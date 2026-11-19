@@ -45,9 +45,9 @@ export interface SidebarSections {
    */
   imported: ChatSessionSummary[];
   /**
-   * Spawned sessions drawn under the session that started them, keyed by that parent's id. Empty
-   * when nesting is off. A session listed here appears in no other list above - only under its
-   * parent, wherever that parent is drawn.
+   * Spawned sessions drawn under their top-level ancestor, keyed by that ancestor's id (one level
+   * only, however deep the spawn chain). Empty when nesting is off. A session listed here appears
+   * in no other list above - only under that row, wherever it is drawn.
    */
   children: ReadonlyMap<string, ChatSessionSummary[]>;
 }
@@ -129,8 +129,8 @@ export function groupSessions(
 }
 
 /**
- * Which visible sessions hang under which top-level row, keyed by that row's id. A child stays where the user put it when they put it
- * somewhere on purpose - pinned, or filed in a section of their own - and falls back to its own
+ * Which visible sessions hang under which top-level row, keyed by that row's id. A child stays
+ * where the user put it when they put it somewhere on purpose - pinned, or filed in a section of their own - and falls back to its own
  * row when its parent is archived, deleted or in the other mode, since there is nothing visible
  * to hang it under.
  */
@@ -217,7 +217,7 @@ export function parentHints(
   const hints = new Map<string, ParentHint>();
   for (const session of all) {
     const parent = session.origin && byId.get(session.origin.parentSessionId);
-    if (!parent) continue;
+    if (!parent || parent.id === session.id) continue;
     const nestedUnder = rootOfChild.get(session.id);
     if (nestedUnder === undefined) hints.set(session.id, { kind: 'from', title: parent.title });
     else if (nestedUnder !== parent.id) hints.set(session.id, { kind: 'via', title: parent.title });

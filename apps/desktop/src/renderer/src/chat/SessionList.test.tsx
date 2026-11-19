@@ -546,6 +546,7 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(false);
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect(hintOf('Kid A')).toBeNull();
     expect(query('chat-session-fold-btn')).toBeNull();
   });
 });

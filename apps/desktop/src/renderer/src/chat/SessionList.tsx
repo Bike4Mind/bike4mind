@@ -190,7 +190,8 @@ interface NestProps {
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
   /** "via X" / "from X", for a spawned session whose direct parent is not the row above it. */
-  parentHint?: ParentHint;
+  hintKind?: ParentHint['kind'];
+  hintTitle?: string;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -508,7 +509,8 @@ const SessionRow = memo(function SessionRow({
   subActivity,
   subFolded = false,
   subFoldable = true,
-  parentHint,
+  hintKind,
+  hintTitle,
   refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -706,16 +708,16 @@ const SessionRow = memo(function SessionRow({
               {session.title}
             </Typography>
           )}
-          {!editing && parentHint && (
+          {!editing && hintKind && hintTitle && (
             <Typography
               level="body-xs"
               noWrap
               textColor="text.tertiary"
               sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
-              title={`${parentHint.kind} ${parentHint.title}`}
+              title={`${hintKind} ${hintTitle}`}
               data-testid="chat-session-parent-hint"
             >
-              {parentHint.kind} {parentHint.title}
+              {hintKind} {hintTitle}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1121,7 +1123,12 @@ export function SessionList({
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
   }, [matching, mode, userSections, searching, importedInline, nested]);
 
-  const hints = useMemo(() => parentHints(sessions, sections.children), [sessions, sections.children]);
+  // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
+  // No hints with nesting off: the setting brings back the plain flat list.
+  const hints = useMemo(
+    () => (nested ? parentHints(sessions, sections.children) : new Map<string, ParentHint>()),
+    [nested, sessions, sections.children]
+  );
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1323,7 +1330,8 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
-        parentHint={hints.get(session.id)}
+        hintKind={hints.get(session.id)?.kind}
+        hintTitle={hints.get(session.id)?.title}
       />,
       ...(folded
         ? []
@@ -1344,7 +1352,8 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
-      parentHint={hints.get(session.id)}
+      hintKind={hints.get(session.id)?.kind}
+      hintTitle={hints.get(session.id)?.title}
       refChip={refLabel(match.ref)}
     />
   );

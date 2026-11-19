@@ -369,6 +369,58 @@ describe('nested sub-sessions', () => {
     expect(hints.has('missing-parent')).toBe(false);
   });
 
+  it('sorts pinned roots by group activity too', () => {
+    const sessions = [
+      session({ id: 'p-new', pinned: true, updatedAt: '2026-09-05T00:00:00.000Z' }),
+      session({ id: 'p-old', pinned: true, updatedAt: '2026-09-01T00:00:00.000Z' }),
+      spawned('p-old-kid', 'p-old', { updatedAt: '2026-09-09T00:00:00.000Z' }),
+    ];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.pinned.map(entry => entry.id)).toEqual(['p-old', 'p-new']);
+  });
+
+  it('nests a grandchild under a filed child, and survives a chain that runs into a cycle', () => {
+    const state = { sections: [{ id: 's1', name: 'Mine' }], assignments: { kid: 's1' } };
+    const filed = groupSessions(
+      [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')],
+      'chat',
+      state,
+      false,
+      true
+    );
+    expect(filed.custom[0].sessions.map(entry => entry.id)).toEqual(['kid']);
+    expect(filed.children.get('kid')?.map(entry => entry.id)).toEqual(['grandkid']);
+
+    const cyclic = groupSessions(
+      [spawned('a', 'b'), spawned('b', 'a'), spawned('c', 'a')],
+      'chat',
+      undefined,
+      false,
+      true
+    );
+    expect(cyclic.loose.map(entry => entry.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('lists a flattened grandchild in quick-switch order only while its group is open', () => {
+    const grouped = groupSessions(
+      [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')],
+      'chat',
+      undefined,
+      false,
+      true
+    );
+    expect(orderedSessions(grouped, { isOpen: () => true }).map(entry => entry.id)).toEqual([
+      'root',
+      'kid',
+      'grandkid',
+    ]);
+  });
+
+  it('gives no hint to a session that names itself as its parent', () => {
+    const all = [spawned('loop', 'loop')];
+    expect(parentHints(all, new Map()).size).toBe(0);
+  });
+
   it('hints "from" on every spawned session in a flat list, including when the parent is not a match', () => {
     const all = [session({ id: 'root', title: 'Root' }), spawned('kid', 'root')];
     const matching = [all[1]];
