@@ -439,7 +439,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       open
       onClose={onClose}
       title={`Delete ${displayName(user)}`}
-      description="After any required approval, locks and signs this user out, then queues permanent erasure of the account and deletable data. Erasure is asynchronous; records covered by retention rules remain. Their live Stripe subscriptions, including those of organizations they own, are canceled with no refund, and organizations they own alone are deleted. Owners of shared organizations must transfer them first. There is no undo; suspend them instead if you might need to restore access."
+      description="Locks and signs this user out, then permanently erases the account and its deletable data. There is no undo; suspend them instead if you might need to restore access."
       reasonPresets={ADMIN_REASON_PRESETS.userDeletion}
       typedConfirm={
         user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }
@@ -448,7 +448,13 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       tone="danger"
       onConfirm={handleConfirm}
       data-testid="delete-user-dialog"
-    />
+    >
+      <Typography level="body-sm" data-testid="delete-user-dialog-details">
+        Erasure runs asynchronously, and records covered by retention rules remain. Live Stripe subscriptions, including
+        those of organizations they own, are canceled with no refund, and organizations they own alone are deleted.
+        Owners of shared organizations must transfer them first. Deleting an admin account may need approval.
+      </Typography>
+    </ActionDialog>
   );
 };
 
