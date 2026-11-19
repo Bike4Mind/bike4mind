@@ -337,6 +337,7 @@ export const SettingKeySchema = z.enum([
   'EnableMementosDefault',
   'EnableArtifacts',
   'EnableArtifactsDefault',
+  'pythonArtifactDataOrigins',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2785,6 +2786,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
+      { key: 'pythonArtifactDataOrigins', order: 22 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3767,6 +3769,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 21,
     dependsOn: 'EnableArtifacts',
+  }),
+  pythonArtifactDataOrigins: makeObjectSetting<string[]>({
+    key: 'pythonArtifactDataOrigins',
+    name: 'Python Artifact Data Origins',
+    defaultValue: [],
+    description:
+      'Public HTTPS origins that Python artifact code may fetch data from, one per line, such as https://data.example.com (at most 10). Origin only: no path, wildcard, IP address, local hostname or host on this app. Requests come from an isolated frame and carry none of the cookies or tokens of this app, but the code can send anything inside the artifact to a listed origin, so list only public data hosts you trust. The model is told the list. Empty (default): Python artifacts have no network access. A change can take up to ten minutes to reach open pages.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 22,
+    dependsOn: 'EnableArtifacts',
+    // The Python viewer shows the list to every user.
+    userReadable: true,
+    // Plain strings so the update route can name each bad entry; every reader applies
+    // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
+    schema: z.array(z.string()),
   }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',

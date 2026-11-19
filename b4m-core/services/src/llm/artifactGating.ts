@@ -1,3 +1,10 @@
+import {
+  pythonDataOriginReservedHosts,
+  resolvePythonArtifactDataOrigins,
+  withPythonDataOrigins,
+} from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+
 /**
  * Whether artifacts are live for one chat completion: the deployment-wide admin setting AND the
  * caller's per-request flag. Within ChatCompletionProcess this gates BOTH the artifact-emission
@@ -24,6 +31,21 @@ export function resolveArtifactsEnabled(adminEnabled: boolean, requestedByCaller
  * that drops the conditional at the assembly site in `ChatCompletionProcess`, which a test of
  * `resolveArtifactsEnabled` alone cannot see.
  */
+/**
+ * The artifact-emission prompt as the model receives it: unchanged when no Python data origin is
+ * listed, otherwise with one note naming them. The validation and the app-host check match what
+ * `/api/pyodide-sandbox` applies to its CSP, so the model is told exactly the origins that work.
+ * Shared by the chat path and the agent executor (server-utils `artifactGate.ts`).
+ */
+export function withArtifactDataOrigins(
+  prompt: string,
+  storedDataOrigins: unknown,
+  appUrl: string | undefined = process.env.APP_URL
+): string {
+  const reservedHosts = pythonDataOriginReservedHosts([appUrl], host => registrableDomain(host));
+  return withPythonDataOrigins(prompt, resolvePythonArtifactDataOrigins(storedDataOrigins, reservedHosts));
+}
+
 export function buildArtifactEmissionMessages(
   artifactsEnabled: boolean,
   artifactEmissionContent: string

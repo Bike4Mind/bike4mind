@@ -165,6 +165,7 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationEscalationEmails',
   'blockedEmailDomains',
   'freeTierAllowedModels',
+  'pythonArtifactDataOrigins',
 ]);
 
 // Display only: the stored category value stays as is, so settings, search and the API are unaffected.

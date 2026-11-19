@@ -12,6 +12,9 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  partitionPythonDataOrigins,
+  pythonDataOriginReservedHosts,
+  PYTHON_ARTIFACT_DATA_ORIGINS_MAX,
   FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
   isRegisteredSettingKey,
@@ -132,6 +135,20 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
         throw new BadRequestError(
           `Not an owned domain (public suffix): ${suffixes.map(d => JSON.stringify(d)).join(', ')}`
         );
+      }
+      value = valid;
+    }
+
+    if (key === 'pythonArtifactDataOrigins') {
+      const reservedHosts = pythonDataOriginReservedHosts([process.env.APP_URL], host => registrableDomain(host));
+      const { valid, invalid } = partitionPythonDataOrigins(value, reservedHosts);
+      if (invalid.length > 0) {
+        throw new BadRequestError(
+          `Not an allowed data origin: ${invalid.map(({ entry, problem }) => `${JSON.stringify(entry)} (${problem})`).join(', ')}`
+        );
+      }
+      if (valid.length > PYTHON_ARTIFACT_DATA_ORIGINS_MAX) {
+        throw new BadRequestError(`At most ${PYTHON_ARTIFACT_DATA_ORIGINS_MAX} data origins can be listed.`);
       }
       value = valid;
     }
