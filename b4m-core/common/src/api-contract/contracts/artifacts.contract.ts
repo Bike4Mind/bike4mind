@@ -498,6 +498,10 @@ export const republishArtifactContract = defineEndpoint({
   responses: {
     200: { description: 'The refreshed page.', schema: PublishedArtifactResourceSchema, example: PUBLISHED_EXAMPLE },
     ...PUBLISH_FAILURES,
+    404: {
+      description: `${NOT_YOURS_TO_PUBLISH} Also returned when the artifact has no published page to refresh.`,
+      schema: ApiErrorSchema,
+    },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
 });
