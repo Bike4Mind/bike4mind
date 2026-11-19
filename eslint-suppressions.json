@@ -698,11 +698,6 @@
       "count": 6
     }
   },
-  "apps/client/app/components/Session/AISettings/ImageGenerationModelSelectionModal.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
-    }
-  },
   "apps/client/app/components/Session/AISettings/InspectableSettingsButton.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
