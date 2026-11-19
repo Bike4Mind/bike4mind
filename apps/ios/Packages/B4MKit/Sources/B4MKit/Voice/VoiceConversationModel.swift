@@ -251,6 +251,8 @@ public final class VoiceConversationModel {
     case .sending, .streaming, .speaking:
       // Room noise and leftover echo produce short fragments; real interruption takes a few words.
       guard heard.split(separator: " ").count >= bargeInMinimumWords else { return }
+      // Set before abandonTurn flips to listening and awaits the speaker, so listening never shows an empty transcript.
+      liveTranscript = heard
       await abandonTurn()
     default:
       return
