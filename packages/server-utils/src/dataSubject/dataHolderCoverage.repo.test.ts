@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BEFORE_ERASURE_HOOKS } from './erasureRegistry';
 import { DATA_HOLDER_REGISTRY } from './registry/index';
+
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 
 // Split from dataHolderCoverage.test.ts: this case greps every tracked .ts file, so it runs in the
 // uncached `test:repo` lane rather than the unit lane (see vitest.config.mts).

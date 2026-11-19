@@ -24,6 +24,8 @@ import { toMicroUsd } from '../../decisions/platformDecision';
 import { readAdminAiSpend } from './budget';
 import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;

@@ -12,6 +12,8 @@ import {
 import { SubjectErasurePlan } from './subjectErasurePlan';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryReplSet | undefined;

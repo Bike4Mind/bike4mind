@@ -19,6 +19,8 @@ import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
 import type { DataHolderRegistry } from './types';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 const ObjectId = Schema.Types.ObjectId;
 
 const Person = mongoose.model('DsxPerson', new Schema({ email: String, invitedBy: ObjectId }));

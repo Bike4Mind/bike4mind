@@ -6,6 +6,8 @@ import { readDocuments } from './subjectMatcher';
 import { SubjectRecordExport, assertEveryModelClassified, type ExportedRecord } from './subjectRecordExport';
 import type { DataHolderRegistry, UserReference } from './types';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 const ObjectId = Schema.Types.ObjectId;
 
 const Person = mongoose.model(
