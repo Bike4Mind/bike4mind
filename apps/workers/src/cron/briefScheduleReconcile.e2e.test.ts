@@ -250,6 +250,7 @@ describe('runBriefScheduleReconcile', () => {
             periodEnd: brief.periodEnd,
             runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
             approvals: [],
+            emails: [],
           }),
           canCompose: async () => 'ok',
           complete,
@@ -258,7 +259,12 @@ describe('runBriefScheduleReconcile', () => {
         },
         event
       );
-      await started;
+      await Promise.race([
+        started,
+        worker.then(() => {
+          throw new Error('composer settled before reaching the model');
+        }),
+      ]);
       throw new Error('accepted event response lost');
     });
     try {
