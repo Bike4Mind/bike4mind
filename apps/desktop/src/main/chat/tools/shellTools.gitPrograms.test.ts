@@ -1585,6 +1585,14 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         expect(prompt.detail).toContain('git commit after a signing config change in the same script');
       });
 
+      it.each([
+        ['git commit -m x', 'git status'],
+        ['git --git-dir=.git commit -m x', 'git --git-dir=.git status'],
+      ])('withholds an answer for the chat when a config write may race %s, not %s', async (signs, plain) => {
+        expect((await promptIn(`${signs} & cp a .git/config`)).allowOnce).toBe(true);
+        expect((await promptIn(`${plain} & cp a .git/config`)).allowOnce).not.toBe(true);
+      });
+
       describe('for signing or verifying the command asks for itself', () => {
         it.each([
           ['git commit -S -m x', true],
@@ -1603,6 +1611,14 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
             });
           }
         );
+
+        it('names a signing git that find runs over an earlier unlisted one', async () => {
+          const prompt = await promptIn(
+            String.raw`find . -maxdepth 0 -exec git am x.patch \; -exec git commit -S -m x \;`
+          );
+          expect(prompt.allowOnce).toBe(true);
+          expect(prompt.detail).toContain('(git commit with -S)');
+        });
 
         it('honors a later --no-gpg-sign over configured signing without confusing opaque consent with signing', async () => {
           await withConfigs({ global: SIGN }, {}, async () => {
