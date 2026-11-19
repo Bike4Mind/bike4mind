@@ -72,6 +72,33 @@ describe('telemetry hash lookup', () => {
       }
     });
 
+    it('with a dedicated secret and no previous secret, still covers the encryption key', () => {
+      const root = randomBytes(32).toString('hex');
+      secrets.values = { ...original, HMAC_SIGNING_SECRET: root };
+
+      const salts = deriveTelemetrySalts();
+
+      expect(salts).toHaveLength(182);
+      const today = new Date().toISOString().split('T')[0];
+      expect(salts.filter(entry => entry.dateKey === today).map(entry => entry.salt)).toEqual([
+        dailySalt(derive(root), today),
+        dailySalt('test-telemetry-hmac-secret', today),
+      ]);
+    });
+
+    it('does not repeat the encryption key when it is also the previous secret', () => {
+      secrets.values = {
+        ...original,
+        HMAC_SIGNING_SECRET: randomBytes(32).toString('hex'),
+        HMAC_SIGNING_SECRET_PREVIOUS: original.SECRET_ENCRYPTION_KEY,
+      };
+
+      const salts = deriveTelemetrySalts();
+
+      expect(salts).toHaveLength(273);
+      expect(new Set(salts.map(entry => entry.salt)).size).toBe(273);
+    });
+
     it('finds hashes written under the previous secret as well as the current one', async () => {
       const root = randomBytes(32).toString('hex');
       const previous = randomBytes(32).toString('hex');

@@ -35,6 +35,14 @@ export function signingKey(purpose: SigningPurpose): string {
 }
 
 /**
+ * The key every purpose used before a dedicated secret existed: the raw SECRET_ENCRYPTION_KEY, or
+ * ''. For regenerating lookup hashes only; a signature verifier must use `verificationKeys`.
+ */
+export function legacySigningKey(): string {
+  return readSecret('SECRET_ENCRYPTION_KEY') ?? '';
+}
+
+/**
  * Keys to accept when verifying or regenerating, newest first. With a dedicated secret set the
  * previous slot adds its derived key and then its raw value, since values signed before per-purpose
  * keys existed were keyed with a raw secret. Empty when nothing usable is configured.

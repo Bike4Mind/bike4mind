@@ -1,22 +1,23 @@
 import { regenerateHashesForDeletion } from '@bike4mind/common';
 import { createHmac } from 'crypto';
 import { User, questRepository, organizationRepository } from '@bike4mind/database';
-import { signingKey, verificationKeys } from '@bike4mind/server-utils/security/signingKeys';
+import { legacySigningKey, signingKey, verificationKeys } from '@bike4mind/server-utils/security/signingKeys';
 import { normalizeTelemetryUserId } from './telemetryIdentity';
 
 /** Number of days of telemetry to cover when regenerating hashes for DSAR/deletion */
 const TELEMETRY_RETENTION_DAYS = 90;
 
 /**
- * Derive daily HMAC salts for the telemetry retention window, one set per accepted signing key
- * so records written under a previous key are still found.
+ * Derive daily HMAC salts for the telemetry retention window, one set per key that may have
+ * salted a record in it: the accepted signing keys, plus the encryption key that salted records
+ * before a dedicated signing secret was set.
  * Shared by deletion, admin export, and user export endpoints.
  */
 export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
-  const hmacSecrets = verificationKeys('telemetry-salt');
   // The writer salts with any value other than empty or 'not-configured', placeholders included.
-  const writerKey = signingKey('telemetry-salt');
-  if (writerKey && writerKey !== 'not-configured' && !hmacSecrets.includes(writerKey)) hmacSecrets.push(writerKey);
+  const hmacSecrets = [
+    ...new Set([...verificationKeys('telemetry-salt'), signingKey('telemetry-salt'), legacySigningKey()]),
+  ].filter(key => key !== '' && key !== 'not-configured');
   if (hmacSecrets.length === 0 && process.env.NODE_ENV !== 'development') {
     console.warn(
       '[Telemetry] Neither HMAC_SIGNING_SECRET nor SECRET_ENCRYPTION_KEY is configured - using predictable fallback salt. Hashes are reversible.'
