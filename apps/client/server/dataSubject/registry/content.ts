@@ -45,6 +45,12 @@ export const contentHolders = {
     parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  AssistantBrief: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The source ingested email's id, not an address.
+    unrelatedPaths: ['happened.source.emailId', 'handled.source.emailId', 'decisions.source.emailId'],
+  },
   BriefcasePrompt: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
@@ -96,6 +102,7 @@ export const contentHolders = {
       { path: 'falsePositiveBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'noActionBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'reportedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'escalatedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
   ImportHistoryJob: {
@@ -113,8 +120,10 @@ export const contentHolders = {
   },
   Project: {
     kind: 'holder',
+    // As the account purge does: a personal project goes, an organization's stays with the organization.
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
     ],
   },
@@ -164,7 +173,8 @@ export const contentHolders = {
   QuestExternalLink: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
@@ -185,7 +195,10 @@ export const contentHolders = {
   ReleaseNote: { kind: 'noUserData', note: 'Platform release notes, not per person.' },
   ResearchData: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   ResearchLink: { kind: 'noUserData', note: 'Shared research link catalogue with no owner field.' },
   ResearchLinkCategory: { kind: 'noUserData', note: 'Shared research link categories with no owner field.' },
@@ -195,6 +208,11 @@ export const contentHolders = {
   },
   // Simulated agent trades, not real money, so no accounting retention applies.
   StockTrade: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // A Studio Production: owner-only, so it goes with its owner. The FabFiles it references are their own holders.
+  StudioComposition: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },

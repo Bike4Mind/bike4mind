@@ -33,6 +33,7 @@ struct HomeDrawer: View {
             .background(Tokens.Palette.sidebar.ignoresSafeArea())
             .offset(x: -width * (1 - progress))
             .gesture(dragGesture(width: width))
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
             .accessibilityIdentifier("home-drawer")
         }
@@ -102,6 +103,7 @@ private struct DrawerContent: View {
             services.navigator.startVoiceConversation(.newConversation)
           }
           row("Studio", symbol: "wand.and.stars", id: "drawer-studio-btn") { services.navigator.apply(.media) }
+          row("Brief", symbol: "text.badge.checkmark", id: "drawer-brief-btn") { services.navigator.openLatestBrief() }
           notebooks
         }
         .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs / 2)

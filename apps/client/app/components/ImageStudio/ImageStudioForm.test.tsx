@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IMAGE_JOB_PROMPT_MAX_CHARS, ImageModels, SCENE_PRESETS } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -32,6 +32,36 @@ vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
 }));
 
 import { useStudioRestore } from '@client/app/components/Studio/restore/studioRestore';
+
+// Cutout state is useReferenceCutouts' (tested on its own); the form only reads it and forwards the toggle.
+const cutouts = vi.hoisted(() => ({
+  byFileId: {} as Record<string, import('@client/app/components/Studio/capabilityFields').ReferenceCutout>,
+  toggleCutout: vi.fn(),
+}));
+vi.mock('./useReferenceCutouts', () => ({
+  useReferenceCutouts: () => ({
+    cutoutOf: (fileId: string) => cutouts.byFileId[fileId],
+    toggleCutout: cutouts.toggleCutout,
+  }),
+}));
+vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
+  useGetFabFile: (fileId: string) => ({ data: { fileUrl: `https://files.test/${fileId}.png` } }),
+  isFabFileScanInFlight: () => false,
+}));
+
+// The painter draws on a canvas jsdom lacks; the form only opens it and takes the saved mask.
+const painter = vi.hoisted(() => ({
+  open: false,
+  onSaved: undefined as undefined | ((mask: { fileId: string; fileName: string }) => void),
+}));
+vi.mock('./ImageMaskPainter', () => ({
+  default: ({ open, onSaved }: { open: boolean; onSaved: (mask: { fileId: string; fileName: string }) => void }) => {
+    painter.open = open;
+    painter.onSaved = onSaved;
+    return null;
+  },
+}));
+
 import ImageStudioForm from './ImageStudioForm';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -72,6 +102,11 @@ const pickCard = (model: ImageModels) => fireEvent.click(modelOption(`${model}-r
 const submitButton = () => screen.getByTestId('image-form-submit-btn');
 
 describe('ImageStudioForm', () => {
+  beforeEach(() => {
+    cutouts.byFileId = {};
+    cutouts.toggleCutout.mockClear();
+  });
+
   it('opens on a visible default card and keeps Generate off until there is a prompt', () => {
     renderForm();
     expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveAttribute('data-selected', 'true');
@@ -161,6 +196,62 @@ describe('ImageStudioForm', () => {
     });
   });
 
+  describe('Remove background on a reference', () => {
+    const addReference = () => act(() => h.applyImage?.({ id: 'file-1', fileName: 'can.jpg' }));
+
+    it('turns the cutout on from the reference chip', () => {
+      renderForm();
+      addReference();
+      fireEvent.click(screen.getByTestId('image-form-references-cutout-file-1-switch'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', true);
+    });
+
+    it('holds Generate while the cutout is running', () => {
+      cutouts.byFileId = { 'file-1': { status: 'pending' } };
+      renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-cutout-file-1-pending')).toBeInTheDocument();
+      expect(screen.getByTestId('image-form-references-invalid')).toHaveTextContent('Removing the background');
+      expect(submitButton()).toBeDisabled();
+    });
+
+    it('shows the ready cutout on a checkerboard and sends it instead of the original', () => {
+      cutouts.byFileId = { 'file-1': { status: 'ready', fileId: 'cutout-1' } };
+      const { onSubmit } = renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-cutout-file-1-preview').querySelector('img')).toHaveAttribute(
+        'src',
+        'https://files.test/cutout-1.png'
+      );
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ inputs: [{ role: 'reference', fileId: 'cutout-1' }] }),
+        })
+      );
+    });
+
+    it('offers the original when the cutout failed', () => {
+      cutouts.byFileId = { 'file-1': { status: 'failed', message: 'Remove background works on PNG or JPEG images' } };
+      renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-invalid')).toHaveTextContent('PNG or JPEG');
+      expect(submitButton()).toBeDisabled();
+      fireEvent.click(screen.getByTestId('image-form-references-fix-btn'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', false);
+    });
+
+    it('forgets the cutout when the reference is removed', () => {
+      renderForm();
+      addReference();
+      fireEvent.click(screen.getByTestId('image-form-references-remove-file-1-btn'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', false);
+    });
+  });
+
   it('says so when a models refetch drops the picked model', () => {
     const { rerender } = render(
       <TestWrapper>
@@ -186,6 +277,8 @@ describe('ImageStudioForm', () => {
     renderForm({ models: [{ id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' }] });
     expect(screen.getByTestId('image-studio-no-generate-model')).toBeInTheDocument();
     expect(screen.queryByTestId('image-form')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('image-studio-switch-to-edit-btn'));
+    expect(screen.getByTestId('image-form')).toBeInTheDocument();
   });
   describe('Look chips', () => {
     const [slate, kitchen] = SCENE_PRESETS;
@@ -297,6 +390,127 @@ describe('ImageStudioForm', () => {
 
       pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
       expect(screen.queryByTestId('image-form-changes')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('edit mode', () => {
+    const SOURCE = 'a'.repeat(24);
+    const MASK = 'b'.repeat(24);
+    const enterEdit = () => fireEvent.click(screen.getByTestId('image-form-mode-edit-btn'));
+    const chooseSource = () => {
+      fireEvent.click(screen.getByTestId('image-form-edit-source-pick-btn'));
+      act(() => h.applyImage?.({ id: SOURCE, fileName: 'cat.png' }));
+    };
+
+    it('asks for the image to edit before it can submit, and greys the models that cannot edit', () => {
+      renderForm();
+      enterEdit();
+      expect(screen.getByTestId('image-form-prompt-input')).toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/change/)
+      );
+      expect(screen.queryByTestId('image-form-look-chips')).toBeNull();
+      expect(modelOption(`${ImageModels.FLUX_PRO_ULTRA}-radio`)).toBeDisabled();
+      expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-radio`)).not.toBeDisabled();
+      typePrompt('make it a tabby');
+      expect(submitButton()).toBeDisabled();
+      expect(screen.getByTestId('image-form-mask-pick-btn')).toBeDisabled();
+    });
+
+    it('says the picked model cannot edit, rather than that it went away', () => {
+      renderForm();
+      pickCard(ImageModels.FLUX_PRO_ULTRA);
+      enterEdit();
+      expect(screen.getByTestId('image-form-changes')).toHaveTextContent(/cannot edit images; using/);
+      expect(screen.getByTestId('image-form-changes')).not.toHaveTextContent('no longer available');
+    });
+
+    it('submits an edit with the source and a drawn mask as role-tagged inputs', () => {
+      const { onSubmit } = renderForm();
+      enterEdit();
+      chooseSource();
+      expect(screen.getByTestId('image-form-edit-source-name')).toHaveTextContent('cat.png');
+      expect(screen.getByTestId('image-form-edit-source-preview')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('image-form-mask-pick-btn'));
+      expect(painter.open).toBe(true);
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      expect(screen.getByTestId('image-form-mask-name')).toHaveTextContent('mask.png');
+      typePrompt('  make it a tabby  ');
+      expect(submitButton()).toHaveTextContent('Edit image');
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith({
+        count: 1,
+        request: {
+          model: ImageModels.GPT_IMAGE_1_5,
+          mode: 'edit',
+          prompt: 'make it a tabby',
+          inputs: [
+            { role: 'edit_source', fileId: SOURCE },
+            { role: 'mask', fileId: MASK },
+          ],
+        },
+      });
+    });
+
+    it('sends references after the source in an edit', () => {
+      const { onSubmit } = renderForm();
+      enterEdit();
+      chooseSource();
+      fireEvent.click(screen.getByTestId('image-form-references-add-btn'));
+      act(() => h.applyImage?.({ id: 'ref-1', fileName: 'hat.png' }));
+      typePrompt('put this hat on the cat');
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            mode: 'edit',
+            inputs: [
+              { role: 'edit_source', fileId: SOURCE },
+              { role: 'reference', fileId: 'ref-1' },
+            ],
+          }),
+        })
+      );
+    });
+
+    it('marks a mask the picked model cannot take and offers to remove it', () => {
+      renderForm();
+      enterEdit();
+      chooseSource();
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      pickCard(ImageModels.FLUX_KONTEXT_PRO);
+      typePrompt('make it a tabby');
+      expect(screen.getByTestId('image-form-mask-invalid')).not.toBeEmptyDOMElement();
+      expect(submitButton()).toBeDisabled();
+      fireEvent.click(screen.getByTestId('image-form-mask-fix-btn'));
+      expect(screen.queryByTestId('image-form-mask-pick-btn')).toBeNull();
+      expect(submitButton()).not.toBeDisabled();
+    });
+
+    it('drops the mask when a different source is chosen', () => {
+      renderForm();
+      enterEdit();
+      chooseSource();
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      fireEvent.click(screen.getByTestId('image-form-edit-source-pick-btn'));
+      act(() => h.applyImage?.({ id: 'd'.repeat(24), fileName: 'dog.png' }));
+      expect(screen.queryByTestId('image-form-mask-name')).toBeNull();
+    });
+
+    it("opens prefilled from chat's Edit hand-off, with no missing-model notice", () => {
+      renderForm();
+      act(() =>
+        useStudioRestore.getState().requestRestore({
+          medium: 'image',
+          request: { mode: 'edit' },
+          lineageInputs: [{ fileId: SOURCE, role: 'edit_source' }],
+          fileNames: { [SOURCE]: 'from-chat.png' },
+          handoff: true,
+        })
+      );
+      expect(screen.getByTestId('image-form-mode-edit-btn')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('image-form-edit-source-name')).toHaveTextContent('from-chat.png');
+      expect(screen.queryByText(/did not record its model/)).toBeNull();
     });
   });
 });

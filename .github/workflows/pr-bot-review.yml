@@ -50,6 +50,9 @@ jobs:
       verdict_on_clean: COMMENT
       changeset_guard: true
       runner_label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+      # Set here because the pinned reusable still defaults to older models.
+      model_small: claude-sonnet-5-5
+      model_large: claude-opus-5-5
       # Workload identity federation. Unset the rule variable to fall back to the
       # ANTHROPIC_API_KEY secret; with it set, the key is not sent and a failed
       # exchange fails the review.

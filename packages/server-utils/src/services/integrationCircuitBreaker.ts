@@ -5,8 +5,10 @@ import {
   INTEGRATION_HEALTH_THRESHOLDS,
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
+import { createApplicationCache } from '@bike4mind/utils/cache/ApplicationCache';
+import { Logger } from '@bike4mind/observability';
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes — matches probe interval
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
   available: boolean;
@@ -20,7 +22,10 @@ interface CacheEntry {
   cachedAt: number;
 }
 
-const cache = new Map<IntegrationName, CacheEntry>();
+const logger = new Logger();
+const cache = createApplicationCache('integration-circuit-breaker', process.env, operation => {
+  logger.warn(`Application cache ${operation} failed; using database-backed circuit status`);
+});
 
 /**
  * Maps an MCP server name to the integration name(s) it depends on.
@@ -39,15 +44,14 @@ const MCP_TO_INTEGRATIONS: Partial<Record<McpServerName, IntegrationName[]>> = {
  *  2. Automatic probe-based detection (3 consecutive API failures)
  *  3. Default: available
  *
- * Results are cached in memory for CACHE_TTL_MS to avoid repeated DB queries.
+ * Results are cached for CACHE_TTL_MS using the configured application cache.
  */
 async function checkAvailability(integration: IntegrationName): Promise<CacheEntry> {
-  const now = Date.now();
-  const cached = cache.get(integration);
+  return cache.getOrLoad(integration, CACHE_TTL_MS, () => loadAvailability(integration));
+}
 
-  if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
-    return cached;
-  }
+async function loadAvailability(integration: IntegrationName): Promise<CacheEntry> {
+  const now = Date.now();
 
   // --- 1. Check manual override ---
   const override = await integrationCircuitOverrideRepository.getOverride(integration);
@@ -61,7 +65,6 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
       autoTripped: false,
       cachedAt: now,
     };
-    cache.set(integration, entry);
     return entry;
   }
 
@@ -73,7 +76,6 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
       autoTripped: false,
       cachedAt: now,
     };
-    cache.set(integration, entry);
     return entry;
   }
 
@@ -95,7 +97,6 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
       noData: true,
       cachedAt: now,
     };
-    cache.set(integration, entry);
     return entry;
   }
 
@@ -110,12 +111,10 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
       autoTripped: true,
       cachedAt: now,
     };
-    cache.set(integration, entry);
     return entry;
   }
 
   const entry: CacheEntry = { available: true, reason: null, mode: 'auto', autoTripped: false, cachedAt: now };
-  cache.set(integration, entry);
   return entry;
 }
 
@@ -197,13 +196,9 @@ export async function isMcpServerAvailable(
 }
 
 /**
- * Clear the in-memory cache for a specific integration or all integrations.
- * Call this after setting a manual override so it takes effect immediately.
+ * Invalidate the small integration namespace after a manual override.
+ * Await acknowledgement before reporting success to the caller.
  */
-export function clearCache(integration?: IntegrationName): void {
-  if (integration) {
-    cache.delete(integration);
-  } else {
-    cache.clear();
-  }
+export async function clearCache(_integration?: IntegrationName): Promise<void> {
+  await cache.invalidate();
 }

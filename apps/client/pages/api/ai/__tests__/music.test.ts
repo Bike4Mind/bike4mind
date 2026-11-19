@@ -93,6 +93,8 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
+  warmExchangeAttribution: async () => undefined,
   apiKeyRepository: {},
   cacheRepository: { sentinel: 'cacheRepository' },
   adminSettingsRepository: { sentinel: 'adminSettingsRepository' },
@@ -252,8 +254,10 @@ describe('POST /api/ai/music', () => {
     const { promise, res } = run({ prompt: 'a song', modelId: 'music_v1' });
     await promise;
     expect(res._getStatusCode()).toBe(403);
-    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
-    expect(assertAdmission).toHaveBeenCalledWith('music_v1');
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, false, {
+      organizationId: undefined,
+    });
+    expect(assertAdmission).toHaveBeenCalledWith('music_v1', { orgModelBackend: null });
     expect(userIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });

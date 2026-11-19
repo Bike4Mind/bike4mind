@@ -17,6 +17,7 @@ import {
   organizationRepository,
   orgSlackWorkspaceRepository,
   slackChannelConfigRepository,
+  SlackFeedbackChannel,
 } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@bike4mind/slack';
@@ -182,6 +183,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Check if org already has a workspace connected
     const existingForOrg = await orgSlackWorkspaceRepository.findByOrganizationId(organizationId);
+
+    await SlackFeedbackChannel.updateMany({ $or: [{ organizationId }, { slackTeamId }] }, { $set: { enabled: false } });
 
     // API posting opt-ins are only ever this organization's own: drop any granted under another
     // connection of this workspace, and all of a workspace this organization is moving away from.

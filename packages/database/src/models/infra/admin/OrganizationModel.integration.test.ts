@@ -48,12 +48,20 @@ describe('OrganizationModel - org-groups fields', () => {
 });
 
 describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data lakes)', () => {
-  it('returns orgs where the user is billing owner OR an appointed admin', async () => {
+  it('returns orgs where the user is billing owner OR a manager with a roster row, never a row-less admin entry', async () => {
     const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
     const appointed = await Organization.create({
       name: 'Appointed',
       userId: 'other',
       adminUserIds: ['u1'],
+      users: [{ userId: 'u1' }],
+      personal: false,
+    });
+    await Organization.create({
+      name: 'RowlessAdmin',
+      userId: 'other',
+      adminUserIds: ['u1'],
+      users: [],
       personal: false,
     });
     // A plain member (only on the users ACL, no admin role) is NOT administered.

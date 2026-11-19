@@ -6,6 +6,7 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,

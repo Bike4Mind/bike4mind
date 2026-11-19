@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   getDlqByLabel: vi.fn(),
   getDlqUrl: vi.fn(() => 'dlq-url'),
   getSourceQueueUrl: vi.fn(() => 'source-url'),
+  suggestion: vi.fn(),
+  transition: vi.fn(),
 }));
 
 type Route = (req: unknown, res: unknown) => unknown;
@@ -50,7 +52,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { countAttempts: h.countAttempts, logReplay: h.logReplay },
+  adminAiSuggestionRepository: { transition: h.transition },
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
+vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
@@ -72,6 +77,103 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/dlq/replay admin audit', () => {
+  it('claims approval once and audits the approving admin before SQS work', async () => {
+    const id = 'a'.repeat(24);
+    h.suggestion.mockResolvedValue({
+      id,
+      proposedAction: {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded transient failure',
+      },
+    });
+    h.transition.mockResolvedValueOnce({ id, status: 'accepted' }).mockResolvedValue(null);
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+    const invoke = async () => {
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: { queueLabel: 'quest', messageIds: ['m1'], aiSuggestionId: id, reason: 'Reviewed transient failure' },
+      });
+      (req as unknown as Record<string, unknown>).user = {
+        id: 'admin-1',
+        name: 'Admin',
+        username: 'admin',
+        isAdmin: true,
+      };
+      return (handler as unknown as Route)(req, res);
+    };
+    await invoke();
+    expect(h.transition).toHaveBeenCalledWith(id, ['pending'], 'accepted', {
+      decidedBy: { userId: 'admin-1', name: 'Admin' },
+    });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.triage.accepted',
+      reason: 'Reviewed transient failure',
+      details: { aiSuggestionId: id },
+    });
+    expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+    await expect(invoke()).rejects.toThrow('already been decided');
+    expect(h.sendToQueue).toHaveBeenCalledOnce();
+  });
+  it('requires a reason for suggestion approval even on a safe queue', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        queueLabel: 'quest',
+        messageIds: ['m1'],
+        aiSuggestionId: 'a'.repeat(24),
+      },
+    });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await expect((handler as unknown as Route)(req, res)).rejects.toThrow('reason');
+    expect(h.transition).not.toHaveBeenCalled();
+    expect(h.receiveFromQueue).not.toHaveBeenCalled();
+  });
+  it.each(['missing', 'id', 'action', 'queueLabel', 'messageId', 'malformed'])(
+    'rejects a %s recommendation mismatch before claiming or SQS work',
+    async mismatch => {
+      const id = 'a'.repeat(24);
+      const action = {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded failure',
+      };
+      h.suggestion.mockResolvedValue(
+        mismatch === 'missing'
+          ? null
+          : {
+              id: mismatch === 'id' ? 'b'.repeat(24) : id,
+              proposedAction:
+                mismatch === 'malformed'
+                  ? {}
+                  : {
+                      ...action,
+                      ...(mismatch === 'action' ? { action: 'discard' } : {}),
+                      ...(mismatch === 'queueLabel' ? { queueLabel: 'other' } : {}),
+                      ...(mismatch === 'messageId' ? { messageId: 'other' } : {}),
+                    },
+            }
+      );
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: {
+          queueLabel: 'quest',
+          messageIds: ['m1'],
+          aiSuggestionId: id,
+          reason: 'Reviewed failure',
+        },
+      });
+      Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+      await expect((handler as unknown as Route)(req, res)).rejects.toThrow('does not match');
+      expect(h.transition).not.toHaveBeenCalled();
+      expect(h.receiveFromQueue).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
   it.each([
     { replay: 'safe', sourceQueue: null },
     { replay: 'side-effects', sourceQueue: null },

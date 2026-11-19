@@ -69,6 +69,27 @@ b4m
 
 When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
 
+### Optional fullscreen mode
+
+Run `b4m --fullscreen` to use the terminal's alternate screen. This opt-in mode
+redraws the live display after resizing and restores the original shell screen
+when it exits. It requires interactive stdin and stdout; piped and headless runs
+keep their normal output behavior. The default normal-screen mode is unchanged,
+including its known resize artifacts in some reflowing terminals.
+
+Alternate screen has no native scrollback. Press Ctrl+O to browse completed
+messages, Left/Right to change messages, and Up/Down or PageUp/PageDown to scroll
+wrapped text. Press Ctrl+O again to return to the input. Completed agent steps
+are available as plain JSON text below the message body. Session persistence is
+unchanged. As with other terminal applications, a forced kill cannot run cleanup.
+Command help and diagnostics are retained separately in the fullscreen history
+browser (most recent 64K characters); they do not become conversation messages.
+Retained diagnostics are printed after the original screen is restored on exit,
+so initialization failures and restart hints remain available in shell history.
+While a permission prompt is active, PageUp/PageDown scrolls its complete pending
+arguments and preview. Paging never approves or denies; use the displayed
+decision keys explicitly.
+
 ### Chat without signing in
 
 Start Ollama and pull a model, then open the CLI:
@@ -987,6 +1008,104 @@ chosen, and nothing is persisted. A one-line notice says so; run `/trust folder`
 to trust it. Pending repo MCP servers stay off with the usual warning. Context the
 host needs should reach the session through `--append-system-prompt` and
 `--mcp-config`.
+
+## Local CLI session messaging
+
+On macOS and Linux, independently launched interactive CLI sessions can discover
+and message each other without Desktop running. Messaging is off at startup;
+repository settings, agent tools, and saved histories cannot enable it.
+
+In two terminals working in the same repository (separate Git worktrees work):
+
+1. Run `/peers on api-worker` in the first terminal and `/peers on client-worker`
+   in the second. Each command prints that process's session ID.
+2. Run `/peers list` to see reachable sessions and their advertised readiness.
+3. Run `/peers send <session-id> The response field is now displayName.`
+4. In the recipient, inspect `/peers inbox`, then run `/peers release <message-id>`
+   to approve that message. It runs only when the recipient is safely idle.
+5. The sender can run `/peers status <session-id> <message-id>` for the exact
+   correlated result. The recipient can send an explicit reply with
+   `/peers reply <received-message-id> Confirmed; the client uses displayName.`
+
+Incoming messages are held by default. `/peers accept` explicitly allows pending
+and future incoming messages to start idle model turns and incur usage.
+`/peers hold` pauses pending delivery; `/peers refuse` rejects incoming work.
+`/peers cancel <session-id> <message-id>` withdraws an undelivered message, and
+`/peers delete <message-id>` removes stored message content when safe.
+`/peers off` unregisters the session and closes its local endpoint.
+If a receiver has gone away, deleting an unresolved outgoing receipt archives it
+locally and retains a bounded tombstone. It does not cancel or retry remote work.
+Already running work may still finish after `/peers off`; its correlated outcome
+is saved for this conversation's history without starting more work.
+
+While enabled, the agent has `peer_list`, `peer_send`, and `peer_status` tools, but cannot enable
+messaging or change inbound policy. Every agent send requires a separate human
+review, including in auto-accept mode. Peer-origin turns can only send back to
+their sender and preserve the reply hop limit. A message is peer input, never
+human permission, and cannot answer approval prompts or bypass denied actions.
+Approval identifies the recipient process and conversation before sending. If
+that recipient restarts while approval is pending, request a new approval.
+The recipient-specific review is the single normal send prompt, and it runs
+for every payload even in auto-accept mode. Plan mode and explicit tool denials
+still apply before that review. Human `/peers send` and `/peers reply`
+commands are independent of the agent's reply chain and send allowance.
+
+Discovery is limited to the same local user, account/API environment, canonical
+repository, and additional granted directories. Local-only profiles use the
+user-owned CLI profile identity. Other projects/accounts and different folder
+grants cannot communicate in this release; explicit cross-scope pairing is not
+implemented. Session/model/account/folder changes disable messaging and require
+another `/peers on`. Automatic delivery is paused outside normal permission mode,
+while drafting input, while another turn holds the session, and during dialogs.
+
+Only explicit text crosses the connection. Messages do not expand `@file` or
+image references, execute slash commands, or attach full conversation histories.
+Receiving agents can use their own tools subject to their existing permissions.
+Human input entered during peer work waits for a separate human turn. Its text
+and expanded file references are not steered into the peer's turn or its result.
+Custom commands, generated handoffs, compaction, and rewind are unavailable until
+peer work finishes. Replacing the conversation retires peer enrollment and prevents late
+peer output from entering the replacement conversation.
+Transport credentials stay outside model context in owner-only registry files
+under `~/.bike4mind/peers`. These controls do not isolate malicious programs
+already running as the same OS user.
+The CLI secures its own config and peer directories to 0700 when enabling peers;
+it does not change arbitrary parent-directory permissions. Unsafe ancestors or
+uncertain stale enrollment claims produce an actionable error instead of being
+silently trusted. A terminal transport failure disables peer tools and prints a
+notice; re-enroll only after resolving the reported problem.
+
+Messages are limited to 8 KiB UTF-8, with 20 pending messages per recipient,
+two agent sends per turn, a five-hop reply-chain limit, and per-sender rate
+limits. Pending messages expire after 15 minutes. Receipt content is bounded
+and retained for up to seven days; unresolved outgoing receipts in the current
+process retain visible status metadata until reconciled. Correlated result
+previews are bounded separately.
+Queued/held, delivered, completed, stopped, cancelled, failed, expired, rejected,
+and unknown are separate states. Completed means the turn finished, not that its
+claims were independently verified. An ambiguous disconnect is unknown; do not
+blindly resend it.
+Sender-side deadlines cannot prove remote work expired. Unconfirmed outgoing
+work remains unknown and visible until its remote status is reconciled, including
+when the recipient started running before the deadline. If that receiver is no
+longer discoverable, the user can archive the local receipt without claiming the
+execution stopped.
+If a model turn finishes but its conversation history cannot be saved, the receipt
+reports a storage failure with the completed result. This does not mean the work
+never ran; do not automatically retry it.
+
+Each launch has a new process identity, separate from its saved conversation.
+Use distinct saved conversations for concurrent processes. Peer enrollment is
+serialized per account, project, and saved conversation. This is not a general
+lock on history files used by sessions that have not enabled peer messaging.
+Old process addresses are not redirected to resumed histories. Restarted work
+does not replay pending peer messages automatically. `/peers inbox` can show
+retired receipts for the same saved conversation; unfinished historical work is
+marked unknown and must be reconciled manually. When context needs compaction,
+peer work stops before starting a model turn; compact manually and enable peers
+again. Native Windows, headless/ACP
+enrollment, cross-machine delivery, mid-turn injection, shared task boards, and
+autonomous coordination are outside this first release.
 
 ## License
 

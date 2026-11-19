@@ -204,7 +204,7 @@ export async function transcribeUpload({
     const speechToText = new speechToTextService.speechService(bucketName);
 
     // Held last, so no rejection above strands it; the actual cost is the same size-based figure.
-    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(user, cost.credits, logger));
+    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(user, cost.credits, logger, apiKeyId));
     let results: speechToTextService.TranscriptionResult;
     try {
       // A slow hold write can finish after the deadline. It must still enter the refund boundary.

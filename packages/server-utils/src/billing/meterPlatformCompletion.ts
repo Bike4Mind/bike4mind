@@ -11,15 +11,20 @@ import {
   getTurnsCost,
   insufficientCreditsError,
   isShadowTier,
+  readOrgModelPolicy,
   type IMessage,
   type IUserDocument,
   type ModelInfo,
+  type ApiKeyBillingOwnerType,
   type ApiKeyCompletionSource,
+  type ReadOrgModelPolicy,
+  type SpendFreezeSubject,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   cacheRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
 } from '@bike4mind/database';
 import { estimateInputTokens, estimateToolTokens } from '@bike4mind/services/cliCompletions';
@@ -36,6 +41,7 @@ import {
   loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
+  type ModelAdmissionInput,
 } from '@bike4mind/services/llm/modelAdmission';
 import {
   executedModelFields,
@@ -46,11 +52,13 @@ import {
 } from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
+import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { persistedIsAdmin } from '../auth/apiKeyAdminScope';
 import { recordPaidPlanRefusal } from './userLimitEvents';
 import { getUserEntitlements } from '../entitlements/index';
 import { resolveRequestUsageSource } from '../utils/resolveRequestUsageSource';
 import { reserveRequestCredits, resolveRequestBillingOrgId, type CreditReservation } from './reserveRequestCredits';
+import { spendFreezeSubjectForRequest, type SpendFreezeApiKey } from './spendFreezeSubject';
 
 /**
  * Metering for routes that run a text completion outside ChatCompletionInvoke (so nothing else
@@ -71,16 +79,26 @@ export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] 
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
  * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
  * picker access rules and the free-tier gate for a model the platform chose (the operations model, a fixed default).
+ * `organizationId` applies that org's model policy; a system model skips it, since the org did not pick it.
  */
 export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
-  systemModel = false
+  systemModel = false,
+  opts: {
+    organizationId?: string | null;
+    getOrgModelBackend?: ModelAdmissionInput['getOrgModelBackend'];
+    /** Trusted parsed snapshot already loaded for this execution; explicit null is unrestricted. */
+    orgModelPolicy?: ReadOrgModelPolicy;
+  } = {}
 ): Promise<ModelAdmission> {
-  const [configs, enforceCredits, freeTierAllowedModels] = await Promise.all([
+  const [configs, enforceCredits, freeTierAllowedModels, org] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
+    systemModel || opts.orgModelPolicy !== undefined || !opts.organizationId
+      ? null
+      : organizationRepository.findById(opts.organizationId),
   ]);
   const admission = createSharedModelAdmission({
     user,
@@ -89,12 +107,18 @@ export async function createModelAdmission(
     models,
     enforceCredits,
     freeTierAllowedModels,
+    orgModelPolicy: systemModel
+      ? null
+      : opts.orgModelPolicy === undefined
+        ? readOrgModelPolicy(org?.modelPolicy)
+        : opts.orgModelPolicy,
+    getOrgModelBackend: opts.getOrgModelBackend,
   });
   return {
-    admits: modelId => admission.admits(modelId),
-    async assert(modelId) {
+    admits: (modelId, options) => admission.admits(modelId, options),
+    async assert(modelId, options) {
       try {
-        await admission.assert(modelId);
+        await admission.assert(modelId, options);
       } catch (error) {
         await recordPaidPlanRefusal(user.id, modelId, error);
         throw error;
@@ -157,8 +181,23 @@ export async function reserveCompletionCredits(
   req: MeteredRequest,
   usd: number,
   featureLabel: string,
-  { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
+  {
+    organizationId,
+    holdTtlMs,
+    spendFreezeApiKey,
+  }: { organizationId?: string | null; holdTtlMs?: number; spendFreezeApiKey?: SpendFreezeApiKey } = {}
 ): Promise<CreditReservation> {
+  // Access gate and freeze run ahead of the restricted-tier cap so a moderated or paused caller is told so
+  // and spends no daily token budget; reserveRequestCredits repeats both, which is harmless.
+  if (req.user) assertAiAccessAllowed(req.user);
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(
+      { user: req.user, apiKeyInfo: req.apiKeyInfo ?? spendFreezeApiKey },
+      resolveRequestBillingOrgId(req, organizationId) ?? null
+    ),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
+
   // Restricted-tier daily token cap; refused like an empty balance.
   const user = throttleUser(req);
   if (user && isShadowTier(user)) {
@@ -182,12 +221,14 @@ export async function reserveCompletionCredits(
     featureLabel,
     billingOrganizationId: organizationId,
     holdTtlMs,
+    spendFreezeApiKey,
   });
 }
 
 /**
  * The allowlisted model a restricted caller runs in place of `requested`, or undefined when the request
- * runs as asked. Callers keep admission, the hold and the response on the requested model.
+ * runs as asked. Only models the billing org allows qualify. Callers keep admission, the hold and the
+ * response on the requested model.
  */
 export async function resolveShadowSubstitute(
   req: MeteredRequest,
@@ -197,8 +238,13 @@ export async function resolveShadowSubstitute(
 ): Promise<ModelInfo | undefined> {
   const user = throttleUser(req);
   if (!user || !isShadowTier(user)) return undefined;
-  const { allowlist } = await loadShadowTierSettings(adminSettingsRepository);
-  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools });
+  const organizationId = resolveRequestBillingOrgId(req);
+  const [{ allowlist }, org] = await Promise.all([
+    loadShadowTierSettings(adminSettingsRepository),
+    organizationId ? organizationRepository.findById(organizationId) : null,
+  ]);
+  const orgModelPolicy = readOrgModelPolicy(org?.modelPolicy);
+  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools, orgModelPolicy });
 }
 
 export { hasReportedUsage, latchUsage, type CompletionUsage };
@@ -294,8 +340,18 @@ type CompletionMeterOptions = {
   sessionId?: string;
   organizationId?: string | null;
   systemModel?: boolean;
-  /** The UserApiKey behind queued work that has no request; ledger attribution only, never the billing owner. */
+  /**
+   * The UserApiKey behind queued work that has no request: ledger attribution and the spend freeze subject,
+   * never the billing owner.
+   */
   apiKeyId?: string;
+  /** Org policy snapshot the caller already loaded; skips the meter's own org lookup. Explicit null is unrestricted. */
+  orgModelPolicy?: ReadOrgModelPolicy;
+  /**
+   * That key's billing owner type. No longer read by the spend freeze check, which keeps the acting user for
+   * every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
 };
 
 /**
@@ -325,10 +381,17 @@ export function createRequestCompletionMeter(
   opts: CompletionMeterOptions = {}
 ): CompletionMeter {
   return async (modelInfo, messages, maxTokens, models, turns = 1, tools = []) => {
-    await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
+    const organizationId = opts.systemModel ? null : resolveRequestBillingOrgId(req, opts.organizationId);
+    await (
+      await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel, {
+        organizationId,
+        orgModelPolicy: opts.orgModelPolicy,
+      })
+    ).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
+      spendFreezeApiKey: opts.apiKeyId ? { keyId: opts.apiKeyId } : undefined,
     });
     return {
       refund: () => reservation.refund(),
@@ -352,11 +415,13 @@ export function createRequestCompletionMeter(
 
 /**
  * Pre-enqueue gate for queued platform-key work billed later through createCompletionMeter: refuses
- * (422 insufficient_credits) when the billing owner - the org seat when present, else the user - has
- * no credits or the member is at their org cap. A no-op when enforceCredits is off.
+ * (403 spend_frozen) when the user or the billing owner is frozen, then (422 insufficient_credits) when
+ * the billing owner - the org seat when present, else the user - has no credits or the member is at
+ * their org cap. Only the freeze applies when enforceCredits is off.
  */
 export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
-  await assertCanAfford(user, user.organizationId ? String(user.organizationId) : undefined);
+  const organizationId = user.organizationId ? String(user.organizationId) : undefined;
+  await assertCanAfford(user, organizationId, { userId: user.id, organizationId: organizationId ?? null });
 }
 
 /**
@@ -365,14 +430,23 @@ export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
  * key holder's org seat.
  */
 export async function assertRequestCanAfford(req: MeteredRequest): Promise<void> {
-  await assertCanAfford(req.user!, resolveRequestBillingOrgId(req), Boolean(req.apiKeyInfo));
+  const organizationId = resolveRequestBillingOrgId(req);
+  await assertCanAfford(
+    req.user!,
+    organizationId,
+    spendFreezeSubjectForRequest(req, organizationId ?? null),
+    Boolean(req.apiKeyInfo)
+  );
 }
 
 async function assertCanAfford(
   user: IUserDocument,
   organizationId: string | undefined,
+  freezeSubject: SpendFreezeSubject,
   isApiKeyCaller = false
 ): Promise<void> {
+  // Same order as reserveRequestCredits, which re-checks it when the queued work reserves.
+  await creditService.assertSpendNotFrozen(freezeSubject, { db: { spendFreezes: spendFreezeRepository } });
   if (!(await isCreditsEnforced())) return;
   const org = organizationId ? await organizationRepository.findById(organizationId) : null;
   // Same refusal reserveRequestCredits' assertBillable raises at hold time; checked here so a departed

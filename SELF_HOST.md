@@ -635,7 +635,7 @@ This is a separate corpus from your uploaded files: the **Help** panel and the H
 | Half                                           | Built by                                          | Needs a key        |
 | ---------------------------------------------- | ------------------------------------------------- | ------------------ |
 | The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
-| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+| The embedding vectors (`help-embeddings.json` + `help-embeddings.bin`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
 
@@ -654,7 +654,9 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
+**Upgrading from an older build:** the vectors used to live entirely in `help-embeddings.json`. An install that built them then and rebuilds without a key keeps serving keyword results until you re-run `help:vectorize`, which writes the new JSON + binary pair.
+
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` + `help-embeddings.bin` pair still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -1137,14 +1139,14 @@ Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure l
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
-| Setup | `TRUSTED_PROXY_HOPS` |
-| --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
-| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
-| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
-| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
-| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+| Setup                                                         | `TRUSTED_PROXY_HOPS`                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No proxy (direct `:3000`)                                     | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket                                                                                                                                                                                                   |
+| Tailscale sidecar (Path A, including the Headscale variant)   | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
+| Bundled Caddy (`compose.caddy.yaml`)                          | `1` - set for you                                                                                                                                                                                                                                                                                                                            |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1`                                                                                                                                                                                                                                                                                                                                          |
+| Kubernetes chart via `kubectl port-forward`                   | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front                                                                                                                                                                   |
+| A CDN or load balancer in front of your proxy                 | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For`                                                                                                                                                                                                                                                                      |
 
 With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
@@ -1312,7 +1314,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.

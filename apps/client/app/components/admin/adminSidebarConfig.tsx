@@ -13,6 +13,7 @@ import {
   ChartColumn,
   ChartLine,
   ChartSpline,
+  ChartColumnStacked,
   Clock,
   Code,
   Coins,
@@ -54,7 +55,6 @@ import {
   ScrollText,
   ClipboardCheck,
   Settings,
-  ShieldAlert,
   ShieldCheck,
   Siren,
   Sparkles,
@@ -62,7 +62,7 @@ import {
   Tag,
   Timer,
   TrendingUp,
-  UserPlus,
+  UserCheck,
   UserSearch,
   Users,
   UsersRound,
@@ -120,6 +120,7 @@ export enum AdminTab {
   ArchitectureDiagrams = 47,
   Dependencies = 48,
   ApiCookbook = 49,
+  /** Retired page: its slug redirects to the Security page's Scans view (adminTabSlugs.ts). */
   SecOpsTriage = 51,
   VoiceSettings = 52,
   AgentExecutions = 53,
@@ -149,6 +150,9 @@ export enum AdminTab {
   Tutorials = 77,
   AiOperations = 78,
   LegacyApiKeys = 79,
+  Roles = 80,
+  AccessReview = 81,
+  SpendExplorer = 82,
 }
 
 /**
@@ -221,10 +225,9 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
-      { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
+      { Icon: ShieldCheck, tab: AdminTab.Roles, label: 'Roles', testid: 'admin-roles-btn' },
       { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback', badge: 'feedback' },
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
-      { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
       { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds', badge: 'signupDomainHolds' },
       {
         Icon: UserSearch,
@@ -257,6 +260,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
+      {
+        Icon: ChartColumnStacked,
+        tab: AdminTab.SpendExplorer,
+        label: 'Spend explorer',
+        testid: 'admin-spend-explorer-btn',
+      },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],
@@ -267,7 +276,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Trust and safety',
     items: [
       { Icon: ShieldCheck, tab: AdminTab.SecurityDashboard, label: 'Security', testid: 'admin-security-dashboard-btn' },
-      { Icon: ShieldAlert, tab: AdminTab.SecOpsTriage, label: 'SecOps triage', testid: 'admin-secops-triage-btn' },
       {
         Icon: ImageOff,
         tab: AdminTab.ModerationIncidents,
@@ -282,6 +290,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
+      { Icon: UserCheck, tab: AdminTab.AccessReview, label: 'Access review', testid: 'admin-access-review-btn' },
       {
         Icon: ClipboardCheck,
         tab: AdminTab.Approvals,

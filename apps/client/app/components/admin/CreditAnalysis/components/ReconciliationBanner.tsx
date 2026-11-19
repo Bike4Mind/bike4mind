@@ -1,43 +1,39 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Alert, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { api } from '@client/app/contexts/ApiContext';
-import { ISpendReconciliation } from '@bike4mind/common';
+import {
+  ISpendReconciliation,
+  SPEND_RECONCILIATION_DRIFT_ALERT_PCT,
+  SPEND_RECONCILIATION_DRIFT_WARN_PCT,
+} from '@bike4mind/common';
+
+const RECONCILIATION_STALE_TIME_MS = 5 * 60 * 1000;
 
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
 const statusFromDelta = (deltaPct: number): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
-  if (deltaPct < 2) return { color: 'success', Icon: CheckCircleOutlineIcon };
-  if (deltaPct <= 10) return { color: 'warning', Icon: WarningAmberIcon };
+  if (deltaPct < SPEND_RECONCILIATION_DRIFT_WARN_PCT) return { color: 'success', Icon: CheckCircleOutlineIcon };
+  if (deltaPct <= SPEND_RECONCILIATION_DRIFT_ALERT_PCT) return { color: 'warning', Icon: WarningAmberIcon };
   return { color: 'danger', Icon: ErrorOutlineIcon };
 };
 
 export const ReconciliationBanner: React.FC = () => {
-  const [rows, setRows] = useState<ISpendReconciliation[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchReconciliation = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await api.get<{ reconciliations: ISpendReconciliation[] }>(
-        '/api/admin/spend-reconciliation?view=latest'
-      );
-      setRows(res.data.reconciliations);
-    } catch (err) {
-      setError((err as Error)?.message || 'Failed to load reconciliation data');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchReconciliation();
-  }, [fetchReconciliation]);
+  const query = useQuery({
+    queryKey: ['admin', 'spend-reconciliation', 'latest'],
+    queryFn: async () =>
+      (await api.get<{ reconciliations: ISpendReconciliation[] }>('/api/admin/spend-reconciliation?view=latest')).data
+        .reconciliations,
+    staleTime: RECONCILIATION_STALE_TIME_MS,
+  });
+  const rows = query.data ?? null;
+  const isLoading = query.isFetching;
+  const error = query.error ? query.error.message || 'Failed to load reconciliation data' : null;
+  const fetchReconciliation = () => void query.refetch();
 
   // Nothing to show until the first reconciliation runs.
   if (isLoading && !rows) {
@@ -46,7 +42,23 @@ export const ReconciliationBanner: React.FC = () => {
 
   if (error) {
     return (
-      <Alert color="danger" size="sm" data-testid="reconciliation-banner-error">
+      <Alert
+        color="danger"
+        size="sm"
+        data-testid="reconciliation-banner-error"
+        endDecorator={
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="danger"
+            onClick={fetchReconciliation}
+            disabled={isLoading}
+            data-testid="reconciliation-banner-retry"
+          >
+            <RefreshIcon fontSize="small" />
+          </IconButton>
+        }
+      >
         Reconciliation: {error}
       </Alert>
     );

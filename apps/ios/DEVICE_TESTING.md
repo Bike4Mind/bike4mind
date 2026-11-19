@@ -12,7 +12,9 @@ CI. Work through it before the first TestFlight build and again before each rele
       bundle ids, or the extension cannot reach the session.
 - [ ] `apple-app-site-association` published at `https://app.bike4mind.com/.well-known/apple-app-site-association` listing
       `/sessions/*` and `/notebooks/*` under `applinks`, and the app id under `webcredentials.apps` (the entitlement declares
-      both `applinks:` and `webcredentials:app.bike4mind.com`).
+      both `applinks:` and `webcredentials:app.bike4mind.com`). The backend serves it; set the **iOS App Team ID**
+      admin setting (`iosAppTeamId`, under API Clients) in production, then check
+      `curl -i https://app.bike4mind.com/.well-known/apple-app-site-association` lists `<TEAMID>.com.bike4mind.app`.
 - [ ] APNs auth key uploaded to the backend; Live Activity push (`liveactivity` push type) enabled for it.
 - [ ] The `b4m-ios-app` OAuth client lists only `https://app.bike4mind.com/ios/auth-callback`, and production has no
       `b4m-ios-app-dev` client (see the README "Sign-in callback" table).
@@ -196,7 +198,7 @@ Run on the first TestFlight build and every release candidate:
 - [ ] Live Activity: start, update, end.
 - [ ] App Lock (Face ID), sign out, sign in again.
 - [ ] Dynamic Type at the largest accessibility size on the Chat home, Notebooks, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
-- [ ] Icon and launch screen show (the shipped icon is a placeholder, see the README).
+- [ ] Home-screen icon, launch screen, sign-in header and the Chat home greeting mark show the official brand mark.
 
 ## Things worth watching that are not in a feature list
 

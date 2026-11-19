@@ -8,6 +8,7 @@ import {
   convertPipelineForDocumentDB,
   executeFacetCompatible,
   mongoose,
+  platformEndUserRepository,
   type IUserObject,
 } from '@bike4mind/database';
 import { ADMIN_USER_PROJECTION, type AdminUserListItem } from '../../app/utils/adminUserProjection';
@@ -22,7 +23,13 @@ import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '../../users/signupAnomaly';
 import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '../../analytics/activationFunnel';
 import { signupVerdictUserIds } from '../../analytics/realSignup';
 import { listAiAbuseAdvisories } from '../aiAdvisory/aiAbuseAdvisories';
-import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
+import {
+  LIVE_API_KEY_STATUS,
+  PROVIDER_END_USER_ID,
+  adminUsersSort,
+  buildAdminUsersMatch,
+  organizationNamesOf,
+} from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 // Shared with the Analytics funnel so its counts and this drill-down fail on the same terms.
@@ -80,7 +87,7 @@ export async function adminUsersPipeline(
     ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
     : undefined;
   const cohortOptions = { now, deadlineMs: LIST_MAX_TIME_MS };
-  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds] = await Promise.all([
+  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds, platformEndUser] = await Promise.all([
     filter.verdict
       ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
       : undefined,
@@ -93,6 +100,9 @@ export async function adminUsersPipeline(
           advisories.map(advisory => advisory.userId)
         )
       : undefined,
+    filter.search && PROVIDER_END_USER_ID.test(filter.search)
+      ? platformEndUserRepository.findByProviderEndUserId(filter.search.toLowerCase())
+      : null,
   ]);
   const match = buildAdminUsersMatch(filter, {
     now,
@@ -103,6 +113,7 @@ export async function adminUsersPipeline(
     activeUserIds: activeIds,
     funnelStepUserIds: funnelIds,
     aiAbuseUserIds,
+    platformEndUserOwnerIds: platformEndUser ? [platformEndUser.keyOwnerId] : undefined,
   });
   // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
   return [{ $match: match }] as unknown as mongoose.PipelineStage[];
@@ -208,6 +219,7 @@ export type AdminUsersExportRow = Pick<
   IUserObject,
   'name' | 'username' | 'email' | 'createdAt' | 'isAdmin' | 'isBanned'
 > & {
+  id: string;
   organizationName: string | null;
   loginCount: number;
   lastLoginAt: Date | null;
@@ -215,13 +227,12 @@ export type AdminUsersExportRow = Pick<
 
 /** The CSV columns for every user the filter matches, newest first, up to USERS_EXPORT_MAX_ROWS. */
 export async function exportAdminUsers(filter: AdminUsersFilter, now = new Date()) {
-  const rows: (AdminUsersExportRow & { organizationId?: unknown })[] = await User.aggregate([
+  const rows: (Omit<AdminUsersExportRow, 'id'> & { _id: unknown; organizationId?: unknown })[] = await User.aggregate([
     ...(await adminUsersPipeline(filter, now)),
     { $sort: { createdAt: -1, _id: -1 } },
     { $limit: USERS_EXPORT_MAX_ROWS + 1 },
     {
       $project: {
-        _id: 0,
         name: 1,
         username: 1,
         email: 1,
@@ -241,8 +252,9 @@ export async function exportAdminUsers(filter: AdminUsersFilter, now = new Date(
   const names = new Map(organizations.map(organization => [String(organization._id), organization.name]));
   return {
     truncated: rows.length > USERS_EXPORT_MAX_ROWS,
-    users: rows.slice(0, USERS_EXPORT_MAX_ROWS).map(({ organizationId, ...row }) => ({
+    users: rows.slice(0, USERS_EXPORT_MAX_ROWS).map(({ _id, organizationId, ...row }) => ({
       ...row,
+      id: String(_id),
       organizationName: organizationId ? (names.get(String(organizationId)) ?? null) : null,
       lastLoginAt: row.lastLoginAt ?? null,
     })),

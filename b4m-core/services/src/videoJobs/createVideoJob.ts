@@ -47,7 +47,12 @@ export async function createVideoJob(
   const caps = getVideoModelCapabilities(request.model);
   const retired = retiredVideoModelMessage(request.model);
   if (retired) return { ok: false, status: 422, code: 'model_unavailable', message: retired };
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   if (!deps.providers.get(caps.provider)) {
     return {
       ok: false,
@@ -96,6 +101,8 @@ export async function createVideoJob(
       user: input.user,
       requiredCredits: estimateVideoCostCredits(caps, request),
       featureLabel: 'video generation',
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
     },
     deps
   );

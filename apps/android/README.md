@@ -53,11 +53,19 @@ project-specific is committed. Take the four values from the Firebase console (P
 
 With any of them unset the app builds and runs normally and simply never gets a push token (CI builds this way).
 
+Tapping a push routes by its `data` (`kit/push/NotificationRoute`): a `brief_ready` push opens that brief. Other
+categories just open the app. Which categories a user receives is a server-side preference
+(`preferences.pushNotifications`); the app has no settings screen for it yet.
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to
 `MAJOR.MINOR.PATCH`), so `minimumClientVersions["b4m-android"]` can refuse an old build with a 426. Keep `versionName`
 to one to three integers; anything else sends neither header.
+
+## Releases
+
+Release builds ship on the monthly mobile train: `.github/workflows/android-play-internal.yml` builds a signed bundle and uploads it to the Play internal testing track on a `mobile-v*` tag. `versionName` and `versionCode` come from `-Pb4m.versionName` / `-Pb4m.versionCode`, and signing from `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them a release build is unsigned at `0.1.0` (1). Process, version scheme and secrets: [docs/mobile-release-train.md](../../docs/mobile-release-train.md).
 
 ## Generated API client
 

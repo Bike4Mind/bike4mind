@@ -20,6 +20,58 @@ export const OVERFLOW_POINTS: Record<TavernZone, SlotPoint> = TAVERN_LAYOUT.over
 
 export const DOOR_POINT: SlotPoint = TAVERN_LAYOUT.door;
 
+/** The quest board's box on the back wall (percent of the scene box) and how many notes it holds. */
+export const QUEST_BOARD = TAVERN_LAYOUT.questBoard;
+
+/**
+ * Splits `items` into the notes pinned on a board with room for `capacity`, and the rest. Like a full
+ * zone's overflow stack, a board that cannot fit everything gives its last place to a "+N" note.
+ */
+export function pinNotes<T>(items: readonly T[], capacity: number): { pinned: T[]; hidden: T[] } {
+  if (items.length <= capacity) return { pinned: [...items], hidden: [] };
+  const room = Math.max(0, capacity - 1);
+  return { pinned: items.slice(0, room), hidden: items.slice(room) };
+}
+
+// The board's vertical metrics, in cqh (1% of the scene height) unless noted. Must stay in sync with
+// the paddings, gaps and font in QuestBoard.tsx, whose note font is clamp(7px, 1.5cqh, 10px).
+const NOTE_FONT_CQH = 1.5;
+const NOTE_FONT_MIN_PX = 7;
+const NOTE_FONT_MAX_PX = 10;
+const NOTE_GAP_CQH = 0.9;
+const NOTE_PAD_CQH = 0.9;
+const MORE_PAD_CQH = 0.8;
+// Frame padding (0.4 top, 0.7 bottom), the header's gap and cork padding (0.6 top and bottom).
+const BOARD_CHROME_CQH = 0.4 + 0.7 + NOTE_GAP_CQH + 1.2;
+const HEADER_LINES = 1.3;
+const NOTE_LINES = 2.4;
+const MORE_LINES = 1.2;
+const FIT_SLACK_PX = 2;
+
+/**
+ * How many notes (the "+N" note counts as one, as in `pinNotes`) a board `boardHeightPx` tall holds
+ * for `total` quests. The note font has a pixel floor, so on a small scene a fixed count overruns
+ * the board; this shrinks the count until the pinned notes and the "+N" note fit. 0 means not even
+ * the "+N" note fits, so the board is too small to be of use and should not be drawn.
+ */
+export function noteCapacity(boardHeightPx: number, total: number, max: number = QUEST_BOARD.notes): number {
+  const unit = boardHeightPx / QUEST_BOARD.height; // px per percent of the scene height
+  const font = Math.min(NOTE_FONT_MAX_PX, Math.max(NOTE_FONT_MIN_PX, NOTE_FONT_CQH * unit));
+  const room = boardHeightPx - BOARD_CHROME_CQH * unit - HEADER_LINES * font - FIT_SLACK_PX;
+  const stack = (pinned: number, more: boolean) => {
+    const places = pinned + (more ? 1 : 0);
+    const notes = pinned * (NOTE_LINES * font + NOTE_PAD_CQH * unit);
+    const moreNote = more ? MORE_LINES * font + MORE_PAD_CQH * unit : 0;
+    return notes + moreNote + Math.max(0, places - 1) * NOTE_GAP_CQH * unit;
+  };
+  if (total <= max && stack(total, false) <= room) return total;
+  for (let pinned = Math.min(total, max) - 1; pinned >= 0; pinned--) {
+    if (pinned + 1 >= total) continue; // a capacity of `total` must mean the full stack fits
+    if (stack(pinned, true) <= room) return pinned + 1;
+  }
+  return 0;
+}
+
 /**
  * The bar counter as drawn in the backdrop (percent of the scene box): `top` is where its top
  * meets the shelving behind it, `front` where its front panel meets the floor.
@@ -56,16 +108,6 @@ const POSE: Record<AgentState, Pose> = {
   failed: 'ko',
   stopped: 'idle',
   idle: 'idle',
-};
-
-/** The lamp on each nameplate and token: the agent's state at a glance, without the bubble. */
-export const STATE_LAMP: Record<AgentState, string> = {
-  'needs-you': '#f5c542',
-  working: '#ff9d3c',
-  done: '#7ed07a',
-  failed: '#e5534b',
-  stopped: '#a89a88',
-  idle: '#a89a88',
 };
 
 export function zoneFor(state: AgentState): TavernZone {
@@ -266,13 +308,13 @@ export type WaitingSeat = { id: string; zone: TavernZone; point: SlotPoint };
  * Agents waiting in one zone share a single "needs you" bubble. Seats are closer together than
  * the bubble is wide at most stage sizes (bar seats 6% of the scene apart, the bubble 5% to 28%,
  * since its text has a pixel floor), so one bubble each would pile up. Returns the agent each
- * zone's bubble sits over, the one nearest the group's middle (leftmost on a tie), and how many
- * agents it speaks for.
+ * zone's bubble sits over, the one nearest the group's middle (leftmost on a tie), and the ids it
+ * speaks for, left to right.
  */
-export function needsYouBubbles(waiting: Iterable<WaitingSeat>): Map<string, number> {
+export function needsYouGroups(waiting: Iterable<WaitingSeat>): Map<string, string[]> {
   const byZone = new Map<TavernZone, WaitingSeat[]>();
   for (const seat of waiting) byZone.set(seat.zone, [...(byZone.get(seat.zone) ?? []), seat]);
-  const carriers = new Map<string, number>();
+  const carriers = new Map<string, string[]>();
   for (const group of byZone.values()) {
     const total = group.reduce((sum, seat) => sum + seat.point.x, 0);
     // Scaled by the group size so the middle stays exact for whole-number seats.
@@ -280,7 +322,11 @@ export function needsYouBubbles(waiting: Iterable<WaitingSeat>): Map<string, num
     const carrier = group.reduce((best, seat) =>
       offset(seat) < offset(best) || (offset(seat) === offset(best) && seat.point.x < best.point.x) ? seat : best
     );
-    carriers.set(carrier.id, group.length);
+    const ordered = [...group].sort((a, b) => a.point.x - b.point.x);
+    carriers.set(
+      carrier.id,
+      ordered.map(seat => seat.id)
+    );
   }
   return carriers;
 }

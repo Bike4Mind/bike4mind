@@ -44,7 +44,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   aiImageService: () => ({ generate: m.generate }),
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({ openai: 'sk-test' }) },
   latchUsage: () => undefined,
@@ -116,7 +121,7 @@ describe('POST /api/blog/generate-featured-image metering', () => {
     m.assertAdmission.mockRejectedValue(new ForbiddenError('Model "gpt-image-1" is not accessible'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
-    expect(m.assertAdmission).toHaveBeenCalledWith('gpt-image-1');
+    expect(m.assertAdmission).toHaveBeenCalledWith('gpt-image-1', undefined);
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
   });

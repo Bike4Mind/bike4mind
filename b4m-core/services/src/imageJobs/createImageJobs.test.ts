@@ -52,6 +52,7 @@ const capUser = { id: 'u1', createdAt: new Date('2026-10-12T00:00:00Z'), isAdmin
 const testCredits = {
   users: { findById: vi.fn(async () => capUser) },
   newAccountSpendCap: {},
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
 } as unknown as CreditHoldAdapters;
 
 const openAiProvider: ImageProvider = {
@@ -103,7 +104,12 @@ const validRequest = { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt:
 const run = (
   deps: CreateImageJobsDeps,
   request: unknown,
-  extra: { count?: number; idempotencyKey?: string; delivery?: CreateImageJobsInput['delivery'] } = {}
+  extra: {
+    count?: number;
+    idempotencyKey?: string;
+    delivery?: CreateImageJobsInput['delivery'];
+    questId?: string;
+  } = {}
 ) => createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
 
 describe('createImageJobs', () => {
@@ -327,6 +333,20 @@ describe('createImageJobs', () => {
       for (const job of result.jobs) expect(job).not.toHaveProperty('delivery');
     });
 
+    it('stamps the chat turn on every job of the batch', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 2, questId: 'q-1' });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job.questId).toBe('q-1');
+    });
+
+    it('stores no questId when the batch was not started from a chat turn', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest);
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0]).not.toHaveProperty('questId');
+    });
+
     it('records the batch size on every job so the group completes only when all members are in', async () => {
       const { deps } = makeDeps();
       const result = await run(deps, validRequest, { count: 3 });
@@ -421,8 +441,8 @@ describe('createImageJobs', () => {
       const first = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       const second = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       if (!first.ok || !second.ok) throw new Error('expected both calls to succeed');
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(false);
+      expect(first).toMatchObject({ created: true, createdCount: 2 });
+      expect(second).toMatchObject({ created: false, createdCount: 0 });
       expect(second.groupId).toBe(first.groupId);
       expect(second.jobs.map(job => job.id)).toEqual(first.jobs.map(job => job.id));
       expect(holdCredits).toHaveBeenCalledTimes(2);

@@ -8,6 +8,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { CreditHolderType, TooManyRequestsError, questReplyText } from '@bike4mind/common';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
+import { FlaggedContentError } from '@bike4mind/utils';
 
 // SST Resource - the internal shared-secret bearer /process checks.
 const mockResource = vi.hoisted(() => ({
@@ -56,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
   cacheRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
@@ -309,6 +311,25 @@ describe('ChatCompletion /process', () => {
       'q1',
       expect.objectContaining({ status: 'stopped', type: 'error' })
     );
+  });
+
+  // The moderation service already logged the flag once at warn; the route must not log or count it again.
+  it('settles a moderation refusal without logging or counting it as a processing failure', async () => {
+    const refusal = new FlaggedContentError(
+      "We're sorry, your prompt has been flagged for potential harmful content on the following categories: violence",
+      ['violence']
+    );
+    mockProcessQuest.mockRejectedValueOnce(refusal);
+    const response = await post(VALID_BODY, { authorization: AUTH });
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
   });
 
   it('still settles the quest and emits the metric when it is a non-Error throw', async () => {

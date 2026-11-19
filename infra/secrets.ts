@@ -17,6 +17,7 @@ export const secrets = {
   SESSION_SECRET: new sst.Secret('SESSION_SECRET', 'my-secret-placeholder-value'),
   JWT_SECRET: new sst.Secret('JWT_SECRET', 'my-secret-placeholder-value'),
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
+  SLACK_FEEDBACK_DESTINATIONS: new sst.Secret('SLACK_FEEDBACK_DESTINATIONS', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
   SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
   // Cost-category alarms (apps/workers/src/events/alarmSlackMessage.ts) post here when set;

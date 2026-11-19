@@ -29,6 +29,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
   },
+  cancelSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions/{id}/cancel',
+  },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
@@ -40,6 +44,10 @@ export const operations = {
   cloneSession: {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
+  },
+  composeBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs',
   },
   createAgent: {
     method: 'POST',
@@ -88,6 +96,10 @@ export const operations = {
   createProjectInvite: {
     method: 'POST',
     path: '/api/v1/projects/{id}/invites',
+  },
+  createSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions',
   },
   createSession: {
     method: 'POST',
@@ -209,6 +221,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getBrief: {
+    method: 'GET',
+    path: '/api/v1/briefs/{id}',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -224,6 +240,10 @@ export const operations = {
   getClientConfig: {
     method: 'GET',
     path: '/api/v1/client-config',
+  },
+  getCompletionRunUsage: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/usage',
   },
   getCreditBalance: {
     method: 'GET',
@@ -273,6 +293,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}',
   },
+  getSceneComposition: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions/{id}',
+  },
   getSession: {
     method: 'GET',
     path: '/api/sessions/{id}',
@@ -316,6 +340,10 @@ export const operations = {
   listArtifacts: {
     method: 'GET',
     path: '/api/v1/artifacts',
+  },
+  listBriefs: {
+    method: 'GET',
+    path: '/api/v1/briefs',
   },
   listCreditTransactions: {
     method: 'GET',
@@ -380,6 +408,10 @@ export const operations = {
   listQuestFiles: {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
+  },
+  listSceneCompositions: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions',
   },
   listSessionFiles: {
     method: 'GET',

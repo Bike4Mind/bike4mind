@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -100,7 +101,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit) {
+fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit, onOpenBrief: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
     val model = viewModel { SessionListViewModel(graph) }
     val state by model.state.collectAsStateWithLifecycle()
@@ -111,6 +112,7 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
             TopAppBar(
                 title = { Text("Chats") },
                 actions = {
+                    TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text("Brief") }
                     TextButton(onClick = model::refresh) { Text("Refresh") }
                     TextButton(onClick = {
                         scope.launch {
@@ -125,16 +127,16 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                                 graph.session.restore()
                             }
                         }
-                    }) { Text("Sign out") }
+                    }, modifier = Modifier.testTag("settings-signout-btn")) { Text("Sign out") }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = onNewChat) { Text("New chat") }
+            ExtendedFloatingActionButton(onClick = onNewChat, modifier = Modifier.testTag("sessions-new-conversation-btn")) { Text("New chat") }
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize().testTag("sessions-list")) {
                 state.defaultModel?.let { defaultModel ->
                     item {
                         Text(

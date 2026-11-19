@@ -8,17 +8,24 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
+import com.bike4mind.kit.push.NotificationRoute
+import com.bike4mind.kit.push.PendingNotificationRoute
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val signInError = MutableStateFlow<String?>(null)
+    private val pendingPush = PendingNotificationRoute()
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { syncNotificationPermission() }
@@ -27,12 +34,29 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as B4MApplication
+        if (savedInstanceState != null) {
+            pendingPush.restoreBriefId(savedInstanceState.getString(PENDING_BRIEF_KEY))
+        }
         setContent {
             B4MTheme {
-                AppRoot(app = app, signInError = signInError, onSignedIn = ::askForNotificationsOnce)
+                // Exposes Compose test tags as resource ids, which is how the shared Maestro flows address elements.
+                Box(Modifier.semantics { testTagsAsResourceId = true }) {
+                    AppRoot(
+                        app = app,
+                        signInError = signInError,
+                        pushRoute = pendingPush.route,
+                        onPushRouteConsumed = { route -> pendingPush.consume(route) },
+                        onSignedIn = ::askForNotificationsOnce,
+                    )
+                }
             }
         }
-        if (savedInstanceState == null) handleCallback(intent)
+        if (savedInstanceState == null) handleIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(PENDING_BRIEF_KEY, pendingPush.snapshotBriefId())
     }
 
     override fun onResume() {
@@ -43,7 +67,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        handlePushTap(intent)
         handleCallback(intent)
+    }
+
+    /**
+     * A tapped push: the system tray hands FCM's `data` over as the launch intent's extras, and the foreground
+     * notification (PushNotifications.show) copies them the same way. AppRoot opens the route once signed in.
+     */
+    private fun handlePushTap(intent: Intent?) {
+        val extras = intent?.extras ?: return
+        NotificationRoute.from { extras.getString(it) }?.let(pendingPush::accept)
     }
 
     private fun syncNotificationPermission() {
@@ -78,5 +116,9 @@ class MainActivity : ComponentActivity() {
                 failure.message ?: "Sign-in failed"
             }
         }
+    }
+
+    private companion object {
+        const val PENDING_BRIEF_KEY = "b4m.pendingBriefId"
     }
 }

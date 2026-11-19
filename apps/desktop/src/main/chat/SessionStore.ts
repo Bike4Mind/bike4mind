@@ -36,6 +36,8 @@ import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
+import { StudioFamilyStore } from './studio/StudioFamilyStore';
+import { studioIdSchema, type StudioWorkspaceIdentity } from '@shared/studio';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -279,6 +281,8 @@ export interface PromptCacheTtlMemory {
  * install before this looked like on disk.
  */
 export class SessionStore implements SessionWritesStore {
+  private readonly studioFamilies = new StudioFamilyStore();
+
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -448,6 +452,12 @@ export class SessionStore implements SessionWritesStore {
       ...(options.workerTask ? { workerTask: workerTaskSchema.parse(options.workerTask) } : {}),
       messages: [],
     };
+    const family =
+      origin && studioIdSchema.safeParse(origin.parentSessionId).success
+        ? await this.studioFamilies.resolve(directory, origin.parentSessionId, id => this.read(directory, id), false)
+        : null;
+    session.studioWorkspaceId = family?.workspaceId ?? session.id;
+    session.studioRootSessionId = family?.rootSessionId ?? session.id;
     await this.write(directory, session);
     return summarizeSession(session);
   }
@@ -561,6 +571,7 @@ export class SessionStore implements SessionWritesStore {
           const task = session.workerTask;
           session.workerTask = workerTaskSchema.parse({
             ...task,
+            attentionViewed: undefined,
             state: { status: 'queued' },
             attempts: [
               ...task.attempts,
@@ -584,13 +595,19 @@ export class SessionStore implements SessionWritesStore {
       id,
       session => {
         if (!session.workerTask) return null;
-        const changed = change(session.workerTask);
+        const previous = session.workerTask;
+        const changed = change(previous);
         const attempts =
           changed.attempts.length > MAX_TASK_ATTEMPTS
             ? [changed.attempts[0], ...changed.attempts.slice(1 - MAX_TASK_ATTEMPTS)]
             : changed.attempts;
         const resolvedDecisions = changed.resolvedDecisions.slice(-MAX_RESOLVED_DECISIONS);
-        session.workerTask = workerTaskSchema.parse({ ...changed, attempts, resolvedDecisions });
+        session.workerTask = workerTaskSchema.parse({
+          ...changed,
+          ...(changed.state !== previous.state ? { attentionViewed: undefined } : {}),
+          attempts,
+          resolvedDecisions,
+        });
         if (model && session.workerSelection) {
           session.model = model;
           session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
@@ -604,6 +621,29 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {
+    if (!expectedScope || this.scopeKey() !== expectedScope) return null;
+    const directory = await this.directoryFor(true);
+    if (!directory || this.scopeKey() !== expectedScope) return null;
+    const identity = await this.studioFamilies.resolve(directory, id, ancestor => this.read(directory, ancestor));
+    return this.scopeKey() === expectedScope ? identity : null;
+  }
+
+  async withStudioSession<T>(id: string, expectedScope: string | null, operation: () => Promise<T>): Promise<T | null> {
+    return this.serialize(id, async () => {
+      if (!expectedScope || this.scopeKey() !== expectedScope) return null;
+      const directory = await this.directoryFor(true);
+      if (!directory || this.scopeKey() !== expectedScope) return null;
+      try {
+        await stat(this.filePath(directory, id));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+      return operation();
+    });
   }
 
   /**
@@ -1227,9 +1267,11 @@ export class SessionStore implements SessionWritesStore {
    * a worktree can hold uncommitted work, and deleting a chat must never be a way to lose code.
    * Removing one stays a git operation the user performs themselves (`rmworktree <branch>`).
    */
-  async delete(id: string): Promise<void> {
+  async delete(id: string, expectedScope = this.scopeKey()): Promise<void> {
     await this.serialize(id, async () => {
+      if (this.scopeKey() !== expectedScope) throw new Error('Account changed.');
       const directory = await this.directoryFor(false);
+      if (this.scopeKey() !== expectedScope) throw new Error('Account changed.');
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });
@@ -1309,6 +1351,9 @@ export class SessionStore implements SessionWritesStore {
     }
 
     session.messages.push(message);
+    if (message.role === 'assistant' && session.workerTask) {
+      session.workerTask = { ...session.workerTask, attentionViewed: false };
+    }
     session.updatedAt = new Date().toISOString();
     if (session.importOrigin && !session.importOrigin.forkedAt && !isImportedMessageId(message.id)) {
       session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
@@ -1332,6 +1377,9 @@ export class SessionStore implements SessionWritesStore {
     if (!target) return session;
 
     Object.assign(target, changes);
+    if (target.role === 'assistant' && session.workerTask) {
+      session.workerTask = { ...session.workerTask, attentionViewed: false };
+    }
     session.updatedAt = new Date().toISOString();
     await this.write(directory, session);
     return session;
@@ -1454,6 +1502,10 @@ export class SessionStore implements SessionWritesStore {
       ...(workerTask.success ? { workerTask: workerTask.data } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
+      ...(studioIdSchema.safeParse(parsed.studioWorkspaceId).success &&
+      studioIdSchema.safeParse(parsed.studioRootSessionId).success
+        ? { studioWorkspaceId: parsed.studioWorkspaceId, studioRootSessionId: parsed.studioRootSessionId }
+        : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),

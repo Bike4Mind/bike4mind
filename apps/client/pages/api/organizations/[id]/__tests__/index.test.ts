@@ -50,7 +50,7 @@ const get = vi.hoisted(() =>
   }))
 );
 const update = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_user: unknown, _params: { id: string; name?: string; storageLimit?: number | null }) => ({
     id: 'org1',
     userId: 'owner1',
     name: 'Acme',
@@ -103,6 +103,9 @@ vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));
 
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
+
 import '@pages/api/organizations/[id]/index';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -133,6 +136,25 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
     const body = res._getJSONData();
     expect(body.billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body).toBe(false);
+  });
+});
+
+describe('GET /api/organizations/[id] - staff read audit', () => {
+  beforeEach(() => recordOrganizationRead.mockClear());
+
+  it('records the organization as a detail read before responding', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await mockRefs.getHandler!(req, res);
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [expect.objectContaining({ name: 'Acme' })], {
+      view: 'detail',
+    });
+  });
+
+  it('fails the read when the audit write fails', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
   });
 });
 
@@ -326,6 +348,49 @@ describe('PUT /api/organizations/[id] - settings audit', () => {
     update.mockResolvedValueOnce({ id: 'org1', userId: 'owner1', name: 'Acme', systemPrompt: 'old' } as never);
     const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
     Object.assign(req, { body: { name: 'Acme' } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('records a storage override equal to the plan allowance against storageLimitOverride', async () => {
+    credits.findById.mockReset();
+    credits.findById.mockResolvedValueOnce({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      storageLimit: 5000,
+      planStorageLimit: 5000,
+    } as never);
+    update.mockResolvedValueOnce({
+      id: 'org1',
+      userId: 'owner1',
+      name: 'Acme',
+      storageLimit: 5000,
+      planStorageLimit: 5000,
+      storageLimitOverride: 5000,
+    } as never);
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'PUT');
+    Object.assign(req, { body: { storageLimit: 5000 } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ changes: [{ field: 'storageLimitOverride', before: null, after: 5000 }] })
+    );
+  });
+
+  it('records no storageLimitOverride change for a legacy org when the override is not written', async () => {
+    credits.findById.mockReset();
+    credits.findById.mockResolvedValueOnce({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      storageLimit: 10000,
+    } as never);
+    update.mockResolvedValueOnce({ id: 'org1', userId: 'owner1', name: 'Acme', storageLimit: 10000 } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { storageLimit: 20000 } });
     await mockRefs.putHandler!(req, res);
 
     expect(credits.recordAdminAction).not.toHaveBeenCalled();

@@ -9,6 +9,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditLedgerEntry } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import type { SpendFreezeApiKey } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
 import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 
@@ -130,11 +131,14 @@ export async function holdPreflightCredits({
   requiredCredits,
   featureLabel,
   billingOrganizationId,
+  spendFreezeApiKey,
 }: {
   req: PreflightBillingRequest;
   requiredCredits: number;
   featureLabel: string;
   billingOrganizationId?: string | null;
+  /** See reserveRequestCredits' spendFreezeApiKey: joins the freeze subject, never moves the payer. */
+  spendFreezeApiKey?: SpendFreezeApiKey;
 }): Promise<PreflightCreditHold> {
   const { user, logger } = req;
   const settings = await getSettingsMap(
@@ -150,6 +154,7 @@ export async function holdPreflightCredits({
       enforceCredits: getSettingsValue('enforceCredits', settings),
       featureLabel,
       billingOrganizationId,
+      spendFreezeApiKey,
     });
   } catch (err) {
     if (err instanceof UnprocessableEntityError) throw new InsufficientCreditsPreflightError(err.message);

@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUserDeletion } from '@bike4mind/common';
-import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import {
+  Organization,
+  User,
+  accountDeletionNoticeRepository,
+  adminAuditLogRepository,
+  realtimeConnectionRepository,
+  type mongoose,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
+import { redactAccountStripeCustomer } from '../billing/redactAccountStripeCustomer';
+import { erasureIdHash } from '../privacy/erasureHash';
 import { hardDeleteUser } from '../services/hardDeleteUser';
 import { systemAuditActor } from '../utils/adminAudit';
-import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
+import { sendPendingDeletionNotice } from './accountDeletionNotice';
 import { classifyOwnedOrganizations, deleteSoleOwnedOrganizations } from './ownedOrganizations';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -16,6 +25,8 @@ export type AccountDeletionSkipReason = 'not_due' | 'not_found' | 'busy';
 export type AccountDeletionCompletion = { deleted: true } | { deleted: false; reason: AccountDeletionSkipReason };
 
 export type ErasureSubject = { userId: string; email: string | null };
+/** `beforeDelete` holds back the references `hardDeleteUser` still reads (an organization's owner); `afterDelete` writes only those. */
+export type ErasureStage = 'beforeDelete' | 'afterDelete';
 
 /**
  * The data holder registry's view of one person, for an admin data subject erasure. The registry
@@ -23,8 +34,17 @@ export type ErasureSubject = { userId: string; email: string | null };
  * import, so callers pass it in.
  */
 export type ErasureRegistry = {
+  /** Throws when a contributed entry is malformed. Called before the claim so a bad registry purges nothing. */
+  assertReady(): void;
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
+  /** Deletes, anonymizes or detaches every row the registry finds naming the subject, or one stage of them. Idempotent. */
+  erase(
+    subject: ErasureSubject,
+    assertLease: () => Promise<void>,
+    stage?: ErasureStage,
+    session?: mongoose.ClientSession
+  ): Promise<void>;
   /** After the purge: what still names the subject outside the stated retentions, and the models not checked. */
   audit(subject: ErasureSubject): Promise<{ remaining: AdminErasureCollection[]; unclassified: string[] }>;
 };
@@ -106,6 +126,7 @@ export async function completeAccountDeletion(
   if (!(await User.exists(dueFilter(userId, now)))) {
     return { deleted: false, reason: (await User.exists({ _id: userId })) ? 'not_due' : 'not_found' };
   }
+  erasureRegistry.assertReady();
   await assertNoSharedOrganizations(userId);
   const leaseId = randomUUID();
   const user = await claimPurge(userId, now, leaseId);
@@ -121,6 +142,7 @@ export async function completeAccountDeletion(
   const erasure = user.deletion?.source === 'admin' ? { requestedBy: user.deletion.requestedBy ?? null } : null;
   const subject = { userId, email: user.email ?? null };
 
+  let deleteCommitted = false;
   try {
     // Snapshot once: a retry after a partial purge would count less, and the record must describe it all.
     let scope = user.deletion?.erasureScope;
@@ -132,11 +154,15 @@ export async function completeAccountDeletion(
     await deleteSoleOwnedOrganizations(userId, { logger, assertLease });
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
+    // Before the user row goes: the customer ID lives on it, so only this phase can retry the redaction.
+    await redactAccountStripeCustomer(userId, { logger, assertLease });
     await assertLease();
     await authSessionService.endRealtimeConnections(
       { userId },
       { db: { realtimeConnections: realtimeConnectionRepository } }
     );
+    await assertNoOwnedOrganizations(userId);
+    await erasureRegistry.erase(subject, assertLease, 'beforeDelete');
     await hardDeleteUser(
       userId,
       {
@@ -152,6 +178,14 @@ export async function completeAccountDeletion(
         // The admin audit entry commits with the delete, as the admin delete route's does.
         recordInTransaction: async target => {
           await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+          // The address is unreadable once the row is gone, so the confirmation's outbox commits with the delete.
+          if (!erasure && user.email) {
+            await accountDeletionNoticeRepository.record({
+              idHash: erasureIdHash(userId),
+              email: user.email,
+              now: new Date(),
+            });
+          }
           await adminAuditService.recordAdminAction(
             {
               action: 'user.deletion.completed',
@@ -173,10 +207,17 @@ export async function completeAccountDeletion(
             { db: { adminAuditLog: adminAuditLogRepository }, logger }
           );
         },
+        afterDeleteInTransaction: session => erasureRegistry.erase(subject, async () => {}, 'afterDelete', session),
+        onDeleteCommitted: () => {
+          deleteCommitted = true;
+        },
       },
       users => users.delete(userId)
     );
   } catch (error) {
+    if (deleteCommitted) {
+      throw error;
+    }
     try {
       await User.updateOne(
         { _id: userId, 'deletion.purgeLeaseId': leaseId },
@@ -195,13 +236,7 @@ export async function completeAccountDeletion(
     return { deleted: true };
   }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
-  if (user.email) {
-    try {
-      await sendAccountDeletionCompleteEmail(user.email);
-    } catch (error) {
-      logger.error(`Failed to send the deletion-complete email for user ${userId}: ${String(error)}`);
-    }
-  }
+  if (user.email) await sendPendingDeletionNotice(erasureIdHash(userId), { logger });
   return { deleted: true };
 }
 

@@ -30,8 +30,10 @@ export type JointDragDeps = {
   shown(): THREE.Object3D | null;
   /** The shared joint values, as the sliders show them. */
   pose(): Record<string, number>;
-  /** False while something else owns the view (a turntable recording). */
+  /** False while something else owns the view (a turntable recording, the measure tool). */
   enabled(): boolean;
+  /** The section tool's cut, if on: the part of the model it takes away cannot be grabbed. */
+  clip?(): THREE.Plane | null;
   /** A dragged joint's value, always within its range. */
   onChange(name: string, value: number): void;
   /** A drag began: the joints' Play loop should stop. */
@@ -147,7 +149,8 @@ export class JointDragController {
     const hit = meshAt(
       shown,
       this.deps.camera,
-      new THREE.Vector2((point.x / bounds.width) * 2 - 1, 1 - (point.y / bounds.height) * 2)
+      new THREE.Vector2((point.x / bounds.width) * 2 - 1, 1 - (point.y / bounds.height) * 2),
+      this.deps.clip?.() ?? null
     );
     const node = hit ? drivingJoint(hit.object) : null;
     return hit && node ? { node, hit: hit.point } : null;

@@ -1,4 +1,5 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetMetadata,
   GenerationJobSource,
   IGenerationJobDocumentOf,
@@ -61,7 +62,13 @@ export type MusicJobDeps = {
 };
 
 export type CreateMusicJobDeps = MusicJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more (the song is saved there, as saveToFiles does); undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -77,6 +84,11 @@ export type CreateMusicJobInput = {
   source: GenerationJobSource;
   /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
   apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   /** The notebook and message the song belongs to, for in-chat producers. */
   sessionId?: string;

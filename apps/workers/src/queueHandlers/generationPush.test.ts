@@ -56,11 +56,38 @@ describe('publishGenerationJobReadyPush', () => {
     });
   });
 
+  it('collapses a render job on its export group, and any other job on itself', async () => {
+    const renderJob = {
+      id: 'job-2',
+      kind: 'render',
+      state: 'succeeded',
+      requestedBy: 'user-1',
+      payload: { groupId: 'group-1', request: { title: 'Cut' } },
+    };
+    const render = jobDeps(renderJob);
+    await publishGenerationJobReadyPush('job-2', render, logger);
+    expect(render.publish).toHaveBeenCalledWith(expect.objectContaining({ collapseId: 'generation:group-1' }));
+
+    const video = jobDeps(videoJob);
+    await publishGenerationJobReadyPush('job-1', video, logger);
+    expect(video.publish).toHaveBeenCalledWith(expect.objectContaining({ collapseId: 'generation:job-1' }));
+  });
+
   it('does not push a succeeded image job', async () => {
     const deps = jobDeps({ ...videoJob, kind: 'image' });
     await publishGenerationJobReadyPush('job-1', deps, logger);
     expect(deps.publish).not.toHaveBeenCalled();
   });
+
+  it.each(['speech', 'sound_effect'])(
+    'does not push a succeeded %s job, whose requester is waiting on it',
+    async kind => {
+      const deps = jobDeps({ ...videoJob, kind, payload: { request: { text: 'Hello' }, sessionId: 'session-1' } });
+      await publishGenerationJobReadyPush('job-1', deps, logger);
+      expect(deps.findJob).toHaveBeenCalledWith('job-1');
+      expect(deps.publish).not.toHaveBeenCalled();
+    }
+  );
 
   it('links a music job to its notebook', async () => {
     const deps = jobDeps({ ...videoJob, kind: 'music', payload: { sessionId: 's1', request: {} } });

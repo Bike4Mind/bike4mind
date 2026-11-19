@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import en from '@client/app/locales/en.json';
+import i18next from 'i18next';
 import OrganizationSettingsSection from './OrganizationSettingsSection';
 
 const currentUser = vi.fn();
@@ -23,6 +25,12 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
+
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 vi.mock('./OrganizationGeneralSection', () => ({ default: () => null }));
 vi.mock('./DeleteOrganizationDialog', () => ({
@@ -61,8 +69,8 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
 
 /**
  * The Danger Zone mirrors the server gate in organizationService/delete.ts (billing owner or
- * platform admin). The rest of this tab is open to anyone with org update, or a current manager, so these pin that
- * a member who can reach the tab is not shown a Delete button whose call would 403.
+ * platform admin). The rest of this tab is open to current managers too, so these pin that a caller who can
+ * reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
   it('shows exports only to the owner, never to a platform admin or member', () => {
@@ -75,7 +83,7 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     renderAs({ id: 'member1' });
     expect(screen.queryByTestId('organization-export-section')).toBeNull();
   });
-  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+  it('lets a current manager edit the sharing policy and the system prompt', () => {
     updateOrg.mockClear();
     renderAs({ id: 'manager', isAdmin: false }, {
       ...org,
@@ -83,10 +91,15 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
       users: [{ userId: 'manager', permissions: ['read'] }],
     } as IOrganizationDocument);
     expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
-    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
-    // A disabled prompt cannot be edited, so the save bar never appears for it.
-    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).not.toBeDisabled();
+    expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
     expect(updateOrg).not.toHaveBeenCalled();
+  });
+
+  it('keeps the system prompt read-only for a member holding update on the sharing ACL', () => {
+    renderAs({ id: 'member1', isAdmin: false });
+
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
   });
 
   it('shows Delete Team to the billing owner', () => {
@@ -101,12 +114,24 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('hides Delete Team from a member who can otherwise manage the org', () => {
+  it('hides Delete Team from a member who is not the owner', () => {
     renderAs({ id: 'member1', isAdmin: false });
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
-    // The rest of the tab still renders for them.
-    expect(screen.getByText('Team System Prompt')).toBeTruthy();
+  });
+
+  it('explains the missing Danger Zone to a non-owner instead of rendering nothing', () => {
+    renderAs({ id: 'member1', isAdmin: false });
+
+    expect(screen.getByTestId('organization-settings-owner-only').textContent).toContain(
+      'Owner only: Exporting team data, transferring ownership and deleting the team. Ask the team owner'
+    );
+  });
+
+  it('shows no owner-only note to the owner', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+
+    expect(screen.queryByTestId('organization-settings-owner-only')).toBeNull();
   });
 
   it('hides Delete Team when there is no resolved user', () => {

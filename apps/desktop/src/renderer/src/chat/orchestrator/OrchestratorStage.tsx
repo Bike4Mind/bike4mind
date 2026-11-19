@@ -2,30 +2,36 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, type ReactNode, useState } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
-import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
+import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ViewSwitcher } from './ViewSwitcher';
-import { toViewSnapshot } from './viewSnapshot';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
+import { useApplySkin, useSkinTheme } from './skins';
+import { SKIN_STAGE_VARIABLE } from './statePalette';
+import { useQuickApprovals } from './quickApprovals';
+import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
+import { useAvatarDetailsPosition } from './useAvatarDetailsPosition';
 
 export interface AgentActions {
   open(id: string): void;
-  stop(id: string): void;
+  stop(id: string): void | Promise<void>;
   archive(id: string): void;
 }
 
 export interface OrchestratorViewProps {
   agents: readonly AgentView[];
+  /** The orchestrating session, for a view built on the snapshot (snapshotView.tsx). */
+  rootId?: string;
   onSelect(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
@@ -37,7 +43,9 @@ export interface OrchestratorViewProps {
   celebrating?: boolean;
   /** Drawn over the top of the scene by a view that has one (the Tavern); other views leave it to the stage. */
   sceneOverlay?: ReactNode;
-  /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
+  /** Agent details, positioned relative to the artwork rather than its surrounding letterbox. */
+  agentDetailsOverlay?: ReactNode;
+  /** The parent's latest reply, shown at the bar while its conversation is hidden. */
   desk?: InnkeeperDesk;
   /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
   settled?: boolean;
@@ -45,18 +53,12 @@ export interface OrchestratorViewProps {
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
 export interface InnkeeperDesk {
-  /** Sends to the parent conversation, as the composer does but without the composer's attachments. */
-  send(text: string): void;
   /** The parent's latest finished reply, for the Innkeeper's speech bubble. */
   reply?: { id: string; snippet: string };
   /** "Read all" on that bubble: show the reply in the conversation. */
   onReadReply(id: string): void;
-  /** Bring the whole conversation forward instead of the slip. */
-  onOpenConversation(): void;
   /** The conversation is out of sight, so a reply has nowhere else to show. */
   conversationHidden: boolean;
-  /** Bumped to open the slip; `seed` is a character typed while the Tavern was quiet. */
-  openRequest?: { seq: number; seed: string };
 }
 
 /** Focus mode (FocusPanel): owned by the shell, which also keeps the ambient settle off while it is on. */
@@ -76,8 +78,9 @@ export interface StageAmbient {
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
   parent?: ParentView;
-  /** Clicking the Innkeeper: bring the parent's own conversation forward. */
+  /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
+  onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
@@ -100,6 +103,8 @@ export interface OrchestratorStageProps {
   desk?: InnkeeperDesk;
   ambient?: StageAmbient;
   focus?: StageFocus;
+  /** Showing the parent conversation takes precedence over an agent peek. */
+  conversationRequest?: number;
 }
 
 const NO_PARENT: ParentView = {};
@@ -113,12 +118,12 @@ export function OrchestratorStage({
   agents,
   parent = NO_PARENT,
   onParentFocus,
+  onParentToggle,
   rootId,
   report,
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
-  onExampleQuest,
   view,
   onViewChange,
   actions,
@@ -128,6 +133,7 @@ export function OrchestratorStage({
   desk,
   ambient,
   focus,
+  conversationRequest,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -138,6 +144,23 @@ export function OrchestratorStage({
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
   const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
+  const handledDetailsClicks = useRef(new WeakSet<Event>());
+
+  useEffect(() => {
+    if (!hasSelection || settled) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledDetailsClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      setSelectedId(null);
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [hasSelection, settled]);
+
+  useEffect(() => {
+    if (conversationRequest) setSelectedId(null);
+  }, [conversationRequest]);
 
   useEffect(() => {
     if (!focusAgent) return;
@@ -184,15 +207,22 @@ export function OrchestratorStage({
 
   const quest = useMemo(() => questAgents(agents, report), [agents, report]);
   const finale = useFinale(rootId, quest, parent, report);
+  const spend = useRunSpend(rootId, finale.shown);
+  const skin = useSkinTheme();
+  useApplySkin(skin);
+  // Read when the finale shows, so switching skins mid-finale does not replay it.
+  const finaleSound = useRef(skin.sounds.finale);
+  finaleSound.current = skin.sounds.finale;
   useEffect(() => {
-    if (finale.shown) playChime();
+    if (finale.shown) playChime(finaleSound.current);
   }, [finale.shown]);
 
-  // The Tavern seats the banner on its scene rather than in the letterbox above it.
-  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused;
+  const parentScene = view === 'tavern' || view === 'office';
+  const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
+      spend={spend}
       placement={bannerInScene ? 'scene' : 'inline'}
       onRead={() => {
         finale.dismiss();
@@ -202,30 +232,76 @@ export function OrchestratorStage({
     />
   );
 
+  const detailsInScene =
+    (parentScene || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
+  const detailsOverlay = selected && (
+    // Stay mounted while settled so waking restores the draft and selection.
+    <Box
+      ref={detailsPosition}
+      data-testid="orchestrator-peek-drawer-region"
+      sx={{
+        position: 'absolute',
+        ...(detailsInScene
+          ? {
+              top: 12,
+              left: 12,
+              width: 320,
+              maxWidth: 'calc(100% - 24px)',
+              maxHeight: 'calc(100% - 24px)',
+              '& > [data-agent-details-panel]': { maxHeight: 'calc(100cqh - 24px)' },
+            }
+          : { inset: 12 }),
+        zIndex: 400,
+        display: settled ? 'none' : 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'flex-start',
+        pointerEvents: 'none',
+        overflow: 'hidden',
+      }}
+    >
+      <AgentPeekDrawer
+        key={selected.id}
+        agent={selected}
+        persona={personas.get(selected.id)}
+        onClose={() => setSelectedId(null)}
+        actions={actions}
+        skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
+        visible={!settled}
+      />
+    </Box>
+  );
+
   const viewProps: OrchestratorViewProps = {
     agents,
+    rootId,
     onSelect: setSelectedId,
     selectedId,
     introPlaying,
     personas,
     parent,
-    onInnkeeperSelect: onParentFocus,
+    onInnkeeperSelect: parentScene ? (onParentToggle ?? onParentFocus) : onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
+    agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
     desk,
     settled: ambient?.settled === true,
   };
 
+  const approvals = useQuickApprovals(focused, rootId, agents, parent);
   const snapshot = useMemo(
-    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent) : undefined),
-    [focused, rootId, agents, parent]
+    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
+    [focused, rootId, agents, parent, approvals]
   );
   // Through the same gate a view that does not ship with the app will go through.
-  const runViewAction = (action: ViewAction) => {
+  const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
     if (!accepted) return;
-    if (accepted.kind === 'open-root') onParentFocus?.();
-    else setSelectedId(accepted.agentId);
+    await runViewAction(accepted, {
+      openAgent: setSelectedId,
+      openRoot: () => onParentFocus?.(),
+      stop: actions.stop,
+    });
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
@@ -234,7 +310,13 @@ export function OrchestratorStage({
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
       agent={askingAgent}
-      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : 'The Innkeeper'}
+      name={
+        askingAgent
+          ? (personas.get(askingAgent.id)?.label ?? askingAgent.title)
+          : view === 'office'
+            ? 'The orchestrator'
+            : 'The Innkeeper'
+      }
       onOpen={() => {
         ambient?.wake();
         if (askingAgent) setSelectedId(askingAgent.id);
@@ -246,7 +328,27 @@ export function OrchestratorStage({
   return (
     <Box
       data-testid="orchestrator-stage"
-      sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
+      data-agent-details-open={hasSelection && !settled ? 'true' : undefined}
+      onClickCapture={event => {
+        handledDetailsClicks.current.add(event.nativeEvent);
+        if (!hasSelection || settled || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (event.target.closest('[data-agent-details-panel]')) return;
+        setSelectedId(null);
+      }}
+      data-skin={skin.id ?? 'default'}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        bgcolor: `var(${SKIN_STAGE_VARIABLE}, transparent)`,
+        // Joy's type scale reads these, so every Typography under the stage picks the skin's family up.
+        ...(skin.fontFamily
+          ? { '--joy-fontFamily-body': skin.fontFamily, '--joy-fontFamily-display': skin.fontFamily }
+          : {}),
+      }}
     >
       {settled ? (
         <Typography
@@ -256,7 +358,7 @@ export function OrchestratorStage({
           data-testid="orchestrator-ambient-status"
           sx={{ px: 1.5, py: 0.5 }}
         >
-          {summary || 'The tavern is quiet'}
+          {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
         </Typography>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
@@ -307,7 +409,10 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
-      <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <Box
+        data-testid="orchestrator-scene-viewport"
+        sx={{ position: 'relative', isolation: 'isolate', display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }}
+      >
         <Box
           sx={{
             position: 'relative',
@@ -322,11 +427,11 @@ export function OrchestratorStage({
           {!bannerInScene && banner}
           {agents.length === 0 ? (
             <EmptyStage
-              tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
-              onExampleQuest={onExampleQuest}
+              scene={parentScene && renderView ? renderView(view, viewProps) : null}
+              office={view === 'office'}
             />
           ) : snapshot ? (
-            <FocusPanel snapshot={snapshot} onAction={runViewAction} />
+            <FocusPanel snapshot={snapshot} onAction={onViewAction} />
           ) : renderView ? (
             renderView(view, viewProps)
           ) : (
@@ -334,42 +439,26 @@ export function OrchestratorStage({
           )}
           {needsYouCard}
         </Box>
-        {selected && (
-          // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
-          // brings it back where it was (ambient.ts gives focus back to it too).
-          <Box data-testid="orchestrator-peek-drawer-region" sx={{ display: settled ? 'none' : 'contents' }}>
-            <AgentPeekDrawer
-              key={selected.id}
-              agent={selected}
-              persona={personas.get(selected.id)}
-              onClose={() => setSelectedId(null)}
-              actions={actions}
-            />
-          </Box>
-        )}
+        {!detailsInScene && detailsOverlay}
       </Box>
     </Box>
   );
 }
 
-/**
- * With no agents: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line.
- * ChatShell mounts the stage only while the session has an agent, so this is the stage's own fallback.
- */
-function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQuest?(prompt: string): void }) {
-  const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
-  if (tavern) {
+function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
+  if (scene) {
     return (
       <Box
         data-testid="orchestrator-empty-state"
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
       >
-        {tavern}
+        {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            No quests yet. Describe the work and the Innkeeper will split it across agents.
+            {office
+              ? 'No agents yet. Describe the work and it will be split across agents.'
+              : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
           </Typography>
-          {quests}
         </Box>
       </Box>
     );
@@ -390,7 +479,6 @@ function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQu
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
         No agents yet. Describe the work and it will be split across agents.
       </Typography>
-      {quests}
     </Box>
   );
 }

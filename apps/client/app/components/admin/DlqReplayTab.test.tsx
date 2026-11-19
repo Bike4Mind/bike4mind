@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
+vi.mock('./DlqTriageRecommendation', () => ({ DlqTriageRecommendation: () => null }));
 
 type TestMessage = {
   queueLabel: string;
@@ -14,8 +15,14 @@ type TestMessage = {
   sentTimestamp: string;
   approximateReceiveCount: string;
   failureLookupFailed?: boolean;
-  failure?: { errorMessage: string; category: 'timeout' };
+  failure?: {
+    errorMessage: string;
+    category: 'timeout' | 'unknown';
+    source: 'recorded' | 'attributes';
+    errorCode?: string;
+  };
   logsUrl?: string | null;
+  logsScope?: 'request' | 'window';
   recommendation?: { action: 'replay' | 'inspect' | 'discard'; label: string; basis: string };
 };
 
@@ -485,13 +492,56 @@ describe('DlqReplayTab bulk discard', () => {
 
 describe('DlqReplayTab message details', () => {
   it('shows the failure reason and category in the row and drawer', async () => {
-    state.messages[1].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    state.messages[1].failure = { errorMessage: 'worker timed out', category: 'timeout', source: 'recorded' };
     renderTab();
     expect(screen.getByTestId('dlq-reason-b1')).toHaveTextContent('worker timed out');
     expect(screen.getByTestId('dlq-category-b1')).toHaveTextContent('timeout');
     await userEvent.click(within(screen.getByTestId('dlq-message-row-b1')).getByText('worker timed out'));
     expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
     expect(screen.getByTestId('dlq-failure-category')).toHaveTextContent('timeout');
+    expect(screen.queryByTestId('dlq-failure-source-b1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-failure-source')).not.toBeInTheDocument();
+  });
+
+  it('shows an attribute-derived failure with its error code and source chip instead of a category', async () => {
+    state.messages[1].failure = {
+      errorMessage: 'Task timed out',
+      category: 'unknown',
+      source: 'attributes',
+      errorCode: 'Function error',
+    };
+    renderTab();
+    expect(screen.getByTestId('dlq-reason-b1')).toHaveTextContent('Function error: Task timed out');
+    expect(screen.getByTestId('dlq-failure-source-b1')).toHaveTextContent('From message attributes');
+    expect(screen.queryByTestId('dlq-category-b1')).not.toBeInTheDocument();
+    await userEvent.click(within(screen.getByTestId('dlq-message-row-b1')).getByText('Function error: Task timed out'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('Function error: Task timed out');
+    expect(screen.getByTestId('dlq-failure-source')).toHaveTextContent('From message attributes');
+    expect(screen.queryByTestId('dlq-failure-category')).not.toBeInTheDocument();
+  });
+
+  it('shows Unknown with an Unknown category when there is no failure', async () => {
+    renderTab();
+    expect(screen.getByTestId('dlq-reason-b1')).toHaveTextContent('Unknown');
+    expect(screen.getByTestId('dlq-category-b1')).toHaveTextContent('Unknown');
+    expect(screen.queryByTestId('dlq-failure-source-b1')).not.toBeInTheDocument();
+  });
+
+  it('labels a request-filtered logs link as the request logs', async () => {
+    state.messages[1].logsUrl = 'https://logs.example/b1';
+    state.messages[1].logsScope = 'request';
+    state.messages[3].logsUrl = 'https://logs.example/b2';
+    renderTab();
+    expect(screen.getByTestId('dlq-logs-b1')).toHaveAttribute('aria-label', 'View request logs');
+    expect(screen.getByTestId('dlq-logs-b2')).toHaveAttribute('aria-label', 'View consumer logs');
+    await userEvent.click(within(screen.getByTestId('dlq-message-row-b1')).getByText('Billing Events'));
+    expect(screen.getByTestId('dlq-drawer-logs')).toHaveTextContent('View request logs');
+  });
+
+  it('shows the run time of a scheduled-run dead letter as its entity', () => {
+    state.messages[2].entity = { type: 'Scheduled run', id: '2026-01-02T03:00:00.000Z' };
+    renderTab();
+    expect(screen.getByTestId('dlq-entity-c1')).toHaveTextContent('Scheduled run');
   });
 
   it('shows Unknown and warns when failure details could not be loaded', () => {
@@ -536,6 +586,21 @@ describe('DlqReplayTab recommendations', () => {
     expect(screen.getByTestId('dlq-recommendation-f1')).toHaveTextContent('Replay');
     expect(screen.getByTestId('dlq-recommendation-f1')).toHaveTextContent('Recorded transient failure: timeout.');
     expect(screen.getByTestId('dlq-recommendation-b1')).toHaveTextContent('Inspect first');
+  });
+
+  it('shows a discard recommendation for an obsolete job', () => {
+    state.messages[2] = {
+      ...state.messages[2],
+      recommendation: {
+        action: 'discard',
+        label: 'Job obsolete, discard',
+        basis:
+          'Scheduled run at 2026-01-02T03:00:00.000Z; the next run, due at 2026-01-02T04:00:00.000Z, is not in this dead-letter queue a day later.',
+      },
+    };
+    renderTab();
+    expect(screen.getByTestId('dlq-recommendation-c1')).toHaveTextContent('Job obsolete, discard');
+    expect(screen.getByTestId('dlq-recommendation-c1')).toHaveTextContent('is not in this dead-letter queue');
   });
 });
 

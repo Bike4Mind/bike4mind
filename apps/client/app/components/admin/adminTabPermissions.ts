@@ -39,6 +39,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.RetrievalRate]: 'support:read',
   [AdminTab.WebhookAuditLogs]: 'support:read',
   [AdminTab.HelpAnalytics]: 'support:read',
+  [AdminTab.SpendExplorer]: 'support:read',
   [AdminTab.ApiKeyScopePreflight]: 'support:read',
   [AdminTab.LegacyApiKeys]: 'support:read',
   [AdminTab.IntegrationDemand]: 'support:read',
@@ -46,6 +47,10 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.Approvals]: 'support:read',
   [AdminTab.StripeDisputes]: 'support:read',
   [AdminTab.ShadowDetections]: 'support:read',
+
+  // Read-only for support:read: the roles routes' GET declares it. Creating, editing and deleting
+  // are full-admin only, so the tab hides those controls from a delegate.
+  [AdminTab.Roles]: 'support:read',
 
   // Reads declare support:read; writes need a full admin and stay disabled for a delegate. The lifecycle queue and
   // Settings section need settings:manage as well and gate themselves.

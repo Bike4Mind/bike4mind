@@ -1,10 +1,12 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
+  ImageJobPurpose,
   ImageProviderId,
   ImageValidationFailure,
   StorageLimitErrorInfo,
@@ -54,6 +56,8 @@ export type ImageJobDeps = {
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
     derivedFrom?: GeneratedAssetLineageEntry[];
+    /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
+    questId?: string;
     signal: AbortSignal;
   }): Promise<SaveGeneratedAssetResult>;
   saveToGeneratedBucket(params: {
@@ -71,12 +75,23 @@ export type ImageJobDeps = {
     /** `refusal` for a block that was billed: spend with no image delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
+  /**
+   * Adds one image to the notebook (session) of a chat-made job's quest: the imageCount sidebar badge the in-process
+   * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
+   */
+  countNotebookImage?(questId: string): Promise<void>;
   now(): Date;
   logger: Logger;
 };
 
 export type CreateImageJobsDeps = ImageJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more; undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -90,10 +105,19 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The chat turn that started the batch; every job carries it, so its output is linked to that notebook. */
+  questId?: string;
   /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */
   delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */
   idempotencyKey?: string;
+  /** Server-chosen only (see createCutoutJob); never read from a client body. */
+  purpose?: ImageJobPurpose;
 };
 
 export type CreateImageJobsErrorCode =
@@ -108,7 +132,14 @@ export type CreateImageJobsErrorCode =
   | 'idempotency_key_reused';
 
 export type CreateImageJobsResult =
-  | { ok: true; groupId: string; jobs: ImageJob[]; created: boolean }
+  | {
+      ok: true;
+      groupId: string;
+      jobs: ImageJob[];
+      created: boolean;
+      /** Jobs this call created; fewer than jobs.length when part of the batch was an idempotent replay. */
+      createdCount?: number;
+    }
   | {
       ok: false;
       status: 400 | 402 | 422;

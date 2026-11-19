@@ -1,5 +1,12 @@
-import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CREDITS_PER_USD_COST,
+  CreditHolderType,
+  getTextModelCost,
+  ModelBackend,
+  type ModelInfo,
+  type ReadOrgModelPolicy,
+} from '@bike4mind/common';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
@@ -15,11 +22,13 @@ const m = vi.hoisted(() => ({
   getSettingsMap: vi.fn(async (..._args: unknown[]) => ({})),
   enforceCredits: true,
   tokenCounter: vi.fn(),
+  findFreeze: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 }));
 
 vi.mock('@bike4mind/database', async () => ({
   ...(await import('../__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: { findOne: m.findBySettingName },
+  spendFreezeRepository: { findActiveForSubject: m.findFreeze },
   creditTransactionRepository: {},
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
@@ -66,6 +75,7 @@ import {
   completionUsd,
   assertOwnerCanAfford,
   assertRequestCanAfford,
+  createCompletionMeter,
   createModelAdmission,
   createRequestCompletionMeter,
   isCreditsEnforced,
@@ -370,6 +380,57 @@ describe('meterPlatformCompletion credits', () => {
     expect(m.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k-queued' }));
   });
 
+  describe("an in-turn meter's spend freeze subject", () => {
+    type Subject = { userId?: string | null; organizationId?: string | null; apiKeyId?: string | null };
+    const frozenWhen = (matches: (subject: Subject) => boolean) =>
+      m.findFreeze.mockImplementation(async (...args: unknown[]) =>
+        matches(args[0] as Subject) ? { scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') } : null
+      );
+    const meterFor = (apiKeyBillingOwnerType?: CreditHolderType.User | CreditHolderType.Organization) =>
+      createRequestCompletionMeter(req(), 'QuestMaster planning', {
+        organizationId: 'o1',
+        apiKeyId: 'k-org',
+        apiKeyBillingOwnerType,
+      })(model, [], 1000, [model]);
+
+    beforeEach(() => {
+      // The freeze runs ahead of the enforceCredits short-circuit, so no hold is needed to reach it.
+      m.enforceCredits = false;
+      m.findBySettingName.mockResolvedValue(null);
+    });
+    // clearAllMocks keeps implementations, so the freeze stub would leak into later describes.
+    afterEach(() => m.findFreeze.mockImplementation(async () => null));
+
+    it("refuses an org-billed key's turn when its acting user is frozen", async () => {
+      frozenWhen(subject => subject.userId === 'u1');
+
+      await expect(meterFor(CreditHolderType.Organization)).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
+      expect(m.findFreeze).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'u1', organizationId: 'o1', apiKeyId: 'k-org' })
+      );
+    });
+
+    it.each([
+      ['the key', (subject: Subject) => subject.apiKeyId === 'k-org'],
+      ['the org', (subject: Subject) => subject.organizationId === 'o1'],
+    ])("refuses an org-billed key's turn when %s is frozen", async (_label, matches) => {
+      frozenWhen(matches);
+
+      await expect(meterFor(CreditHolderType.Organization)).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
+    });
+
+    it('keeps the creator in the subject when the key billing owner type is unknown', async () => {
+      frozenWhen(subject => subject.userId === 'u1');
+
+      await expect(meterFor(undefined)).rejects.toMatchObject({ additionalInfo: { errorCode: 'spend_frozen' } });
+    });
+  });
+
   it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {
     m.findBySettingName.mockResolvedValue(null);
     const messages = [{ role: 'user' as const, content: 'x'.repeat(250) }];
@@ -468,6 +529,16 @@ describe('meterPlatformCompletion for a restricted-tier caller', () => {
     expect(shape(overCap)).toEqual(shape(empty));
   });
 
+  it('refuses a frozen caller with spend_frozen before spending any daily token budget', async () => {
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'User', frozenAt: new Date() });
+    const err = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat').catch(error => error);
+
+    expect(err.statusCode).toBe(403);
+    expect(err.additionalInfo).toEqual(expect.objectContaining({ errorCode: 'spend_frozen' }));
+    expect(m.tokenCounter).not.toHaveBeenCalled();
+    expect(m.userIncrement).not.toHaveBeenCalled();
+  });
+
   it('adds settled tokens to the daily counter and leaves other callers alone', async () => {
     m.userIncrement.mockResolvedValue({ currentCredits: 1000 });
     const reservation = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat');
@@ -557,6 +628,89 @@ describe('createModelAdmission', () => {
     expect(await system.admits('off')).toBe(false);
   });
 
+  describe('organization model policy', () => {
+    const catalog = [
+      { id: 'gpt', backend: 'openai' } as unknown as ModelInfo,
+      { id: 'claude', backend: 'anthropic' } as unknown as ModelInfo,
+    ];
+    const policy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+    const snapshots: Array<[ReadOrgModelPolicy, boolean]> = [
+      [policy, false],
+      [null, true],
+      ['invalid', false],
+    ];
+
+    it.each(snapshots)(
+      'reuses the supplied snapshot without reloading the organization (%j)',
+      async (snapshot, admitted) => {
+        m.orgFindById.mockRejectedValue(new Error('precomputed policy must not be reloaded'));
+        const admission = await createModelAdmission(user(), catalog, false, {
+          organizationId: 'org1',
+          orgModelPolicy: snapshot,
+        });
+        await expect(admission.admits('gpt')).resolves.toBe(admitted);
+        expect(m.orgFindById).not.toHaveBeenCalled();
+      }
+    );
+
+    it('preserves the platform-selected exemption even when a precomputed policy is invalid', async () => {
+      const admission = await createModelAdmission(user(), catalog, true, {
+        organizationId: 'org1',
+        orgModelPolicy: 'invalid',
+      });
+      await expect(admission.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
+
+    it('forwards authoritative provider metadata through both methods without reloading the org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: { allowedProviders: ['openai'] } });
+      const backend = vi.fn(() => ModelBackend.OpenAI);
+      const scoped = await createModelAdmission(user(), undefined, false, {
+        organizationId: 'org1',
+        getOrgModelBackend: backend,
+      });
+      await expect(scoped.assert('future-tts')).resolves.toBeUndefined();
+      await expect(scoped.admits('future-tts', { orgModelBackend: null })).resolves.toBe(false);
+      await expect(scoped.assert('tts-1', { orgModelBackend: null })).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.admits('tts-1', { orgModelBackend: ModelBackend.OpenAI })).resolves.toBe(true);
+      expect(backend).toHaveBeenCalledExactlyOnceWith('future-tts');
+      expect(m.orgFindById).toHaveBeenCalledExactlyOnceWith('org1');
+    });
+
+    it('refuses a model the given org does not allow, and admits it with no org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const scoped = await createModelAdmission(user(), catalog, false, { organizationId: 'org1' });
+      await expect(scoped.assert('gpt')).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.assert('claude')).resolves.toBeUndefined();
+      await expect((await createModelAdmission(user(), catalog)).assert('gpt')).resolves.toBeUndefined();
+    });
+
+    it("admits the meter's model against a caller-supplied snapshot without loading the org", async () => {
+      m.orgFindById.mockRejectedValue(new Error('precomputed policy must not be reloaded'));
+      const meter = createCompletionMeter(user({ organizationId: 'org1' }), logger as never, 'scheduled', {
+        orgModelPolicy: policy,
+      });
+
+      await expect(meter(catalog[0], [], 1000, catalog)).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
+
+    it('does not apply the org policy to a platform-chosen model', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const system = await createModelAdmission(user(), catalog, true, { organizationId: 'org1' });
+      await expect(system.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
+  });
+
   describe('free-tier gate', () => {
     const gatedModel = { ...model, id: 'premium-model', type: 'text' } as unknown as ModelInfo;
 
@@ -609,6 +763,15 @@ describe('assertOwnerCanAfford', () => {
     m.enforceCredits = false;
     await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 0 } as never)).resolves.toBeUndefined();
   });
+
+  it('refuses a frozen owner with 403 spend_frozen ahead of the balance, credits on or off', async () => {
+    m.enforceCredits = false;
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'Organization', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    await expect(
+      assertOwnerCanAfford({ id: 'u1', organizationId: 'o1', currentCredits: 500 } as never)
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'o1' });
+  });
 });
 
 describe('assertRequestCanAfford', () => {
@@ -648,6 +811,17 @@ describe('assertRequestCanAfford', () => {
     m.orgFindById.mockResolvedValue({ id: 'seat', currentCredits: 0, userDetails: [], users: [{ userId: 'u1' }] });
     await expect(assertRequestCanAfford(keyReq(undefined))).rejects.toMatchObject({ statusCode: 422 });
     expect(m.orgFindById).toHaveBeenCalledWith('seat');
+  });
+
+  it('checks an org-billed key against its org, the key and its user', async () => {
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    await expect(
+      assertRequestCanAfford(
+        keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org', keyId: 'k1' })
+      )
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'api_key' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'k1' });
+    expect(m.orgFindById).not.toHaveBeenCalled();
   });
 
   it('refuses an org-billed key whose holder has left the org with a 400, even when the org is funded', async () => {

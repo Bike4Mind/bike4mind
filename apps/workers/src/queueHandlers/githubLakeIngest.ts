@@ -30,6 +30,7 @@ import {
   gitHubRateLimitDelaySeconds,
 } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { releaseGitHubLakeConnection } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
 import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';
 import { Resource } from 'sst';
@@ -247,6 +248,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseUnchanged();
       return;
     }
+    await resolveRoleAdminPermissions(user);
     const config = getGitHubLakeAppConfig();
     if (!config) {
       await settle(resumeBatchId);

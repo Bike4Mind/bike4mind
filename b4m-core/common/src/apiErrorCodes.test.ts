@@ -6,6 +6,8 @@ import {
   API_KEY_USER_CAP_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
@@ -85,6 +87,9 @@ describe('API_ERROR_CODES', () => {
     // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
     // ACCOUNT_SUSPENDED_ERROR_CODE likewise; proven by packages/server-utils/src/auth/assertAccountStateUsable.test.ts.
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
+    // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
+    // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -102,6 +107,9 @@ describe('API_ERROR_CODES', () => {
       UPGRADE_REQUIRED_ERROR_CODE,
       ACCOUNT_SUSPENDED_ERROR_CODE,
       RUN_NOT_FOUND_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      'input_file_not_found',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

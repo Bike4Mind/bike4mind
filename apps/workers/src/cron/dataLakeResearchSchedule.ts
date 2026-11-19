@@ -21,6 +21,7 @@ import {
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   organizationRepository,
+  spendFreezeRepository,
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -62,6 +63,7 @@ export async function runResearchScheduleTick(
       // refused exactly like a Run-now one when the owner cannot cover the ceiling.
       users: userRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
       ...lakeConfigAuditDb,
     },
     enqueue: (run, lake) => queueResearchRun(run, lake, queueUrl, runLogger),

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AdminPermissionSchema, sortAdminPermissions, type AdminPermissionId } from './adminPermissions';
+import { AdminActionReasonSchema } from './types/entities/adminActionReason';
 
 /**
  * Admin roles: named, admin-defined sets of the code-defined ADMIN_PERMISSIONS. Roles are database
@@ -34,9 +35,14 @@ export const AdminRoleUpdateSchema = z
     name: AdminRoleNameSchema.optional(),
     description: AdminRoleDescriptionSchema.optional(),
     permissions: AdminRolePermissionsSchema.optional(),
+    /** Why the role changes; recorded on the audit entry, never stored on the role. Required when `permissions` change (enforced by updateAdminRole). */
+    reason: AdminActionReasonSchema.optional(),
   })
   .strict()
-  .refine(patch => Object.values(patch).some(value => value !== undefined), 'Nothing to change');
+  .refine(
+    ({ reason: _reason, ...fields }) => Object.values(fields).some(value => value !== undefined),
+    'Nothing to change'
+  );
 export type AdminRoleUpdate = z.infer<typeof AdminRoleUpdateSchema>;
 
 export type AdminRole = {
@@ -103,3 +109,39 @@ export const ADMIN_ROLE_TEMPLATES = [
 ] as const satisfies readonly AdminRoleTemplate[];
 
 export type AdminRoleTemplateId = (typeof ADMIN_ROLE_TEMPLATES)[number]['id'];
+
+/** Where one effective permission comes from: a direct grant, one or more roles, or both. */
+export type AdminPermissionSource = {
+  permission: AdminPermissionId;
+  direct: boolean;
+  roles: { id: string; name: string }[];
+};
+
+/**
+ * Effective permissions (direct UNION every role's, the union hasAdminPermission applies) with the
+ * grant behind each one, in ADMIN_PERMISSIONS order. Ids no longer in the list are dropped.
+ */
+export function adminPermissionSources(
+  direct: readonly string[],
+  roles: readonly Pick<AdminRole, 'id' | 'name' | 'permissions'>[]
+): AdminPermissionSource[] {
+  const permissions = sortAdminPermissions([...direct, ...roles.flatMap(role => role.permissions)]);
+  return permissions.map(permission => {
+    const grantingRoles = new Map<string, string>();
+    for (const role of roles) if (role.permissions.includes(permission)) grantingRoles.set(role.id, role.name);
+    return {
+      permission,
+      direct: direct.includes(permission),
+      roles: [...grantingRoles]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    };
+  });
+}
+
+/** Distinguishes direct grants from quoted role names, including roles named "direct". */
+export function formatAdminPermissionSource(source: Pick<AdminPermissionSource, 'direct' | 'roles'>): string {
+  return [...(source.direct ? ['direct'] : []), ...source.roles.map(role => `role ${JSON.stringify(role.name)}`)].join(
+    ' + '
+  );
+}

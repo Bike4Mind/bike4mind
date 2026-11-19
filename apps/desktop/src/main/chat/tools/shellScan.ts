@@ -115,6 +115,8 @@ export interface ShellCommand {
    * sets turns it on. Auto and Full require fresh consent (shellTools.ts `signingRisk`).
    */
   gitSigningRisk?: true;
+  /** This part deletes recursively or forcefully (`rm -r`/`-f`, `find -delete`, `find -exec rm {}`). */
+  deletes?: true;
 }
 
 export interface ShellScan {
@@ -1901,11 +1903,13 @@ const mayNameSettings = (pattern: string): boolean =>
  * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless its other operands are static, which are returned
  * in `reads`, and it only reads or is an `-exec`; none is a shell, even behind a wrapper. Such a `writer` writes
  * what find prints. `runs` holds each program's words, which are judged as a command of their own would be.
+ * `removes` is set by any `-delete` or `rm {}`, narrowed or not.
  */
 export function findActions(args: readonly string[]): {
   reach: Reach;
   untrackable: boolean;
   writer: boolean;
+  removes: boolean;
   reads: string[];
   runs: string[][];
 } {
@@ -1913,18 +1917,20 @@ export function findActions(args: readonly string[]): {
   let write = false;
   let untrackable = false;
   let writer = false;
+  let removes = false;
   const runs: string[][] = [];
   const reads: string[] = [];
   let narrowed = true;
   let named = false;
   const deletes = (): void => {
+    removes = true;
     if (!(narrowed && named)) write = true;
   };
   for (let at = 0; at < words.length; at++) {
     const word = words[at] as string;
     if (/^-(exec|execdir|ok|okdir)$/.test(word)) {
       const end = words.findIndex((value, index) => index > at && (value === ';' || value === '+'));
-      if (end === -1) return { reach: 'write', untrackable: true, writer, reads, runs };
+      if (end === -1) return { reach: 'write', untrackable: true, writer, removes, reads, runs };
       const inner = args.slice(at + 1, end);
       const values = words.slice(at + 1, end);
       const operands = values.slice(1).filter(value => !value.startsWith('-'));
@@ -1969,7 +1975,7 @@ export function findActions(args: readonly string[]): {
       narrowed = false;
     }
   }
-  return { reach: write ? 'write' : 'read', untrackable, writer, reads, runs };
+  return { reach: write ? 'write' : 'read', untrackable, writer, removes, reads, runs };
 }
 
 /** find primaries that act rather than test. */
@@ -8668,6 +8674,18 @@ export async function scanShell(
       for (const arg of rest) {
         const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
         if (envFile) (entry.envFiles ??= []).push(envFile);
+      }
+      if (
+        name === 'rm'
+          ? /[rRf]/.test(shortFlags(wrappedRest)) ||
+            wrappedRest.some(arg => {
+              const option = unquote(arg);
+              // GNU rm takes any unambiguous prefix of a long option, e.g. `--rec`.
+              return option.length > 2 && ['--recursive', '--force'].some(full => full.startsWith(option));
+            })
+          : findRun?.removes
+      ) {
+        entry.deletes = true;
       }
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       const trees = treeOperands(name, wrappedRest);

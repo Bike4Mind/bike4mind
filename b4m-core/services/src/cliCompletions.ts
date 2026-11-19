@@ -20,6 +20,8 @@ import {
   PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
+  ISpendFreezeRepository,
+  type ApiKeyBillingOwnerType,
   ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   IAdminSettingsRepository,
@@ -55,6 +57,7 @@ import {
   type ICacheRepository,
   type CompletionRunAttribution,
   isOrgServiceAccountOf,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -84,6 +87,8 @@ import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { assertSpendNotFrozen } from './spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from './spendFreezeService/spendFreezeSubjectForHold';
 import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
@@ -202,6 +207,8 @@ export interface CompletionParams {
     cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
     /** Records each credit refusal for the admin user timeline; must not throw (see ChatCompletionFeatures). */
     recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
+    /** Required so every completion surface wires the freeze check. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
@@ -224,6 +231,18 @@ export interface CompletionParams {
    * Requires `db.organizations`.
    */
   billingOrganizationId?: string;
+  /**
+   * Model policy of an organization that governs the turn without paying for it (an org-owned embed agent
+   * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
+   */
+  governingOrgModelPolicy?: unknown;
+  /**
+   * Whether the authenticating key bills its owner or an organization. No longer read by the spend freeze check,
+   * which keeps the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The caller already ran assertSpendNotFrozen for this request (ahead of its own cap checks); skips the second lookup. */
+  spendFreezeChecked?: boolean;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -237,6 +256,11 @@ export interface CompletionParams {
    * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
    */
   run?: CompletionRunAttribution;
+  /**
+   * Opaque identifier the provider receives instead of the hash of `userId`: set for a platform key's
+   * end user (toPlatformEndUserProviderId). `userId` still owns billing and every other check.
+   */
+  providerEndUserId?: string;
   /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
@@ -713,6 +737,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
   if (!storedActor) throw new UnauthorizedError('User not found');
   const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  const orgModelPolicy = readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy);
   await createModelAdmission({
     user: actor,
     configs: modelConfigs,
@@ -720,7 +745,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
+    orgModelPolicy,
   }).assert(model);
+
+  // After the access gate and before every cap and hold, and whether or not credits are enforced.
+  if (!params.spendFreezeChecked) {
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId: params.billingOrganizationId ?? null,
+        apiKeyId: apiKeyInfo?.keyId,
+      }),
+      { db: { spendFreezes: db.spendFreezes } }
+    );
+  }
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(
@@ -736,6 +774,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     requested: requestedModelInfo,
     models,
     adminSettings: db.adminSettings,
+    orgModelPolicy,
     logger,
   });
   // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.
@@ -763,6 +802,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
+    providerEndUserId: params.providerEndUserId,
   });
 
   if (!llm) {

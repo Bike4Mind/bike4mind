@@ -8,13 +8,14 @@ import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './webTools.contract';
 import { createCompletionContract } from './completions.contract';
-import { createCompletionRunContract } from './completionRuns.contract';
+import { createCompletionRunContract, getCompletionRunUsageContract } from './completionRuns.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
+import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
@@ -86,6 +87,12 @@ import {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './musicGeneration.contract';
+import {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './sceneComposition.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 import {
   listProjectsContract,
@@ -161,6 +168,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getCurrentWeatherContract,
   createCompletionContract,
   createCompletionRunContract,
+  getCompletionRunUsageContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,
@@ -169,6 +177,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -218,6 +229,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMusicGenerationContract,
   listMusicGenerationsContract,
   listMusicModelsContract,
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,

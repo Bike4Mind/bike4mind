@@ -11,7 +11,7 @@ import { TurnTimingSchema } from './turnTiming';
 import { StudioJobCompletionSchema } from './studioJobCompleted';
 import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
+import { shareableDocumentSchema, QUEST_OUTCOME_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import {
@@ -48,6 +48,8 @@ export const DataSubscribeRequestAction = z.object({
   // z.looseObject({}).
   fields: z.record(z.string(), z.union([z.boolean(), z.number()])),
   fetchInitialData: z.boolean().prefault(true).optional(),
+  /** Single-org signal listeners may require snapshot delivery after registration; not a snapshot-consistency guarantee. */
+  initialDataAfterSubscribe: z.boolean().optional(),
   clientId: z.string().optional(),
 });
 export type IDataSubscribeRequestAction = z.infer<typeof DataSubscribeRequestAction>;
@@ -375,8 +377,8 @@ export const StreamedChatCompletionAction = z.object({
       status: z.enum(['stopped', 'running', 'done']).optional(),
       // Machine-readable classifier for `type: 'error'` quests so the client can render a
       // targeted error state (e.g. the inline "Add Credits" CTA) rather than raw `reply` text.
-      // Values derive from QUEST_ERROR_CODES so this enum can't drift from the TS union.
-      errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+      // Values derive from QUEST_OUTCOME_ERROR_CODES so this enum can't drift from the TS union.
+      errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
       questMasterReply: z.string().nullable().optional(),
       questMasterPlanId: z.string().optional(),
       creditsUsed: z.number().optional(),

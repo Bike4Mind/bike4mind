@@ -42,11 +42,12 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Library, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, API keys, Audit, Settings). Everyone sees Overview, Members and Library; the other tabs appear only for people with the right access. The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner, Team managers and platform admins. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Library, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, API keys, Audit, Settings). Everyone sees Overview, Members and Library; the other tabs appear only for people with the right access. The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner, Team managers and platform admins. The **Settings** tab, where the Team name, description and system prompt are edited, is also for the owner, Team managers and platform admins; only the owner and platform admins see the billing contact there. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
 
 On the **Members** tab:
 
 - The header shows how many seats are in use, for example "3 of 10 seats used". Pending invites hold a seat until they are accepted or cancelled.
+- The Team owner, Team managers and platform admins see each member's email address. Other members see names only, and search the list by name.
 - The Team owner, Team managers and platform admins can invite people, cancel pending invites and remove members. Only the owner and platform admins can remove a Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
@@ -69,6 +70,23 @@ If you are the Team owner, a current Team manager or a platform admin, open **Vi
 If you do not see **Connectors**, ask the Team owner to check your management access. An **Admin** role label alone does not make you a Team manager.
 
 If the deployment has custom connectors turned off, the page shows a notice; saving a Team policy cannot turn them on. If the saved policy is invalid, save a valid replacement or use **Use platform default**. If a policy or member-connections request fails, use **Retry** instead of treating the missing data as an empty list. A member who belongs to several Teams is subject to every Team's connector policy, so another Team's restrictions can also block a connection.
+
+## Models and tools
+
+The Team owner, current Team managers and platform admins can open **View Details > Settings > Models and tools** to restrict the AI providers, models and listed built-in tools used in the Team's context. These restrictions do not grant access to a model that is unavailable under the deployment's settings or your plan. Custom connector tools have their own policy under **Connectors**. Requests outside an organization context and platform-selected system models are exempt from the Team's model policy.
+
+- Turn on **Restrict providers** or **Restrict models** and select at least one entry. When both restrictions are on, a model must satisfy both. A provider restriction also blocks media providers that are not represented in the provider list.
+- A selected retired model ID also allows its configured successor, provided the successor meets the provider restriction. Selected IDs that are no longer in the catalog remain visible. Models outside the selected providers remain visible when selected so you can remove them.
+- Turn on **Restrict built-in tools** to choose from the listed tools. Leaving every tool unchecked blocks those tools; turning the restriction off leaves them unrestricted.
+- Click **Save** to apply the policy, or **Reset to unrestricted** to remove the Team's restrictions. Unrestricted does not override platform or plan limits.
+
+The model picker refreshes when you return to the tab and every few minutes, so it can briefly show a model the policy no longer allows. Server checks enforce the policy regardless, when work starts and when governed tools choose a provider; an already running provider request is not cancelled by a policy edit.
+
+### Troubleshooting model policy
+
+If **Models and tools** is missing, ask the owner to check your Team management access. Being able to edit other Team settings does not necessarily grant policy management access.
+
+Unrecognized saved provider or tool entries are shown so an administrator can remove them before saving. They do not authorize a different provider or tool. If the stored policy is malformed, requests fail closed until an administrator saves a valid replacement or resets it. If no model satisfies the policy and the usual platform and plan checks, widen the policy or choose another permitted model; the system does not bypass the restriction to find a fallback.
 
 ## Data retention
 

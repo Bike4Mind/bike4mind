@@ -7,7 +7,7 @@
  * exists. The split is still worth keeping for the reason below, not for a second caller.
  *
  * Retrieval stays in the Next.js app on purpose: the embeddings index (`app/generated/
- * help-embeddings.json`) and the bundled markdown are app assets read via `process.cwd()`. The
+ * help-embeddings.json` + `help-embeddings.bin`) and the bundled markdown are app assets read via `process.cwd()`. The
  * LLM completion workers (questProcessor/agentExecutor) run in separate Lambdas without those
  * files, so they reach this logic over HTTP rather than importing it.
  *
@@ -29,6 +29,7 @@ import {
   resolveEmbeddingCredentials,
 } from '@bike4mind/services/llm/embeddingProviders';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { decodeHelpEmbeddings } from '@bike4mind/scripts/help/embeddingsCodec';
 import type { HelpIndex, HelpIndexEntry, HelpEmbeddingsIndex, HelpEmbeddingChunk } from '@bike4mind/scripts/help/types';
 import {
   ADMIN_HELP_CONTENT_DIR,
@@ -118,13 +119,17 @@ export interface HelpSearchResult {
 async function loadHelpEmbeddings(logger: HelpLogger): Promise<HelpEmbeddingsIndex | null> {
   if (embeddingsCache) return embeddingsCache;
   try {
-    const embeddingsPath = path.join(process.cwd(), 'app/generated/help-embeddings.json');
-    const content = await fs.promises.readFile(embeddingsPath, 'utf-8');
-    embeddingsCache = JSON.parse(content) as HelpEmbeddingsIndex;
+    const metadataPath = path.join(process.cwd(), 'app/generated/help-embeddings.json');
+    const vectorsPath = path.join(process.cwd(), 'app/generated/help-embeddings.bin');
+    const [metadataJson, vectors] = await Promise.all([
+      fs.promises.readFile(metadataPath, 'utf-8'),
+      fs.promises.readFile(vectorsPath),
+    ]);
+    embeddingsCache = decodeHelpEmbeddings(metadataJson, vectors);
     logger.info(`[HelpRetrieval] Loaded ${embeddingsCache.chunks.length} embedding chunks`);
     return embeddingsCache;
-  } catch {
-    logger.warn('[HelpRetrieval] help-embeddings.json not found, will use keyword fallback');
+  } catch (error) {
+    logger.warn('[HelpRetrieval] help embeddings unavailable, will use keyword fallback', error);
     return null;
   }
 }

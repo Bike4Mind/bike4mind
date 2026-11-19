@@ -195,6 +195,14 @@ describe('credentialExecutionFields', () => {
     ).toEqual({ authOrigin: 'apiKey', apiKeyId: 'key-1' });
   });
 
+  it('stamps the connected app for an exchange key and not for a personal key', () => {
+    const scopes = [ApiKeyScope.DATALAKE_WRITE];
+    expect(credentialExecutionFields({ keyId: 'key-1', scopes, oauthExchangeClientId: 'app-a' })).toMatchObject({
+      oauthClientId: 'app-a',
+    });
+    expect(credentialExecutionFields({ keyId: 'key-1', scopes })).not.toHaveProperty('oauthClientId');
+  });
+
   it('refuses a credential with no key id rather than recording a session run', () => {
     expect(() => credentialExecutionFields({ keyId: '', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toThrow(/key id/);
   });

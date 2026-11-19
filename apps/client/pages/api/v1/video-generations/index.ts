@@ -59,13 +59,17 @@ const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationReques
   const hasFirstFrame = videoRequestInputs(inputs).some(input => input.role === 'first_frame');
   return {
     model: model.data,
-    mode: body.mode ?? (hasFirstFrame ? 'image_to_video' : 'text_to_video'),
+    mode: body.mode ?? (hasFirstFrame || body.keyframes ? 'image_to_video' : 'text_to_video'),
     prompt: body.prompt,
     durationSeconds: body.duration_seconds ?? defaults.durationSeconds,
     aspectRatio: body.aspect_ratio ?? defaults.aspectRatio,
     resolution: body.resolution ?? defaults.resolution,
     ...inputs,
     ...(body.audio !== undefined && { audio: body.audio }),
+    ...(body.draft !== undefined && { draft: body.draft }),
+    ...(body.keyframes && {
+      keyframes: body.keyframes.map(frame => ({ fileId: frame.file_id, timeSeconds: frame.time_seconds })),
+    }),
   };
 };
 
@@ -93,6 +97,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       request,
       source,
       apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

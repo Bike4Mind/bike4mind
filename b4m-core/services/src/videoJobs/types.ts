@@ -1,4 +1,5 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
@@ -65,7 +66,13 @@ export type VideoJobDeps = {
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
@@ -76,6 +83,11 @@ export type CreateVideoJobInput = {
   source: GenerationJobSource;
   /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
   apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;

@@ -6,6 +6,7 @@ import {
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
+  type ApiKeyBillingOwnerType,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
@@ -124,10 +125,21 @@ export async function createImageJobs(
   if (reused) return reused;
   const replayed = replays.flatMap(replay => (replay?.ok ? [replay.job] : []));
   if (replayed.length === input.count) {
-    return { ok: true, groupId: replayed[0].payload.groupId ?? replayed[0].id, jobs: replayed, created: false };
+    return {
+      ok: true,
+      groupId: replayed[0].payload.groupId ?? replayed[0].id,
+      jobs: replayed,
+      created: false,
+      createdCount: 0,
+    };
   }
 
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return refuse(422, 'model_unavailable', `Image model ${request.model} has no API key configured`);
   }
@@ -151,7 +163,17 @@ export async function createImageJobs(
 
   const { enforceCredits } = await deps.getSettings();
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
-  const holds = await holdBatch(missingIndexes.length, { enforceCredits, user: input.user, requiredCredits }, deps);
+  const holds = await holdBatch(
+    missingIndexes.length,
+    {
+      enforceCredits,
+      user: input.user,
+      requiredCredits,
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+    },
+    deps
+  );
   if (!holds.ok) return holds;
 
   const groupId = replayed[0]?.payload.groupId ?? new Types.ObjectId().toHexString();
@@ -166,10 +188,22 @@ export async function createImageJobs(
     const job = replay?.ok ? replay.job : fresh.next().value;
     return job ? [job] : [];
   });
-  return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
+  return {
+    ok: true,
+    groupId: jobs[0]?.payload.groupId ?? groupId,
+    jobs,
+    created: true,
+    createdCount: created.jobs.length,
+  };
 }
 
-type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };
+type HoldParams = {
+  enforceCredits: boolean;
+  user: CreateImageJobsInput['user'];
+  requiredCredits: number;
+  apiKeyId?: string;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+};
 
 async function holdBatch(
   count: number,
@@ -245,10 +279,17 @@ async function persistBatch(
           ...owner,
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
+          ...(input.questId !== undefined && { questId: input.questId }),
           source: input.source,
           ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
-          payload: { request, providerId, groupId, groupSize: input.count },
+          payload: {
+            request,
+            providerId,
+            groupId,
+            groupSize: input.count,
+            ...(input.purpose !== undefined && { purpose: input.purpose }),
+          },
           pollCount: 0,
           attempts: 0,
           cancelRequested: false,

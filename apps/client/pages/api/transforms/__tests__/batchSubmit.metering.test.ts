@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, spendFrozenError } from '@bike4mind/common';
 
 /**
  * Batch submit runs on the platform Anthropic key, so it must admit every model and reserve the
@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   ceiling: vi.fn(),
   substitute: vi.fn(),
   catalogModels: [] as unknown[],
+  admissionArgs: vi.fn(),
 }));
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
@@ -46,11 +47,14 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: async () => ({
-    assert: async (id: string) => {
-      if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
+  createModelAdmission: async (...args: unknown[]) => {
+    m.admissionArgs(...args);
+    return {
+      assert: async (id: string) => {
+        if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
   completionCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
   resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   isCreditsEnforced: async () => m.enforced,
@@ -66,11 +70,11 @@ const item = (ref: string, model = 'claude-opus-4-6') => ({
   messages: [{ role: 'user', content: 'summarize' }],
 });
 
-async function submit(requests: unknown[]) {
+async function submit(requests: unknown[], apiKeyInfo: Record<string, unknown> = { keyId: 'k1' }) {
   const { req, res } = createMocks({ method: 'POST' });
   Object.assign(req, {
     user: { id: 'u1' },
-    apiKeyInfo: { keyId: 'k1' },
+    apiKeyInfo,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     body: { requests },
   });
@@ -127,12 +131,33 @@ describe('POST /api/transforms/batch metering', () => {
     expect(m.submitBatch).not.toHaveBeenCalled();
   });
 
+  it('refuses a frozen caller with 403 spend_frozen and never submits', async () => {
+    m.reserve.mockRejectedValue(spendFrozenError({ scopeType: 'apiKey', frozenAt: new Date('2026-11-16T00:00:00Z') }));
+
+    await expect(submit([item('a')])).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'api_key' },
+    });
+    expect(m.submitBatch).not.toHaveBeenCalled();
+  });
+
   it('403s a model the caller is not admitted to, before reserving or submitting', async () => {
     m.denied.add('claude-opus-4-6');
 
     await expect(submit([item('a')])).rejects.toMatchObject({ statusCode: 403 });
     expect(m.reserve).not.toHaveBeenCalled();
     expect(m.submitBatch).not.toHaveBeenCalled();
+  });
+
+  it("admits models under the org-billed key's organization policy, and no org for a personal key", async () => {
+    await submit([item('a')], { keyId: 'k1', billingOwnerType: 'Organization', organizationId: 'org1' });
+    expect(m.admissionArgs).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: 'org1',
+    });
+    await submit([item('a')]);
+    expect(m.admissionArgs).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: undefined,
+    });
   });
 
   it('reserves the summed per-item ceiling and persists the hold for the poll', async () => {

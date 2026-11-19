@@ -1,7 +1,10 @@
+import type { SkinSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
+import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
+import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
@@ -43,6 +46,10 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathAction,
+  ChatFilePathActionResult,
+  ChatFilePathOpenResult,
+  ChatFileView,
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
@@ -140,6 +147,10 @@ import type {
   ModelCaptureRequestEvent,
   ModelExportFormat,
   ModelStateUpdate,
+  ModelVersion,
+  ModelVersionEntry,
+  ModelVersionRecordRequest,
+  ModelVersionsUpdate,
   ModelViewState,
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
@@ -156,6 +167,15 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
+  studioPrepare: 'studio:prepare',
+  studioCreate: 'studio:create',
+  studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
+  studioAssetAction: 'studio:asset-action',
+  studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -252,6 +272,7 @@ export const IPC_CHANNELS = {
   chatClearContext: 'chat:clear-context',
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
+  chatGetRunSpend: 'chat:get-run-spend',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
   chatGetHeldRelays: 'chat:get-held-relays',
@@ -271,6 +292,11 @@ export const IPC_CHANNELS = {
   chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
+  chatCheckFilePaths: 'chat:check-file-paths',
+  chatOpenFilePath: 'chat:open-file-path',
+  chatReadFilePath: 'chat:read-file-path',
+  chatFilePathAction: 'chat:file-path-action',
+  chatAttachFilePath: 'chat:attach-file-path',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -485,6 +511,13 @@ export const IPC_CHANNELS = {
   modelState: 'model:state',
   /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
   modelCaptureRequest: 'model:capture-request',
+  /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
+  modelListVersions: 'model:list-versions',
+  modelRecordVersion: 'model:record-version',
+  modelWantsVersion: 'model:wants-version',
+  modelRestoreVersion: 'model:restore-version',
+  /** main -> renderer push: a conversation kept a new version. */
+  modelVersions: 'model:versions',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -578,6 +611,10 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
+  skinsList: 'skins:list',
+  /** main -> renderer push after the mods folder changed on disk. */
+  skinsChanged: 'skins:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -648,6 +685,8 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** When an agent tool last took this tab (ms since epoch); absent or 0 if it never has. */
+  agentUsedAt?: number;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
@@ -668,6 +707,8 @@ export interface BrowserOpenArtifactRequest {
   sessionId: string;
   title: string;
   content: string;
+  /** Names the artifact, so a tab still showing it is switched to rather than opened again. */
+  artifactKey?: string;
 }
 
 /** The history controls, which take no url. */
@@ -732,7 +773,13 @@ export interface MiniTavernApi {
 }
 
 export interface DesktopApi {
+  studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
+  skins: {
+    list(): Promise<SkinSummary[]>;
+    onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -938,7 +985,7 @@ export interface DesktopApi {
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string): Promise<ChatSession | null>;
+    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
@@ -985,6 +1032,8 @@ export interface DesktopApi {
      * `model` is the Settings pick; null or omitted is automatic.
      */
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
+    /** The settled spend of the orchestration rooted at this session, for its job summary. */
+    getRunSpend(rootSessionId: string): Promise<RunSpend>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -1040,6 +1089,19 @@ export interface DesktopApi {
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
     attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
+    /**
+     * For each path a reply names, its absolute path when it exists inside this session's shared
+     * folders, else null. Same order as `paths`; an over-long or malformed list answers empty.
+     */
+    checkFilePaths(sessionId: string, paths: string[]): Promise<(string | null)[]>;
+    /** Open a path a reply names in its default app, or reveal it when it would run. Never rejects. */
+    openFilePath(sessionId: string, path: string): Promise<ChatFilePathOpenResult>;
+    /** Read a path a reply names for the Files pane, under the same checks as opening it. Never rejects. */
+    readFilePath(sessionId: string, path: string): Promise<ChatFileView>;
+    /** Copy or reveal a path a reply names, under the same checks as opening it. Never rejects. */
+    filePathAction(sessionId: string, path: string, action: ChatFilePathAction): Promise<ChatFilePathActionResult>;
+    /** Add a path a reply names to this session's draft, under the same checks as opening it. */
+    attachFilePath(sessionId: string, path: string): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -1209,6 +1271,15 @@ export interface DesktopApi {
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (update: ModelStateUpdate) => void): () => void;
     onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
+    /** Oldest first, with thumbnails. */
+    listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
+    /** Keeps the good build of `generation`; null when nothing new was kept. */
+    /** Whether this window should render a thumbnail and keep `generation` (main may already have it). */
+    wantsVersion(sessionId: string, generation: number): Promise<boolean>;
+    recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
+    /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
+    restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;
+    onVersions(listener: (update: ModelVersionsUpdate) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

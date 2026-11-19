@@ -25,8 +25,9 @@ import { useAdminListUrlState } from '@client/app/components/admin/shared/useAdm
 import { ActionDialog } from './shared/ActionDialog';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
-import { REPLAY_CHIP, UNKNOWN_REPLAY_CHIP } from './DlqMessageDrawer';
+import { FailureChip, failureText, REPLAY_CHIP, UNKNOWN_REPLAY_CHIP } from './DlqMessageDrawer';
 import { DlqRecommendation } from './DlqRecommendation';
+import { DlqTriageRecommendation } from './DlqTriageRecommendation';
 import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 
@@ -142,10 +143,14 @@ const COLUMNS: readonly DataColumn<Row>[] = [
     render: row => (
       <Stack gap={0.5} sx={{ minWidth: 0 }} data-testid={`dlq-reason-${row.messageId}`}>
         <Typography level="body-xs" noWrap>
-          {row.failure?.errorMessage ?? 'Unknown'}
+          {failureText(row.failure)}
         </Typography>
-        <span data-testid={`dlq-category-${row.messageId}`}>
-          <StatusChip tone="neutral" label={row.failure?.category ?? 'Unknown'} />
+        <span>
+          <FailureChip
+            failure={row.failure}
+            categoryTestId={`dlq-category-${row.messageId}`}
+            sourceTestId={`dlq-failure-source-${row.messageId}`}
+          />
         </span>
       </Stack>
     ),
@@ -154,8 +159,13 @@ const COLUMNS: readonly DataColumn<Row>[] = [
     id: 'recommendation',
     label: 'Next step',
     width: '14rem',
-    help: 'Advisory only, from the recorded failure and replay attempts; review before acting.',
-    render: row => <DlqRecommendation message={row} />,
+    help: 'Advisory only, from the recorded failure, replay attempts and queue policy; review before acting.',
+    render: row => (
+      <Stack gap={1}>
+        <DlqRecommendation message={row} />
+        <DlqTriageRecommendation queueLabel={row.queueLabel} messageId={row.messageId} />
+      </Stack>
+    ),
   },
   { id: 'age', label: 'Age', width: '6rem', render: row => <AgeCell row={row} /> },
   { id: 'expires', label: 'Expires in', width: '7rem', render: row => <ExpiresCell row={row} /> },
@@ -305,14 +315,20 @@ export const DlqMessagesTable: React.FC<{
         minWidth="60rem"
         rowActions={row =>
           row.logsUrl ? (
-            <Tooltip title="View consumer logs around the send time">
+            <Tooltip
+              title={
+                row.logsScope === 'request'
+                  ? 'View the logs of the failed request'
+                  : 'View consumer logs around the send time'
+              }
+            >
               <IconButton
                 size="sm"
                 component="a"
                 href={row.logsUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="View consumer logs"
+                aria-label={row.logsScope === 'request' ? 'View request logs' : 'View consumer logs'}
                 data-testid={`dlq-logs-${row.messageId}`}
               >
                 <ArticleIcon fontSize="small" />
@@ -394,8 +410,7 @@ export const DlqMessagesTable: React.FC<{
         </Stack>
         {replayNeedsReason && (
           <Typography level="body-sm" data-testid="dlq-replay-reason-note">
-            A reason is required because replay can have side effects or its safety is unknown for some of these
-            queues.
+            A reason is required because replay can have side effects or its safety is unknown for some of these queues.
           </Typography>
         )}
         {selectedRows.length > replayableRows.length && (
