@@ -21,7 +21,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
-import com.bike4mind.kit.links.DeepLinkRouter
+import com.bike4mind.kit.links.IncomingUri
 import com.bike4mind.kit.links.PendingRoute
 import com.bike4mind.kit.links.Route
 import com.bike4mind.kit.push.PushRoute
@@ -77,11 +77,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val data = intent?.data
-        when {
-            data == null -> handlePushTap(intent)
-            data.scheme == "https" || data.scheme == "http" -> handleAppLink(data.toString())
-            else -> handleCallback(data.toString())
+        val uri = intent?.data?.toString() ?: return handlePushTap(intent)
+        val graph = (application as B4MApplication).graph.value ?: return
+        when (val incoming = IncomingUri.classify(uri, graph.oauth, graph.environment.baseUrl)) {
+            IncomingUri.SignInCallback -> handleCallback(uri)
+            is IncomingUri.Link -> open(incoming.route)
+            null -> Unit
         }
     }
 
@@ -94,12 +95,7 @@ class MainActivity : ComponentActivity() {
         PushRoute.from({ extras.getString(it) }, serverBaseUrl())?.let(::open)
     }
 
-    /** An app link the manifest claims; a path with no native screen goes back to the browser. */
-    private fun handleAppLink(url: String) {
-        DeepLinkRouter.route(url, serverBaseUrl())?.let(::open)
-    }
-
-    /** AppRoot opens an in-app route once signed in; a web page needs no sign-in. */
+    /** AppRoot opens an in-app route once signed in; a web page (no native screen) needs no sign-in. */
     private fun open(route: Route) {
         if (route is Route.Web) openInBrowser(route.url) else pendingRoute.accept(route)
     }
