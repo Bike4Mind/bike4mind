@@ -5,7 +5,6 @@ import { keyframes } from '@mui/system';
 import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
-import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
@@ -125,7 +124,6 @@ export function OrchestratorStage({
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
-  onExampleQuest,
   view,
   onViewChange,
   actions,
@@ -431,7 +429,6 @@ export function OrchestratorStage({
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
               office={view === 'office'}
-              onExampleQuest={onExampleQuest}
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
@@ -448,16 +445,7 @@ export function OrchestratorStage({
   );
 }
 
-function EmptyStage({
-  scene,
-  office,
-  onExampleQuest,
-}: {
-  scene: ReactNode;
-  office: boolean;
-  onExampleQuest?(prompt: string): void;
-}) {
-  const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
+function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
   if (scene) {
     return (
       <Box
@@ -471,7 +459,6 @@ function EmptyStage({
               ? 'No agents yet. Describe the work and it will be split across agents.'
               : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
           </Typography>
-          {quests}
         </Box>
       </Box>
     );
@@ -492,7 +479,6 @@ function EmptyStage({
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
         No agents yet. Describe the work and it will be split across agents.
       </Typography>
-      {quests}
     </Box>
   );
 }

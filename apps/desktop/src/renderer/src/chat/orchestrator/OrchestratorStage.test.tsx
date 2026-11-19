@@ -3,7 +3,6 @@ import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
-import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
 import { Aquarium } from './aquarium/Aquarium';
@@ -73,7 +72,7 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-table-row-w')).not.toBeNull();
   });
 
-  describe('example quests', () => {
+  describe('empty stage', () => {
     const onExampleQuest = vi.fn();
     const renderEmpty = (view: 'tavern' | 'office' | 'board' | 'table') =>
       themed.render(
@@ -100,26 +99,22 @@ describe('OrchestratorStage', () => {
       );
     });
 
-    it('renders the Office scene with zero agents and example quests', async () => {
+    it('renders the Office scene with zero agents without suggestions', async () => {
       await renderEmpty('office');
       expect(el('orchestrator-empty-state').contains(el('fake-office'))).toBe(true);
       expect(el('orchestrator-empty-state').textContent).toContain(
         'No agents yet. Describe the work and it will be split across agents.'
       );
-      act(() => el('orchestrator-example-quest-1').click());
-      expect(onExampleQuest).toHaveBeenLastCalledWith(EXAMPLE_QUESTS[0].prompt);
+      expect(query('orchestrator-example-quest-1')).toBeNull();
     });
 
-    it.each(['tavern', 'board', 'table'] as const)('offers three example quests in the %s view', async view => {
+    it.each(['tavern', 'board', 'table'] as const)('omits suggestion buttons in the %s view', async view => {
       await renderEmpty(view);
       expect(query(`fake-${view}`)).toBeNull();
-      expect(EXAMPLE_QUESTS.map((_quest, index) => el(`orchestrator-example-quest-${index + 1}`).textContent)).toEqual([
-        'Audit this repo',
-        'Write missing tests',
-        'Compare approaches',
-      ]);
-      act(() => el('orchestrator-example-quest-2').click());
-      expect(onExampleQuest).toHaveBeenLastCalledWith(EXAMPLE_QUESTS[1].prompt);
+      for (const index of [1, 2, 3]) {
+        expect(query(`orchestrator-example-quest-${index}`)).toBeNull();
+      }
+      expect(onExampleQuest).not.toHaveBeenCalled();
     });
 
     it('keeps the plain empty line in the board and table views', async () => {
