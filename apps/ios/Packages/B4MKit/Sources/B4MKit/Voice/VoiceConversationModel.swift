@@ -40,6 +40,8 @@ public struct VoiceExchange: Identifiable, Equatable, Sendable {
 @MainActor
 @Observable
 public final class VoiceConversationModel {
+  public typealias UtteranceHandler = @MainActor (String) async -> String?
+
   public enum Phase: Equatable, Sendable {
     case idle, listening, sending, streaming, speaking
     case paused(PauseReason)
@@ -82,6 +84,8 @@ public final class VoiceConversationModel {
   private let opening: [String]
   /// Sent ahead of the first message of a new conversation, so the assistant knows what was just read out.
   private var firstTurnContext: String?
+  /// Gets each utterance before it is sent; a non-nil answer is spoken instead and nothing reaches the chat.
+  private let utteranceHandler: UtteranceHandler?
 
   private var audioTask: Task<Void, Never>?
   private var framesTask: Task<Void, Never>?
@@ -110,11 +114,13 @@ public final class VoiceConversationModel {
     speaker: any SpeechSpeaking, audioSession: any VoiceAudioSessionControlling,
     silenceTimeout: Duration = .milliseconds(1400), stallTimeout: Duration = .seconds(20),
     bargeInMinimumWords: Int = 2, opening: [String] = [], firstTurnContext: String? = nil,
+    utteranceHandler: UtteranceHandler? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) {
     self.target = target
     self.opening = opening.filter { !$0.isEmpty }
     self.firstTurnContext = firstTurnContext
+    self.utteranceHandler = utteranceHandler
     if case .session(let id) = target { sessionID = id }
     self.api = api
     self.realtime = realtime
@@ -329,6 +335,11 @@ public final class VoiceConversationModel {
     await beginListening()
     guard token == turnToken else { return }
 
+    if let utteranceHandler, let spoken = await utteranceHandler(text) {
+      guard token == turnToken else { return }
+      exchanges[exchanges.count - 1].replyText = spoken
+      return speakLocal([spoken], token: token)
+    }
     var message = text
     if target == .newConversation, let context = firstTurnContext {
       message = "Context - the brief you just read me:\n\(context)\n\n\(text)"
@@ -452,7 +463,7 @@ public final class VoiceConversationModel {
     chunkSink?.finish()
   }
 
-  /// Speaks text that did not come from a quest (the opening), then returns to listening like any reply.
+  /// Speaks text that did not come from a quest (the opening, a handled utterance), then returns to listening like any reply.
   private func speakLocal(_ sections: [String], token: Int) {
     replyFinished = true
     phase = .speaking

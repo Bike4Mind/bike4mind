@@ -15,22 +15,24 @@ final class VoiceConversationModelTests: XCTestCase {
   private func makeModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
     stallTimeout: Duration = .seconds(30), opening: [String] = [], firstTurnContext: String? = nil,
+    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
       silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, opening: opening,
-      firstTurnContext: firstTurnContext, sleep: sleep)
+      firstTurnContext: firstTurnContext, utteranceHandler: utteranceHandler, sleep: sleep)
   }
 
   private func startedModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
     stallTimeout: Duration = .seconds(30), opening: [String] = [], firstTurnContext: String? = nil,
+    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) async -> VoiceConversationModel {
     let model = makeModel(
       target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, opening: opening,
-      firstTurnContext: firstTurnContext, sleep: sleep)
+      firstTurnContext: firstTurnContext, utteranceHandler: utteranceHandler, sleep: sleep)
     await model.start()
     await until { await realtime.listenerCount == 1 }
     await until { await listener.startCount == 1 }
@@ -719,6 +721,26 @@ final class VoiceConversationModelTests: XCTestCase {
     await until { await api.sentMessages.count == 2 }
     let sent = await api.sentMessages
     XCTAssertEqual(sent.last?.message.hasPrefix("Context - the brief you just read me:\n"), true)
+    await model.stop()
+  }
+
+  func testAHandledUtteranceIsSpokenLocallyAndNeverSentToTheChat() async throws {
+    let model = await startedModel(
+      target: .newConversation, firstTurnContext: "Ship the budget.",
+      utteranceHandler: { $0 == "approve" ? "Approve the budget? Say yes to confirm." : nil })
+    await say("approve")
+    await until { await speaker.spoken == ["Approve the budget? Say yes to confirm."] }
+    await until { model.phase == .listening }
+    XCTAssertEqual(model.exchanges.last?.userText, "approve")
+    XCTAssertEqual(model.exchanges.last?.replyText, "Approve the budget? Say yes to confirm.")
+    var sent = await api.sentMessages
+    XCTAssertTrue(sent.isEmpty)
+
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-1", sessionID: "fresh")))
+    await say("what does the budget cover")
+    await until { await api.sentMessages.count == 1 }
+    sent = await api.sentMessages
+    XCTAssertEqual(sent.first?.message.hasPrefix("Context - the brief you just read me:\n"), true)
     await model.stop()
   }
 }

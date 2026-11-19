@@ -181,7 +181,12 @@ struct VoiceConversationView: View {
       briefSession = session
       (opening, context) = await session.prepare()
     }
-    let model = Self.makeModel(request: request, services: services, opening: opening, context: context)
+    var handler: VoiceConversationModel.UtteranceHandler?
+    if let session = briefSession {
+      handler = { utterance in await session.handle(utterance) }
+    }
+    let model = Self.makeModel(
+      request: request, services: services, opening: opening, context: context, handler: handler)
     self.model = model
     await model.start()
   }
@@ -211,22 +216,28 @@ struct VoiceConversationView: View {
   }
 
   private static func makeModel(
-    request: VoiceRequest, services: AppServices, opening: [String], context: String?
+    request: VoiceRequest, services: AppServices, opening: [String], context: String?,
+    handler: VoiceConversationModel.UtteranceHandler?
   ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
       // The Simulator has no usable speech input: B4M_VOICE_SCRIPTED_SPEECH=1 scripts the utterance while the
-      // send and the streamed reply still go through the real API and socket.
-      if FixtureServices.isEnabled || ProcessInfo.processInfo.environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
+      // send and the streamed reply still go through the real API and socket. B4M_VOICE_SCRIPT="approve|yes"
+      // replaces the scripted utterances, one per turn.
+      let environment = ProcessInfo.processInfo.environment
+      if FixtureServices.isEnabled || environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
+        let script = environment["B4M_VOICE_SCRIPT"].map { $0.split(separator: "|").map(String.init) }
         model = VoiceFixtures.makeModel(
           target: request.target, api: services.api, realtime: services.realtime, opening: opening,
-          firstTurnContext: context)
+          firstTurnContext: context, utteranceHandler: handler,
+          script: script ?? ["What can you help me with today"])
         return model
       }
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), opening: opening, firstTurnContext: context)
+      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), opening: opening, firstTurnContext: context,
+      utteranceHandler: handler)
     return model
   }
 

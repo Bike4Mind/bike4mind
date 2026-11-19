@@ -1,9 +1,9 @@
 import Foundation
 import UserNotifications
 
-/// The notification categories the server selects with `aps.category` on a `brief_ready` push whose brief holds
-/// exactly one decision. Identifiers must stay in sync with BRIEF_ACTION_CATEGORIES in
-/// apps/workers/src/events/sendPush.ts.
+/// The notification categories the server selects with `aps.category` on a `brief_ready` push: approve/deny or
+/// reply when the brief holds exactly one decision, Listen alone otherwise. Identifiers must stay in sync with
+/// BRIEF_ACTION_CATEGORIES and BRIEF_LISTEN_CATEGORY in apps/workers/src/events/sendPush.ts.
 public enum BriefNotificationCategory {
   public static let approvalIdentifier = "brief_ready_approval"
   public static let replyIdentifier = "brief_ready_reply"
