@@ -265,6 +265,14 @@ describe('createSerpApiProvider', () => {
       expect(results[0].displayHost).toBe('DataDrivenInvestor');
     });
 
+    it('caps a long platform name at 40 characters', async () => {
+      const source = 'abcdefghij'.repeat(6);
+      const results = await searchWith({ link: goto, displayed_link: '10+ comments', source });
+
+      expect(results[0].displayHost).toHaveLength(40);
+      expect(results[0].displayHost).toBe(source.slice(0, 40));
+    });
+
     it('prefers the breadcrumb host over source', async () => {
       const results = await searchWith({
         link: goto,

@@ -66,6 +66,14 @@ const getFaviconUrl = (url: string): string | null => {
   }
 };
 
+const isBareHostname = (value: string): boolean => {
+  try {
+    return value.includes('.') && new URL(`https://${value}`).hostname === value.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
 /** Names listed in the conflict tooltip before it degrades to a count. Keeps one line readable. */
 const CONFLICT_NAMES_SHOWN = 2;
 
@@ -219,9 +227,9 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
             ? source.metadata.displayHost
             : undefined;
         hostname = (displayHost ?? parsedUrl.hostname).replace(/^www\./, '');
-        // A platform name such as "Reddit" has no host to look a favicon up by.
+        // Only a bare hostname has a favicon; a platform name ("Reddit", "foo@bar.com") does not.
         faviconUrl = displayHost
-          ? displayHost.includes('.')
+          ? isBareHostname(displayHost)
             ? getFaviconUrl(`https://${displayHost}`)
             : null
           : getFaviconUrl(source.url);

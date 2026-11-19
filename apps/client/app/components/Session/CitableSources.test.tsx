@@ -86,6 +86,17 @@ describe('CitableSources host label', () => {
     expect(container.querySelector('img')).toBeNull();
   });
 
+  it('shows no favicon for a platform name containing userinfo', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'foo@bar.com' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('foo@bar.com');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('shows a favicon for a bare hostname', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'example.com' });
+    expect(container.querySelector('img')).not.toBeNull();
+  });
+
   it('only strips a leading www. from the label', () => {
     renderRedirect({ sourceSystem: 'web_search', displayHost: 'Thewww.Blog' });
     expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Thewww.Blog');
