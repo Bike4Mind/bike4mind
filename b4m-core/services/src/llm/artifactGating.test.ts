@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
+import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
 import { buildTaggedContextMessages } from './systemPromptSources';
 
 describe('resolveArtifactsEnabled', () => {
@@ -63,5 +64,34 @@ describe('artifact-emission wiring into the assembled system messages', () => {
       role: 'system',
       content: EMISSION,
     });
+  });
+});
+
+describe('withArtifactDataOrigins', () => {
+  const APP_URL = 'https://app.example.com';
+
+  it.each([
+    ['unset', undefined],
+    ['empty', []],
+    ['invalid', ['https://data.example.org', 'http://plain.example.org']],
+    ["naming the app's own site", ['https://api.example.com']],
+  ])('returns the default prompt byte for byte when the list is %s', (_label, stored) => {
+    expect(withArtifactDataOrigins(ARTIFACT_EMISSION_PROMPT, stored, APP_URL)).toBe(ARTIFACT_EMISSION_PROMPT);
+  });
+
+  it('names each listed origin and how to fetch it after the Python section', () => {
+    const content = withArtifactDataOrigins(
+      ARTIFACT_EMISSION_PROMPT,
+      ['https://Data.example.org/', 'https://stats.example.net'],
+      APP_URL
+    );
+
+    expect(content.startsWith(ARTIFACT_EMISSION_PROMPT)).toBe(true);
+    const note = content.slice(ARTIFACT_EMISSION_PROMPT.length);
+    expect(note).toMatch(/^\n\nPYTHON DATA ORIGINS: /);
+    expect(note).toContain('https://data.example.org, https://stats.example.net');
+    expect(note).toContain('pyodide.http import pyfetch');
+    expect(note).toContain('pyodide.http import open_url');
+    expect(note).toContain('Every other address is blocked');
   });
 });
