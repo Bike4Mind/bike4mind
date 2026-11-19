@@ -1003,7 +1003,7 @@ export class ChatService {
   /**
    * The plan progress of each session with a turn in flight, `null` once its thread has no plan.
    * A reply is stored only when it settles, so a stored summary lags a plan the model updates
-   * mid-turn; every summary push and list goes through withLivePlan, which lays this over it.
+   * mid-turn; every summary pushed, listed or returned by a setter goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
 
@@ -1343,7 +1343,7 @@ export class ChatService {
       this.dropHeldFrom(sessionId);
       await this.announceSuggestions(sessionId);
     }
-    return updated;
+    return this.liveSummary(updated);
   }
 
   childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
@@ -1428,7 +1428,7 @@ export class ChatService {
         }
       }
       if (summary && isCurrentOperation()) this.emitSummary(summary);
-      return summary;
+      return this.liveSummary(summary);
     } finally {
       if (isCurrentOperation()) this.historySettings.delete(key);
     }
@@ -1986,7 +1986,7 @@ export class ChatService {
       if (updated) this.markTaskDecisionMutation(sessionId, scope);
       this.syncTaskDecision(updated, scope);
       if (updated) this.emitSummary(updated);
-      return updated;
+      return this.liveSummary(updated);
     }
     const updated = await this.deps.store.setModel(sessionId, model);
     if (updated) {
@@ -1995,25 +1995,25 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
       });
     }
-    return updated;
+    return this.liveSummary(updated);
   }
 
   /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
   setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setReasoningEffort(sessionId, effort);
+    return this.liveSummary(this.deps.store.setReasoningEffort(sessionId, effort));
   }
 
   setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setPromptCacheTtl(sessionId, ttl);
+    return this.liveSummary(this.deps.store.setPromptCacheTtl(sessionId, ttl));
   }
 
   /** Replaces this conversation's overrides; an empty set clears them. */
   setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setGeneration(sessionId, generation);
+    return this.liveSummary(this.deps.store.setGeneration(sessionId, generation));
   }
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setPinned(sessionId, pinned);
+    return this.liveSummary(this.deps.store.setPinned(sessionId, pinned));
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
@@ -2039,7 +2039,7 @@ export class ChatService {
     }
     if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
     if (this.deps.store.scopeKey() !== scope) return null;
-    return this.deps.store.setOrchestrate(sessionId, orchestrate);
+    return this.liveSummary(this.deps.store.setOrchestrate(sessionId, orchestrate));
   }
 
   /**
@@ -2836,7 +2836,7 @@ export class ChatService {
    * access to the machine, which is the one escalation this whole feature has to not have.
    */
   setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setApprovalMode(sessionId, mode);
+    return this.liveSummary(this.deps.store.setApprovalMode(sessionId, mode));
   }
 
   /** The folders this session's tools may read, for links to files a reply names; null for an unknown session. */
@@ -3023,6 +3023,12 @@ export class ChatService {
     return live ? { ...rest, plan: live } : rest;
   }
 
+  /** For the summaries a setter hands back over IPC: the renderer swaps them into the row, so they carry the live plan too. */
+  private async liveSummary(summary: ChatSessionSummary | null | Promise<ChatSessionSummary | null>) {
+    const resolved = await summary;
+    return resolved && this.withLivePlan(resolved);
+  }
+
   private emitSummary(summary: ChatSessionSummary): void {
     this.deps.summaryChanged?.(this.withLivePlan(summary));
   }
@@ -3093,7 +3099,7 @@ export class ChatService {
   }
 
   renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null> {
-    return this.deps.store.rename(sessionId, title);
+    return this.liveSummary(this.deps.store.rename(sessionId, title));
   }
 
   /**
@@ -4191,6 +4197,8 @@ export class ChatService {
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
         this.attendedTurns.delete(sessionId);
+        // Backstop for a turn that ended without a 'done'/'error' (its own bookkeeping threw).
+        if (this.livePlans.delete(sessionId)) void this.pushStoredSummary(sessionId);
         this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent

@@ -146,13 +146,52 @@ describe('ChatService live plan', () => {
     expect(overlaid(id)).toBe(false);
   });
 
-  it('pushes nothing extra for a turn without a plan', async () => {
+  it('returns the live plan from the setters while the turn is running', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'do it');
+    await nextRequest(1);
+    streams[0].write(frame(todoCall('c1', ['completed', 'in_progress', 'pending'])));
+    streams[0].write(frame('[DONE]'));
+    await nextRequest(2);
+    await vi.waitUntil(() => planOf(summaries.at(-1)) === '1/3', { timeout: 3000, interval: 5 });
+
+    expect((await service.setSessionPinned(id, true))?.plan).toMatchObject({ done: 1, total: 3 });
+    expect((await service.renameSession(id, 'Renamed'))?.plan).toMatchObject({ done: 1, total: 3 });
+    expect((await service.setSessionArchived(id, false))?.plan).toMatchObject({ done: 1, total: 3 });
+  });
+
+  it('hands over to the stored plan when the turn errors', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'do it');
+    await nextRequest(1);
+    streams[0].write(frame(todoCall('c1', ['completed', 'pending'])));
+    streams[0].write(frame('[DONE]'));
+    await nextRequest(2);
+    await vi.waitUntil(() => overlaid(id), { timeout: 3000, interval: 5 });
+    const pushed = summaries.length;
+
+    streams[1].destroy(new Error('the server fell over'));
+    await vi.waitUntil(() => events.some(event => event.type === 'error'), { timeout: 3000, interval: 5 });
+    expect(overlaid(id)).toBe(false);
+    const stored = await store.get(id);
+    const storedPlan = stored && summarizeSession(stored).plan;
+    expect(storedPlan).toMatchObject({ done: 1, total: 2 });
+    await vi.waitUntil(() => summaries.length > pushed, { timeout: 3000, interval: 5 });
+    expect(summaries.at(-1)?.plan).toEqual(storedPlan);
+  });
+
+  it('pushes no summary for a tool round that leaves the plan alone', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
     await nextRequest(1);
-    await endTurn(streams[0]);
-    await service.setSessionHistory(id, false);
-    expect(summaries.length).toBeGreaterThan(0);
+    streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'not_a_real_tool', arguments: '{}' }] }));
+    streams[0].write(frame('[DONE]'));
+    await nextRequest(2);
+    const pushed = summaries.length;
+    streams[1].write(frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'not_a_real_tool', arguments: '{}' }] }));
+    streams[1].write(frame('[DONE]'));
+    await nextRequest(3);
+    expect(summaries.length).toBe(pushed);
     expect(summaries.every(summary => summary.plan === undefined)).toBe(true);
   });
 });
