@@ -1,17 +1,29 @@
-import type { ChatMessage } from './chat';
+import {
+  fromClaudeTasks,
+  fromTodoWrite,
+  PLAN_ITEM_STATUSES,
+  PLAN_TOOL_ADAPTERS,
+  planProgress,
+  type ClaudeTaskCall,
+  type PlanItem,
+  type PlanItemStatus,
+} from '@bike4mind/common';
+import type { ChatMessage, ChatToolCall } from './chat';
+import { own } from './ownKeys';
 
-export type TodoStatus = 'pending' | 'in_progress' | 'completed';
-
-export interface TodoItem {
-  content: string;
-  status: TodoStatus;
-}
+export type { PlanItem, PlanItemStatus };
 
 export const TODO_TOOL_NAME = 'todo_write';
 export const MAX_TODOS = 50;
 export const MAX_TODO_CHARS = 200;
 
-const STATUSES: readonly TodoStatus[] = ['pending', 'in_progress', 'completed'];
+/**
+ * The shared adapters Desktop reads a plan from. `quest_master` is left out: its adapter takes
+ * the quest list itself, not a tool call's input, so a call named that would yield a bogus plan.
+ */
+const { quest_master: _questMaster, ...PLAN_TOOLS } = PLAN_TOOL_ADAPTERS;
+
+const TASK_TOOLS: ReadonlySet<string> = new Set(['TaskCreate', 'TaskUpdate']);
 
 /**
  * The plan a `todo_write` call carries, or why it is not one.
@@ -20,38 +32,74 @@ const STATUSES: readonly TodoStatus[] = ['pending', 'in_progress', 'completed'];
  * which draws the plan from the call's own input: the transcript is the only store, so a plan
  * survives a restart and a window opened mid-turn with nothing persisted beside it.
  */
-export function parseTodos(value: unknown): { todos: TodoItem[] } | { error: string } {
+export function parseTodos(value: unknown): { todos: PlanItem[] } | { error: string } {
   if (!Array.isArray(value)) return { error: 'The "todos" argument is required and must be an array.' };
   if (value.length > MAX_TODOS) return { error: `At most ${MAX_TODOS} todos are allowed; merge or drop some.` };
 
-  const todos: TodoItem[] = [];
+  const todos: { content: string; status: PlanItemStatus; activeForm?: string }[] = [];
   for (const [index, entry] of value.entries()) {
-    const item = entry as { content?: unknown; status?: unknown } | null;
+    const item = entry as { content?: unknown; status?: unknown; activeForm?: unknown } | null;
     const label = `Todo ${index + 1}`;
     if (typeof item !== 'object' || item === null) return { error: `${label} must be an object.` };
     const content = typeof item.content === 'string' ? item.content.trim() : '';
     if (!content) return { error: `${label} needs non-empty "content".` };
     if (content.length > MAX_TODO_CHARS) return { error: `${label} is over ${MAX_TODO_CHARS} characters; shorten it.` };
-    if (!STATUSES.includes(item.status as TodoStatus)) {
-      return { error: `${label} has status ${JSON.stringify(item.status)}; use ${STATUSES.join(', ')}.` };
+    if (!PLAN_ITEM_STATUSES.includes(item.status as PlanItemStatus)) {
+      return { error: `${label} has status ${JSON.stringify(item.status)}; use ${PLAN_ITEM_STATUSES.join(', ')}.` };
     }
-    todos.push({ content, status: item.status as TodoStatus });
+    const todo: (typeof todos)[number] = { content, status: item.status as PlanItemStatus };
+    if (item.activeForm !== undefined) {
+      const activeForm = typeof item.activeForm === 'string' ? item.activeForm.trim() : '';
+      if (!activeForm) return { error: `${label} has an empty "activeForm"; omit it or give a short phrase.` };
+      if (activeForm.length > MAX_TODO_CHARS) {
+        return { error: `${label} "activeForm" is over ${MAX_TODO_CHARS} characters; shorten it.` };
+      }
+      todo.activeForm = activeForm;
+    }
+    todos.push(todo);
   }
-  return { todos };
+  // normalizePlan demotes a second in_progress item; the tool counts before this and warns.
+  return { todos: fromTodoWrite({ todos }).plan.items };
 }
 
-/** The most recent plan in a thread: the list the last accepted `todo_write` set, or null if none. */
-export function latestTodos(messages: readonly ChatMessage[]): TodoItem[] | null {
-  for (let m = messages.length - 1; m >= 0; m -= 1) {
-    const calls = messages[m].toolCalls ?? [];
-    for (let c = calls.length - 1; c >= 0; c -= 1) {
-      const call = calls[c];
-      if (call.name !== TODO_TOOL_NAME || call.status === 'error' || call.status === 'denied') continue;
+/** The tool result's `Task #<id>` text, when it names the id the task was given. */
+function taskResult(call: ChatToolCall): ClaudeTaskCall['result'] {
+  const taskId = call.name === 'TaskCreate' ? /Task #(\S+?)[\s:]/.exec(call.preview ?? '')?.[1] : undefined;
+  return taskId ? { taskId } : undefined;
+}
+
+/** Every plan-writing call that was accepted, oldest first. */
+function planCalls(messages: readonly ChatMessage[]): { call: ChatToolCall; message: number }[] {
+  return messages.flatMap((message, m) =>
+    (message.toolCalls ?? [])
+      .filter(call => own(PLAN_TOOLS, call.name) && call.status !== 'error' && call.status !== 'denied')
+      .map(call => ({ call, message: m }))
+  );
+}
+
+function planFrom(calls: readonly { call: ChatToolCall }[]): PlanItem[] | null {
+  for (let c = calls.length - 1; c >= 0; c -= 1) {
+    const { call } = calls[c];
+    if (TASK_TOOLS.has(call.name)) {
+      // Each task call is a delta, so the plan is the fold of the whole stream up to this one.
+      const tasks = calls.slice(0, c + 1).filter(entry => TASK_TOOLS.has(entry.call.name));
+      return fromClaudeTasks(
+        tasks.map(({ call: task }) => ({ name: task.name, input: task.input, result: taskResult(task) }))
+      ).plan.items;
+    }
+    if (call.name === TODO_TOOL_NAME) {
       const parsed = parseTodos(call.input.todos);
       if ('todos' in parsed) return parsed.todos;
+      continue;
     }
+    return own(PLAN_TOOLS, call.name)?.(call.input).plan.items ?? null;
   }
   return null;
+}
+
+/** The most recent plan in a thread: what the last accepted plan call set, or null if none. */
+export function latestTodos(messages: readonly ChatMessage[]): PlanItem[] | null {
+  return planFrom(planCalls(messages));
 }
 
 /**
@@ -68,17 +116,24 @@ export function latestTodos(messages: readonly ChatMessage[]): TodoItem[] | null
  * the previous one does and holds it up while the turn runs, and the turn ending closes the
  * window to the reply itself.
  */
-export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean): TodoItem[] | null {
+export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean): PlanItem[] | null {
   const window = turnOpen ? 2 : 1;
-  const recent: ChatMessage[] = [];
-  for (let m = messages.length - 1; m >= 0 && recent.length < window; m -= 1) {
-    if (messages[m].role === 'assistant') recent.unshift(messages[m]);
+  // The window's oldest assistant reply (`start`) and the newest (`first`), as thread indices.
+  let first = -1;
+  let start = -1;
+  for (let m = messages.length - 1, seen = 0; m >= 0 && seen < window; m -= 1) {
+    if (messages[m].role !== 'assistant') continue;
+    if (first < 0) first = m;
+    start = m;
+    seen += 1;
   }
-  return latestTodos(recent);
+  const calls = planCalls(messages);
+  // Recency decides only whether the plan is current; the task fold still reads the whole thread.
+  if (first < 0 || (calls.at(-1)?.message ?? -1) < start) return null;
+  return planFrom(calls);
 }
 
-export function countTodos(todos: readonly TodoItem[]): Record<TodoStatus, number> {
-  const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0 };
-  for (const todo of todos) counts[todo.status] += 1;
-  return counts;
+/** Done/total over the items that count (cancelled ones are left out), plus the current and next item. */
+export function todoProgress(items: readonly PlanItem[]) {
+  return planProgress({ version: 1, source: 'desktop', items: [...items], updatedAt: 0 });
 }
