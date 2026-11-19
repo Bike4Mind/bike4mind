@@ -174,12 +174,13 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
                     spending cap is enforced.
                   </Typography>
                   <Select
+                    data-testid="agent-task-upgrade-select"
                     aria-label="Task upgrade model"
                     value={upgrade}
                     onChange={(_event, value) => setUpgrade(value)}
                   >
                     {(allowed?.allowedRoles.includes(task.contract.role) ? allowed.allowedModels : []).map(id => (
-                      <Option key={id} value={id}>
+                      <Option key={id} value={id} data-testid={`agent-task-upgrade-option-${id}`}>
                         {name(id)}
                       </Option>
                     ))}

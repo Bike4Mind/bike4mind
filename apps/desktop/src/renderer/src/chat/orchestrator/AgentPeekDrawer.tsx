@@ -11,10 +11,11 @@ import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
+import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
@@ -278,6 +279,11 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
   const mode = useTheme().palette.mode;
   const palette = skin?.[mode];
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [taskControlsState, setTaskControlsState] = useState<'unopened' | 'open' | 'closed'>('unopened');
+  const taskControlsId = useId();
+  useEffect(() => {
+    setTaskControlsState('unopened');
+  }, [agent.id]);
   useEffect(() => {
     if (!visible) setActionsOpen(false);
   }, [visible]);
@@ -365,6 +371,29 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
         <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
           {loadError || actionError}
         </Typography>
+      )}
+      {agent.workerTask && (
+        <Box sx={{ flex: '0 1 auto !important', minHeight: 0, maxHeight: '40%', overflowY: 'auto' }}>
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-expanded={taskControlsState === 'open'}
+            aria-controls={taskControlsId}
+            data-testid="orchestrator-peek-task-toggle"
+            onClick={() => setTaskControlsState(current => (current === 'open' ? 'closed' : 'open'))}
+          >
+            Review task
+          </Button>
+          <Box
+            id={taskControlsId}
+            hidden={taskControlsState !== 'open'}
+            sx={{ display: taskControlsState === 'open' ? 'block' : 'none' }}
+            data-testid="orchestrator-peek-task-controls"
+          >
+            {taskControlsState !== 'unopened' && <TaskDecisionPanel key={agent.id} agent={agent} compact />}
+          </Box>
+        </Box>
       )}
       <Box
         data-testid="orchestrator-peek-conversation"

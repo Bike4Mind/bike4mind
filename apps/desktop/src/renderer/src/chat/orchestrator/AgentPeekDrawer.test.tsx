@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
+import type { ChatModelOption, ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer, useSessionMessages } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
-import type { WorkerTask } from '@shared/orchestration';
+import { inheritancePolicy, type WorkerTask } from '@shared/orchestration';
 import { assignPersonas } from '@shared/agentPersona';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
@@ -26,7 +26,7 @@ const chat = {
   cancelQueuedMessage: vi.fn(),
   sendQueuedMessageNow: vi.fn(),
   respondToApproval: vi.fn(),
-  listModels: vi.fn(async () => ({ models: [] })),
+  listModels: vi.fn(async (): Promise<{ models: ChatModelOption[] }> => ({ models: [] })),
   taskAction: vi.fn(),
 };
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
@@ -127,6 +127,7 @@ beforeEach(() => {
   chat.cancelQueuedMessage.mockResolvedValue(undefined);
   chat.sendQueuedMessageNow.mockResolvedValue(undefined);
   chat.respondToApproval.mockResolvedValue(undefined);
+  chat.listModels.mockResolvedValue({ models: [] });
   (window as unknown as { b4m: unknown }).b4m = { chat };
 });
 
@@ -522,5 +523,131 @@ describe('AgentPeekDrawer', () => {
     await renderDrawer(agentFixture('a1'));
     expect(el('chat-message-user-text').textContent).toBe('go');
     expect(el('chat-message-assistant').textContent).toContain('on it');
+  });
+});
+
+describe('structured task actions in the conversation drawer', () => {
+  const openTaskControls = () => act(async () => el('orchestrator-peek-task-toggle').click());
+  const taskNote = () => el('agent-task-note').querySelector('textarea') as HTMLTextAreaElement;
+
+  it('keeps completed tasks reviewable after viewing and preserves the assessment while collapsed', async () => {
+    const workerTask = longTask();
+    if (workerTask.state.status !== 'completed') throw new Error('Expected a completed task fixture');
+    chat.taskAction.mockResolvedValue({
+      workerTask: { ...workerTask, state: { ...workerTask.state, accepted: true, assessment: 'Reviewed evidence' } },
+    });
+    await renderDrawer(agentFixture('a1', 'done', { workerTask }));
+    expect(query('agent-task-panel')).toBeNull();
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-expanded')).toBe('false');
+    await openTaskControls();
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-controls')).toBe(
+      el('orchestrator-peek-task-controls').id
+    );
+    expect(el('orchestrator-peek-conversation').textContent).toContain('message 1');
+    expect(el('orchestrator-peek-task-controls').contains(el('orchestrator-peek-reply-input'))).toBe(false);
+    await typeInto(taskNote(), 'Reviewed evidence');
+    await openTaskControls();
+    expect(el('orchestrator-peek-task-controls').hidden).toBe(true);
+    await openTaskControls();
+    expect(taskNote().value).toBe('Reviewed evidence');
+    await act(async () => el('agent-task-accept-btn').click());
+    expect(chat.taskAction).toHaveBeenCalledTimes(1);
+    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'accept', assessment: 'Reviewed evidence' });
+    expect(query('agent-task-accept-btn')).toBeNull();
+  });
+
+  it.each(['approve', 'deny'] as const)('makes an escalation %s reachable with its exact decision', async answer => {
+    const workerTask: WorkerTask = {
+      ...longTask(),
+      state: {
+        status: 'escalation-requested',
+        reason: 'The current model needs help',
+        evidence: ['Observed the missing capability'],
+        decisionId: 'upgrade-one',
+        requestedModelId: 'premium',
+      },
+    };
+    chat.listModels.mockResolvedValue({ models: [{ id: 'premium', name: 'Approved premium' }] });
+    chat.taskAction.mockResolvedValue({ workerTask });
+    await renderDrawer(
+      agentFixture('a1', 'needs-you', {
+        workerTask,
+        orchestrationPolicy: {
+          rootSessionId: 'parent',
+          rootRunId: 'run',
+          policy: {
+            ...inheritancePolicy(),
+            escalation: {
+              mode: 'ask',
+              allowedModels: ['premium'],
+              allowedRoles: ['implementation'],
+              maxAutomaticUpgrades: 0,
+            },
+          },
+        },
+      })
+    );
+    await openTaskControls();
+    if (answer === 'approve') {
+      const selectRoot = el('agent-task-upgrade-select');
+      const select = selectRoot.querySelector('button') ?? selectRoot;
+      await act(async () => select.click());
+      await act(async () => el('agent-task-upgrade-option-premium').click());
+      await act(async () => el('agent-task-upgrade-btn').click());
+      expect(chat.taskAction).toHaveBeenCalledWith('a1', {
+        kind: 'upgrade',
+        modelId: 'premium',
+        decisionId: 'upgrade-one',
+      });
+    } else {
+      await act(async () => el('agent-task-deny-btn').click());
+      expect(chat.taskAction).toHaveBeenCalledWith('a1', {
+        kind: 'deny',
+        decisionId: 'upgrade-one',
+        reason: 'User declined the model upgrade.',
+      });
+    }
+    expect(chat.taskAction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['revise', 'cancel'] as const)('keeps blocked task %s reachable', async action => {
+    const workerTask: WorkerTask = {
+      ...longTask(),
+      state: { status: 'blocked', reason: 'Need input', evidence: ['Observed missing detail'] },
+    };
+    chat.taskAction.mockResolvedValue({ workerTask });
+    await renderDrawer(agentFixture('a1', 'needs-you', { workerTask }));
+    await openTaskControls();
+    await typeInto(taskNote(), 'Use the documented interface');
+    await act(async () => el(`agent-task-${action}-btn`).click());
+    expect(chat.taskAction).toHaveBeenCalledWith(
+      'a1',
+      action === 'revise'
+        ? { kind: 'revise', contract: workerTask.contract, instruction: 'Use the documented interface' }
+        : { kind: 'cancel', reason: 'Use the documented interface' }
+    );
+  });
+
+  it('keeps cancellation reachable while the task is running', async () => {
+    const workerTask: WorkerTask = { ...longTask(), state: { status: 'running' } };
+    chat.taskAction.mockResolvedValue({
+      workerTask: { ...workerTask, state: { status: 'canceled', reason: 'Canceled by user.' } },
+    });
+    await renderDrawer(agentFixture('a1', 'working', { workerTask }));
+    await openTaskControls();
+    await act(async () => el('agent-task-cancel-btn').click());
+    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'cancel', reason: 'Canceled by user.' });
+  });
+
+  it('starts closed with a fresh assessment when selecting another agent', async () => {
+    await renderDrawer(agentFixture('a1', 'needs-you', { workerTask: longTask() }));
+    await openTaskControls();
+    await typeInto(taskNote(), 'Only for the first agent');
+    await renderDrawer(agentFixture('a2', 'needs-you', { workerTask: longTask() }));
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(query('agent-task-panel')).toBeNull();
+    await openTaskControls();
+    expect(taskNote().value).toBe('');
+    expect(chat.taskAction).not.toHaveBeenCalled();
   });
 });
