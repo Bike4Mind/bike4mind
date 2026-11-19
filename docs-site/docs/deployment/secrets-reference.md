@@ -438,7 +438,7 @@ The command prints one line of counts per stored field and a total. It never pri
 | Exit code | Meaning |
 |-----------|---------|
 | `0` | Every stored value is under the current key |
-| `1` | Some values are unreadable, or changed while they were being rewritten. Run the command again |
+| `1` | Some values changed while they were being rewritten (`conflicts`): run the command again. Or no configured key opens some values (`unreadable`): a rerun does not change those, so find out why before you clear the previous key |
 | `2` | Usage or connection error, or no encrypted values were found (wrong or empty database) |
 
 :::warning Do Not Clear the Previous Key Early
