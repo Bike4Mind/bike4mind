@@ -15,6 +15,8 @@ import {
   truncateForPush,
 } from '@bike4mind/server-utils/utils/pushNotifications';
 
+export { isTopLevelRun };
+
 /**
  * Agent-run push notifications (`agent_completed` / `agent_failed`), published from the run's terminal
  * websocket frames so every failure exit is covered by one helper rather than one call per site.
