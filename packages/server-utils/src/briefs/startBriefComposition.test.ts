@@ -121,6 +121,7 @@ type GatedOver = {
   straddling?: Date | null;
 };
 
+const PREVIOUS_START = new Date('2026-11-17T01:00:00Z');
 const enabledUser = { preferences: { briefSchedule: { enabled: true } } };
 
 const makeGatedDeps = (over: GatedOver = {}) => {
@@ -129,7 +130,7 @@ const makeGatedDeps = (over: GatedOver = {}) => {
     ...base,
     users: {
       findById: vi.fn().mockResolvedValue(over.user === undefined ? enabledUser : over.user),
-      claimBriefStart: vi.fn().mockResolvedValue(over.claimed ?? true),
+      claimBriefStart: vi.fn().mockResolvedValue(over.claimed === false ? null : { previous: PREVIOUS_START }),
       releaseBriefStart: vi.fn().mockResolvedValue(true),
     },
     hasRunsSince: vi.fn().mockResolvedValue(over.hasRuns ?? true),
@@ -172,7 +173,7 @@ describe.each([
     deps.briefs.findActiveComposing.mockResolvedValueOnce(null).mockResolvedValueOnce(stored({ status: 'composing' }));
     expect(await start('u1', asDeps(deps))).toBe('in_flight');
     expect(deps.publishCompose).not.toHaveBeenCalled();
-    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now);
+    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now, PREVIOUS_START);
   });
 
   it('counts a run that finished after the last brief as activity', async () => {
@@ -192,7 +193,7 @@ describe.each([
     const deps = makeGatedDeps();
     deps.publishCompose.mockRejectedValue(new BriefComposeRejectedError());
     await expect(start('u1', asDeps(deps))).rejects.toMatchObject({ retrySafe: true });
-    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now);
+    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now, PREVIOUS_START);
   });
 
   it('keeps the claim when the compose event may have been delivered', async () => {
@@ -210,7 +211,7 @@ describe.each([
     const cause = new Error('database unavailable');
     deps.briefs.createComposing.mockRejectedValue(cause);
     await expect(start('u1', asDeps(deps))).rejects.toBe(cause);
-    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now);
+    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now, PREVIOUS_START);
   });
 
   it('rethrows the start error even when the release itself fails', async () => {

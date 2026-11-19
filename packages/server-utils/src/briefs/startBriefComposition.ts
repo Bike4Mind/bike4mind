@@ -138,9 +138,10 @@ async function startGatedBrief(
   const { periodStart } = await activityWindow(userId, deps, now);
   if (!(await deps.hasRunsSince(userId, periodStart))) return 'no_activity';
 
-  if (!(await deps.users.claimBriefStart(userId, now, claimGapMs))) return 'debounced';
+  const claim = await deps.users.claimBriefStart(userId, now, claimGapMs);
+  if (!claim) return 'debounced';
   const release = () =>
-    deps.users.releaseBriefStart(userId, now).catch((releaseError: unknown) => {
+    deps.users.releaseBriefStart(userId, now, claim.previous).catch((releaseError: unknown) => {
       logger.error('Failed to release a brief start claim', { userId, releaseError });
     });
   let created: boolean;
