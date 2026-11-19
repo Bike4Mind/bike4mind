@@ -9,13 +9,16 @@ import ChatPanelControls from './ChatPanelControls';
 // The copy button's hook reaches SessionsContext and react-query, neither of which the
 // header's own wiring depends on. `copyState` is mutable so a test can render the
 // post-copy state without driving the hook's 2s reset timer.
-const { copyMarkdown, copyState } = vi.hoisted(() => ({
-  copyMarkdown: vi.fn(),
-  copyState: { copied: false },
-}));
-vi.mock('./useCopySessionMarkdown', () => ({
-  useCopySessionMarkdown: () => ({ copyMarkdown, copied: copyState.copied }),
-}));
+const { copyMarkdown, copyState, useCopySessionMarkdown } = vi.hoisted(() => {
+  const copyMarkdown = vi.fn();
+  const copyState = { copied: false };
+  return {
+    copyMarkdown,
+    copyState,
+    useCopySessionMarkdown: vi.fn((_getMarkdown?: () => string) => ({ copyMarkdown, copied: copyState.copied })),
+  };
+});
+vi.mock('./useCopySessionMarkdown', () => ({ useCopySessionMarkdown }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -37,6 +40,7 @@ const openOptionLabels = () =>
 
 beforeEach(() => {
   copyMarkdown.mockClear();
+  useCopySessionMarkdown.mockClear();
   copyState.copied = false;
   // Distinct from every value the menu can write, so each assertion below fails if the
   // selection never reaches the store.
@@ -132,6 +136,19 @@ describe('ChatPanelControls copy button', () => {
     fireEvent.click(screen.getByTestId(`${PREFIX}-copy-markdown`));
 
     expect(copyMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the caller's getCopyMarkdown to the copy hook", () => {
+    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    renderControls({ getCopyMarkdown });
+
+    expect(useCopySessionMarkdown).toHaveBeenLastCalledWith(getCopyMarkdown);
+  });
+
+  it('leaves the copy hook on the main chat when no getCopyMarkdown is given', () => {
+    renderControls();
+
+    expect(useCopySessionMarkdown).toHaveBeenLastCalledWith(undefined);
   });
 
   it('swaps the copy icon for a tick once a copy has landed', () => {

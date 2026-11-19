@@ -7,8 +7,17 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import DockedChatPanel from './DockedChatPanel';
 
 // The control cluster reaches SessionsContext/react-query through useCopySessionMarkdown,
-// which is irrelevant to the header's Hide chat wiring.
-vi.mock('./ChatPanelControls', () => ({ default: () => null, chatHeaderToolButtonSx: {} }));
+// which is irrelevant to the header's Hide chat wiring. The stub records its props.
+const { controlsProps } = vi.hoisted(() => ({
+  controlsProps: { last: undefined as Record<string, unknown> | undefined },
+}));
+vi.mock('./ChatPanelControls', () => ({
+  default: (props: Record<string, unknown>) => {
+    controlsProps.last = props;
+    return null;
+  },
+  chatHeaderToolButtonSx: {},
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -61,5 +70,16 @@ describe('DockedChatPanel', () => {
     setSessionLayout({ layout: 'floatingChat' });
 
     expect(useSessionLayout.getState().hiddenFromLayout).toBeUndefined();
+  });
+
+  it('passes getCopyMarkdown through to the copy button', () => {
+    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    render(
+      <Wrapper>
+        <DockedChatPanel getCopyMarkdown={getCopyMarkdown}>chat</DockedChatPanel>
+      </Wrapper>
+    );
+
+    expect(controlsProps.last?.getCopyMarkdown).toBe(getCopyMarkdown);
   });
 });
