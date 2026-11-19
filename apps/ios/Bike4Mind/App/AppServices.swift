@@ -60,6 +60,7 @@ final class AppServices {
   let studioModels: StudioModelCatalog
   /// The deployment's premium voices and this device's pick; empty or unavailable means on-device speech.
   let voiceCatalog: VoiceCatalogModel
+  let voiceAPI: any VoiceAPI
 
   init(auth: AuthController) {
     self.auth = auth
@@ -114,8 +115,10 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    let voiceAPI = ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) }
+    self.voiceAPI = voiceAPI
     voiceCatalog = VoiceCatalogModel(
-      wire: ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) },
+      wire: voiceAPI,
       store: UserDefaultsVoiceSelectionStore()
     ) {
       guard let userID = await auth.userID() else { return nil }

@@ -44,6 +44,47 @@
     }
   }
 
+  /// `AudioClipPlaying` over `AVAudioPlayer`, playing through the session `AVVoiceAudioSession` activated.
+  @MainActor
+  public final class AVAudioClipPlayer: NSObject, AudioClipPlaying, @preconcurrency AVAudioPlayerDelegate {
+    public struct UnplayableClip: Error {}
+
+    private var player: AVAudioPlayer?
+    private var finished: CheckedContinuation<Void, Never>?
+
+    public override init() {
+      super.init()
+    }
+
+    public func play(_ clip: Data) async throws {
+      complete()
+      let player = try AVAudioPlayer(data: clip)
+      player.delegate = self
+      guard player.play() else { throw UnplayableClip() }
+      self.player = player
+      await withCheckedContinuation { finished = $0 }
+    }
+
+    public func stop() async {
+      player?.stop()
+      complete()
+    }
+
+    public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+      complete()
+    }
+
+    public func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
+      complete()
+    }
+
+    private func complete() {
+      player = nil
+      finished?.resume()
+      finished = nil
+    }
+  }
+
   /// `SpeechListening` over `SFSpeechRecognizer` fed by an `AVAudioEngine` input tap. Recognition stays on
   /// the device when the locale supports it, so nothing is sent to Apple unless it has to be.
   public final class SFSpeechListener: SpeechListening, @unchecked Sendable {

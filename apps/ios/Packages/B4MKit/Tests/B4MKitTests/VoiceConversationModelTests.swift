@@ -837,6 +837,71 @@ final class VoiceConversationModelTests: XCTestCase {
     await until { await handled.all == ["yes"] }
     await model.stop()
   }
+
+  // MARK: - Premium voice
+
+  private func startedModel(speaker: any SpeechSpeaking) async -> VoiceConversationModel {
+    let model = VoiceConversationModel(
+      target: .session("s1"), api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
+      sleep: { try await Task.sleep(for: $0) })
+    await model.start()
+    await until { await realtime.listenerCount == 1 }
+    await until { await listener.startCount == 1 }
+    return model
+  }
+
+  func testEachOpeningSectionIsPreparedBeforeItIsSpoken() async throws {
+    let speaker = RecordingPrefetchSpeaker()
+    let model = VoiceConversationModel(
+      target: .session("s1"), api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
+      opening: opening, sleep: { try await Task.sleep(for: $0) })
+    await model.start()
+    await until { speaker.spoken == opening }
+
+    XCTAssertEqual(speaker.prepared, opening)
+    XCTAssertEqual(Array(speaker.log.prefix(2)), ["prepare", "prepare"], "both sections prepared before playback")
+    await model.stop()
+  }
+
+  func testEachChunkIsPreparedInOrderBeforeItIsSpoken() async throws {
+    let speaker = RecordingPrefetchSpeaker()
+    let model = await startedModel(speaker: speaker)
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .done))
+    await until { model.phase == .listening && speaker.spoken.count == 2 }
+
+    let chunks = ["The capital of France is Paris.", "It has been the capital for a very long time."]
+    XCTAssertEqual(speaker.prepared, chunks)
+    XCTAssertEqual(speaker.spoken, chunks)
+    XCTAssertEqual(Array(speaker.log.prefix(2)), ["prepare", "prepare"], "both chunks prepared before playback")
+    await model.stop()
+  }
+
+  func testTalkingOverAServerVoiceStopsItAndListensAgain() async throws {
+    let wire = FakeSpeechWire()
+    await wire.setHolding(true)
+    let fallback = FakeSpeaker()
+    let player = FakeClipPlayer()
+    let speaker = ServerSpeechSpeaker(wire: wire, voiceID: "v1", fallback: fallback, player: player)
+    let model = await startedModel(speaker: speaker)
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("wait stop that")
+    await until { model.phase == .listening }
+    await wire.release()
+    try await Task.sleep(for: .milliseconds(50))
+
+    let played = await player.played
+    let onDevice = await fallback.spoken
+    XCTAssertEqual(played, [], "a clip that lands after the barge-in is dropped")
+    XCTAssertEqual(onDevice, [])
+    XCTAssertEqual(model.liveTranscript, "wait stop that")
+    await model.stop()
+  }
 }
 
 private actor HandledUtterances {
@@ -846,4 +911,24 @@ private actor HandledUtterances {
     all.append(utterance)
     return "Okay."
   }
+}
+
+/// Records `prepare` and `speak` calls in the order they arrive.
+@MainActor
+final class RecordingPrefetchSpeaker: SpeechSpeaking, SpeechPrefetching {
+  private(set) var prepared: [String] = []
+  private(set) var spoken: [String] = []
+  private(set) var log: [String] = []
+
+  func prepare(_ text: String) {
+    prepared.append(text)
+    log.append("prepare")
+  }
+
+  func speak(_ text: String) async {
+    spoken.append(text)
+    log.append("speak")
+  }
+
+  func stop() async {}
 }

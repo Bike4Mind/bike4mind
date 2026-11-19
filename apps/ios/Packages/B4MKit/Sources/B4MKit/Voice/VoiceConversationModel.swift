@@ -428,7 +428,10 @@ public final class VoiceConversationModel {
       exchanges[exchanges.count - 1].replyText = reply
       if phase == .sending { phase = .streaming }
     }
-    for chunk in chunker.ingest(cumulative: reply, isFinal: isFinal) { chunkSink?.yield(chunk) }
+    for chunk in chunker.ingest(cumulative: reply, isFinal: isFinal) where chunkSink != nil {
+      (speaker as? any SpeechPrefetching)?.prepare(chunk)
+      chunkSink?.yield(chunk)
+    }
     if isFinal {
       replyFinished = true
       chunkSink?.finish()
@@ -498,6 +501,7 @@ public final class VoiceConversationModel {
   /// Speaks a short notice and ends the turn: refusals and approvals are heard, not just seen.
   private func finishStream(saying notice: String) {
     self.notice = notice
+    if chunkSink != nil { (speaker as? any SpeechPrefetching)?.prepare(notice) }
     chunkSink?.yield(notice)
     chunkSink?.finish()
   }
@@ -509,7 +513,10 @@ public final class VoiceConversationModel {
     replyFinished = true
     phase = .speaking
     startSpeaking(token: token)
-    for section in sections { chunkSink?.yield(section) }
+    for section in sections {
+      (speaker as? any SpeechPrefetching)?.prepare(section)
+      chunkSink?.yield(section)
+    }
     chunkSink?.finish()
   }
 
