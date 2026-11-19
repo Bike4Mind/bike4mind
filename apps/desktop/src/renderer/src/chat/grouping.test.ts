@@ -307,21 +307,12 @@ describe('nested sub-sessions', () => {
     expect(descendantsOf(grouped.children, 'root').map(entry => entry.id)).toEqual(['kid', 'grandkid']);
   });
 
-  it('keeps one indent level: a grandchild nests under the top-level ancestor, with a via hint', () => {
+  it('nests a grandchild under its own parent, however deep the chain', () => {
     const sessions = [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')];
     const grouped = groupSessions(sessions, 'chat', undefined, false, true);
-    expect([...grouped.children.keys()]).toEqual(['root']);
-    expect(grouped.children.get('root')?.map(entry => entry.id)).toEqual(['kid', 'grandkid']);
-    expect(grouped.children.get('kid')).toBeUndefined();
-    const hints = parentHints(sessions, grouped.children);
-    expect(hints.get('grandkid')).toEqual({ kind: 'via', title: 'kid' });
-    expect(hints.has('kid')).toBe(false);
-  });
-
-  it('nests a grandchild under a pinned child, which is its top-level ancestor', () => {
-    const sessions = [session({ id: 'root' }), spawned('kid', 'root', { pinned: true }), spawned('grandkid', 'kid')];
-    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.children.get('root')?.map(entry => entry.id)).toEqual(['kid']);
     expect(grouped.children.get('kid')?.map(entry => entry.id)).toEqual(['grandkid']);
+    expect(parentHints(sessions, grouped.children).size).toBe(0);
   });
 
   it('orders children by creation, not recency', () => {
@@ -364,8 +355,8 @@ describe('nested sub-sessions', () => {
     ];
     const grouped = groupSessions(sessions, 'chat', undefined, false, true);
     const hints = parentHints(sessions, grouped.children);
-    expect(hints.get('orphan')).toEqual({ kind: 'from', title: 'Archived parent' });
-    expect(hints.get('pinned-kid')).toEqual({ kind: 'from', title: 'Root' });
+    expect(hints.get('orphan')).toBe('Archived parent');
+    expect(hints.get('pinned-kid')).toBe('Root');
     expect(hints.has('missing-parent')).toBe(false);
   });
 
@@ -426,7 +417,7 @@ describe('nested sub-sessions', () => {
     const matching = [all[1]];
     const grouped = groupSessions(matching, 'chat', undefined, false, false);
     expect(grouped.loose.map(entry => entry.id)).toEqual(['kid']);
-    expect(parentHints(all, grouped.children).get('kid')).toEqual({ kind: 'from', title: 'Root' });
+    expect(parentHints(all, grouped.children).get('kid')).toBe('Root');
   });
 
   it('stays flat when nesting is off', () => {

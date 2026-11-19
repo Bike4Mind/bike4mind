@@ -45,9 +45,9 @@ export interface SidebarSections {
    */
   imported: ChatSessionSummary[];
   /**
-   * Spawned sessions drawn under their top-level ancestor, keyed by that ancestor's id (one level
-   * only, however deep the spawn chain). Empty when nesting is off. A session listed here appears
-   * in no other list above - only under that row, wherever it is drawn.
+   * Spawned sessions drawn under the session that started them, keyed by that parent's id. Empty
+   * when nesting is off. A session listed here appears in no other list above - only under its
+   * parent, wherever that parent is drawn.
    */
   children: ReadonlyMap<string, ChatSessionSummary[]>;
 }
@@ -129,10 +129,10 @@ export function groupSessions(
 }
 
 /**
- * Which visible sessions hang under which top-level row, keyed by that row's id. A child stays
- * where the user put it when they put it somewhere on purpose - pinned, or filed in a section of
- * their own - and falls back to its own row when its parent is archived, deleted or in the other
- * mode, since there is nothing visible to hang it under.
+ * Which visible sessions hang under which. A child stays where the user put it when they put it
+ * somewhere on purpose - pinned, or filed in a section of their own - and falls back to its own
+ * row when its parent is archived, deleted or in the other mode, since there is nothing visible
+ * to hang it under.
  */
 function nestSpawned(
   visible: readonly ChatSessionSummary[],
@@ -155,33 +155,25 @@ function nestSpawned(
     return false;
   };
 
-  // One indent level: a session hangs under the top-level ancestor of its chain, however deep it was
-  // spawned, so the narrow sidebar never stacks indentation. rootOf stops at the first ancestor that
-  // is itself drawn as a row (top-level, pinned or filed), which is what the chain's visible top is.
-  const rootOf = (session: ChatSessionSummary): ChatSessionSummary => {
-    let root = session;
-    for (let parent = parentOf(root); parent; parent = parentOf(root)) root = parent;
-    return root;
-  };
   const children = new Map<string, ChatSessionSummary[]>();
   for (const session of visible) {
-    if (!parentOf(session) || cyclic(session)) continue;
-    const rootId = rootOf(session).id;
-    const siblings = children.get(rootId);
+    const parent = parentOf(session);
+    if (!parent || cyclic(session)) continue;
+    const siblings = children.get(parent.id);
     if (siblings) siblings.push(session);
-    else children.set(rootId, [session]);
+    else children.set(parent.id, [session]);
   }
   // Creation order keeps a group's rows still while its members work; recency decides the group's place.
   for (const siblings of children.values()) siblings.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return children;
 }
 
-/** The latest updatedAt among a session and everything nested under it. */
+/** The latest updatedAt among a session and everything nested under it, at any depth. */
 function groupActivity(
   children: ReadonlyMap<string, readonly ChatSessionSummary[]>,
   session: ChatSessionSummary
 ): string {
-  return (children.get(session.id) ?? []).reduce(
+  return descendantsOf(children, session.id).reduce(
     (latest, child) => (child.updatedAt > latest ? child.updatedAt : latest),
     session.updatedAt
   );
@@ -197,30 +189,24 @@ function activityOrder(children: ReadonlyMap<string, readonly ChatSessionSummary
     groupActivity(children, b).localeCompare(groupActivity(children, a));
 }
 
-export type ParentHint = { kind: 'via' | 'from'; title: string };
-
 /**
- * The small "via X" / "from X" label a spawned session wears. "via" marks a session nested under a
- * top-level ancestor that is not its direct parent; "from" marks one drawn on its own row (parent
- * archived or in another mode, the user pinned or filed it, or a search flattened the list).
- * `all` is every session, not just the matching ones, so a hint survives a search that skips the parent.
- * A deleted parent has no title to show, so its child gets none.
+ * The title of the parent a spawned session is drawn away from, for its small "from X" label: its
+ * parent is archived or in another mode, the user pinned or filed it, or a search flattened the
+ * list. `all` is every session, not just the matching ones, so a hint survives a search that skips
+ * the parent. A deleted parent has no title to show, so its child gets none.
  */
 export function parentHints(
   all: readonly ChatSessionSummary[],
   children: ReadonlyMap<string, readonly ChatSessionSummary[]>
-): ReadonlyMap<string, ParentHint> {
+): ReadonlyMap<string, string> {
   const byId = new Map(all.map(session => [session.id, session]));
-  const rootOfChild = new Map<string, string>();
-  for (const [rootId, nested] of children) for (const child of nested) rootOfChild.set(child.id, rootId);
+  const nestedIds = new Set([...children.values()].flat().map(session => session.id));
 
-  const hints = new Map<string, ParentHint>();
+  const hints = new Map<string, string>();
   for (const session of all) {
     const parent = session.origin && byId.get(session.origin.parentSessionId);
-    if (!parent || parent.id === session.id) continue;
-    const nestedUnder = rootOfChild.get(session.id);
-    if (nestedUnder === undefined) hints.set(session.id, { kind: 'from', title: parent.title });
-    else if (nestedUnder !== parent.id) hints.set(session.id, { kind: 'via', title: parent.title });
+    if (!parent || parent.id === session.id || nestedIds.has(session.id)) continue;
+    hints.set(session.id, parent.title);
   }
   return hints;
 }

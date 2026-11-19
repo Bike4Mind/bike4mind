@@ -51,7 +51,6 @@ import {
   orderedSessions,
   parentHints,
   type CustomGroup,
-  type ParentHint,
   type ProjectGroup,
 } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
@@ -155,7 +154,7 @@ export function NavItem({
  * px each level of sub-session steps in. With the list's 8px inset and a 14px badge, a parent's
  * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
  */
-const NEST_INDENT = 18;
+const NEST_INDENT = 14;
 const BADGE_CENTER = 15;
 /** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
 const ROW_GAP = 2;
@@ -189,8 +188,7 @@ interface NestProps {
   subFolded?: boolean;
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
-  /** "via X" / "from X", for a spawned session whose direct parent is not the row above it. */
-  hintKind?: ParentHint['kind'];
+  /** Title of the parent a spawned session is drawn away from, shown as "from X". */
   hintTitle?: string;
 }
 
@@ -201,11 +199,19 @@ type SubActivity = 'needs-action' | 'processing' | undefined;
  * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
  * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
  */
-function railSx(depth: number, first: boolean, last: boolean, guides: string) {
+function railSx(depth: number, first: boolean, last: boolean, guides: string, status: ChatSessionStatus) {
   const indent = depth * NEST_INDENT;
   const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
   if (!last) straight.push(depth - 1);
   const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
+  // The elbow into a working or waiting session lights up in the fold pill's colours, so a deep tree
+  // shows which branch needs you without unfolding anything.
+  const elbowColor =
+    status === 'needs-action'
+      ? 'var(--joy-palette-warning-solidBg)'
+      : status === 'processing'
+        ? 'var(--joy-palette-primary-solidBg)'
+        : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -233,9 +239,13 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       height: `calc(50% + ${first ? FIRST_RAIL_REACH : ROW_GAP}px)`,
       left: BADGE_CENTER - NEST_INDENT,
       width: NEST_INDENT - BADGE_CENTER + ELBOW_END,
-      borderLeft: `1px solid ${RAIL_COLOR}`,
-      borderBottom: `1px solid ${RAIL_COLOR}`,
+      borderLeft: `1px solid ${elbowColor}`,
+      borderBottom: `1px solid ${elbowColor}`,
       borderBottomLeftRadius: '7px',
+      ...(status === 'processing' && {
+        animation: `${pulse} 1.2s ease-in-out infinite`,
+        '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+      }),
     },
   };
 }
@@ -509,7 +519,6 @@ const SessionRow = memo(function SessionRow({
   subActivity,
   subFolded = false,
   subFoldable = true,
-  hintKind,
   hintTitle,
   refChip,
 }: RowProps) {
@@ -530,7 +539,7 @@ const SessionRow = memo(function SessionRow({
     <ListItem
       data-nest-depth={nestDepth || undefined}
       sx={{
-        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides)),
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, status)),
         ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
@@ -708,16 +717,16 @@ const SessionRow = memo(function SessionRow({
               {session.title}
             </Typography>
           )}
-          {!editing && hintKind && hintTitle && (
+          {!editing && hintTitle && (
             <Typography
               level="body-xs"
               noWrap
               textColor="text.tertiary"
               sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
-              title={`${hintKind} ${hintTitle}`}
+              title={`from ${hintTitle}`}
               data-testid="chat-session-parent-hint"
             >
-              {hintKind} {hintTitle}
+              from {hintTitle}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1126,7 +1135,7 @@ export function SessionList({
   // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
   // No hints with nesting off: the setting brings back the plain flat list.
   const hints = useMemo(
-    () => (nested ? parentHints(sessions, sections.children) : new Map<string, ParentHint>()),
+    () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
     [nested, sessions, sections.children]
   );
 
@@ -1330,8 +1339,7 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
-        hintKind={hints.get(session.id)?.kind}
-        hintTitle={hints.get(session.id)?.title}
+        hintTitle={hints.get(session.id)}
       />,
       ...(folded
         ? []
@@ -1352,8 +1360,7 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
-      hintKind={hints.get(session.id)?.kind}
-      hintTitle={hints.get(session.id)?.title}
+      hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
     />
   );
