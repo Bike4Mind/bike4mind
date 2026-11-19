@@ -88,9 +88,10 @@ describe('selectAffected', () => {
     );
   });
 
-  it('selects nothing when no package file changed', () => {
+  it('selects only the root package when no package file changed', () => {
     const selection = selectAffected({ changedFiles: ['docs-site/a.md'], turbo, packageDirs, tasks: ['test'] });
-    expect(turboFilters(selection)).toEqual([]);
+    expect(turboFilters(selection)).toEqual(['--filter=//']);
+    expect(turboFilters({ changed: [], extra: [] })).toEqual([]);
   });
 
   it('runs everything for a lockfile change', () => {

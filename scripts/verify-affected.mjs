@@ -88,17 +88,25 @@ export function packageOfFile(file, packageDirs) {
 // `changed` run with their dependents, `extra` (reached only through a foreign input) without.
 export function selectAffected({ changedFiles, turbo, packageDirs, tasks }) {
   if (needsFullRun(changedFiles, turbo)) return { full: true };
-  const changed = new Set(changedFiles.map(file => packageOfFile(file, packageDirs)).filter(Boolean));
+  const owners = changedFiles.map(file => packageOfFile(file, packageDirs));
+  const changed = new Set(owners.filter(Boolean));
   const reached = packagesReachedByForeignInputs({ turbo, packageDirs, tasks, changedFiles });
   return {
     full: false,
     changed: [...changed].sort(),
     extra: [...reached].filter(name => !changed.has(name)).sort(),
+    // A file outside every package belongs to the root package, as in turbo's [ref] filter, so a
+    // root task such as //#typecheck:fast still runs.
+    root: owners.includes(null),
   };
 }
 
-export function turboFilters({ changed, extra }) {
-  return [...changed.map(name => `--filter=...${name}`), ...extra.map(name => `--filter=${name}`)];
+export function turboFilters({ changed, extra, root = false }) {
+  return [
+    ...changed.map(name => `--filter=...${name}`),
+    ...extra.map(name => `--filter=${name}`),
+    ...(root ? ['--filter=//'] : []),
+  ];
 }
 
 export function planLint(changedFiles, fileExists) {
