@@ -87,7 +87,7 @@ describe('resolveSearchRedirect', () => {
 
     it('follows location.replace with escaped literal', async () => {
       const result = await run(
-        pageWith('<script>location.replace("https:\/\/example.com\/a?b\x3dc\u0026d\u003de");</script>')
+        pageWith(String.raw`<script>location.replace("https:\/\/example.com\/a?b\x3dc\u0026d\u003de");</script>`)
       );
       expect(result).toEqual({ url: 'https://example.com/a?b=c&d=e', resolved: 'followed', via: 'script' });
     });
@@ -136,6 +136,58 @@ describe('resolveSearchRedirect', () => {
       expect(result.resolved).toBe('unresolved');
       expect(result.detail).toMatchObject({ scriptRedirect: true, externalLinks: 0 });
     });
+
+    it('does not follow a lone anchor on a captcha page', async () => {
+      const result = await run(pageWith('<p>unusual traffic</p><a href="https://example.com/a">a</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'captcha' });
+    });
+
+    it('does not follow a script redirect on a consent page', async () => {
+      const result = await run(
+        pageWith('<p>Before you continue</p><script>location.replace("https://example.com/s")</script>')
+      );
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'consent', scriptRedirect: true });
+    });
+
+    it('still follows a meta refresh on a captcha page', async () => {
+      const result = await run(
+        pageWith('unusual traffic<meta http-equiv="refresh" content="0;url=https://example.com/m">')
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/m', via: 'meta_refresh' });
+    });
+
+    it('ignores a lone youtube.com anchor', async () => {
+      const result = await run(pageWith('<a href="https://www.youtube.com/watch?v=1">v</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'other', externalLinks: 0 });
+    });
+
+    it('follows the real link when a youtube.com link sits beside it', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.youtube.com/watch?v=1">v</a><a href="https://example.com/real">r</a>')
+      );
+      expect(result).toEqual({ url: 'https://example.com/real', resolved: 'followed', via: 'anchor' });
+    });
+
+    it.each([
+      'https://www.google.co.uk/x',
+      'https://google.de/x',
+      'https://news.google.com.au/x',
+      'https://fonts.gstatic.com/x',
+    ])('does not follow a script redirect to %s', async target => {
+      const result = await run(pageWith(`<script>location.replace("${target}")</script>`));
+      expect(result.resolved).toBe('unresolved');
+    });
+
+    it.each(['https://notyoutube.com/a', 'https://google.example.com/a'])(
+      'still follows an anchor to %s',
+      async target => {
+        const result = await run(pageWith(`<a href="${target}">a</a>`));
+        expect(result).toMatchObject({ url: target, via: 'anchor' });
+      }
+    );
 
     it('is unresolved for two distinct external anchors', async () => {
       const result = await run(pageWith('<a href="https://example.com/a">a</a><a href="https://example.org/b">b</a>'));

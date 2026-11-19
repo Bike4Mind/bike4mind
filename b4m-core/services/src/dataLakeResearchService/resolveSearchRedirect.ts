@@ -33,6 +33,22 @@ const GOOGLE_REDIRECT_PATHS = new Set(['/goto', '/url']);
 
 const isGoogleHost = (host: string): boolean => host === 'google.com' || host.endsWith('.google.com');
 
+const GOOGLE_OWNED_DOMAINS = [
+  'youtube.com',
+  'youtu.be',
+  'gstatic.com',
+  'googleusercontent.com',
+  'googleapis.com',
+  'g.co',
+  'goo.gl',
+];
+const GOOGLE_COUNTRY_HOST = /(?:^|\.)google\.(?:com?\.)?[a-z]{2,3}$/;
+
+const isGoogleOwnedHost = (host: string): boolean =>
+  isGoogleHost(host) ||
+  GOOGLE_OWNED_DOMAINS.some(domain => host === domain || host.endsWith(`.${domain}`)) ||
+  GOOGLE_COUNTRY_HOST.test(host);
+
 const parseHttpUrl = (value: string | null | undefined, base?: string): URL | null => {
   if (!value) return null;
   try {
@@ -50,6 +66,12 @@ const nonGoogleDestination = (value: string | null | undefined): string | null =
   // No base: a relative or scheme-less value is not a destination.
   const parsed = parseHttpUrl(value);
   return parsed && !isGoogleHost(parsed.hostname.toLowerCase()) ? parsed.toString() : null;
+};
+
+// Page-scraped targets are guessed, so Google-owned hosts (video, assets, country sites) are never the answer.
+const scrapedDestination = (value: string | null | undefined): string | null => {
+  const parsed = parseHttpUrl(value);
+  return parsed && !isGoogleOwnedHost(parsed.hostname.toLowerCase()) ? parsed.toString() : null;
 };
 
 const refreshContentTarget = (content: string): string | null => {
@@ -84,7 +106,7 @@ const unescapeJsString = (literal: string): string =>
 
 const scriptRedirectTarget = (body: string): string | null => {
   for (const match of body.matchAll(SCRIPT_REDIRECT)) {
-    const target = nonGoogleDestination(unescapeJsString(match[2]).trim());
+    const target = scrapedDestination(unescapeJsString(match[2]).trim());
     if (target) return target;
   }
   return null;
@@ -101,7 +123,7 @@ const externalAnchorTargets = (body: string): string[] => {
   const found = new Set<string>();
   for (const tag of body.match(/<a\b[^>]*>/gi) ?? []) {
     const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
-    const target = nonGoogleDestination(decodeHtmlEntities(href?.[1] ?? href?.[2] ?? '').trim());
+    const target = scrapedDestination(decodeHtmlEntities(href?.[1] ?? href?.[2] ?? '').trim());
     if (target) found.add(target);
   }
   return [...found];
@@ -184,13 +206,15 @@ export async function resolveSearchRedirect(
       if (headerTarget) return { url: headerTarget, resolved: 'followed', via: 'refresh_header' };
       const metaTarget = metaRefreshTarget(body);
       if (metaTarget) return { url: metaTarget, resolved: 'followed', via: 'meta_refresh' };
-      const scriptTarget = scriptRedirectTarget(body);
+      const bodyHint = bodyHintFor(body);
+      const interstitial = bodyHint === 'captcha' || bodyHint === 'consent';
+      const scriptTarget = interstitial ? null : scriptRedirectTarget(body);
       if (scriptTarget) return { url: scriptTarget, resolved: 'followed', via: 'script' };
       const anchors = externalAnchorTargets(body);
-      if (anchors.length === 1) return { url: anchors[0], resolved: 'followed', via: 'anchor' };
+      if (!interstitial && anchors.length === 1) return { url: anchors[0], resolved: 'followed', via: 'anchor' };
       return unresolved({
         reason: 'no_meta_refresh',
-        bodyHint: bodyHintFor(body),
+        bodyHint,
         bodyLength: body.length,
         hasRefreshHeader: Boolean(refreshHeader),
         scriptRedirect: SCRIPT_REDIRECT_MARKER.test(body),
