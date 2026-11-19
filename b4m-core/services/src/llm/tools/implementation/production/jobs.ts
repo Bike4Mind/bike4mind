@@ -275,6 +275,12 @@ export function pickMusicModel(usable: readonly MusicModelId[], seconds: number)
   );
 }
 
+/** How much of a `totalMs` cut the model submitMusic would pick can cover; 0 when music is unavailable. */
+export function musicReachMs(config: ProductionToolConfig, totalMs: number): number {
+  const model = config.music && pickMusicModel(config.music.usableModels, totalMs / 1000);
+  return model ? Math.min(totalMs, musicRange(model).max * 1000) : 0;
+}
+
 export async function submitMusic(
   context: Context,
   config: ProductionToolConfig,

@@ -9,7 +9,7 @@ import {
   type ProductionComposition,
   type ProductionToolConfig,
 } from './config';
-import { jobOutcome, submitMusic, waitForJobs } from './jobs';
+import { jobOutcome, musicReachMs, submitMusic, waitForJobs } from './jobs';
 import {
   buildMusicClip,
   buildSfxClips,
@@ -161,12 +161,14 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
     if (sfx.clips.length > 0) replacements.sfx = sfx.clips;
     notes.push(...sfx.notes);
   }
-  const musicShortMs = musicShortfallMs(timeline, totalMs);
+  const musicShortMs = musicShortfallMs(timeline, musicReachMs(config, totalMs));
   if (args.music && (musicShortMs > 0 || wants('music', args, directorClips(timeline, 'music')))) {
-    if (musicShortMs > 0) notes.push(`the music bed ended ${musicShortMs} ms before the cut, so a new one was made.`);
     const underVoice = (replacements.voice ?? directorClips(timeline, 'voice')).length > 0;
     const music = await makeMusic(context, config, args.music.prompt, totalMs, underVoice);
-    if (music.clips.length > 0) replacements.music = music.clips;
+    if (music.clips.length > 0) {
+      replacements.music = music.clips;
+      if (musicShortMs > 0) notes.push(`the music bed ended ${musicShortMs} ms before the cut, so a new one was made.`);
+    }
     notes.push(...music.notes);
     pendingMusic = music.pending;
   }
