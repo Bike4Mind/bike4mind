@@ -332,6 +332,14 @@ export async function recordPaymentStart(
   },
   logger: Logger
 ): Promise<void> {
+  // Emitted ahead of the write so a failed or slow attempt-row write cannot drop the count.
+  await emitMetric(
+    'Lumina5/Billing',
+    'PaymentStarted',
+    1,
+    { kind: 'credits', Stage: Config.STAGE },
+    StandardUnit.Count
+  );
   try {
     await paymentAttemptRepository.recordStart({
       paymentIntentId: input.paymentIntentId,
