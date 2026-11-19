@@ -8706,8 +8706,8 @@ export function buildSystemMessage(
  * would rewrite the parent's system prompt, and every turn after it, on the wake that follows.
  */
 const AGENT_WORKTREE_LINES: readonly string[] = [
-  'A session you start in a worktree of its own shares that worktree with you as well; the',
-  'session_spawn result names its folder.',
+  'A session you start in a worktree of its own shares that worktree with you as well; find its',
+  'folder with git worktree list, by the branch the session_spawn result names.',
 ];
 
 function sharedRootLines(roots: readonly string[]): string[] {
