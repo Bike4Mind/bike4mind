@@ -41,12 +41,15 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
     expect(text).toContain("so I didn't start any agents.");
   });
 
-  it('says spawned agents get their own worktrees and that the parent is woken, not left polling', () => {
+  it('says agents share this checkout unless isolated, and that the parent is woken, not left polling', () => {
     const text = build(['/work'], true, true);
-    expect(text).toContain('its own isolated worktree and branch');
-    expect(text).toContain('never create worktrees or branches for agents');
-    expect(text).toContain('never remove an agent worktree or delete');
-    expect(text).toContain('Merging agent branches into your own branch');
+    expect(text).toContain('Agents work in this working directory by default');
+    expect(text).toContain('there is nothing to merge or copy');
+    expect(text).toContain('Pass isolation "worktree" only for an agent whose files overlap');
+    expect(text).toContain('git merge of its branch');
+    expect(text).toContain('never by retyping its files');
+    expect(text).toContain('Never create worktrees or branches');
+    expect(text).toContain('never remove an agent worktree');
     expect(text).toContain('Never use git stash, and tell agents not to');
     expect(text).toContain('the app wakes this conversation');
     expect(text).toContain('rather than polling or sleeping');

@@ -5857,7 +5857,9 @@ export class ChatService {
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
       ...(orchestratesAgents(session)
         ? {
-            delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
+            delegates: {
+              placement: (title, prompt, isolate) => this.delegatedPlacement(project, title, prompt, isolate),
+            },
             quest: { readiness: () => this.questReadiness(session.id) },
           }
         : session.origin
@@ -6875,6 +6877,12 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
+      } else if (
+        child.orchestrationPolicy &&
+        child.project &&
+        (await isGitRepository(child.project.workingDirectory))
+      ) {
+        text = `${SHARED_CHECKOUT_PREAMBLE}\n\n${seed}`;
       }
       // The dependency install keeps running in the background: the turn starts now, and its
       // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
@@ -7121,8 +7129,12 @@ export class ChatService {
   private async delegatedPlacement(
     project: ChatProject,
     title: string | undefined,
-    prompt: string
+    prompt: string,
+    isolate: boolean
   ): Promise<SpawnPlacement> {
+    // The parent's checkout by default, as a subagent works: the agent's edits are already in
+    // place when it finishes, with nothing to merge and one system prompt shared by every sibling.
+    if (!isolate) return { kind: 'local' };
     const repository = await isGitRepository(project.workingDirectory);
     if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
     const base = await spawnBaseFor(project);
@@ -9227,14 +9239,18 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'to name the files and contracts each piece touches - then start the agents. Keep each brief',
   'concise and leave the detailed reading to the agents: they read the code themselves, and a',
   "long survey here only delays them and can run out this turn's time before anything starts.",
-  'In a git repository session_spawn gives each agent its own isolated worktree and branch',
-  'automatically; its result names them. So never create worktrees or branches for agents',
-  'yourself, never point an agent at another path, and never remove an agent worktree or delete',
-  'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Agents work in this working directory by default, so their edits are already here when they',
+  'finish: there is nothing to merge or copy. Give each running agent different files to change,',
+  'and do not edit those files yourself while it runs. When woken, check the combined result with',
+  'git status, git diff and the tests, then commit it yourself if the task calls for a commit.',
+  'Pass isolation "worktree" only for an agent whose files overlap another running agent, or for',
+  'work you may want to discard; in a git repository it then gets its own worktree and branch, which',
+  'its result names. Combine such an agent with git merge of its branch (commit its worktree first',
+  'if it left changes uncommitted), never by retyping its files. Never create worktrees or branches',
+  'for agents yourself, never point an agent at another path, and never remove an agent worktree',
+  'or delete its branch.',
   'Never use git stash, and tell agents not to: the stash is shared by every worktree of the',
   "repository, so one agent's pop can take another's changes. Set work aside with a commit.",
-  'Outside a repository the agents share this working directory, so give each one different',
-  'files to change.',
   `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
   'the limit, wait for one to finish before starting another.',
   'Track them with session_list and session_read if you need to. Once every agent you started',
@@ -9509,6 +9525,18 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
+/**
+ * Prepended to the seed of a delegated agent in its parent's checkout: the parent and its other
+ * agents work in the same files and on the same branch, and the parent combines the result.
+ */
+export const SHARED_CHECKOUT_PREAMBLE = [
+  '[You are working in the same checkout as the conversation that started you, and other agents',
+  'may be working in it at the same time. Change only the files your task owns, and leave the',
+  'rest as you found it. Do not commit, switch or create branches, stash, reset, or check out or',
+  'restore files: the session that started you reviews and commits the combined result. Report',
+  'which files you changed.]',
+].join('\n');
+
 export function worktreePreamble(
   projectDirectory: string,
   workspace: { branch: string; base: string; workingDirectory: string }

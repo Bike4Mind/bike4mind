@@ -282,7 +282,9 @@ export const sessionSpawn: ToolDefinition = {
       ].join('\n');
     }
 
-    const placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
+    const placement = host.delegates
+      ? await host.delegates.placement(title, prompt, input.isolation === 'worktree')
+      : await cardPlacement(input, host);
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
@@ -320,6 +322,14 @@ export const delegatedSpawnSchema = (modelHint: string | null): ToolSchema => ({
     properties: {
       ...sessionSpawn.schema.parameters.properties,
       role: { type: 'string', enum: ['implementation', 'exploration', 'review'] },
+      isolation: {
+        type: 'string',
+        enum: ['shared', 'worktree'],
+        description:
+          'shared (the default): the agent works in this working directory, so its edits are already ' +
+          'here when it finishes. worktree: its own git worktree and branch, which you merge afterwards; ' +
+          'only for agents whose files overlap another running agent, or work you may want to discard.',
+      },
       ...(modelHint ? { requested_model_id: { type: 'string', description: modelHint } } : {}),
       contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any' }),
       model_requirements: z.toJSONSchema(workerRequirementsSchema),
@@ -327,9 +337,9 @@ export const delegatedSpawnSchema = (modelHint: string | null): ToolSchema => ({
   },
   description:
     'Hand a self-contained piece of work to a NEW conversation in this project. The user turned ' +
-    'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in its ' +
-    'own git worktree on a new branch cut from the branch this conversation is on when the ' +
-    'project is a repository, and in this working directory otherwise; the result says which. ' +
+    'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in this ' +
+    'working directory unless isolation is worktree, which in a repository gives it its own git ' +
+    'worktree on a new branch cut from the branch this conversation is on; the result says which. ' +
     'A started session runs on its own, does not report into your turn, and tells this ' +
     'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
     'carry the whole task. Each one costs credits: never start several variations of one task.',
