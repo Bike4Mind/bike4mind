@@ -3,7 +3,7 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
-import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
+import { OPTI_SURFACE, isShadowTier, hasAdminPermission } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
@@ -285,9 +285,12 @@ const execDoc = {
 
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
+const mockFindRoles = vi.fn();
+
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
   const repo = actual.agentExecutionRepository;
+  vi.spyOn(actual.adminRoleRepository, 'findByIds').mockImplementation((...args) => mockFindRoles(...args));
   vi.spyOn(repo, 'findById').mockResolvedValue(execDoc as never);
   vi.spyOn(repo, 'claimExecution').mockResolvedValue(true as never);
   vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
@@ -403,6 +406,73 @@ describe('processExecution tool deps', () => {
       const { users, owner } = await depsUsersReadFor({ ...execDoc, apiKeyId: 'key-1' });
       expect(users).toBe(userRepository);
       expect(owner.isAdmin).toBe(true);
+    });
+  });
+
+  describe('role-held admin permissions', () => {
+    const ROLE_ID = 'a'.repeat(24);
+    const DELETED_ROLE_ID = 'c'.repeat(24);
+
+    async function depsUserWith(fields: Record<string, unknown>, doc: Record<string, unknown> = execDoc) {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, ...fields } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      return deps.user as never;
+    }
+
+    beforeEach(() => {
+      mockFindRoles.mockReset();
+      mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    });
+
+    it('counts a permission held only through a role', async () => {
+      const user = await depsUserWith({ adminRoleIds: [ROLE_ID] });
+
+      expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(true);
+    });
+
+    it('refuses the permission on the next call once the role is removed', async () => {
+      expect(hasAdminPermission(await depsUserWith({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+
+      buildSharedToolsMock.mockClear();
+      expect(hasAdminPermission(await depsUserWith({ adminRoleIds: [] }), 'settings:manage')).toBe(false);
+    });
+
+    it('grants nothing for a deleted or malformed role id', async () => {
+      mockFindRoles.mockResolvedValue([]);
+
+      const user = await depsUserWith({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+      expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('keeps the role permission hidden when the run was started without the admin scope', async () => {
+      const user = await depsUserWith(
+        { adminRoleIds: [ROLE_ID] },
+        { ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true }
+      );
+
+      expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('never reaches the tools when the role lookup throws', async () => {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      mockFindRoles.mockRejectedValue(new Error('db down'));
+      vi.mocked(User.findById).mockResolvedValueOnce({
+        id: 'user-1',
+        currentCredits: 100,
+        adminRoleIds: [ROLE_ID],
+      } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(execDoc as never);
+      const { handler } = await import('./agentExecutor');
+
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
   });
 

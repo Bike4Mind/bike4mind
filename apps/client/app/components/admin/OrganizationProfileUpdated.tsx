@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, Grid, FormControl, Button, Textarea, FormLabel, FormHelperText, Typography, Input } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
+import { IOrganization, IOrganizationDocument, WithId, resolveOrganizationStorageLimit } from '@bike4mind/common';
 import { orgManagerNames } from './orgManagerNames';
 import { getLastLoginDate } from '@client/app/utils/user';
 import Compressor from 'compressorjs';
@@ -48,9 +48,11 @@ interface OrganizationProfileProps {
 
 const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, onClose, children, activeDays }) => {
   const [editedOrg, setEditedOrg] = useState<WithId<IOrganization>>(org);
-  const [storageLimitInput, setStorageLimitInput] = useState(org.storageLimit?.toString() ?? '');
+  const allocation = resolveOrganizationStorageLimit(org);
+  const override = allocation.source === 'override' ? allocation.limitMb : null;
+  const [storageLimitInput, setStorageLimitInput] = useState(override?.toString() ?? '');
   // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
-  const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
+  const [savedStorageLimit, setSavedStorageLimit] = useState(override);
   const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
   const [creditDialogOpen, setCreditDialogOpen] = useState(false);
   const [creditInput, setCreditInput] = useState(String(org.currentCredits ?? 0));
@@ -81,8 +83,10 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       description: org.description ?? '',
       billingContact: org.billingContact ?? '',
     });
-    setStorageLimitInput(org.storageLimit?.toString() ?? '');
-    setSavedStorageLimit(org.storageLimit ?? null);
+    const allocation = resolveOrganizationStorageLimit(org);
+    const override = allocation.source === 'override' ? allocation.limitMb : null;
+    setStorageLimitInput(override?.toString() ?? '');
+    setSavedStorageLimit(override);
     setSavedCredits(org.currentCredits ?? 0);
     setCreditInput(String(org.currentCredits ?? 0));
   }, [org]);
