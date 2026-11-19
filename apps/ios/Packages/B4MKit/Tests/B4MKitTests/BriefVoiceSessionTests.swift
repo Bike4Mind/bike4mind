@@ -73,6 +73,13 @@ final class BriefVoiceSessionTests: XCTestCase {
     XCTAssertEqual(context, opening.joined(separator: "\n"))
   }
 
+  func testPrepareCollectsTheOptionsItReadsOutAsAnswers() async {
+    let (session, _, _) = make(
+      .success(brief([approval("d1", "Ship it"), question("d2", "When?", options: ["**Next week**", "Never"])])))
+    _ = await session.prepare()
+    XCTAssertEqual(session.answerPhrases, ["Next week", "Never"])
+  }
+
   func testPrepareSaysTheBriefCouldNotLoadAndLeavesNoContext() async {
     let (session, _, _) = make(.failure(.malformedResponse))
     let (opening, context) = await session.prepare()

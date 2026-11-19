@@ -17,6 +17,8 @@ public final class BriefVoiceSession {
   public static let bargeInWords: Set<String> = BriefVoiceCommand.oneWordCommands
 
   public let model: BriefViewModel
+  /// Every option the brief's open questions offer, as read aloud; set by `prepare()`.
+  public private(set) var answerPhrases: Set<String> = []
   /// What a spoken "yes" is waiting to send. Any other utterance disarms it.
   private var awaitingConfirm: PendingAnswer?
   private let canAnswer: @MainActor () -> Bool
@@ -44,6 +46,11 @@ public final class BriefVoiceSession {
     await model.load()
     guard case .loaded = model.state, let brief = model.brief else { return ([Self.loadFailure], nil) }
     let sections = SpokenBriefRenderer.sections(for: brief)
+    answerPhrases = Set(
+      brief.decisions.filter { $0.question?.state == .open }
+        .flatMap { $0.question?.options ?? [] }
+        .map(SpokenBriefRenderer.plain)
+        .filter { !$0.isEmpty })
     return (sections, sections.joined(separator: "\n"))
   }
 

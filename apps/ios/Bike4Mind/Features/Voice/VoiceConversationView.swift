@@ -29,9 +29,9 @@ struct VoiceConversationView: View {
     .padding(Tokens.Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Tokens.Palette.background)
-    // Nothing is loaded, read out or listened for until App Lock is lifted (Listen can arrive from a notification).
-    .task(id: auth.state == .locked) {
-      if auth.state != .locked { await run() }
+    // Nothing is loaded, read out or listened for until signed in with App Lock lifted (Listen can arrive from a notification).
+    .task(id: auth.state == .signedIn) {
+      if auth.state == .signedIn { await run() }
     }
     .onDisappear { Task { await model?.stop() } }
     .onChange(of: model?.phase) { _, phase in announce(phase) }
@@ -186,7 +186,7 @@ struct VoiceConversationView: View {
       let auth = auth
       let made = BriefVoiceSession(
         briefID: briefID, api: services.briefs, pendingActions: services.pendingActions,
-        canAnswer: { auth.state != .locked && UIApplication.shared.applicationState == .active })
+        canAnswer: { auth.state == .signedIn && UIApplication.shared.applicationState == .active })
       session = made
       (opening, context) = await made.prepare()
     }
@@ -197,7 +197,8 @@ struct VoiceConversationView: View {
     }
     let model = Self.makeModel(
       request: request, services: services, opening: opening, context: context,
-      bargeInWords: session == nil ? [] : BriefVoiceSession.bargeInWords, handler: handler)
+      bargeInWords: session == nil ? [] : BriefVoiceSession.bargeInWords, answerPhrases: session?.answerPhrases ?? [],
+      handler: handler)
     self.model = model
     await model.start()
     if Task.isCancelled {
@@ -232,7 +233,7 @@ struct VoiceConversationView: View {
 
   private static func makeModel(
     request: VoiceRequest, services: AppServices, opening: [String], context: String?, bargeInWords: Set<String>,
-    handler: VoiceConversationModel.UtteranceHandler?
+    answerPhrases: Set<String>, handler: VoiceConversationModel.UtteranceHandler?
   ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
@@ -244,7 +245,7 @@ struct VoiceConversationView: View {
         let script = environment["B4M_VOICE_SCRIPT"].map { $0.split(separator: "|").map(String.init) }
         model = VoiceFixtures.makeModel(
           target: request.target, api: services.api, realtime: services.realtime, bargeInWords: bargeInWords,
-          opening: opening,
+          answerPhrases: answerPhrases, opening: opening,
           firstTurnContext: context, utteranceHandler: handler,
           script: script ?? ["What can you help me with today"])
         return model
@@ -252,8 +253,8 @@ struct VoiceConversationView: View {
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), bargeInWords: bargeInWords, opening: opening,
-      firstTurnContext: context, utteranceHandler: handler)
+      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), bargeInWords: bargeInWords,
+      answerPhrases: answerPhrases, opening: opening, firstTurnContext: context, utteranceHandler: handler)
     return model
   }
 
