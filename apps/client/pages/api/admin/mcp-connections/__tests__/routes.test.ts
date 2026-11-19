@@ -484,6 +484,26 @@ describe('the other admin routes', () => {
     expect((await call(admin.apiKey, { method: 'POST', id, body: { value: NEW_KEY } })).status).toBe(403);
   });
 
+  it('a failed refresh still answers 502 and is audited as failed with its error code', async () => {
+    const id = await createPlatform();
+    const { RemoteMcpError } = await import('@bike4mind/mcp/remote');
+    discover.mockRejectedValueOnce(new RemoteMcpError('protocol', 'not an MCP server'));
+
+    const refreshed = await call(admin.refresh, { method: 'POST', id });
+    expect(refreshed.status).toBe(502);
+    expect(h.adminAudits.slice(1)).toEqual([
+      {
+        action: 'settings.mcp_connector.tools_refreshed',
+        target: { kind: 'settings', id, displayName: 'Docs MCP connector' },
+        summary: 'failed to refresh the tools of platform MCP connector docs on mcp.example.com',
+        details: { outcome: 'failed', errorCode: 'protocol' },
+      },
+    ]);
+
+    expect((await call(admin.refresh, { method: 'POST', id: 'not-an-id' })).status).toBe(404);
+    expect(h.adminAudits).toHaveLength(2);
+  });
+
   it('DELETE removes the row and audits it; a second delete is a 404 with no audit entry', async () => {
     const id = await createPlatform();
     expect((await call(admin.item, { method: 'DELETE', id })).status).toBe(204);
