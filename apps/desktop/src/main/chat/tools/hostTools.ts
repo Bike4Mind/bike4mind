@@ -295,10 +295,12 @@ export const sessionSpawn: ToolDefinition = {
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
     const who = host.delegates ? 'It has' : 'The user gave it';
+    const folder = outcome.session.project?.workingDirectory;
+    const at = folder ? ` at ${folder}` : '';
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
-        ? `${who} its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
+        ? `${who} its own worktree${at} on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
         : host.delegates
           ? 'It shares this working directory, so it is editing the same files you are.'
           : 'The user had it share this working directory, so it is editing the same files you are.',

@@ -319,7 +319,7 @@ describe('ChatService spawn placement', () => {
     const { parent, call } = await delegate();
 
     expect(call?.status).toBe('done');
-    expect(call?.preview).toContain('It has its own worktree on agent/the-thing, cut from main');
+    expect(call?.preview).toMatch(/It has its own worktree at \S+ on agent\/the-thing, cut from main/);
     await worktreeOf('agent/the-thing');
     expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
@@ -331,7 +331,7 @@ describe('ChatService spawn placement', () => {
     const { parent, call } = await delegate();
 
     expect(call?.status).toBe('done');
-    expect(call?.preview).toContain('It has its own worktree on agent/the-thing-2, cut from main');
+    expect(call?.preview).toMatch(/It has its own worktree at \S+ on agent\/the-thing-2, cut from main/);
     await worktreeOf('agent/the-thing-2');
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
   });

@@ -1799,24 +1799,31 @@ export class ChatService {
    * empty root set makes each tool refuse (paths.resolveWithinRoots and shellTools.resolveCwd
    * both reject one). `send` already refuses its turn outright; this is the second lock.
    */
-  private async resolveToolScope(
-    session: ChatSession
-  ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
+  private async resolveToolScope(session: ChatSession): Promise<{
+    roots: readonly string[];
+    /** `roots` less the worktrees of agents this session started; see AGENT_WORKTREE_LINES. */
+    listedRoots: readonly string[];
+    workingDirectory?: string;
+  }> {
     // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
     // takes these too: unlike the global grants, nobody shared them for some other conversation.
     const own = session.grantedDirectories ?? [];
     const project = await this.repairBareWorkingDirectory(session);
     if (!project) {
       const global = session.mode === 'code' ? [] : await this.deps.access.list();
-      return { roots: union(global, own) };
+      const roots = union(global, own);
+      return { roots, listedRoots: roots };
     }
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
     const agents = this.mayHaveAgentWorktrees(session) ? await this.agentWorktrees(session.id, project.directory) : [];
     const scratch = await ensureScratchDirectory(session.id);
+    const roots = union(union(union(owned, agents), granted), scratch ? [scratch] : []);
+    const listed = new Set(union(union(owned, granted), scratch ? [scratch] : []));
     return {
-      roots: union(union(union(owned, agents), granted), scratch ? [scratch] : []),
+      roots,
+      listedRoots: roots.filter(root => listed.has(root)),
       workingDirectory: project.workingDirectory,
     };
   }
@@ -4050,7 +4057,7 @@ export class ChatService {
       const attended = this.attendedTurns.has(sessionId);
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
-      let { roots, workingDirectory } = await this.resolveToolScope(session);
+      let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
       const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
       const web = api
@@ -4223,7 +4230,7 @@ export class ChatService {
                 : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
-              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
+              pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
@@ -4332,7 +4339,7 @@ export class ChatService {
       }
       const systemMessage = () =>
         buildSystemMessage(
-          toolsSupported ? roots : [],
+          toolsSupported ? listedRoots : [],
           toolsSupported && !!media,
           toolsSupported && !!host,
           toolsSupported && !!explore,
@@ -4676,7 +4683,7 @@ export class ChatService {
           if (!current) return [];
           scopeVersion = version;
           const before = roots;
-          ({ roots, workingDirectory } = await this.resolveToolScope(current));
+          ({ roots, listedRoots, workingDirectory } = await this.resolveToolScope(current));
           explore = exploreFor(roots);
           tools = requestTools();
           return describeRootChange(before, roots);
@@ -8663,9 +8670,6 @@ export function buildSystemMessage(
     content: [
       'You can read and change files on the user machine, and run bash commands on it, with the',
       'provided tools.',
-      ...(project ? projectPreamble(project) : []),
-      ...dependencyLines,
-      ...sharedRootLines(roots),
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(plan ? PLAN_GUIDANCE : []),
       ...(browser ? BROWSER_GUIDANCE : []),
@@ -8684,11 +8688,27 @@ export function buildSystemMessage(
       '',
       DESKTOP_ARTIFACT_PROMPT,
       ...(projectContext ? ['', projectContext] : []),
+      // Per-session lines after everything sessions share, so sibling agents in their own
+      // worktrees share the cached prefix up to here; see ChatService.promptPrefix.test.ts.
+      '',
+      ...(project ? projectPreamble(project) : []),
+      ...dependencyLines,
+      ...sharedRootLines(roots),
+      ...(host ? AGENT_WORKTREE_LINES : []),
       // Last, after everything stable: see mcpServerLines for when it changes.
       ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
     ].join('\n'),
   };
 }
+
+/**
+ * Stands in for listing the agents' worktrees, which join the roots as agents start: listed, they
+ * would rewrite the parent's system prompt, and every turn after it, on the wake that follows.
+ */
+const AGENT_WORKTREE_LINES: readonly string[] = [
+  'A session you start in a worktree of its own shares that worktree with you as well; the',
+  'session_spawn result names its folder.',
+];
 
 function sharedRootLines(roots: readonly string[]): string[] {
   const scratch = roots.find(isScratchDirectory);
@@ -8739,7 +8759,7 @@ function localToolLines(
   patchEdits: boolean
 ): string[] {
   return [
-    'Always pass absolute paths. The file tools deny any path outside those folders;',
+    'Always pass absolute paths. The file tools deny any path outside the folders shared with you;',
     ...(ask
       ? [
           'if you need one, call request_directory with that folder and your reason - the user adds it',
@@ -8751,7 +8771,7 @@ function localToolLines(
           'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
           'path in this conversation. No typed message grants access on its own.',
         ]),
-    'Bash commands run as the user with their full environment, not inside those folders: git,',
+    'Bash commands run as the user with their full environment, not inside the shared folders: git,',
     'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
     'on authentication, report the command error; do not conclude the user is logged out.',
     ...(instructions
@@ -8843,7 +8863,6 @@ export function buildDeferredSystemMessage(
     content: [
       'Which tools you have and which folders are shared with you are stated in a system reminder on',
       'a user turn. When there are several, the latest one is current and replaces the earlier ones.',
-      ...(project ? projectPreamble(project) : []),
       ...WEB_GUIDANCE,
       ...HONESTY_LINES,
       ...desktopAppGuidance(null),
@@ -8851,6 +8870,7 @@ export function buildDeferredSystemMessage(
       '',
       DESKTOP_ARTIFACT_PROMPT,
       ...(projectContext ? ['', projectContext] : []),
+      ...(project ? ['', ...projectPreamble(project)] : []),
     ].join('\n'),
   };
 }
