@@ -23,7 +23,7 @@ vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: (...a: unknown[]) => m.getCachedData(...(a as [string, () => unknown])) },
 }));
 
-import { SUSPEND_ACTIONS } from '@server/security/accountStatusAuditActions';
+import { SUSPEND_ACTIONS } from '@bike4mind/server-utils/security/accountStatusAuditActions';
 import handler from '../timeline';
 import { findReturning, NON_ADMIN_USER, runGet } from '@server/admin/spendExplorer/__tests__/routeTestHarness';
 

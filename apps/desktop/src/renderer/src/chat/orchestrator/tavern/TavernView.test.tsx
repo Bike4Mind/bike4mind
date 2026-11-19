@@ -27,7 +27,13 @@ const themed = createThemedMount();
 
 // The answerable "needs you" bubble reads the waiting agent's session for its parked request.
 beforeEach(() => {
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
+  (window as unknown as { b4m: unknown }).b4m = {
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      onStreamEvent: vi.fn(() => () => undefined),
+      onQueueChanged: vi.fn(() => () => undefined),
+    },
+  };
 });
 
 const renderTavern = (

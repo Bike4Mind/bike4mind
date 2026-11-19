@@ -51,6 +51,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
         message: { type: String, required: true },
         providerStatus: { type: Number },
         retryAfterSeconds: { type: Number },
+        cutOffByStepDeadline: { type: Boolean },
       },
       { _id: false }
     ),

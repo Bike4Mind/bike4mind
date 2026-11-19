@@ -6,7 +6,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgApiKeyOptions } from '@server/organizations/orgApiKeys';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, Awaited<ReturnType<typeof orgApiKeyOptions>>, unknown, { id?: string }>(async (req, res) => {

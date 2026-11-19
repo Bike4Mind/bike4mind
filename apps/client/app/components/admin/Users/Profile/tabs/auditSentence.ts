@@ -28,6 +28,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
+  'user.api_key.moderation_exception_updated': 'Changed an API key moderation exception',
   'user.api_key_trust.approved': 'Approved API key trust',
   'user.api_key_trust.revoked': 'Revoked API key trust',
   'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',

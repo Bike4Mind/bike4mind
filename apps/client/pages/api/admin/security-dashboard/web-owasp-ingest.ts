@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import {
   computeDeterministicStatus,
   computeWebsiteScore,

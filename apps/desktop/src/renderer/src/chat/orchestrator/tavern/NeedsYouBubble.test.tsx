@@ -36,6 +36,8 @@ const decision = (labels: string[]): PendingDecision => ({
 
 let chat: {
   getSession: ReturnType<typeof vi.fn>;
+  onStreamEvent: ReturnType<typeof vi.fn>;
+  onQueueChanged: ReturnType<typeof vi.fn>;
   respondToApproval: ReturnType<typeof vi.fn>;
   answerTaskDecision: ReturnType<typeof vi.fn>;
 };
@@ -43,6 +45,8 @@ let chat: {
 beforeEach(() => {
   chat = {
     getSession: vi.fn().mockResolvedValue(null),
+    onStreamEvent: vi.fn(() => () => undefined),
+    onQueueChanged: vi.fn(() => () => undefined),
     respondToApproval: vi.fn().mockResolvedValue(undefined),
     answerTaskDecision: vi.fn().mockResolvedValue(undefined),
   };

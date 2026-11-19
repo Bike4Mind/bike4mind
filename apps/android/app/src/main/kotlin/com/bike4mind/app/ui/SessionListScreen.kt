@@ -101,7 +101,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit) {
+fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit, onOpenBrief: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
     val model = viewModel { SessionListViewModel(graph) }
     val state by model.state.collectAsStateWithLifecycle()
@@ -112,6 +112,7 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
             TopAppBar(
                 title = { Text("Chats") },
                 actions = {
+                    TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text("Brief") }
                     TextButton(onClick = model::refresh) { Text("Refresh") }
                     TextButton(onClick = {
                         scope.launch {

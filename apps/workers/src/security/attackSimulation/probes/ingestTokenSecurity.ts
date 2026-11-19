@@ -4,7 +4,7 @@ import { assertTargetUrlIsSafe, probeFetch } from './probeUtils';
 
 const PROBE_NAME = 'ingestTokenSecurity';
 
-/** Must match ATTACK_SIMULATION_HEADER in apps/client/server/security/ingestToken.ts. */
+/** Must match ATTACK_SIMULATION_HEADER in packages/server-utils/src/security/ingestToken.ts. */
 const ATTACK_SIMULATION_HEADER = 'x-attack-simulation-token';
 
 const INGEST_PATHS = [
@@ -37,7 +37,7 @@ function unauthorizedAccept(status: number): boolean {
 
 /**
  * `simulationToken` is the simulation's own ingest secret, sent as the marker header
- * (apps/client/server/security/ingestToken.ts) so the API probe detector does not count these
+ * (packages/server-utils/src/security/ingestToken.ts) so the API probe detector does not count these
  * deliberate refusals. It is never sent as the ingest token under test.
  */
 export async function ingestTokenSecurityProbe(

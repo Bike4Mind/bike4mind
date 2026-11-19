@@ -20,6 +20,12 @@ class B4MMessagingService : FirebaseMessagingService() {
     /** Only reached for a foreground app; a backgrounded one gets the notification from the system tray. */
     override fun onMessageReceived(message: RemoteMessage) {
         val notification = message.notification ?: return
-        PushNotifications.show(this, notification.title, notification.body, tag = notification.tag ?: message.collapseKey)
+        PushNotifications.show(
+            this,
+            notification.title,
+            notification.body,
+            tag = notification.tag ?: message.collapseKey,
+            data = message.data,
+        )
     }
 }

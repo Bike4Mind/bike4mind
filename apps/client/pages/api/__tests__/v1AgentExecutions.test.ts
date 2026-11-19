@@ -50,7 +50,7 @@ vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: mockS
 vi.mock('@server/utils/loadAgentExecutionTrace', () => ({ loadAgentExecutionTrace: mockLoadTrace }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 // The quota itself is covered by v1/agent-executions/__tests__/index.quota.test.ts.
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: async () => ({ release: async () => {} }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));

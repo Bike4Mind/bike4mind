@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 
 export type CompletionQuotaContext = {
   /** A provider may outlive a best-effort timeout response and must retain its slot. */
