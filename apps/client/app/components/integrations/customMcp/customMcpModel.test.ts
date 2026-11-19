@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IMcpConnectionPublic } from '@bike4mind/common';
+import type { IMcpConnectionPublic, IMcpPlatformConnectionMemberView } from '@bike4mind/common';
 import {
   composerConnections,
   connectionChip,
@@ -99,5 +99,27 @@ describe('composerConnections', () => {
       connection({ id: 'none-on', tools: [tool({ state: 'active', enabled: false })] }),
     ];
     expect(composerConnections(all).map(c => c.id)).toEqual(['ok']);
+  });
+
+  it('offers a platform connector to the composer, which no drawer manages', () => {
+    const shared: IMcpPlatformConnectionMemberView = {
+      id: 'shared',
+      ownerType: 'platform',
+      slug: 'docs',
+      displayName: 'Docs',
+      urlHost: 'mcp.example.com',
+      status: 'connected',
+      tools: [tool({ state: 'active', enabled: true })],
+      enabled: true,
+    };
+    const all = [
+      connection({ id: 'mine' }),
+      shared,
+      { ...shared, id: 'blocked', status: 'blocked_by_policy' as const },
+    ];
+
+    expect(composerConnections(all).map(c => c.id)).toEqual(['shared']);
+    expect(connectionsFor(all, undefined).map(c => c.id)).toEqual(['mine']);
+    expect(connectionsFor(all, 'linear')).toEqual([]);
   });
 });

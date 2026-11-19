@@ -971,7 +971,14 @@ const ToolsSection = ({
                   <HubOutlinedIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                   />
-                  <ToolLabel name={connection.displayName} description={`Custom connector on ${connection.urlHost}`} />
+                  <ToolLabel
+                    name={connection.displayName}
+                    description={
+                      connection.ownerType === 'platform'
+                        ? `Connector set up by an admin on ${connection.urlHost}`
+                        : `Custom connector on ${connection.urlHost}`
+                    }
+                  />
                 </Box>
                 <SquareSlideToggle
                   data-testid={`tool-toggle-mcp-connection-${connection.slug}`}

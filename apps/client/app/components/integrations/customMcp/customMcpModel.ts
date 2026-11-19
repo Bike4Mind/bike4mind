@@ -2,6 +2,7 @@ import type {
   IMcpConnectionPublic,
   IntegrationId,
   McpConnectionEffectiveStatus,
+  McpConnectionListEntry,
   McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { McpToolReviewEntry } from '@client/app/hooks/data/mcpConnections';
@@ -40,10 +41,11 @@ export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>
   connection.tools.filter(tool => tool.enabled && tool.state === 'active').length;
 
 /**
- * Connectors the composer can switch per chat: connected, switched on in Integrations, and with at
- * least one reviewed tool on. Anything else contributes no tools, so a row for it would toggle nothing.
+ * Connectors the composer can switch per chat: connected, switched on (in Integrations, or by an
+ * admin for a platform connector), and with at least one reviewed tool on. Anything else
+ * contributes no tools, so a row for it would toggle nothing.
  */
-export const composerConnections = (connections: readonly IMcpConnectionPublic[]): IMcpConnectionPublic[] =>
+export const composerConnections = (connections: readonly McpConnectionListEntry[]): McpConnectionListEntry[] =>
   connections.filter(c => c.status === 'connected' && c.enabled && offeredToolCount(c) > 0);
 
 /** Needs a browser sign-in: waiting for the first one, or the grant expired. API keys are re-entered instead. */
@@ -51,11 +53,17 @@ export const needsSignIn = (connection: IMcpConnectionPublic): boolean =>
   connection.auth.kind !== 'api_key' &&
   (connection.status === 'pending_auth' || connection.status === 'needs_reconnect');
 
-/** Connections the drawer of `presetId` manages; the custom connector entry manages those with no preset. */
+/**
+ * The user's own connections the drawer of `presetId` manages; the custom connector entry manages
+ * those with no preset. A platform connector is an admin's to manage, so no drawer lists it.
+ */
 export const connectionsFor = (
-  connections: readonly IMcpConnectionPublic[],
+  connections: readonly McpConnectionListEntry[],
   presetId: IntegrationId | undefined
-): IMcpConnectionPublic[] => connections.filter(c => (presetId ? c.presetId === presetId : !c.presetId));
+): IMcpConnectionPublic[] =>
+  connections.filter(
+    (c): c is IMcpConnectionPublic => c.ownerType !== 'platform' && (presetId ? c.presetId === presetId : !c.presetId)
+  );
 
 /** Gallery connection state for one entry: connected when any of its connections is. */
 export const galleryConnectionState = (connections: readonly IMcpConnectionPublic[]): ConnectionState => ({
