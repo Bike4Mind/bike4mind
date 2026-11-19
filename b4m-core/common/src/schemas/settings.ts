@@ -712,6 +712,7 @@ export const SettingKeySchema = z.enum([
 
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
+  'EnableEmailTriage',
   'EmailAnalysisModel',
   'EmailAnalysisTemperature',
   'EmailAnalysisPrompt',
@@ -8097,6 +8098,16 @@ export const settingsMap = {
     order: 200,
     // The Integrations page derives the inbound-email analysis capability's status from it.
     userReadable: true,
+  }),
+  EnableEmailTriage: makeBooleanSetting({
+    key: 'EnableEmailTriage',
+    name: 'Enable Email Triage',
+    defaultValue: false,
+    description:
+      'After an ingested email is analyzed, sort it into needs-a-decision, handled or FYI and draft a reply for ' +
+      "decisions, for the owner's next assistant brief. Drafts are never sent. Runs only when analysis runs.",
+    category: 'AI',
+    order: 205,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
