@@ -90,7 +90,7 @@ public final class VoiceCatalogModel {
   @ObservationIgnored private let currentAccount: @MainActor () async -> VoiceAccount?
   @ObservationIgnored private var account: VoiceAccount?
   /// The last flag reading and catalog this app session saw; a later failed load keeps them.
-  @ObservationIgnored private var flagEnabled: Bool?
+  private var flagEnabled: Bool?
   @ObservationIgnored private var lastCatalog: [VoiceOption]?
   @ObservationIgnored private var inFlight: Task<Void, Never>?
   /// Bumped by `reset()`, so a load that lands after sign-out is dropped.
@@ -114,6 +114,10 @@ public final class VoiceCatalogModel {
     await task.value
     if started == generation { inFlight = nil }
   }
+
+  /// Whether Settings offers the voice picker: the deployment has premium voices on, even if the last catalog
+  /// fetch failed. Stays true through a refetch so the row does not flicker.
+  public var offersVoices: Bool { flagEnabled == true && state != .unavailable }
 
   /// Picks a premium voice for this account, or `nil` for on-device speech.
   public func select(_ voice: VoiceOption?) {

@@ -19,6 +19,10 @@ struct SettingsView: View {
           .accessibilityIdentifier("settings-notifications-link")
         NavigationLink("Assistant instructions") { AssistantInstructionsView() }
           .accessibilityIdentifier("settings-instructions-link")
+        if services.voiceCatalog.offersVoices {
+          NavigationLink("Voice") { VoiceSettingsView() }
+            .accessibilityIdentifier("settings-voice-link")
+        }
       }
       .listRowBackground(Tokens.Palette.groupedBackground)
 
@@ -66,6 +70,7 @@ struct SettingsView: View {
     .brandedListChrome()
     .navigationTitle("Settings")
     .task { profile = await services.accountProfile() }
+    .task { await services.voiceCatalog.load() }
     .confirmationDialog("Sign out of Bike4Mind?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
         Task { await services.signOutEverywhere() }
