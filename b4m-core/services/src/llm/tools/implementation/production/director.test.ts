@@ -396,6 +396,24 @@ describe('production director tools', () => {
     expect(music[0]!.startMs + music[0]!.durationMs).toBeGreaterThanOrEqual(12_000 - 500);
   });
 
+  it('does not remake the music bed when the model cannot cover the grown cut', async () => {
+    const withSeconds = (seconds: number) => ({
+      ...STORYBOARD,
+      shots: STORYBOARD.shots.map(shot => ({ ...shot, durationSeconds: seconds })),
+    });
+    await run(productionStoryboardTool, harness, withSeconds(2));
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
+    expect(harness.counts.music).toBe(1);
+
+    await run(productionStoryboardTool, harness, withSeconds(15));
+    const music = { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } };
+    await run(productionAddAudioTool, harness, music);
+    expect(harness.counts.music).toBe(2);
+    await run(productionAddAudioTool, harness, music);
+    expect(harness.counts.music).toBe(2);
+  });
+
   it('refuses a re-time that leaves a shot too short for its voice line', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });

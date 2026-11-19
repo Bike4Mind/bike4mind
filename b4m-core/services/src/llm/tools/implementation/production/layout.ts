@@ -145,13 +145,14 @@ export function keptMusic(timeline: StudioTimeline, timelineMs: number): StudioA
 const MUSIC_SHORT_TOLERANCE_MS = 500;
 
 /**
- * How long the cut runs on past the end of the director's music bed, or 0 when the bed covers it (or there is none).
- * keptMusic only shortens a bed, so a re-time that grows the cut leaves this gap for production_add_audio to fill.
+ * How far the director's music bed ends short of `reachMs` (how much of the cut a new bed could cover), or 0 when it
+ * is within tolerance (or there is none). keptMusic only shortens a bed, so a re-time that grows the cut leaves this
+ * gap for production_add_audio to fill.
  */
-export function musicShortfallMs(timeline: StudioTimeline, timelineMs: number): number {
+export function musicShortfallMs(timeline: StudioTimeline, reachMs: number): number {
   const clips = directorClips(timeline, 'music');
   if (clips.length === 0) return 0;
-  const gapMs = timelineMs - Math.max(...clips.map(clip => clip.startMs + clip.durationMs));
+  const gapMs = reachMs - Math.max(...clips.map(clip => clip.startMs + clip.durationMs));
   return gapMs > MUSIC_SHORT_TOLERANCE_MS ? gapMs : 0;
 }
 
