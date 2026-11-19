@@ -3775,7 +3775,7 @@ export const settingsMap = {
     name: 'Python Artifact Data Origins',
     defaultValue: [],
     description:
-      'Public HTTPS origins that Python artifact code may fetch data from, one per line, such as https://data.example.com (at most 10). Origin only: no path, wildcard, IP address, local hostname or host on this app. Requests come from an isolated frame and carry none of the cookies or tokens of this app, but the code can send anything inside the artifact to a listed origin, so list only public data hosts you trust. The model is told the list. Empty (default): Python artifacts have no network access. A change can take up to ten minutes to reach open pages.',
+      'Public HTTPS origins that Python artifact code may fetch data from, one per line, such as https://data.example.com (at most 10). Origin only: no path, wildcard, IP address, local hostname or host on this app. Requests come from an isolated frame and carry none of the cookies or tokens of this app, but the code can send anything inside the artifact to a listed origin, so list only public data hosts you trust. The model is told the list. Empty (default): Python artifacts can reach only the Python package CDN. A change applies to pages loaded up to ten minutes after it is saved; a page that has already run Python keeps the earlier list until it is reloaded.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 22,

@@ -26,26 +26,43 @@ export function resolveArtifactsEnabled(adminEnabled: boolean, requestedByCaller
 }
 
 /**
+ * Hosts a Python data origin may not name: every host this deployment serves from, each with its
+ * whole site. Shared by the settings update route, `/api/pyodide-sandbox` and the prompt below.
+ * Each runtime reads what it has: the web function has all four variables, the chat completion
+ * service and the agent executor only `SERVER_DOMAIN` and `NEXT_PUBLIC_CDN_URL` (see infra/).
+ */
+export function dataOriginReservedHosts(env: Record<string, string | undefined> = process.env): string[] {
+  return pythonDataOriginReservedHosts(
+    [
+      env.APP_URL,
+      env.SERVER_DOMAIN ? `https://${env.SERVER_DOMAIN}` : undefined,
+      env.CHAT_COMPLETION_PUBLIC_URL,
+      env.NEXT_PUBLIC_CDN_URL,
+    ],
+    host => registrableDomain(host, { allowPrivateDomains: true })
+  );
+}
+
+/**
+ * The artifact-emission prompt as the model receives it: unchanged when no Python data origin is
+ * listed, otherwise with one note naming them. Reserves hosts through `dataOriginReservedHosts`, as
+ * the update route and `/api/pyodide-sandbox` do. Shared by the chat path and the agent executor
+ * (server-utils `artifactGate.ts`).
+ */
+export function withArtifactDataOrigins(
+  prompt: string,
+  storedDataOrigins: unknown,
+  reservedHosts: readonly string[] = dataOriginReservedHosts()
+): string {
+  return withPythonDataOrigins(prompt, resolvePythonArtifactDataOrigins(storedDataOrigins, reservedHosts));
+}
+
+/**
  * The `artifactEmission` slice of the always-on system-prompt floor. Lives here, beside the gate it
  * consumes, so one test can lock gate-and-assembly together: the defect worth guarding is a refactor
  * that drops the conditional at the assembly site in `ChatCompletionProcess`, which a test of
  * `resolveArtifactsEnabled` alone cannot see.
  */
-/**
- * The artifact-emission prompt as the model receives it: unchanged when no Python data origin is
- * listed, otherwise with one note naming them. The validation and the app-host check match what
- * `/api/pyodide-sandbox` applies to its CSP, so the model is told exactly the origins that work.
- * Shared by the chat path and the agent executor (server-utils `artifactGate.ts`).
- */
-export function withArtifactDataOrigins(
-  prompt: string,
-  storedDataOrigins: unknown,
-  appUrl: string | undefined = process.env.APP_URL
-): string {
-  const reservedHosts = pythonDataOriginReservedHosts([appUrl], host => registrableDomain(host));
-  return withPythonDataOrigins(prompt, resolvePythonArtifactDataOrigins(storedDataOrigins, reservedHosts));
-}
-
 export function buildArtifactEmissionMessages(
   artifactsEnabled: boolean,
   artifactEmissionContent: string

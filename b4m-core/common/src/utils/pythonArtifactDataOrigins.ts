@@ -70,7 +70,6 @@ export function parsePythonDataOrigin(raw: unknown, reservedHosts: readonly stri
   if (labels.length < 2 || !labels.every(label => HOST_LABEL.test(label))) {
     return { problem: 'must name a public hostname such as data.example.com' };
   }
-  if (/^\d+$/.test(tld)) return { problem: 'IP addresses are not allowed' };
 
   if (reservedHosts.some(reserved => host === reserved || host.endsWith(`.${reserved}`))) {
     return { problem: "this app's own hosts are not allowed" };

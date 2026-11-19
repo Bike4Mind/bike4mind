@@ -13,7 +13,6 @@ import {
   partitionDomainList,
   partitionEmailList,
   partitionPythonDataOrigins,
-  pythonDataOriginReservedHosts,
   PYTHON_ARTIFACT_DATA_ORIGINS_MAX,
   FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
@@ -43,6 +42,7 @@ import {
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { appReservedHosts } from '@server/utils/pythonArtifactDataOrigins';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { AdminAiConfigSchema } from '@bike4mind/common';
@@ -140,8 +140,7 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
     }
 
     if (key === 'pythonArtifactDataOrigins') {
-      const reservedHosts = pythonDataOriginReservedHosts([process.env.APP_URL], host => registrableDomain(host));
-      const { valid, invalid } = partitionPythonDataOrigins(value, reservedHosts);
+      const { valid, invalid } = partitionPythonDataOrigins(value, appReservedHosts());
       if (invalid.length > 0) {
         throw new BadRequestError(
           `Not an allowed data origin: ${invalid.map(({ entry, problem }) => `${JSON.stringify(entry)} (${problem})`).join(', ')}`
