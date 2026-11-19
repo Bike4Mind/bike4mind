@@ -125,12 +125,10 @@ public final class VoiceCatalogModel {
   /// without the network. Otherwise it loads the catalog (or joins a running load) for at most `premiumVoiceWait`;
   /// past that the conversation starts on-device and the load finishes in the background.
   public func premiumVoice() async -> String? {
-    if state == .idle {
-      guard let account = await currentAccount(), store.selection(for: account) != nil else { return nil }
-    }
     var flagUnread = false
     if case .failed = state, flagEnabled == nil { flagUnread = true }
     if state == .idle || state == .loading || flagUnread {
+      guard let account = await currentAccount(), store.selection(for: account) != nil else { return nil }
       guard await loadFinished(within: premiumVoiceWait) else { return nil }
     }
     guard flagEnabled == true, let selection else { return nil }
