@@ -9,6 +9,7 @@ struct VoiceConversationView: View {
   @Environment(AuthController.self) private var auth
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
+  @Environment(\.scenePhase) private var scenePhase
   @ScaledMetric(relativeTo: .largeTitle) private var orbSize: CGFloat = 132
 
   let request: VoiceRequest
@@ -32,6 +33,10 @@ struct VoiceConversationView: View {
     // Nothing is loaded, read out or listened for until signed in with App Lock lifted (Listen can arrive from a notification).
     .task(id: auth.state == .signedIn) {
       if auth.state == .signedIn { await run() }
+    }
+    // This cover sits above LockedView, whose own unlock prompt ran while the app was still in the background.
+    .task(id: scenePhase) {
+      if scenePhase == .active, auth.state == .locked { await auth.unlock() }
     }
     .onDisappear { Task { await model?.stop() } }
     .onChange(of: model?.phase) { _, phase in announce(phase) }

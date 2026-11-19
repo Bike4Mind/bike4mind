@@ -62,7 +62,8 @@ public final class BriefVoiceSession {
     let armed = awaitingConfirm
     awaitingConfirm = nil
     let decision = current
-    let command = BriefVoiceCommand.parse(utterance, options: decision?.question?.options ?? [])
+    let command = BriefVoiceCommand.parse(
+      utterance, options: decision?.question?.options ?? [], confirming: armed != nil)
     if command == .archive { return Self.archiveRefusal }
     guard let decision, let command else { return nil }
     if command != .cancel, !canAnswer() { return Self.lockedRefusal }
@@ -166,23 +167,36 @@ public final class BriefVoiceSession {
 
 /// A spoken triage command. Deliberately narrow: anything that is not plainly a command (a negation, a
 /// longer sentence) parses to nil and goes to the chat instead.
-public enum BriefVoiceCommand: Equatable, Sendable {
+public enum BriefVoiceCommand: Hashable, Sendable {
   case approve, deny, confirm, cancel, archive
   case reply(String)
   case choose(Int)
 
   /// Commands short enough to be said over a prompt; `parse` maps each of these alone to a command.
-  static let oneWordCommands: Set<String> = [
-    "approve", "approved", "deny", "denied", "reject", "decline", "yes", "yeah", "yep", "confirm", "no", "nope",
-    "cancel",
-  ]
+  static let oneWordCommands: Set<String> = Set(commandWords.keys).subtracting(["archive"])
 
   /// The most words a bare command may run to ("approve that one"); longer is treated as conversation.
   static let maxCommandWords = 3
 
-  public static func parse(_ utterance: String, options: [String] = []) -> BriefVoiceCommand? {
+  static let commandWords: [String: BriefVoiceCommand] = [
+    "approve": .approve, "approved": .approve,
+    "deny": .deny, "denied": .deny, "reject": .deny, "decline": .deny,
+    "yes": .confirm, "yeah": .confirm, "yep": .confirm, "confirm": .confirm,
+    "no": .cancel, "nope": .cancel, "cancel": .cancel,
+    "archive": .archive,
+  ]
+
+  /// `confirming` is true while an answer waits for a yes: yes and no then win over option labels that match them.
+  public static func parse(_ utterance: String, options: [String] = [], confirming: Bool = false) -> BriefVoiceCommand? {
     let words = normalized(utterance)
     guard let verb = words.first else { return nil }
+    let short = words.count <= maxCommandWords
+    // Words of two different commands ("deny it approve", "yes no") are most likely the tail of the app's own
+    // prompt heard ahead of the answer, so neither is acted on.
+    let mixed = Set(words.compactMap { commandWords[$0] }).count > 1
+    if confirming, short, !mixed, let command = commandWords[verb], command == .confirm || command == .cancel {
+      return command
+    }
     let spoken = words.joined(separator: " ")
     if let index = options.firstIndex(where: { normalized($0).joined(separator: " ") == spoken }) {
       return .choose(index)
@@ -192,15 +206,8 @@ public enum BriefVoiceCommand: Equatable, Sendable {
       let text = raw.drop { !$0.isWhitespace }.trimmingCharacters(in: .whitespacesAndNewlines)
       return text.isEmpty ? nil : .reply(text)
     }
-    guard words.count <= maxCommandWords else { return nil }
-    switch verb {
-    case "approve", "approved": return .approve
-    case "deny", "denied", "reject", "decline": return .deny
-    case "yes", "yeah", "yep", "confirm": return .confirm
-    case "no", "nope", "cancel": return .cancel
-    case "archive": return .archive
-    default: return nil
-    }
+    guard short, !mixed else { return nil }
+    return commandWords[verb]
   }
 
   private static func normalized(_ text: String) -> [String] { SpokenWords.normalized(text) }
