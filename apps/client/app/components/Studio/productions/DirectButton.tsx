@@ -45,6 +45,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         // The system context reaches only this first run, so the id also sits in the visible message where a
         // follow-up turn (the user answering the director's question) can read it.
         `Production id: ${composition.id}`,
+        'On every turn, change it only through the production tools, and report only what their results show.',
         ...(product ? [`Product photo (Files id): ${product.id}`] : []),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
