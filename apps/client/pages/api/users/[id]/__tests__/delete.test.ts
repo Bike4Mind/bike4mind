@@ -46,7 +46,9 @@ vi.mock('@server/admin/approvals/service', () => ({
   requestApproval: (...a: unknown[]) => m.requestApproval(...a),
 }));
 vi.mock('@server/users/accountDeletion', () => ({ requestAdminErasure: (...a: unknown[]) => m.requestErasure(...a) }));
-vi.mock('@server/dataSubject/adminErasure', () => ({ readAdminErasureState: (...a: unknown[]) => m.erasureState(...a) }));
+vi.mock('@server/dataSubject/adminErasure', () => ({
+  readAdminErasureState: (...a: unknown[]) => m.erasureState(...a),
+}));
 vi.mock('@bike4mind/services', () => ({ adminAuditService: {} }));
 vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: {},
@@ -388,7 +390,12 @@ describe('deleting an admin account needs approval', () => {
   });
 
   it('answers 409 and files no approval when the admin target already has a deletion pending', async () => {
-    m.erasureState.mockResolvedValue({ state: 'pending', ownedOrganizations: [] });
+    m.erasureState.mockResolvedValue({
+      state: 'requested',
+      requestedAt: '2026-01-01T00:00:00.000Z',
+      requestedBy: null,
+      purgeStartedAt: null,
+    });
     const { call } = await run();
 
     await expect(call).rejects.toMatchObject({ statusCode: 409 });
@@ -401,7 +408,7 @@ describe('deleting an admin account needs approval', () => {
 
     await expect(call).rejects.toMatchObject({
       statusCode: 409,
-      details: { code: 'ACCOUNT_DELETION_ORG_OWNER', organizations: [{ id: 'o1', name: 'Org' }] },
+      additionalInfo: { code: 'ACCOUNT_DELETION_ORG_OWNER', organizations: [{ id: 'o1', name: 'Org' }] },
     });
     expect(m.requestApproval).not.toHaveBeenCalled();
   });
