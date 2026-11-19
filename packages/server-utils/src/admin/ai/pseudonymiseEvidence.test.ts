@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { pseudonymiseEvidence } from './pseudonymiseEvidence';
+
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 
 const SALT = 'test-salt-for-evidence';
 

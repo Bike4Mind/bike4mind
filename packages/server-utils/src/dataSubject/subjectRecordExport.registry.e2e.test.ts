@@ -11,6 +11,8 @@ import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecord
 import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { DATA_HOLDER_REGISTRY } from './registry';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryReplSet | undefined;

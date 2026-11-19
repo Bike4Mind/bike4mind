@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ContributedDataHolderRegistry } from '../types';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 const h = vi.hoisted(() => ({ registries: [] as unknown[] }));
 
 vi.mock('../../premium-generated/premiumDataSubjectRegistry.generated', () => ({

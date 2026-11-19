@@ -6,6 +6,8 @@ import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo'
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
+
 const ObjectId = Schema.Types.ObjectId;
 
 const Person = mongoose.model('DsErasePerson', new Schema({ email: String, invitedBy: ObjectId }));

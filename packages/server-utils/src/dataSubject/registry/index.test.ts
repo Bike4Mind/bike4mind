@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels, mergeRegistries } from './index';
 import { holderExportScope } from '../exportScope';
 import { SubjectMatcher } from '../subjectMatcher';
 import type { DataHolderRegistry } from '../types';
+
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
 
