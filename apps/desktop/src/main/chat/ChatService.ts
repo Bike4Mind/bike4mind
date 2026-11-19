@@ -1000,13 +1000,14 @@ export class ChatService {
     }
   }
 
-  /** The events of each reply in flight since its 'start'; see getSession. */
   /**
    * The plan progress of each session with a turn in flight, `null` once its thread has no plan.
    * A reply is stored only when it settles, so a stored summary lags a plan the model updates
-   * mid-turn; every summary push goes through emitSummary, which lays this over it.
+   * mid-turn; every summary push and list goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
+
+  /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
   /** One in-flight reply per session; the value aborts it. */
@@ -1191,8 +1192,8 @@ export class ChatService {
     this.skillsPrompt = deps.skills ? new SkillsPromptCache(deps.skills) : undefined;
   }
 
-  listSessions(): Promise<ChatSessionSummary[]> {
-    return this.deps.store.list();
+  async listSessions(): Promise<ChatSessionSummary[]> {
+    return (await this.deps.store.list()).map(summary => this.withLivePlan(summary));
   }
 
   /** Every session that is busy right now, for a renderer that has just mounted. */
@@ -3015,11 +3016,15 @@ export class ChatService {
     return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
   }
 
-  private emitSummary(summary: ChatSessionSummary): void {
-    if (!this.livePlans.has(summary.id)) return this.deps.summaryChanged?.(summary);
+  private withLivePlan(summary: ChatSessionSummary): ChatSessionSummary {
+    if (!this.livePlans.has(summary.id)) return summary;
     const { plan: _stored, ...rest } = summary;
     const live = this.livePlans.get(summary.id);
-    this.deps.summaryChanged?.(live ? { ...rest, plan: live } : rest);
+    return live ? { ...rest, plan: live } : rest;
+  }
+
+  private emitSummary(summary: ChatSessionSummary): void {
+    this.deps.summaryChanged?.(this.withLivePlan(summary));
   }
 
   /** Records the plan the turn's calls so far leave, and pushes the session's summary when it moved. */
@@ -3034,8 +3039,17 @@ export class ChatService {
       return;
     }
     this.livePlans.set(sessionId, next);
-    const stored = await this.deps.store.get(sessionId);
-    if (stored) this.emitSummary(summarizeSession(stored));
+    await this.pushStoredSummary(sessionId);
+  }
+
+  /** A failed read must not abort the turn: the push is display-only. */
+  private async pushStoredSummary(sessionId: string): Promise<void> {
+    try {
+      const stored = await this.deps.store.get(sessionId);
+      if (stored) this.emitSummary(summarizeSession(stored));
+    } catch (error) {
+      this.deps.logger.debug(`CHAT: could not push summary for ${sessionId}: ${String(error)}`);
+    }
   }
 
   private emit(event: ChatStreamEvent): void {
@@ -3044,16 +3058,20 @@ export class ChatService {
   }
 
   private trackLive(event: ChatStreamEvent): void {
-    if (event.type === 'start') this.livePlans.delete(event.sessionId);
     if (event.type === 'start') {
+      this.livePlans.delete(event.sessionId);
       this.live.set(event.sessionId, { messageId: event.messageId, startedAt: Date.now(), events: [event] });
       return;
+    }
+    // settleReply has usually dropped `live` before 'done', so the overlay is cleared first.
+    // The reply is stored by now, so one push hands the renderer the stored plan.
+    if ((event.type === 'done' || event.type === 'error') && this.livePlans.delete(event.sessionId)) {
+      void this.pushStoredSummary(event.sessionId);
     }
     const events = this.live.get(event.sessionId)?.events;
     if (!events) return;
     if (event.type === 'done' || event.type === 'error') {
       this.live.delete(event.sessionId);
-      this.livePlans.delete(event.sessionId);
       return;
     }
     if (event.type === 'delta') {
@@ -3246,6 +3264,7 @@ export class ChatService {
     const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
+    this.livePlans.delete(sessionId);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
     if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
@@ -5224,7 +5243,8 @@ export class ChatService {
         roundsSincePlanUpdate = settled.some(call => call.name === TODO_TOOL_NAME && call.status === 'done')
           ? 0
           : roundsSincePlanUpdate + 1;
-        await this.publishLivePlan(sessionId, [...sentHistory(session.messages), replySoFar(toolCalls)]);
+        // The whole thread, as summarizeSession reads it, so live and stored agree after a boundary.
+        await this.publishLivePlan(sessionId, [...session.messages, replySoFar(toolCalls)]);
         // Appended HERE and nowhere else. toolResultContent is also what the two history
         // rebuilds send, so folding this into it would rewrite the text of already-sent
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).

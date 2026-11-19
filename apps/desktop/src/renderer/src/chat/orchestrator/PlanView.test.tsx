@@ -51,15 +51,29 @@ describe('PlanView', () => {
     expect(query('plan-view-next')).toBeNull();
   });
 
-  it('keeps every part, clamped, in a narrow container', async () => {
-    const long = 'x'.repeat(300);
-    await show(viewAgentFixture('a', 'working', { plan: { done: 0, total: 2, current: long, next: long } }));
-    const root = el('plan-view-root');
-    root.style.width = '240px';
-    expect(el('plan-view-current').textContent).toBe(long);
+  it('stacks its parts in a narrow container', async () => {
+    await show(viewAgentFixture('a', 'working', { plan: { done: 0, total: 2, current: 'x', next: 'y' } }));
+    const css = [...document.querySelectorAll('style')].map(style => style.textContent).join('\n');
+    expect(getComputedStyle(el('plan-view-root')).containerType).toBe('inline-size');
+    expect(css).toMatch(
+      /@container \(max-width:\s*480px\)\s*\{[^}]*grid-template-areas:\s*"ring title" "ring current" "ring next"/
+    );
     expect(el('plan-view-next')).not.toBeNull();
-    expect(getComputedStyle(root).overflowX).toBe('hidden');
-    expect(getComputedStyle(el('plan-view-current')).textOverflow).toBe('ellipsis');
+  });
+
+  it('shows "Waiting on you" for an agent that needs you with no decision card', async () => {
+    await show(viewAgentFixture('a', 'needs-you', { decision: undefined, plan: { done: 0, total: 2 } }));
+    expect(el('plan-view-needs-you').textContent).toBe('Waiting on you');
+  });
+
+  it('reports progress on the ring and in the row name', async () => {
+    await show(viewAgentFixture('a', 'working', { plan: { done: 1, total: 3, current: 'Wire it', next: 'Test it' } }));
+    const row = el('plan-view-row-a');
+    expect(row.querySelector('[data-testid="plan-view-ring"]')?.getAttribute('aria-valuenow')).toBe('33');
+    const name = row.getAttribute('aria-label');
+    expect(name).toContain('1 of 3 done');
+    expect(name).toContain('Wire it');
+    expect(name).toContain('next Test it');
   });
 
   it('opens the agent when its row is clicked', async () => {
