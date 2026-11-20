@@ -38,6 +38,7 @@ function toViewAgent(agent: AgentView): ViewAgent {
     ...(agent.pr && { pr: { number: agent.pr.number, state: agent.pr.state } }),
     ...(agent.usdCost !== undefined && { usdCost: agent.usdCost }),
     ...(agent.credits !== undefined && { credits: agent.credits }),
+    ...(agent.plan && { plan: agent.plan }),
   };
 }
 
