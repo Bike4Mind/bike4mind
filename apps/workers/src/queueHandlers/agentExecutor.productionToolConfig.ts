@@ -86,19 +86,40 @@ const takesReference = (model: string): boolean =>
 const orderImageModels = (selected: string | undefined, usable: readonly string[]): string[] =>
   selected && takesReference(selected) ? [selected, ...usable.filter(model => model !== selected)] : [...usable];
 
+const warnNotOffered = (logger: Logger, error: unknown): void =>
+  logger.warn('[AgentProduction] could not build the production tool config; tools not offered', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+
 /**
- * Null means the tools are not offered: not in the toolbelt, an API-key run, no Quest to attach job cards to,
- * the Productions flag is closed to this user, or no image config (takes are the one step nothing replaces).
- * A failure while building fails closed.
+ * Whether the run can be offered the production tools: named in the toolbelt, not an API-key run, a Quest to attach
+ * job cards to, and the Productions flag open to the user. Checked before the media configs are built, so a closed
+ * flag skips their reads. Fails closed.
+ */
+export async function productionToolsOpen(
+  input: Pick<BuildAgentProductionToolConfigInput, 'user' | 'apiKeyId' | 'questId' | 'toolEnabled'>,
+  deps: Pick<AgentProductionToolConfigDeps, 'isEnabled' | 'logger'>
+): Promise<boolean> {
+  if (!input.toolEnabled || input.apiKeyId || !input.questId) return false;
+  try {
+    return await deps.isEnabled(input.user);
+  } catch (error) {
+    warnNotOffered(deps.logger, error);
+    return false;
+  }
+}
+
+/**
+ * Null means the tools are not offered: productionToolsOpen says no, or there is no image config (takes are the
+ * one step nothing replaces). A failure while building fails closed.
  */
 export async function buildAgentProductionToolConfig(
   input: BuildAgentProductionToolConfigInput,
   deps: AgentProductionToolConfigDeps
 ): Promise<ProductionToolConfig | null> {
-  const { user, apiKeyId, questId, toolEnabled, image } = input;
-  if (!toolEnabled || apiKeyId || !questId || !image) return null;
+  const { user, image } = input;
+  if (!image || !(await productionToolsOpen(input, deps))) return null;
   try {
-    if (!(await deps.isEnabled(user))) return null;
     const imageModels = orderImageModels(input.imageSelection?.model, await deps.listReferenceImageModels(user.id));
     const adapters = deps.compositionAdapters;
     return {
@@ -117,18 +138,22 @@ export async function buildAgentProductionToolConfig(
       },
     };
   } catch (error) {
-    deps.logger.warn('[AgentProduction] could not build the production tool config; tools not offered', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    warnNotOffered(deps.logger, error);
     return null;
   }
 }
 
 export function getAgentProductionToolConfigDeps(logger: Logger): AgentProductionToolConfigDeps {
+  // productionToolsOpen runs once before the media configs and again inside the builder; one read serves both.
+  const flagReads = new WeakMap<IUserDocument, Promise<boolean>>();
   return {
     // The flag check reads only req.user (and memoizes the plan on the object), so a request holding the run's user is
     // enough; there is no HTTP request in a queue handler.
-    isEnabled: user => isStudioFeatureEnabled('productions', { user } as unknown as Request),
+    isEnabled: user => {
+      const read = flagReads.get(user) ?? isStudioFeatureEnabled('productions', { user } as unknown as Request);
+      flagReads.set(user, read);
+      return read;
+    },
     compositionAdapters: {
       db: { compositions: studioCompositionRepository, fabFiles: fabFileRepository, projects: projectRepository },
     },

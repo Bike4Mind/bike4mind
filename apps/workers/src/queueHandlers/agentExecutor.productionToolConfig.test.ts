@@ -18,7 +18,7 @@ vi.mock('@bike4mind/server-utils/imageGenerations/listUsableImageModels', () => 
 vi.mock('@bike4mind/server-utils/middlewares/studioFeatureFlag', () => ({ isStudioFeatureEnabled: vi.fn() }));
 
 const { studioCompositionService } = await import('@bike4mind/services');
-const { buildAgentProductionToolConfig } = await import('./agentExecutor.productionToolConfig');
+const { buildAgentProductionToolConfig, productionToolsOpen } = await import('./agentExecutor.productionToolConfig');
 type Deps = Parameters<typeof buildAgentProductionToolConfig>[1];
 type Input = Parameters<typeof buildAgentProductionToolConfig>[0];
 
@@ -221,5 +221,26 @@ describe('buildAgentProductionToolConfig', () => {
         expect(studioCompositionService.updateComposition).toHaveBeenCalledWith(USER.id, adapters, 'c1', patch);
       });
     });
+  });
+});
+
+describe('productionToolsOpen', () => {
+  it('reads the flag only for a run that could be offered the tools', async () => {
+    const deps = makeDeps();
+    await expect(productionToolsOpen(makeInput({ apiKeyId: 'key-1' }), deps)).resolves.toBe(false);
+    await expect(productionToolsOpen(makeInput({ toolEnabled: false }), deps)).resolves.toBe(false);
+    expect(deps.isEnabled).not.toHaveBeenCalled();
+    await expect(productionToolsOpen(makeInput(), deps)).resolves.toBe(true);
+    expect(deps.isEnabled).toHaveBeenCalledWith(USER);
+  });
+
+  it('fails closed and warns when the flag check throws', async () => {
+    const deps = makeDeps({
+      isEnabled: vi.fn(async () => {
+        throw new Error('settings down');
+      }),
+    });
+    await expect(productionToolsOpen(makeInput(), deps)).resolves.toBe(false);
+    expect(deps.logger.warn).toHaveBeenCalledOnce();
   });
 });
