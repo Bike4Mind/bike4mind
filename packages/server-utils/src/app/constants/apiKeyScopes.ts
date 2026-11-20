@@ -51,6 +51,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [],
   },
   {
+    value: ApiKeyScope.ARTIFACTS_PUBLISH,
+    label: 'Publish Artifacts',
+    description:
+      'Publish, republish and unpublish your artifacts as public web pages. Does not allow reading artifacts',
+    endpoints: [],
+  },
+  {
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',

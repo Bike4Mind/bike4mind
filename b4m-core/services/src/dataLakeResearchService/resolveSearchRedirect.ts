@@ -8,7 +8,8 @@ export interface UnresolvedDetail {
   status?: number;
   contentType?: string;
   locationHost?: string;
-  bodyHint?: 'consent' | 'redirect_notice' | 'captcha' | 'other';
+  bodyHint?: 'consent' | 'redirect_notice' | 'captcha' | 'verifying' | 'other';
+  bodyTitle?: string;
   bodyLength?: number;
   hasRefreshHeader?: boolean;
   scriptRedirect?: boolean;
@@ -20,15 +21,21 @@ export interface SearchRedirectResult {
   resolved: SearchRedirectResolution;
   via?: SearchRedirectVia;
   detail?: UnresolvedDetail;
+  /** name=value pairs from the response, for that same link's retry only. Never log or store. */
+  retryCookies?: string[];
 }
 
 export interface ResolveSearchRedirectOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  cookies?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_TITLE_CHARS = 80;
+const MAX_RETRY_COOKIES = 10;
+const MAX_RETRY_COOKIE_BYTES = 4096;
 const GOOGLE_REDIRECT_PATHS = new Set(['/goto', '/url']);
 
 const isGoogleHost = (host: string): boolean => host === 'google.com' || host.endsWith('.google.com');
@@ -145,12 +152,46 @@ const readCapped = async (response: Response): Promise<string> => {
   return text.slice(0, MAX_BODY_BYTES);
 };
 
+const bodyTitleOf = (body: string): string | undefined => {
+  const raw = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1];
+  const title = raw ? decodeHtmlEntities(raw).replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_CHARS) : '';
+  return title || undefined;
+};
+
+const collectRetryCookies = (headers: Headers): string[] => {
+  const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
+  const lines =
+    withGetSetCookie.getSetCookie?.() ?? (headers.get('set-cookie') ? [headers.get('set-cookie') as string] : []);
+  const pairs: string[] = [];
+  let bytes = 0;
+  for (const line of lines) {
+    const pair = line.split(';')[0].trim();
+    if (!pair.includes('=') || pair.startsWith('=')) continue;
+    if (pairs.length >= MAX_RETRY_COOKIES || bytes + pair.length > MAX_RETRY_COOKIE_BYTES) break;
+    pairs.push(pair);
+    bytes += pair.length;
+  }
+  return pairs;
+};
+
+/** A 200 with no destination (or a timeout) may be a waiting page that releases later. */
+export const isRetryableUnresolved = (detail: UnresolvedDetail | undefined): boolean =>
+  Boolean(detail) &&
+  (detail?.reason === 'timeout' ||
+    (detail?.status === 200 &&
+      detail.reason === 'no_meta_refresh' &&
+      detail.bodyHint !== 'captcha' &&
+      detail.bodyHint !== 'consent'));
+
 // Coarse classification only, so a log line can tell a throttle page from a consent page.
-const bodyHintFor = (body: string): NonNullable<UnresolvedDetail['bodyHint']> => {
+const bodyHintFor = (body: string, title?: string): NonNullable<UnresolvedDetail['bodyHint']> => {
   const text = body.toLowerCase();
   if (text.includes('unusual traffic') || text.includes('/sorry/') || text.includes('captcha')) return 'captcha';
   if (text.includes('consent.google') || text.includes('before you continue')) return 'consent';
   if (text.includes('redirect notice')) return 'redirect_notice';
+  if ((title ?? '').toLowerCase().includes('verif') || /verif/.test(text.replace(/<script[\s\S]*?<\/script>/g, ''))) {
+    return 'verifying';
+  }
   return 'other';
 };
 
@@ -180,14 +221,17 @@ export async function resolveSearchRedirect(
       method: 'GET',
       redirect: 'manual',
       credentials: 'omit',
+      ...(opts.cookies?.length ? { headers: { Cookie: opts.cookies.join('; ') } } : {}),
       signal: controller.signal,
     });
     status = response.status;
     const contentType = response.headers.get('content-type')?.slice(0, 100) ?? undefined;
+    const retryCookies = collectRetryCookies(response.headers);
     const unresolved = (detail: UnresolvedDetail): SearchRedirectResult => ({
       url,
       resolved: 'unresolved',
       detail: { ...detail, status: response.status, ...(contentType ? { contentType } : {}) },
+      ...(retryCookies.length ? { retryCookies } : {}),
     });
     if (response.status >= 300 && response.status < 400) {
       const rawLocation = response.headers.get('location');
@@ -206,7 +250,8 @@ export async function resolveSearchRedirect(
       if (headerTarget) return { url: headerTarget, resolved: 'followed', via: 'refresh_header' };
       const metaTarget = metaRefreshTarget(body);
       if (metaTarget) return { url: metaTarget, resolved: 'followed', via: 'meta_refresh' };
-      const bodyHint = bodyHintFor(body);
+      const bodyTitle = bodyTitleOf(body);
+      const bodyHint = bodyHintFor(body, bodyTitle);
       const interstitial = bodyHint === 'captcha' || bodyHint === 'consent';
       const scriptTarget = interstitial ? null : scriptRedirectTarget(body);
       if (scriptTarget) return { url: scriptTarget, resolved: 'followed', via: 'script' };
@@ -215,6 +260,7 @@ export async function resolveSearchRedirect(
       return unresolved({
         reason: 'no_meta_refresh',
         bodyHint,
+        ...(bodyTitle ? { bodyTitle } : {}),
         bodyLength: body.length,
         hasRefreshHeader: Boolean(refreshHeader),
         scriptRedirect: SCRIPT_REDIRECT_MARKER.test(body),

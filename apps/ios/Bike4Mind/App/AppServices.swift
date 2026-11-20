@@ -43,6 +43,8 @@ final class AppServices {
   let pendingActions: any PendingActionAPI
   /// The server-composed assistant brief, on whichever server the app currently points at.
   let briefs: any BriefAPI
+  /// The standing instructions the brief composer follows, on whichever server the app points at.
+  let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
@@ -99,6 +101,12 @@ final class AppServices {
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
       #endif
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    instructions = ForwardingInstructionAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
+      #endif
+      return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
 
@@ -162,6 +170,7 @@ final class AppServices {
     await questActivities.sessionWillEnd()
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
+    ThumbnailCache.shared.removeAll()
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
@@ -352,5 +361,22 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func brief(id: String) async throws -> Brief {
     try await provider().brief(id: id)
+  }
+}
+
+/// Routes instruction calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingInstructionAPI: InstructionAPI {
+  let provider: @MainActor @Sendable () -> any InstructionAPI
+
+  func list() async throws -> [AssistantInstruction] {
+    try await provider().list()
+  }
+
+  func add(text: String) async throws -> AssistantInstruction {
+    try await provider().add(text: text)
+  }
+
+  func remove(id: String) async throws {
+    try await provider().remove(id: id)
   }
 }

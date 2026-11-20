@@ -119,6 +119,21 @@ beforeEach(() => {
 });
 
 describe('speech job handler submit', () => {
+  it('keeps the word timings the provider reported on the payload', async () => {
+    const wordTimings = [{ text: 'hello', startMs: 0, endMs: 400 }];
+    const { provider } = providerReturning({ status: 'succeeded', output: testSpeechProviderOutput(), wordTimings });
+    const { handler } = setup({ providers: { openai: provider, elevenlabs: provider } });
+    const result = await handler.submit(makeJob(), stepContext());
+    expect(result).toMatchObject({ next: 'succeeded', payload: { wordTimings } });
+  });
+
+  it('records no word timings when the provider reported none', async () => {
+    const { handler } = setup();
+    const result = await handler.submit(makeJob(), stepContext());
+    if (result.next !== 'succeeded') throw new Error('expected success');
+    expect(result.payload).not.toHaveProperty('wordTimings');
+  });
+
   it('synthesizes, stores in Files and succeeds with the output and producedBy', async () => {
     const { handler, deps } = setup();
     const job = makeJob();

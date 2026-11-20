@@ -58,6 +58,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { runDecisionTool } from '../decisions/runDecisionTool';
 import { operationalBillingAdapters } from '../billing/operationalBilling';
 import { logEvent } from './analyticsLog';
+import { signingKey } from '../security/signingKeys';
 import { recallMementosV2 } from '../memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '../memory/lakeMemoryRecall';
 import { loadSystemPromptById } from './sessionSystemPromptResolver';
@@ -307,7 +308,8 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
   return _defaultChatCompletionOptions;
 };

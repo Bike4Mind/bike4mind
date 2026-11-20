@@ -67,6 +67,7 @@ const {
   resolveCustomMcpContext,
   resolveOwnHosts,
 } = await import('./customMcpAccess');
+const { policyPresetHost } = await import('./policyPresetHost');
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -274,6 +275,50 @@ describe('evaluateConnectionPolicy - API keys over plain http', () => {
     expect(verdict('http://mcp.internal.example:8080/mcp', 'api_key', { ...network, allowHttp: false })).toEqual({
       allowed: true,
     });
+  });
+});
+
+describe('a platform connector under the resolved policies', () => {
+  const HOST = 'mcp.example.com';
+  const verdictFor = async (ownerType: 'platform' | 'user') =>
+    evaluateConnectionPolicy(await resolveCustomMcpContext('member'), {
+      urlHost: HOST,
+      authKind: 'api_key',
+      presetRemoteHost: policyPresetHost({ ownerType, urlHost: HOST }),
+      url: `https://${HOST}/mcp`,
+    });
+
+  it('passes the catalog-only mode, which refuses the same host as a user connection', async () => {
+    state.platformPolicy = { mode: 'presets_only' };
+    expect(await verdictFor('platform')).toEqual({ allowed: true });
+    expect(await verdictFor('user')).toMatchObject({ allowed: false, reason: 'presets_only' });
+  });
+
+  it('is closed for the members of an organization that switched connectors off', async () => {
+    state.platformPolicy = { mode: 'presets_only' };
+    state.orgIds = ['org-a'];
+    state.orgPolicies = { 'org-a': { mode: 'off' } };
+
+    expect((await resolveCustomMcpContext('member')).enabled).toBe(false);
+    expect(await verdictFor('platform')).toMatchObject({ allowed: false, reason: 'org_disabled' });
+  });
+
+  it.each([
+    ['an organization blocked host', { blockedHostPatterns: [HOST] }, [], 'org_blocked_host'],
+    [
+      'an organization allowlist without it',
+      { mode: 'allowlist' as const, allowedHostPatterns: ['other.example.com'] },
+      [],
+      'host_not_allowlisted',
+    ],
+    ['the platform blocklist', {}, [HOST], 'platform_blocked_host'],
+  ])('is still refused by %s', async (_label, orgPolicy, blockedHosts, reason) => {
+    state.platformPolicy = { mode: 'presets_only' };
+    state.orgIds = ['org-a'];
+    state.orgPolicies = { 'org-a': orgPolicy };
+    state.blockedHosts = blockedHosts;
+
+    expect(await verdictFor('platform')).toMatchObject({ allowed: false, reason });
   });
 });
 

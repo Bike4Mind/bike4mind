@@ -76,7 +76,13 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
   const oktaWarnings: string[] = [];
 
   // Check JWT_SECRET using shared validator
-  const jwtResult = validateJwtSecret(Config.JWT_SECRET);
+  let jwtSecret: string | undefined;
+  try {
+    jwtSecret = Config.JWT_SECRET;
+  } catch {
+    // Config refuses a placeholder; report it as missing.
+  }
+  const jwtResult = validateJwtSecret(jwtSecret);
   if (!jwtResult.isValid) {
     if (jwtResult.status === 'missing' || jwtResult.status === 'placeholder') {
       oktaMissing.push('JWT_SECRET');

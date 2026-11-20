@@ -76,7 +76,8 @@
       "title": "Deep links and universal / app links",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the link items in apps/android/DEVICE_TESTING.md pass on a device with assetlinks.json live."
     },
     {
       "id": "share-capture",
