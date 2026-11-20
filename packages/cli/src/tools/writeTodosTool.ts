@@ -109,17 +109,19 @@ If asked to "create a new React component with tests", break it down:
           todos: {
             type: 'array',
             description:
-              'Complete list of todo items. This replaces any existing list. Each item needs content and a status.',
+              'Complete list of todo items (at most 50). This replaces any existing list. Each item needs content and a status.',
             items: {
               type: 'object',
               properties: {
                 content: {
                   type: 'string',
                   description: 'Clear, concise description of the task (imperative, e.g. "Run tests")',
+                  maxLength: 200,
                 },
                 activeForm: {
                   type: 'string',
                   description: 'Present-continuous form shown while in progress (e.g. "Running tests")',
+                  maxLength: 200,
                 },
                 status: {
                   type: 'string',
