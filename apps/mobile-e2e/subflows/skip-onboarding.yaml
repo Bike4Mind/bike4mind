@@ -1,6 +1,12 @@
 appId: com.bike4mind.app
 ---
 # A fresh install shows the two-page welcome before sign-in on both platforms (absent after an upgrade or once finished).
+# `when: visible` does not wait, and Android draws a blank frame while the session restores, so first wait for
+# whichever screen comes up (ids are regexes).
+- extendedWaitUntil:
+    visible:
+      id: "onboarding-next-btn|signin-submit-btn"
+    timeout: 30000
 - runFlow:
     when:
       visible:

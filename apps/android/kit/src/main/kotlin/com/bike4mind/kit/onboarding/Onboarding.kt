@@ -20,7 +20,8 @@ object Onboarding {
             id = "notifications",
             title = "Know the moment it's ready",
             message = "Agents and long answers can take a while. Bike4Mind can notify you, so you can put the phone " +
-                "down. Android asks once, right after you sign in, and you can change it any time in Settings.",
+                "down. If Android asks for permission, it's once, right after you sign in, and you can change it any " +
+                "time in Settings.",
         ),
     )
 
