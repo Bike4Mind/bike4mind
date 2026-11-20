@@ -273,7 +273,13 @@ final class BriefViewModelTests: XCTestCase {
       api: api, sleep: { _ in try Task.checkCancellation() })
     model.startCompose()
     model.cancel()
-    for _ in 0..<50 { await Task.yield() }
+    // A fixed yield count races the task on a loaded runner; wait for the compose to run and unwind.
+    for _ in 0..<10_000 {
+      if await api.composeCount == 1, !model.isComposing { break }
+      await Task.yield()
+    }
+    let composes = await api.composeCount
+    XCTAssertEqual(composes, 1)
     XCTAssertFalse(model.isComposing)
     let fetches = await api.fetchCount
     XCTAssertEqual(fetches, 0)
