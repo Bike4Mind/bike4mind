@@ -133,7 +133,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const { userId } = auth;
 
   // Tavern access gate: a valid bridge identity isn't enough - the owning user
-  // must be allowed to reach the Tavern (admin or 'tavern' tag), the same
+  // must be allowed to reach the Tavern (admin, developer, or 'tavern' tag), the same
   // predicate the HTTP surface enforces via ensureTavernAccess.
   if (!(await connectionUserCanAccessTavern(userId))) {
     logger.warn(`[CC_AGENT_REGISTER] User ${userId} lacks Tavern access - rejecting register for ${instanceId}`);
