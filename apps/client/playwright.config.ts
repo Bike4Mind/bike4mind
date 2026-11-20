@@ -154,10 +154,14 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 1,
   workers: Number(process.env.PW_WORKERS) || 3,
   timeout: TIMEOUTS.TEST,
-  // 30 min: with PW_WORKERS=3 the full suite runs in ~15–20 min under normal conditions,
-  // leaving a 10-min buffer. The GitHub Actions job cap is 35 min, so this inner guard
-  // gives Playwright time to run teardown and write artifacts before the job is killed.
-  globalTimeout: process.env.CI && process.env.AI_LATENCY_RUN !== 'true' ? 30 * 60_000 : undefined,
+  // Inner guard that stops the run early enough for teardown and artifacts before the GitHub
+  // Actions job is killed. 30 min by default (the reusable job's 35-min cap); the scheduled
+  // full suite passes PW_GLOBAL_TIMEOUT_MINUTES (see .github/workflows/e2e-manual.yml), since
+  // it outgrew 30 min with PW_WORKERS=3. Keep it below the caller's timeout_minutes.
+  globalTimeout:
+    process.env.CI && process.env.AI_LATENCY_RUN !== 'true'
+      ? (Number(process.env.PW_GLOBAL_TIMEOUT_MINUTES) || 30) * 60_000
+      : undefined,
   expect: { timeout: TIMEOUTS.VISIBLE },
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',

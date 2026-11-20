@@ -174,7 +174,11 @@ jobs:
       status_context:     'e2e/smoke'
       suite_name:         ${{ needs.prep.outputs.suite_name }}
       artifact_suffix:    ''
-      timeout_minutes:    60
+      # The full suite outgrew 30 min (214 tests reached ~72% by the 30-min cap on 2026-11-20).
+      # About 20 min of the job goes to setup and teardown, so the job cap sits above the
+      # Playwright cap with room for both.
+      timeout_minutes:    75
+      global_timeout_minutes: 50
       stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
       wait_for_deploy:    ${{ github.event_name == 'schedule' || inputs.pr_number == '' }}
       show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}
