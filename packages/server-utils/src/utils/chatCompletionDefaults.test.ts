@@ -95,6 +95,7 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     await import('./chatCompletionDefaults');
     expect(resourceAccessLog).not.toContain('websocket');
     expect(resourceAccessLog).not.toContain('SECRET_ENCRYPTION_KEY');
+    expect(resourceAccessLog).not.toContain('HMAC_SIGNING_SECRET');
     expect(resourceAccessLog).not.toContain('mcpHandler');
   }, 20000);
 
@@ -103,12 +104,20 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     expect(typeof mod.getDefaultChatCompletionOptions).toBe('function');
   }, 20000);
 
-  it('accesses websocket and SECRET_ENCRYPTION_KEY only when factory is invoked', async () => {
+  it('accesses websocket and the signing secret only when factory is invoked', async () => {
     const mod = await import('./chatCompletionDefaults');
     resourceAccessLog.length = 0;
     mod.getDefaultChatCompletionOptions();
     expect(resourceAccessLog).toContain('websocket');
-    expect(resourceAccessLog).toContain('SECRET_ENCRYPTION_KEY');
+    expect(resourceAccessLog).toContain('HMAC_SIGNING_SECRET');
+  }, 20000);
+
+  it('hands the chat service per-purpose signing keys', async () => {
+    const mod = await import('./chatCompletionDefaults');
+    const options = mod.getDefaultChatCompletionOptions();
+    expect(options.telemetryHmacSecret).toMatch(/^[0-9a-f]{64}$/);
+    expect(options.imageUrlSigningSecret).toMatch(/^[0-9a-f]{64}$/);
+    expect(options.imageUrlSigningSecret).not.toBe(options.telemetryHmacSecret);
   }, 20000);
 
   it('memoizes the result - repeated calls return the same reference', async () => {
