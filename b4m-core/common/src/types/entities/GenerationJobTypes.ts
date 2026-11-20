@@ -6,7 +6,7 @@ import type { MusicGenerationRequest, MusicProviderId } from '../../music';
 import type { StoredSceneCompositionRequest } from '../../scene';
 import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
-import type { VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
+import type { SpeechWordTiming, VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
 import type { StudioRenderPricing } from '../../studioComposition/render';
 import type { StudioTimeline, StudioTimelineOutput } from '../../studioComposition/timeline';
 import { IBaseRepository } from './BaseTypes';
@@ -228,6 +228,8 @@ export type SpeechJobPayload = {
   /** The vendor that produced the clip and the model it is billed on; set on success. */
   producedBy?: { provider: VoiceGenerationVendor; model: string };
   output?: AudioJobOutput;
+  /** Per-word timing of `request.text` in the clip, when the producing vendor reported alignment. */
+  wordTimings?: SpeechWordTiming[];
 };
 
 /** The validated sound-effect request as persisted, with the default provider applied. */
@@ -251,8 +253,11 @@ export type SoundEffectJobPayload = {
   output?: AudioJobOutput;
 };
 
-/** Same storage fields as VideoJobOutput: the Scene is a video file. */
-export type ComposeJobOutput = VideoJobOutput;
+/**
+ * Same storage fields as VideoJobOutput: the Scene is a video file. `filesSkipReason`: why Files refused the Scene
+ * (over the per-file size limit or the user's storage quota), so it landed in the generated bucket instead.
+ */
+export type ComposeJobOutput = VideoJobOutput & { filesSkipReason?: GeneratedAssetSaveSkippedReason };
 
 /**
  * A Scene is rendered by our own worker (ffmpeg), not a provider: submit downloads the inputs, muxes them and stores

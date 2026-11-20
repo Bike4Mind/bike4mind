@@ -154,7 +154,10 @@ void app.whenReady().then(async () => {
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
   registerSessionHandoff(auth);
-  const attention = registerAttention({ openWindow: createWindow });
+  const attention = registerAttention({
+    openWindow: createWindow,
+    notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
+  });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();

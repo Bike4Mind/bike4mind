@@ -9,7 +9,7 @@ import { canAccessTavern } from '@bike4mind/common';
  * check Tavern access, and the per-action bridge/identity checks only prove who
  * the caller is and that they own the target resource - not that they may reach
  * the Tavern at all. This loads the resolved user and applies the shared
- * `canAccessTavern` predicate (admin OR 'tavern' tag), so the WS action surface
+ * `canAccessTavern` predicate (admin, developer, or 'tavern' tag), so the WS action surface
  * enforces the same grant as the HTTP surface and the client route guard - the
  * three can never drift (the fail-open class that motivated `canAccessTavern`).
  *

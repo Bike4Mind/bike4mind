@@ -655,6 +655,7 @@ const DROP_REASON_LABEL: Record<
   string
 > = {
   filteredBySource: 'blocked by source rules',
+  unresolvedRedirect: 'search link could not be resolved',
   blockedByRule: 'blocked by an item rule',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
@@ -713,6 +714,7 @@ const JUDGED_BUCKETS: Record<
     keyof ResearchRunTotals,
     | 'searchHits'
     | 'filteredBySource'
+    | 'unresolvedRedirect'
     | 'judgeFailed'
     | 'notJudged'
     | 'autoAdmitted'

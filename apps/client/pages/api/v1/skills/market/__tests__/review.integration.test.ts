@@ -61,6 +61,10 @@ vi.mock('@bike4mind/database/infra', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   organizationRepository: { findIdsAdministeredBy: (...a: unknown[]) => h.adminOrgs(...a) },
 }));
+vi.mock('@bike4mind/server-utils/skillMarket/market', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  adminAudienceIdsFor: async (...a: unknown[]) => ({ orgIds: (await h.adminOrgs(...a)) as string[], spaceIds: [] }),
+}));
 // A JWT caller is the one with `Authorization: Bearer jwt`; anyone else without a key is a 401.
 vi.mock('@server/auth/auth', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -222,9 +226,14 @@ beforeEach(() => {
   h.queue.mockResolvedValue({ rows: [queueRow()], next: null });
   // The real review gate over the given listing; the CAS writes are the e2e suite's concern.
   h.decide.mockImplementation(
-    async (_vid: string, actor: MarketActor, orgIds: string[], decision: { action: string }) => {
+    async (
+      _vid: string,
+      actor: MarketActor,
+      adminAudience: { orgIds: string[]; spaceIds: string[] },
+      decision: { action: string }
+    ) => {
       const listing = (h.decideListing as ISkillListing | undefined) ?? LISTING;
-      if (!canReviewListing(listing, actor, orgIds)) throw new ForbiddenError("You don't have permission");
+      if (!canReviewListing(listing, actor, adminAudience)) throw new ForbiddenError("You don't have permission");
       return { ...VERSION, reviewStatus: decision.action === 'approve' ? 'approved' : 'rejected' };
     }
   );
@@ -294,11 +303,15 @@ describe('/api/v1/skills/market/review-queue', () => {
       snapshot: { body: 'Do it.' },
     });
     expect(item.listing).toMatchObject({ id: LISTING_ID, organization_id: ORG_ID, pending_version: 2 });
-    expect(h.queue).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, [ORG_ID], {
-      filter: 'pending',
-      limit: 25,
-      after: undefined,
-    });
+    expect(h.queue).toHaveBeenCalledWith(
+      { id: 'user-1', isAdmin: false },
+      { orgIds: [ORG_ID], spaceIds: [] },
+      {
+        filter: 'pending',
+        limit: 25,
+        after: undefined,
+      }
+    );
   });
 
   it('withholds a platform admin role under a key, but not over JWT', async () => {
@@ -350,12 +363,17 @@ describe('/api/v1/skills/market/versions/{vid}/review', () => {
     const res = await review({ action: 'approve', ack_high_risk: true, ack_mismatch: false, note: ' ok ' });
     const body = ReviewSkillVersionResponseSchema.parse(res._getJSONData());
     expect(body.version).toMatchObject({ id: VERSION_ID, review_status: 'approved', scan_status: 'passed' });
-    expect(h.decide).toHaveBeenCalledWith(VERSION_ID, { id: 'user-1', isAdmin: false }, [ORG_ID], {
-      action: 'approve',
-      ackHighRisk: true,
-      ackMismatch: false,
-      note: 'ok',
-    });
+    expect(h.decide).toHaveBeenCalledWith(
+      VERSION_ID,
+      { id: 'user-1', isAdmin: false },
+      { orgIds: [ORG_ID], spaceIds: [] },
+      {
+        action: 'approve',
+        ackHighRisk: true,
+        ackMismatch: false,
+        note: 'ok',
+      }
+    );
   });
 
   it('rejects with a note', async () => {

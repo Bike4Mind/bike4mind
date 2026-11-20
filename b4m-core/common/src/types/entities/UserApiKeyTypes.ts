@@ -144,7 +144,7 @@ export enum ApiKeyScope {
    * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
    * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
    * Claude Code" dialog.
-   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * Not bound to an org: membership is re-checked on every request (`audienceIdsFor` in
    * packages/server-utils/src/skillMarket/market.ts), so a member who leaves or is removed loses that org's
    * feed and zips while the key stays valid for their other orgs.
    */
@@ -223,6 +223,13 @@ export enum ApiKeyScope {
    * needs `ai:chat`/`ai:generate`.
    */
   AI_END_USER_ID = 'ai:end-user-id',
+  /**
+   * Publish, republish and unpublish the key owner's own artifacts as web pages
+   * (`/api/v1/artifacts/{id}/publish`, `/republish`). Publishing creates a public URL, so it is
+   * unsuffixed to stay out of the Read-only and Read & write presets; only Full access or ticking it
+   * grants it. Holding it does not let the key read artifacts; that stays `notebooks:read`. Not confined.
+   */
+  ARTIFACTS_PUBLISH = 'artifacts:publish',
 }
 
 /**

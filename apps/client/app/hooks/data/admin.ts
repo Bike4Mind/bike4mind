@@ -405,13 +405,16 @@ export interface SecurityDashboardWafLogsInsightsOverview {
   reason?: 'no-webacl' | 'no-logging-config' | 'no-log-destination' | 'no-data';
 }
 
-export const useSecurityDashboardCloud = () => {
+export const SECURITY_DASHBOARD_CLOUD_QUERY_KEY = ['admin', 'security-dashboard', 'cloud'] as const;
+
+export const useSecurityDashboardCloud = (refetchInterval: number | false = false) => {
   return useQuery<SecurityDashboardCloudSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'cloud'],
+    queryKey: SECURITY_DASHBOARD_CLOUD_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<SecurityDashboardCloudSnapshot>('/api/admin/security-dashboard/cloud');
       return res.data;
     },
+    refetchInterval,
     staleTime: 5 * 60 * 1000, // 5 minutes
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -527,16 +530,10 @@ export const useSecurityDashboardWafBlockedRequests = (params: { range: WafRange
 };
 
 export const useRunCloudSecurityScan = () => {
-  const queryClient = useQueryClient();
-
   return useMutation<RunSecurityScanResponse>({
     mutationFn: async () => {
       const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/cloud');
       return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'cloud'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
     },
   });
 };

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { pyodideSandboxWorkerBody } from '@client/app/workers/pyodide/sandboxWorkerBody';
 import { pyodideCspSources } from '@client/app/utils/pyodideDistribution';
+import { loadPythonArtifactDataOrigins } from '@server/utils/pythonArtifactDataOrigins';
 
 /**
  * GET /api/pyodide-sandbox - iframe target that executes PYTHON artifacts.
@@ -20,8 +21,9 @@ import { pyodideCspSources } from '@client/app/utils/pyodideDistribution';
  * this document gets an OPAQUE origin. That closes the hole twice over: `SameSite=Strict` is
  * not sent from an opaque initiator, and no app-origin response is readable without CORS
  * headers the app never sets. The CSP below is the belt to that pair of braces - `connect-src`
- * names the Pyodide distribution and nothing else, so even a request that could be made has
- * nowhere to go.
+ * names the Pyodide distribution plus any public data origins an admin has listed
+ * (`pythonArtifactDataOrigins`, never this app's own hosts), so even a request that could be made
+ * has nowhere else to go.
  *
  * Routing through `/api/*` is what makes the CSP authoritative: `proxy.ts` deliberately skips
  * the global app CSP for `/api/*`, and a `public/` file would be served by CloudFront and never
@@ -39,8 +41,15 @@ import { pyodideCspSources } from '@client/app/utils/pyodideDistribution';
 
 const SANDBOX_READY = 'pyodide-sandbox-ready';
 
-function buildSandboxCsp(): string {
-  const pyodideSources = pyodideCspSources(process.env.PYODIDE_BASE_URL).join(' ');
+/**
+ * `dataOrigins` is the validated `pythonArtifactDataOrigins` admin list. It widens `connect-src`
+ * only: the blob Worker that runs guest Python inherits this document's policy, so this is the one
+ * place those fetches are governed, and no other artifact frame reads the setting.
+ */
+function buildSandboxCsp(dataOrigins: readonly string[]): string {
+  const pyodideOrigins = pyodideCspSources(process.env.PYODIDE_BASE_URL);
+  const pyodideSources = pyodideOrigins.join(' ');
+  const connectSources = [...pyodideOrigins, ...dataOrigins.filter(origin => !pyodideOrigins.includes(origin))];
 
   return [
     "default-src 'none'",
@@ -54,9 +63,10 @@ function buildSandboxCsp(): string {
     // Note what is deliberately NOT granted: 'unsafe-eval'. The narrow token permits wasm and
     // still refuses string-to-JS eval, so guest Python cannot reach js.eval().
     `script-src 'unsafe-inline' blob: 'wasm-unsafe-eval' ${pyodideSources}`,
-    // The only network reach guest Python has. Pyodide fetches its own wasm and wheels here;
-    // there is deliberately no 'self', so the app origin is unreachable from inside.
-    `connect-src ${pyodideSources}`,
+    // The only network reach guest Python has. Pyodide fetches its own wasm and wheels here, and
+    // guest code may read the admin-listed data origins; there is deliberately no 'self', so the
+    // app origin is unreachable from inside.
+    `connect-src ${connectSources.join(' ')}`,
     'worker-src blob:',
     "style-src 'none'",
     "img-src 'none'",
@@ -135,22 +145,25 @@ function buildSandboxHtml(): string {
 </html>`;
 }
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.setHeader('Allow', 'GET, HEAD');
     return res.status(405).end('Method Not Allowed');
   }
 
+  const { origins: dataOrigins, degraded } = await loadPythonArtifactDataOrigins();
+
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', buildSandboxCsp());
+  res.setHeader('Content-Security-Policy', buildSandboxCsp(dataOrigins));
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
-  // Static shell - the parent drives it by postMessage after load. Matches the sibling
-  // artifact-sandbox routes, including their caveat: a CSP change here takes up to 5 minutes
-  // to propagate through CDN/browser caches.
-  res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
+  // The parent drives the shell by postMessage after load. Matches the sibling artifact-sandbox
+  // routes, including their caveat: a CSP change here takes up to 5 minutes to propagate through
+  // CDN/browser caches. A response built after a failed settings read is not cached, so it cannot
+  // outlive the failure.
+  res.setHeader('Cache-Control', degraded ? 'no-store' : 'public, max-age=300, s-maxage=300');
 
   return res.status(200).send(req.method === 'HEAD' ? '' : buildSandboxHtml());
 }

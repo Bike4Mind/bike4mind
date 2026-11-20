@@ -44,6 +44,10 @@ import {
 } from '@client/app/utils/artifactPersistence';
 import { setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
 import { usePyodide } from '@client/app/hooks/usePyodide';
+import {
+  describePythonNetworkAccess,
+  usePythonArtifactDataOrigins,
+} from '@client/app/hooks/usePythonArtifactDataOrigins';
 
 interface PythonArtifactViewerProps {
   artifact: PythonArtifact;
@@ -70,6 +74,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
     detectPackages,
     isReady,
   } = usePyodide();
+  const dataOrigins = usePythonArtifactDataOrigins();
 
   // Tab state: 0 = Output, 1 = Code
   const [activeTab, setActiveTab] = useState<number>(0);
@@ -632,7 +637,9 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
               <Stack spacing={0.5} sx={{ mt: 0.5 }}>
                 <Typography level="body-sm">Python code runs entirely in your browser (no server execution)</Typography>
                 <Typography level="body-sm">Cannot access files outside the browser sandbox</Typography>
-                <Typography level="body-sm">Network access is restricted to CORS-allowed endpoints</Typography>
+                <Typography level="body-sm" data-testid="python-artifact-network-note">
+                  {describePythonNetworkAccess(dataOrigins)}
+                </Typography>
               </Stack>
             </Alert>
 

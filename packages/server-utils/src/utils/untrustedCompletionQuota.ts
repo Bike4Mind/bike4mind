@@ -3,6 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import {
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
   CreditHolderType,
+  type OAuthClientUnpaidAccountLimits,
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   TooManyRequestsError,
 } from '@bike4mind/common';
@@ -46,6 +47,7 @@ export async function admitApiKeyCompletion({
   ownerUntrusted,
   billingOwnerType,
   holdSlot,
+  unpaidAccountLimits,
   req,
 }: {
   /** The owner document, or just its id when the caller has not loaded it. */
@@ -53,14 +55,16 @@ export async function admitApiKeyCompletion({
   /** The standing auth already judged (cli/auth verifyApiKey); omitted means judge it here. */
   ownerUntrusted?: boolean;
   billingOwnerType?: string;
+  /** The minting OAuth client's limits for unpaid owners; replace the settings' token and concurrency values. */
+  unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
   holdSlot: boolean;
   req?: ActiveSubscriptionsRequest;
 }): Promise<CompletionQuotaGrant> {
   if (billingOwnerType === CreditHolderType.Organization || ownerUntrusted === false) return NO_COMPLETION_QUOTA;
 
   const settings = await userApiKeyService.loadApiKeyTrustSettings({ adminSettings: adminSettingsRepository });
-  const tokensPerMinute = settings.untrustedTokensPerMinute;
-  const maxConcurrent = holdSlot ? settings.untrustedMaxConcurrent : 0;
+  const tokensPerMinute = unpaidAccountLimits?.tokensPerMinute ?? settings.untrustedTokensPerMinute;
+  const maxConcurrent = holdSlot ? (unpaidAccountLimits?.maxConcurrent ?? settings.untrustedMaxConcurrent) : 0;
   if (!settings.gateEnabled || (tokensPerMinute <= 0 && maxConcurrent <= 0)) return NO_COMPLETION_QUOTA;
 
   const ownerId = typeof owner === 'string' ? owner : owner.id;
@@ -79,7 +83,7 @@ export async function admitApiKeyCompletion({
       const retryAfter = Math.max(1, Math.ceil((drainsAt - now) / 1000));
       throw new TooManyRequestsError(
         `Token rate limit exceeded: ${tokensPerMinute} tokens per minute. Try again in ${retryAfter} seconds.`,
-        { errorCode: TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE, retryAfter }
+        { errorCode: TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE, retryAfter, limit: tokensPerMinute, windowSeconds: 60 }
       );
     }
   }
@@ -91,7 +95,7 @@ export async function admitApiKeyCompletion({
   if (!(await cacheRepository.tryAcquireLease(key, holderId, maxConcurrent, COMPLETION_SLOT_LEASE_MS))) {
     throw new TooManyRequestsError(
       `Concurrency limit exceeded: ${maxConcurrent} completions in flight. Retry when one finishes.`,
-      { errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE }
+      { errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE, limit: maxConcurrent }
     );
   }
 
@@ -134,7 +138,11 @@ export async function admitApiKeyCompletion({
 /** The auth fields baseApi puts on the request (apps/client/global.d.ts). */
 export type CompletionRequestAuth = {
   user?: QuotaOwner;
-  apiKeyInfo?: { ownerUntrusted?: boolean; billingOwnerType?: string };
+  apiKeyInfo?: {
+    ownerUntrusted?: boolean;
+    billingOwnerType?: string;
+    unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
+  };
 };
 
 /**
@@ -150,6 +158,7 @@ export function admitRequestCompletion(
     owner: req.user,
     ownerUntrusted: req.apiKeyInfo.ownerUntrusted,
     billingOwnerType: req.apiKeyInfo.billingOwnerType,
+    unpaidAccountLimits: req.apiKeyInfo.unpaidAccountLimits,
     holdSlot,
     req,
   });

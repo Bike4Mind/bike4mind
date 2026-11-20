@@ -40,8 +40,21 @@ export const ACTIVATION_MIN_AGE_MS = ACTIVATION_WINDOW_DAYS * DAY_MS;
 export const FUNNEL_COHORT_MAX = 20_000;
 /** ms. Per-query time limit for every cohort read, shared by the funnel counts and the Users drill-down. */
 export const COHORT_MAX_TIME_MS = 10_000;
+
+/** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
+export async function withinBudget<T>(
+  work: Promise<T>,
+  expiresAt: number,
+  message = 'The funnel took too long.'
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new GatewayTimeoutError(message)), Math.max(0, expiresAt - Date.now()));
+  });
+  return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+}
 /** Stripe statuses under which no payment has been collected yet. */
-const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
+export const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
 
 const utcDayOf = (date: Date) => date.toISOString().slice(0, 10);
 const dayStart = (day: string) => Date.parse(`${day}T00:00:00.000Z`);
@@ -93,7 +106,11 @@ const pushTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
   else map.set(key, [value]);
 };
 
-async function loadActiveDays(batch: CohortMember[], deadlineMs: number): Promise<Map<string, string[]>> {
+/** The UTC days with AI activity per member, from each signup day through the activation window. */
+export async function loadActiveDays(
+  batch: readonly CohortMember[],
+  deadlineMs: number
+): Promise<Map<string, string[]>> {
   const signupDays = batch.map(member => utcDayOf(member.signupAt)).sort();
   const lastDay = utcDayOf(new Date(dayStart(signupDays[signupDays.length - 1]) + ACTIVATION_WINDOW_DAYS * DAY_MS));
   const rows = await AnalyticsUserDay.find(
@@ -180,11 +197,31 @@ const TOO_MANY_SIGNUPS = () =>
   );
 
 /**
- * Every active-eligible user (counted, not banned or AI-held, like the rollup) created in [start, end), old
- * enough to judge at `now`, with the furthest step they reached. `withTooNew` also returns the ids of the
- * active-eligible users in the window who are not old enough yet; they are read separately so they never count
- * toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
- * signups is refused. `needsPayments: false` skips the payment lookups, so `paid` members read as `cameBack`.
+ * Signups matching the `createdAt` range that count toward analytics (not banned or AI-held, like the rollup),
+ * with `extraFields` read alongside the flags that decide it. The read is capped, so a range holding more than
+ * FUNNEL_COHORT_MAX signups is refused with a 422 rather than truncated. Shared by the activation funnel and the
+ * acquisition cohorts.
+ */
+export async function findEligibleSignups<T extends object = object>(
+  createdAt: Record<string, Date>,
+  { ctx, maxTimeMS, extraFields }: { ctx: CountingContext; maxTimeMS: number; extraFields?: string }
+): Promise<(UserFlags & { createdAt: Date } & T)[]> {
+  const users = await User.find({ createdAt })
+    .select(extraFields ? `${USER_FLAG_FIELDS} ${extraFields}` : USER_FLAG_FIELDS)
+    .hint({ createdAt: 1 })
+    .limit(FUNNEL_COHORT_MAX + 1)
+    .maxTimeMS(maxTimeMS)
+    .lean<(UserFlags & { createdAt: Date } & T)[]>();
+  if (users.length > FUNNEL_COHORT_MAX) throw TOO_MANY_SIGNUPS();
+  return users.filter(user => isActiveEligible(user, ctx));
+}
+
+/**
+ * Every active-eligible user created in [start, end), old enough to judge at `now`, with the furthest step
+ * they reached. `withTooNew` also returns the ids of the active-eligible users in the window who are not old
+ * enough yet; they are read separately so they never count toward the FUNNEL_COHORT_MAX of the judged window.
+ * A window holding more than FUNNEL_COHORT_MAX judgeable signups is refused. `needsPayments: false` skips the
+ * payment lookups, so `paid` members read as `cameBack`.
  * Past `expiresAt` (epoch ms) it stops with a 504.
  */
 export async function classifyFunnelCohort(
@@ -201,16 +238,8 @@ export async function classifyFunnelCohort(
   // Each query's limit shrinks to what is left of `expiresAt`, so no read outlives the request's budget.
   const timeLeft = () =>
     expiresAt === undefined ? deadlineMs : Math.max(1, Math.min(deadlineMs, expiresAt - Date.now()));
-  const findEligible = async (createdAt: Record<string, Date>, ctx: CountingContext) => {
-    const users = await User.find({ createdAt })
-      .select(USER_FLAG_FIELDS)
-      .hint({ createdAt: 1 })
-      .limit(FUNNEL_COHORT_MAX + 1)
-      .maxTimeMS(timeLeft())
-      .lean<(UserFlags & { createdAt: Date })[]>();
-    if (users.length > FUNNEL_COHORT_MAX) throw TOO_MANY_SIGNUPS();
-    return users.filter(user => isActiveEligible(user, ctx));
-  };
+  const findEligible = (createdAt: Record<string, Date>, ctx: CountingContext) =>
+    findEligibleSignups(createdAt, { ctx, maxTimeMS: timeLeft() });
   const ctx = await loadCountingContext();
   const [counted, tooNew] = await Promise.all([
     findEligible({ $gte: start, $lt: end, $lte: judgeableUntil }, ctx),

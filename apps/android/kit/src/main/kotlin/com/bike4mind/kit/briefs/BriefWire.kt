@@ -2,6 +2,7 @@ package com.bike4mind.kit.briefs
 
 import com.bike4mind.client.B4MClientJson
 import com.bike4mind.kit.environment.ServerEnvironment
+import com.bike4mind.kit.links.Route
 import com.bike4mind.kit.networking.ApiException
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -61,10 +62,7 @@ class BriefWire(private val environment: ServerEnvironment, private val http: Ht
     private fun url(suffix: String = "") = environment.baseUrl + "/api/v1/briefs" + suffix
 
     companion object {
-        private val ID = Regex("[A-Za-z0-9_-]{1,64}")
-
-        /** Same rule as apps/ios DeepLinkRouter.isValidIdentifier. */
-        fun isValidId(id: String): Boolean = ID.matches(id)
+        fun isValidId(id: String): Boolean = Route.isValidId(id)
     }
 }
 

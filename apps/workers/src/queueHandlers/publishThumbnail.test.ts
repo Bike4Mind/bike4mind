@@ -354,3 +354,14 @@ describe('dispatch (end to end, renderer function mocked at the invoke)', () => 
     expect(h.findOne).not.toHaveBeenCalled();
   });
 });
+
+it('loads the current immutable index while retaining canonical asset paths', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  h.findOne.mockReturnValue(lean(bundleArtifact({ indexObjectPath })));
+  await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('rendered');
+  const input = h.buildThumbnailDocument.mock.calls[0][0];
+  await input.load('index.html');
+  await input.load('style.css');
+  expect(h.storage.download).toHaveBeenCalledWith(`user/owner1/my-slug/${indexObjectPath}`);
+  expect(h.storage.download).toHaveBeenCalledWith('user/owner1/my-slug/style.css');
+});

@@ -543,6 +543,7 @@ export async function shellApproval(
   // A part that can send data out says so on the card but does not stop auto mode.
   const parts = scan.commands.map(entry => partAsk(entry));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const signingRisk = scan.gitSigningRisk === true || scan.commands.some(entry => entry.gitSigningRisk);
   const opaque =
     gitUnlisted.length > 0 ||
     scan.unreadScript === true ||
@@ -556,6 +557,7 @@ export async function shellApproval(
   const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
   const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
+    signingRisk ||
     opaque ||
     envScript ||
     !!gitProgram ||
@@ -567,6 +569,7 @@ export async function shellApproval(
     uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
+    signingRisk ||
     opaque ||
     (writesProtected && !scan.readOnly) ||
     uncheckedSettingsWrite ||
@@ -647,7 +650,8 @@ export async function shellApproval(
     ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
     ...(scan.potentialOutbound !== false ? { outbound: true as const } : {}),
-    ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
+    // An answer given before signing came into play must not carry over to a call that signs.
+    ...(scriptCheckFailed || signingRisk ? { allowOnce: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,

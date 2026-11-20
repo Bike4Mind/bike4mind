@@ -33,11 +33,11 @@ vi.mock('@bike4mind/database', () => ({
 // connection a token came from.
 vi.mock('../security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => value ?? null,
+  decryptStoredSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
 
 vi.mock('../security/secretEncryption', () => ({
   isEncrypted: (value: string) => value.startsWith('enc:'),
-  decryptSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
 
 vi.mock('../utils/config', () => ({

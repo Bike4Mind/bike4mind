@@ -171,7 +171,9 @@ describe('orchestration contracts and role routing', () => {
   it('validates a self-contained bounded contract and explicit empty sections', () => {
     expect(taskContractSchema.parse(contract)).toEqual(contract);
     expect(renderTaskBrief(contract)).toContain('Focused behavior passes');
-    expect(renderTaskBrief(contract)).toContain('Context references:\n(none)');
+    expect(renderTaskBrief(contract)).not.toContain('Context references');
+    const short = { outcome: 'Fix it', role: 'implementation', acceptanceCriteria: ['It works'] };
+    expect(taskContractSchema.parse(short)).toMatchObject({ version: 1, paths: [], verification: [] });
     expect(taskContractSchema.safeParse({ ...contract, acceptanceCriteria: [] }).success).toBe(false);
     expect(taskContractSchema.safeParse({ ...contract, transcript: 'do not copy' }).success).toBe(false);
     expect(taskContractSchema.safeParse({ ...contract, outcome: 'x'.repeat(2001) }).success).toBe(false);

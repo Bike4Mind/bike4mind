@@ -15,7 +15,7 @@ if (duplicates.length > 0) {
 }
 if (rejected.length > 0) {
   Logger.warn(
-    'Dropped contributed admin settings that failed validation (reserved or missing key, no schema, a sensitive default, or a scope)',
+    'Dropped contributed admin settings that failed validation (reserved or missing key, no schema, a sensitive default, a scope, or unusable nestedSecrets)',
     { keys: rejected }
   );
 }

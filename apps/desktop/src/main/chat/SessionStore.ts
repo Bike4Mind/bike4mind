@@ -1022,8 +1022,13 @@ export class SessionStore implements SessionWritesStore {
    * Leaves `updatedAt` alone, as pinning does: this moves a row between sidebar sections and
    * says nothing about when the conversation was last talked to.
    */
-  async setArchived(id: string, archived: boolean): Promise<ChatSessionSummary | null> {
+  async setArchived(
+    id: string,
+    archived: boolean,
+    canChange: (session: ChatSession) => boolean = () => true
+  ): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
+      if (!canChange(session)) return null;
       if (archived) {
         session.archived = true;
         // Nobody is looking at an archived conversation to start one.

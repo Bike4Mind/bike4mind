@@ -5,6 +5,7 @@ import {
   getCompleteRequestEntitlements,
   getUserEntitlements,
   requestHasEntitlement,
+  requestHasProductAccess,
   toEntitlementUser,
   userHasEntitlement,
   type EntitlementRequest,
@@ -465,6 +466,34 @@ describe('requestHasEntitlement', () => {
   it('denies (fail-closed) when the request has no authenticated user', async () => {
     await expect(requestHasEntitlement({} as unknown as EntitlementRequest, 'anything')).resolves.toBe(false);
     expect(findActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestHasProductAccess', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('grants developer-tagged users without querying subscriptions', async () => {
+    await expect(
+      requestHasProductAccess(makeReq({ id: 'd1', tags: ['Developer'], isAdmin: false }), 'someproduct:pro')
+    ).resolves.toBe(true);
+    expect(findActive).not.toHaveBeenCalled();
+  });
+
+  it('grants admins', async () => {
+    await expect(requestHasProductAccess(makeReq({ id: 'a1', isAdmin: true }), 'someproduct:pro')).resolves.toBe(true);
+  });
+
+  it('grants holders of the entitlement and denies everyone else', async () => {
+    findActive.mockResolvedValue([{ priceId: 'price_pro' }]);
+    await expect(requestHasProductAccess(makeReq(user), 'someproduct:pro')).resolves.toBe(true);
+    findActive.mockResolvedValue([]);
+    await expect(requestHasProductAccess(makeReq({ ...user, id: 'u2' }), 'someproduct:pro')).resolves.toBe(false);
+  });
+
+  it('denies (fail-closed) when the request has no authenticated user', async () => {
+    await expect(requestHasProductAccess({} as unknown as EntitlementRequest, 'anything')).resolves.toBe(false);
   });
 });
 

@@ -12,7 +12,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 **The standard path, at a glance** (each step is a section below):
 
 1. Clone the repo and copy the env template.
-2. Generate the three security secrets and set your LLM provider key(s).
+2. Generate the six security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
 4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
@@ -44,13 +44,15 @@ Copy the template and fill it in:
 cp .env.selfhost.example .env.selfhost
 ```
 
-**Generate the three security secrets** (each a fresh 32-byte hex string):
+**Generate the six security secrets** (each a fresh 32-byte hex string). This replaces every `change-me` value in one step:
 
 ```bash
-openssl rand -hex 32   # -> JWT_SECRET
-openssl rand -hex 32   # -> SESSION_SECRET
-openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
+for key in JWT_SECRET SESSION_SECRET SECRET_ENCRYPTION_KEY CHAT_COMPLETION_INTERNAL_SECRET INTERNAL_WS_SECRET INTERNAL_S3_WEBHOOK_SECRET; do
+  sed -i.bak "s|^$key=change-me.*|$key=$(openssl rand -hex 32)|" .env.selfhost
+done && rm -f .env.selfhost.bak
 ```
+
+The app refuses to run with the template values: JWT signing and verification fail, the ChatCompletion service exits at startup, and internal service calls are rejected until each secret holds a generated value.
 
 :::warning
 **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts secrets stored in the database. If you change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext remains readable; rotation is not automated.
@@ -60,7 +62,7 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 Compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 :::
 
-**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
+**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the six secrets above.
 
 **Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin.
 
