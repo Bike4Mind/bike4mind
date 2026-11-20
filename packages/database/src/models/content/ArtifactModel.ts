@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
 export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
@@ -97,6 +98,7 @@ const ArtifactSchema = new Schema(
     },
     organizationId: {
       type: String,
+      immutable: true,
     },
     visibility: {
       type: String,
@@ -260,6 +262,8 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
+ArtifactSchema.plugin(organizationContentPolicyPlugin);
+
 export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
@@ -309,6 +313,30 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
       { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] },
       updateData as Record<string, unknown>
     );
+  }
+
+  /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */
+  async reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }> {
+    const { organizationId, userId } = scope;
+    if (!organizationId || !userId || !recipientId || userId === recipientId) {
+      throw new Error('Artifact reassignment requires an organization and two distinct users');
+    }
+    const query = this.model.updateMany(
+      { organizationId, userId, deletedAt: null },
+      {
+        $set: { userId: recipientId },
+        $pull: {
+          'permissions.canRead': userId,
+          'permissions.canWrite': userId,
+          'permissions.canDelete': userId,
+        },
+      }
+    );
+    if (this._txn) query.session(this._txn);
+    return query.exec();
   }
 
   /**

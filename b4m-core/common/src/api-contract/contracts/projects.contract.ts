@@ -97,6 +97,7 @@ export const createProjectContract = defineEndpoint({
   description:
     'Creates a project owned by the caller, optionally grouping existing sessions and files in it. ' +
     'Every listed session and file must be readable by the caller. ' +
+    'Set `organization_id` to create in an organization you belong to; this binding cannot be changed later. ' +
     `${MEMBERSHIP_NOTE} Sharing the project later shares them too. Unknown body fields are rejected.`,
   tags: ['Projects'],
   auth: 'apiKeyOrJwt',
@@ -112,7 +113,10 @@ export const createProjectContract = defineEndpoint({
         'valid JSON. Nothing is created.',
       schema: ApiErrorSchema,
     },
-    403: { description: 'The API key lacks `projects:write`.', schema: ScopeForbiddenErrorSchema },
+    403: {
+      description: 'The API key lacks `projects:write`, or the caller is not a member of the selected organization.',
+      schema: ScopeForbiddenErrorSchema,
+    },
     422: {
       description: 'Request body failed validation, or you already have a live project with this `name`.',
       schema: ApiErrorSchema,

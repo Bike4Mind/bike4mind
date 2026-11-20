@@ -5,5 +5,6 @@ export type { ArtifactReadAccess, GetArtifactResult } from './get';
 export { toArtifactViewerView, toArtifactViewerVersion } from './toArtifactViewerView';
 export type { ArtifactViewerView, ArtifactViewerVersion } from './toArtifactViewerView';
 export { list } from './list';
+export { findByIdentifier } from './findByIdentifier';
 export { update } from './update';
 export { deleteArtifact as delete } from './delete';

@@ -45,7 +45,7 @@ const {
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -64,7 +64,7 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', (
 
 // The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
 const mockBuildVideoToolConfig = vi.fn();
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getVideoJobDeps: () => ({ deps: 'availability' }),
   getCreateVideoJobDeps: () => ({ deps: 'create' }),
 }));
@@ -72,7 +72,12 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+const mockAudioToolJobs = { createSpeechJob: vi.fn() };
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  buildAudioToolJobs: () => mockAudioToolJobs,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
 }));
@@ -252,7 +257,47 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
-  it("hands the token's key to the QuestMaster completion meter", async () => {
+  it("forwards the token's key billing owner type to invoke() and the process() body", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: 'Organization',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ apiKeyBillingOwnerType: 'Organization' }));
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body).toEqual(
+      expect.objectContaining({ apiKeyBillingOwnerType: 'Organization' })
+    );
+  });
+
+  // process() checks the freeze against the org the turn reserves against, so the proxy must not send
+  // a separate freeze org: the turn's `organizationId` is the one value both read.
+  it("bills and freeze-checks the turn against the token's home org, with no separate freeze org", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: 'home-org',
+      reasoningModelId: 'test-model',
+      authOrigin: 'session',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    const processBody = (mockProcess.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+    expect(processBody.organizationId).toBe('home-org');
+    expect(processBody).not.toHaveProperty('spendFreezeOrganizationId');
+    expect((mockInvoke.mock.calls[0][0] as { body: { organizationId?: string } }).body.organizationId).toBe('home-org');
+  });
+
+  it('leaves the billing owner type unset for a token minted without it', async () => {
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',
@@ -265,16 +310,33 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
 
     await handler(makeReq() as never, makeRes() as never);
 
+    expect((mockInvoke.mock.calls[0][0] as { apiKeyBillingOwnerType?: string }).apiKeyBillingOwnerType).toBeUndefined();
+  });
+
+  it("hands the token's key to the QuestMaster completion meter", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: 'Organization',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
     const { createCompletionMeter: createMeter } = processState.options as {
       createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
     };
     createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     expect(createCompletionMeter).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       'QuestMaster planning',
-      expect.objectContaining({ apiKeyId: 'key-1' })
+      expect.objectContaining({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization' })
     );
   });
 
@@ -381,6 +443,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
       expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
     );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - audio generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // sharedToolBuilder hides audio_generation from a host that wires no job functions.
+  it('hands ChatCompletionProcess the audio job functions', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(processState.options).toMatchObject({ audioToolJobs: mockAudioToolJobs });
   });
 });
 

@@ -1,3 +1,4 @@
+import type { McpConnectionOwnerType } from '@bike4mind/common';
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -38,6 +39,7 @@ export interface CustomMcpAuditMetadata {
   connectionId: string;
   host: string;
   slug: string;
+  ownerType?: McpConnectionOwnerType;
   toolName?: string;
   argsSha256?: string;
   argsBytes?: number;

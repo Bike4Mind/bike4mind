@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload:
 vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
   recordRejectedUploadBatch: recordRejectedBatchMock,
 }));
-vi.mock('@server/s3/moderationScan', () => ({
+vi.mock('@bike4mind/server-utils/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
 }));
@@ -79,7 +79,7 @@ vi.mock('sst', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
-vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
+vi.mock('@bike4mind/server-utils/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
 vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: moderateFilesMock,
 }));
@@ -171,6 +171,14 @@ describe('POST /api/internal/s3/object-created', () => {
   it('rejects a request with a missing or wrong secret', async () => {
     const res = makeRes();
     await handler(makeReq('wrong', 'uploads/a.pdf'), res);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects every request while the webhook secret is the example placeholder', async () => {
+    process.env.INTERNAL_S3_WEBHOOK_SECRET = 'change-me-openssl-rand-hex-32';
+    const res = makeRes();
+    await handler(makeReq('change-me-openssl-rand-hex-32', 'uploads/a.pdf'), res);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });

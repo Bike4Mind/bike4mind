@@ -35,3 +35,32 @@ describe('OrganizationRepository.incrementCurrentStorage', () => {
     expect((await Organization.findById(org._id).lean<{ storageLimit?: number }>())?.storageLimit).toBe(5000);
   });
 });
+
+describe('OrganizationRepository.setCurrentStorageIfUnchanged', () => {
+  setupMongoTest();
+
+  it('writes when the counter still holds the expected value', async () => {
+    const org = await makeOrg({ currentStorageSize: 1000 });
+    expect(await organizationRepository.setCurrentStorageIfUnchanged(String(org._id), 1000, 400)).toBe(true);
+    expect(await storedSize(org._id)).toBe(400);
+  });
+
+  it('refuses when a concurrent adjustment moved the counter', async () => {
+    const org = await makeOrg({ currentStorageSize: 1000 });
+    await organizationRepository.incrementCurrentStorage(String(org._id), 50);
+    expect(await organizationRepository.setCurrentStorageIfUnchanged(String(org._id), 1000, 400)).toBe(false);
+    expect(await storedSize(org._id)).toBe(1050);
+  });
+
+  it('treats a missing counter as 0', async () => {
+    const org = await makeOrg();
+    expect(await organizationRepository.setCurrentStorageIfUnchanged(String(org._id), 0, 300)).toBe(true);
+    expect(await storedSize(org._id)).toBe(300);
+  });
+
+  it('floors a negative reconciled sum at 0', async () => {
+    const org = await makeOrg({ currentStorageSize: 1000 });
+    expect(await organizationRepository.setCurrentStorageIfUnchanged(String(org._id), 1000, -250)).toBe(true);
+    expect(await storedSize(org._id)).toBe(0);
+  });
+});

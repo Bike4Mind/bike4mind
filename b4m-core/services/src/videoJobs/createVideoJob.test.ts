@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, insufficientCreditsError, type VideoInput } from '@bike4mind/common';
-import { createVideoProviderRegistry, TestVideoProvider } from '@bike4mind/utils/videoProviders';
+import { CreditHolderType, insufficientCreditsError, usdToCredits, type VideoInput } from '@bike4mind/common';
+import { BflVideoProvider, createVideoProviderRegistry, TestVideoProvider } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
@@ -36,7 +36,9 @@ const validRequest = {
 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const makeDeps = (overrides: Partial<VideoJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
@@ -84,7 +86,7 @@ describe('createVideoJob', () => {
     await expect(
       createVideoJob({ user: { ...user, adminRoleWithheld: true }, request: validRequest, source: 'api' }, deps)
     ).rejects.toBe(refusal);
-    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-video', true);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-video', true, null);
     expect(holdCredits).not.toHaveBeenCalled();
     expect(deps.enqueue).not.toHaveBeenCalled();
   });
@@ -98,6 +100,73 @@ describe('createVideoJob', () => {
       job: { state: 'pending', creditHold: { reservedCredits: expect.any(Number) } },
     });
     expect(deps.enqueue).toHaveBeenCalledWith(expect.any(String), 0);
+  });
+
+  it.each([
+    { extra: { draft: true }, code: 'unsupported_draft', field: 'draft' },
+    { extra: { keyframes: [{ fileId: 'f1', timeSeconds: 0 }] }, code: 'unsupported_keyframes', field: 'keyframes' },
+  ])('returns a field-specific 422 for $field before holding credits', async ({ extra, code, field }) => {
+    const { deps } = makeDeps();
+    expect(await createVideoJob({ user, request: { ...validRequest, ...extra }, source: 'api' }, deps)).toMatchObject({
+      ok: false,
+      status: 422,
+      code,
+      message: expect.stringContaining(field),
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
+  });
+
+  it('checks every keyframe owner and holds the draft rate on the persisted request', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async () => ({
+      bytes: Buffer.from('img'),
+      mimeType: 'image/png',
+    }));
+    const provider = new BflVideoProvider();
+    const submit = vi
+      .spyOn(provider, 'submit')
+      .mockResolvedValue({ provider: 'bfl', data: { requestId: 'synthetic' } });
+    const { deps } = makeDeps({ providers: createVideoProviderRegistry([provider]), loadInputImage });
+    const request = {
+      ...validRequest,
+      model: 'flux-3-video',
+      mode: 'image_to_video',
+      durationSeconds: 5,
+      draft: true,
+      keyframes: [
+        { fileId: 'f1', timeSeconds: 0 },
+        { fileId: 'f2', timeSeconds: 5 },
+      ],
+    };
+    const created = await createVideoJob({ user, request, source: 'api' }, deps);
+    expect(created).toMatchObject({ ok: true, job: { payload: { request } } });
+    expect(loadInputImage).toHaveBeenNthCalledWith(1, user.id, { kind: 'file', id: 'f1' });
+    expect(loadInputImage).toHaveBeenNthCalledWith(2, user.id, { kind: 'file', id: 'f2' });
+    expect(holdCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: usdToCredits(0.3) }),
+      expect.anything()
+    );
+    if (!created.ok) throw new Error('Expected a created job');
+    expect(
+      await createVideoJobHandler(deps).submit(created.job, { signal: new AbortController().signal })
+    ).toMatchObject({ next: 'running' });
+    expect(submit).toHaveBeenCalledWith(
+      request,
+      {
+        images: [
+          { role: 'reference', bytes: Buffer.from('img'), mimeType: 'image/png' },
+          { role: 'reference', bytes: Buffer.from('img'), mimeType: 'image/png' },
+        ],
+      },
+      expect.anything()
+    );
+    loadInputImage.mockResolvedValue(null);
+    vi.mocked(holdCredits).mockClear();
+    expect(await createVideoJob({ user, request, source: 'api' }, deps)).toMatchObject({
+      ok: false,
+      status: 404,
+      code: 'input_image_not_found',
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
   });
 
   it('persists the delivery target on the job', async () => {
@@ -332,6 +401,7 @@ describe('createVideoJob', () => {
       { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
       deps
     );
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', expect.any(String), undefined, 'org1');
     expect(result).toMatchObject({ ok: true, job: { ownerType: CreditHolderType.Organization, ownerId: 'org1' } });
     expect(holdCredits).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', organizationId: 'org1', featureLabel: 'video generation' }),

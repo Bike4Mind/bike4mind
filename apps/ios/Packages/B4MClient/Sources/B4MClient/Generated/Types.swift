@@ -52,6 +52,13 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/sessions`.
     /// - Remark: Generated from `#/paths//api/v1/sessions/get(listSessions)`.
     func listSessions(_ input: Operations.ListSessions.Input) async throws -> Operations.ListSessions.Output
+    /// Get a session
+    ///
+    /// Reads a session you own or that was shared with you, including its name, attached knowledge files, tags, and retrieval settings. A missing, deleted, malformed, or inaccessible session is 404. An API key needs notebooks:read or notebooks:write.
+    ///
+    /// - Remark: HTTP `GET /api/v1/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)`.
+    func getSessionById(_ input: Operations.GetSessionById.Input) async throws -> Operations.GetSessionById.Output
     /// List a session's quests
     ///
     /// Lists the turns (quests) of a session's conversation, oldest first: what was sent, the visible reply, its status and the credits it cost. Works for a session you own or one shared with you. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Re-read a non-terminal turn with `GET /api/v1/quests/{id}`. While a tool awaits approval the turn carries `pendingAction` (owner only). Deleted turns are not listed. A session that does not exist, was deleted, or is not visible to you is `404`. An API key needs `notebooks:read` or `notebooks:write`.
@@ -130,6 +137,21 @@ extension APIProtocol {
     ) async throws -> Operations.ListSessions.Output {
         try await listSessions(Operations.ListSessions.Input(
             query: query,
+            headers: headers
+        ))
+    }
+    /// Get a session
+    ///
+    /// Reads a session you own or that was shared with you, including its name, attached knowledge files, tags, and retrieval settings. A missing, deleted, malformed, or inaccessible session is 404. An API key needs notebooks:read or notebooks:write.
+    ///
+    /// - Remark: HTTP `GET /api/v1/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)`.
+    public func getSessionById(
+        path: Operations.GetSessionById.Input.Path,
+        headers: Operations.GetSessionById.Input.Headers = .init()
+    ) async throws -> Operations.GetSessionById.Output {
+        try await getSessionById(Operations.GetSessionById.Input(
+            path: path,
             headers: headers
         ))
     }

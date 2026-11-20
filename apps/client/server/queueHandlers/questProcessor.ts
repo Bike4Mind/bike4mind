@@ -1,4 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import {
   connectDB,
   questRepository,
@@ -15,6 +16,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   organizationRepository,
+  spendFreezeRepository,
   mcpServerRepository,
   creditTransactionRepository,
   agentRepository,
@@ -34,6 +36,7 @@ import {
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
@@ -46,25 +49,38 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { coreTutorialTurns } from '@server/tutorials/chatTurns';
+import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
-import { publishLiveActivityUpdate } from '@server/utils/liveActivityPush';
+import { publishLiveActivityUpdate } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import {
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+  getQuestErrorCode,
+  IUserDocument,
+  Permission,
+  SPEND_FROZEN_ERROR_CODE,
+  isSpendFrozenError,
+} from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import {
+  getSharedTokenizer,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
@@ -72,19 +88,25 @@ import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/sl
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import {
+  getCreateImageJobsDeps,
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
   getMusicJobDeps,
   getVideoJobDeps,
-} from '@server/generationJobs/wiring';
+} from '@bike4mind/server-utils/generationJobs/wiring';
+import { createImageJobs } from '@bike4mind/services/imageJobs';
+import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import {
   checkFreeTierDailySpendCap,
   isFreeTierDailyCapError,
 } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -122,6 +144,8 @@ export const getStaticOptions = () => {
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -186,6 +210,8 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
+    admitQuestStart,
+    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
@@ -219,7 +245,8 @@ export const getStaticOptions = () => {
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
 
   return cachedStaticOptions;
@@ -262,6 +289,15 @@ export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId:
     : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
 
 /**
+ * Session turns start image jobs (one card per image). An API-key turn keeps the in-process render: a job it
+ * started would bypass the image-generations contract's scope check and rate limit, as for video.
+ */
+export const getImageJobsResolver = (apiKeyId: string | undefined) =>
+  apiKeyId
+    ? undefined
+    : async () => (input: Parameters<typeof createImageJobs>[0]) => createImageJobs(input, getCreateImageJobsDeps());
+
+/**
  * Quest Processor - shared processing core.
  *
  * Runs a single chat-completion quest end-to-end (load user/session, assemble
@@ -296,6 +332,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
   if (!storedUser) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(storedUser);
 
   logger.updateMetadata({
     userId: params.userId,
@@ -330,6 +367,17 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
     // quest with the reason instead of throwing into the route's generic-failure reply and metric.
     try {
+      // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          {
+            user: { id: params.userId },
+            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
+          },
+          params.organizationId ?? null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
       await checkFreeTierDailySpendCap({
         user: storedUser,
         billingOrganizationId: params.organizationId,
@@ -337,13 +385,17 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
         logger,
       });
     } catch (error) {
-      if (!isFreeTierDailyCapError(error)) throw error;
-      logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });
+      const frozen = isSpendFrozenError(error);
+      if (!frozen && !isFreeTierDailyCapError(error)) throw error;
+      logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
+        questId: params.questId,
+      });
       await questRepository.settleIfUnfinished(params.questId, {
         status: 'stopped',
         type: 'error',
         reply: error.message,
         replies: [error.message],
+        ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
       });
       await liveActivity.end('failed');
       return;
@@ -384,12 +436,14 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       tokenizer: getSharedTokenizer(logger),
       sessionId: params.sessionId,
       user,
+      audioToolJobs: buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
       createCompletionMeter: ({ organizationId, featureLabel }) =>
         createCompletionMeter(user, logger, featureLabel, {
           sessionId: params.sessionId,
           organizationId,
           apiKeyId: params.apiKeyId,
+          apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
         }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
@@ -436,9 +490,22 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       externalTools,
       videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      imageJobFilesResolver: resolveImageJobFiles,
     });
   } catch (error) {
     await liveActivity.end('failed');
+    if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+      const message = (error as Error).message;
+      await questRepository.settleIfUnfinished(params.questId, {
+        status: 'done',
+        type: 'error',
+        errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+        reply: message,
+        replies: [message],
+      });
+      return;
+    }
     throw error;
   }
   await liveActivity.end();

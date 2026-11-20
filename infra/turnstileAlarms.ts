@@ -4,6 +4,8 @@
  * 5 minutes per container), so a stage that should be challenging sign-ins and is not gets noticed.
  * Also alarms on `turnstile-misconfigured` (apps/client/server/middlewares/requireTurnstile.ts), where
  * the challenge is on but rejects every request because the secret or hostname allowlist is wrong.
+ * Also counts `turnstile-client-failure` (apps/client/pages/api/turnstile/client-failure.ts), the
+ * browser-reported challenge failures that block sign-in before any gated request, with no alarm.
  */
 
 import { web } from './web';
@@ -36,7 +38,7 @@ if (isMonitoredStage) {
   // breach is a fresh ALARM transition and notifies again.
   const actions = [dlqAlarmTopic.arn];
 
-  const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
+  const countEvent = (event: string, resourceName: string, metricName: string) => {
     new aws.cloudwatch.LogMetricFilter(`${resourceName}Filter`, {
       name: `${$app.name}-${$app.stage}-${event}`,
       logGroupName: serverLogGroupName,
@@ -48,6 +50,10 @@ if (isMonitoredStage) {
         unit: 'Count',
       },
     });
+  };
+
+  const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
+    countEvent(event, resourceName, metricName);
 
     new aws.cloudwatch.MetricAlarm(resourceName, {
       name: `${$app.name}-${$app.stage}-${event}`,
@@ -81,4 +87,6 @@ if (isMonitoredStage) {
     'TurnstileMisconfigured',
     'Turnstile rejected the server configuration in the last hour, so challenged sign-ins are failing'
   );
+
+  countEvent('turnstile-client-failure', 'turnstileClientFailure', 'TurnstileClientFailures');
 }

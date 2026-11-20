@@ -2,6 +2,14 @@ import type { DataHolderRegistry } from '../types';
 import { ADMIN_NOTE, FINANCIAL_RECORD, expiresAfterTtl } from './retention';
 
 export const authHolders = {
+  AccountDeletionNotice: {
+    kind: 'holder',
+    // Transient outbox for the post-deletion confirmation email; removed on send, after the bounded
+    // retries, or by its TTL. Keyed by the erasure hash, not the person's id.
+    references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
+    secretPaths: ['leaseToken'],
+    unrelatedPaths: ['idHash'],
+  },
   // Notes about the person go with them: the account purge removes them through the raw collection,
   // past the model's immutability hooks. A note this person wrote or edited as an admin about someone
   // else is that other account's record, and its identity fields are required and immutable, so it stays.
@@ -9,16 +17,44 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   ApiKey: {
@@ -56,8 +92,9 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      // The admin who impersonated is recorded on the impersonated person's session.
-      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize' },
+      // The admin who impersonated is recorded on the impersonated person's session, and `device` is
+      // their request's, not the person's.
+      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['device'] },
     ],
     secretPaths: [
       'sid',
@@ -118,6 +155,11 @@ export const authHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['tokenHash'],
   },
+  OrgDomainClaim: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+    secretPaths: ['verificationToken'],
+  },
   PartnerSignupRule: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
@@ -154,7 +196,8 @@ export const authHolders = {
       { path: 'promptMeta.humanReview.reviewedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Authors of cited works and attachments, not platform users.
-    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
+    // The exchange key and connected app behind the quest: ids only, not credentials.
+    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author', 'apiKeyId', 'oauthClientId'],
     // `signupActivity` is a retired field: never exported, though its `userId` is still anonymized.
     secretPaths: ['callback.url', 'signupActivity'],
   },
@@ -174,7 +217,9 @@ export const authHolders = {
   SessionModel: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // A personal notebook goes; an organization's stays with the organization, its owner cleared.
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       // The payer of a live voice hold; only ever set while a voice session is running.
       { path: 'voiceHoldUserId', matchBy: 'userId', action: 'anonymize' },
@@ -187,6 +232,14 @@ export const authHolders = {
       'tutorial.owner',
     ],
   },
+  SideAppRefusal: {
+    kind: 'holder',
+    // The 90-day expiry still applies; erasure only detaches the person from the refusal trail.
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['keyId'],
+  },
+  SideAppAlertState: { kind: 'noUserData', note: 'Alert state per connected app or platform; no user fields.' },
+  SideAppRefusalCounter: { kind: 'noUserData', note: 'Hourly refusal counts per reason; aggregate only.' },
   SignupDomainReview: {
     kind: 'holder',
     references: [
@@ -271,6 +324,7 @@ export const authHolders = {
     unrelatedPaths: ['regInvites'],
     secretPaths: [
       'password',
+      'personaLoginCodeHash',
       'mfa.totpSecret',
       'mfa.backupCodes',
       'mfa.pendingBackupCodes',
@@ -293,6 +347,15 @@ export const authHolders = {
       'pendingEmailToken',
       // A hash of the user id that only resolves provider safety notices; the export already has the id.
       'providerEndUserId',
+      // The stored abuse-scoring results and evidence, withheld for the same reason as
+      // `PendingOtcToken.codes.riskSignals`: exporting them would teach an abuser what the scoring sees.
+      'signupGrantAssessment',
+      'riskScore',
+      'riskSignals',
+      'riskEvidence',
+      'signupMeta',
+      // The admin who wrote a note about this person; `AdminUserNote` withholds `author.name` the same way.
+      'userNotes.userName',
     ],
   },
   UserActivityCounter: {
@@ -305,8 +368,13 @@ export const authHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'revokedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      // An org-owned key outlives its creator, so only the creator link goes.
+      { path: 'orgOwned.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      // The admin who set the exception; the key and the exception stay with the key's owner.
+      { path: 'moderationException.setBy', matchBy: 'userId', action: 'anonymize' },
     ],
-    secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret'],
+    // `moderationException` is admin-only, as on every key response (USER_API_KEY_WITHHELD_FIELDS).
+    secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret', 'moderationException'],
   },
   UserApiKeyAuditLog: {
     kind: 'holder',
@@ -324,6 +392,8 @@ export const authHolders = {
   UserUsagePatternSignals: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The score itself is withheld from the export, as `User.riskScore` is.
+    secretPaths: ['signals', 'score', 'needsReview', 'skipped'],
   },
   Voice: {
     kind: 'holder',

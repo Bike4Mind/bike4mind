@@ -53,6 +53,15 @@ const reserve = (maxCostUsd: number, limits: Partial<AdminAiSpendLimits> = {}, f
   reserveAdminAiSpend({ feature, maxCostUsd, limits: { ...LIMITS, ...limits } });
 
 describe('reserveAdminAiSpend', () => {
+  it('refuses even zero-cost calls for every feature after the monthly cap is reached', async () => {
+    const held = await reserveAdminAiSpend({
+      feature: 'dlqTriage',
+      maxCostUsd: 1,
+      limits: { monthlyCapUsd: 1, dailyBudgetUsd: 2, maxCallsPerDay: 10 },
+    });
+    await held.settle(1);
+    expect(await skipReason(reserve(0, { monthlyCapUsd: 1 }))).toBe('budget');
+  });
   it.each([
     ['zero monthly cap', { monthlyCapUsd: 0 }, 'budget'],
     ['zero daily budget', { dailyBudgetUsd: 0 }, 'budget'],

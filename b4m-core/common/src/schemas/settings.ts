@@ -61,9 +61,20 @@ import {
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
 } from './embedding';
-import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
+import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import {
+  hasNestedSecretValue,
+  isValidNestedSecretGroups,
+  redactNestedSecrets,
+  type NestedSecretGroup,
+} from './nestedSettingSecrets';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
+import {
+  DEFAULT_STUDIO_RENDER_PRICING,
+  StudioRenderPricingSchema,
+  type StudioRenderPricing,
+} from '../studioComposition/render';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 import {
   DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
@@ -326,6 +337,7 @@ export const SettingKeySchema = z.enum([
   'EnableMementosDefault',
   'EnableArtifacts',
   'EnableArtifactsDefault',
+  'pythonArtifactDataOrigins',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -335,6 +347,9 @@ export const SettingKeySchema = z.enum([
   'EnableLattice',
   'EnableLatticeDefault',
   'EnableDataLakes',
+  'EnableSpaces',
+  'SpaceCreationRequiresPaidStanding',
+  'SpaceMaxMembers',
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
@@ -369,6 +384,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -431,6 +447,8 @@ export const SettingKeySchema = z.enum([
   'EnableStudioCreateV2',
   'EnableStudioImage',
   'EnableStudioProductions',
+  'StudioProductionsAudience',
+  'StudioRenderPricing',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -554,6 +572,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorTrustedAccountIds',
   'spendMonitorTrustedAccountSpikeFloorCredits',
   'spendMonitorTrustedAccountCeilingCredits',
+  'spendMonitorMarginEnabled',
+  'spendMonitorMarginMinRatio',
+  'spendMonitorMarginWindowHours',
+  'spendMonitorMarginCostFloorUsd',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
@@ -666,6 +688,14 @@ export const SettingKeySchema = z.enum([
   'AdminAuditCriticalGrantCredits',
   'AdminAuditDailyGrantCredits',
 
+  // Test personas minted with the persona key
+  'PersonaMintEnabled',
+  'PersonaMintDailyLimit',
+  'PersonaMaxLive',
+  'PersonaTtlDays',
+  'PersonaStartingCredits',
+  'PersonaEmailDomain',
+
   // Two-person approval for high-risk admin actions
   'AdminApprovalsEnabled',
   'AdminApprovalBulkUserThreshold',
@@ -695,6 +725,7 @@ export const SettingKeySchema = z.enum([
 
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
+  'EnableEmailTriage',
   'EmailAnalysisModel',
   'EmailAnalysisTemperature',
   'EmailAnalysisPrompt',
@@ -726,7 +757,6 @@ export const SettingKeySchema = z.enum([
 
   // B4M PI SETTINGS
   'EnableBmPi',
-  'EnableBmPiDefault',
   'EnableBmPiJira',
 
   // OPTIHASHI SETTINGS
@@ -766,6 +796,10 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   // OLDEST CLIENT BUILD SERVED PER X-Client-Name (api-contract/clientVersion.ts)
   'minimumClientVersions',
+  // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
+  'androidAppCertFingerprints',
+  // SERVED AT /.well-known/apple-app-site-association (apps/client/pages/api/well-known/apple-app-site-association.ts)
+  'iosAppTeamId',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -810,6 +844,12 @@ export const SettingKeySchema = z.enum([
   'musicGeneration',
   'agentMusicTracksPerRun',
 
+  // IMAGE GENERATION
+  'agentImagesPerRun',
+  // AUDIO GENERATION (agent-mode caps)
+  'agentSpeechClipsPerRun',
+  'agentSoundEffectsPerRun',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -819,6 +859,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
   'modelListRevision',
+  'modelAccessRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -878,13 +919,15 @@ export const OrchestrationDefaultsSchema = z.object({
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block.
     'current_datetime',
-    // Storage-backed artifact generation, opted into for agent mode: the agent
-    // writes these to generated-content storage, not user data, so they are safe
-    // to expose.
+    // Storage-backed artifact generation, opted into for agent mode. These only add
+    // new output (generated-content storage, or the user's Files for image jobs) and
+    // never modify existing user data, so they are safe to expose.
+    // Start capped image jobs when the run gets an image job config (agentImagesPerRun).
     'image_generation',
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
+    // Speech and sound effects are capped per run by agentSpeechClipsPerRun / agentSoundEffectsPerRun.
     'audio_generation',
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
@@ -1121,10 +1164,20 @@ export interface BaseSetting {
   /** Whether the setting is sensitive and should be hidden from users. */
   isSensitive?: boolean;
   /**
+   * Object settings only: secret fields inside the value. They are masked on every read, kept out
+   * of live broadcasts, and encrypted (or kept, when the mask comes back) by the update route.
+   */
+  nestedSecrets?: readonly NestedSecretGroup[];
+  /**
    * Hide from the admin settings list on production stages (PRODUCTION_STAGES in
    * @bike4mind/infra). Display only: the stored value and the update route are unchanged.
    */
   hideOnProductionStages?: boolean;
+  /**
+   * Leave the setting out of the Admin Settings list on every stage: it is edited on its own admin
+   * surface, or is internal state no admin edits. Display only, like hideOnProductionStages.
+   */
+  hideFromSettingsList?: boolean;
   /**
    * Opt-in: include this setting in the PUBLIC, unauthenticated CDN config artifact
    * (see docs/perf/mobile-startup-latency.md, M2.5). Fail-closed - a setting is NEVER
@@ -1170,6 +1223,12 @@ export interface BaseSetting {
   changesCustomerPrice?: boolean;
 }
 
+/** Defaults for the persona-key caps (PersonaMintDailyLimit, PersonaMaxLive, PersonaTtlDays). */
+export const PERSONA_MINT_DAILY_LIMIT_DEFAULT = 20;
+export const PERSONA_MAX_LIVE_DEFAULT = 40;
+export const PERSONA_TTL_DAYS_DEFAULT = 14;
+export const PERSONA_STARTING_CREDITS_DEFAULT = 0;
+
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
 
@@ -1184,6 +1243,11 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
+  /**
+   * Model ids the value pins, keyed by their path under the setting, for the stale model reference
+   * audit (server-utils modelDiscovery/modelReferenceReport.ts). Called with a value the schema accepted.
+   */
+  modelReferences?: (value: unknown) => Record<string, string>;
 };
 
 /**
@@ -1223,6 +1287,10 @@ export function isCalendarDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+
+/** Who Studio Productions opens to once enabled: admins only (the preview), or admins, developers and paid plans. */
+export const STUDIO_PRODUCTIONS_AUDIENCES = ['admins', 'paid'] as const;
+export type StudioProductionsAudience = (typeof STUDIO_PRODUCTIONS_AUDIENCES)[number];
 
 function makeStringSetting(
   config: {
@@ -1431,14 +1499,24 @@ function makeBooleanSetting({
   };
 }
 
+// A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
+const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
+const AndroidCertFingerprintsSchema = z
+  .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
+  .max(10);
+
 function makeObjectSetting<T>(
   config: {
     defaultValue?: T;
     schema: z.ZodType<T>;
+    modelReferences?: (value: T) => Record<string, string>;
   } & BaseSetting
 ) {
+  const { modelReferences, ...rest } = config;
   return {
-    ...config,
+    ...rest,
+    ...(modelReferences && { modelReferences: (value: unknown) => modelReferences(value as T) }),
     type: 'object' as const,
     // Admin settings are stored as JSON strings in the database.
     // This preprocess step parses the JSON string before schema validation.
@@ -1479,6 +1557,12 @@ export function makeContributedBooleanSetting(
   config: { defaultValue?: boolean; acceptNumeric?: boolean } & ContributedSettingFields
 ): SettingDefinition<string> {
   return makeBooleanSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedObjectSetting<T extends object>(
+  config: { defaultValue?: T; schema: z.ZodType<T> } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeObjectSetting(config as AsCoreConfig<typeof config>);
 }
 
 // function makeArraySetting(config: { defaultValue?: string[] } & BaseSetting) {
@@ -1601,7 +1685,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 /**
- * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Operator limits for advisory abuse assessments (packages/server-utils/src/security/abuseAssessment/abuseAssessment.ts).
  * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
  * gates all provider egress on top of this.
  */
@@ -1769,14 +1853,48 @@ export const AdminAiConfigSchema = z.object({
       abuseAssessment: decisionFeatureConfig('Abuse assessment'),
       domainHold: decisionFeatureConfig('Domain hold'),
       detectionTriage: decisionFeatureConfig('Detection triage'),
-      feedbackTriage: textFeatureConfig('Feedback triage'),
+      feedbackTriage: decisionFeatureConfig('Feedback triage'),
       dlqTriage: textFeatureConfig('DLQ triage'),
       morningBrief: textFeatureConfig('Morning brief'),
     })
     .prefault({})
     .meta({ title: 'Features' }),
+  dlqQueueModes: z
+    .record(z.string(), z.enum(['off', 'recommend', 'act']))
+    .prefault({})
+    .meta({
+      title: 'DLQ queue modes',
+      description:
+        'Queue label to autoTriage mode. Unlisted queues default to recommend. DLQ triage is recommend-only even when act is selected; replay has no real Undo. The master Enabled switch stops triage.',
+    }),
 });
 export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
+
+// Stored feedback configs predate the decision engine. Obsolete chat models disable that model
+// choice on read; the strict write schema still requires a supported decision model or null.
+const storedFeedbackDecisionModel = z
+  .union([z.enum(DECISION_MODEL_IDS), supportedChatModels.transform(() => null)])
+  .nullable()
+  .prefault(null);
+const storedAdminAiConfig = AdminAiConfigSchema.extend({
+  features: AdminAiConfigSchema.shape.features
+    .unwrap()
+    .extend({
+      feedbackTriage: decisionFeatureConfig('Feedback triage')
+        .unwrap()
+        .extend({ model: storedFeedbackDecisionModel, escalationModel: storedFeedbackDecisionModel })
+        .prefault({}),
+    })
+    .prefault({}),
+});
+export const AdminAiStoredConfigSchema = z.preprocess(value => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}, storedAdminAiConfig);
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
@@ -1847,6 +1965,8 @@ export const SIGNUP_RISK_SIGNALS = [
   'quickApiKey',
   'fastSpend',
   'generatedLocalPart',
+  'wafAnonIp',
+  'wafBotSignal',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -1867,6 +1987,9 @@ export const SignupRiskScoringSchema = z
         quickApiKey: signupRiskWeight(15),
         fastSpend: signupRiskWeight(20),
         generatedLocalPart: signupRiskWeight(10),
+        // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
+        wafAnonIp: signupRiskWeight(0),
+        wafBotSignal: signupRiskWeight(0),
       })
       .strict()
       .prefault({}),
@@ -2310,6 +2433,7 @@ export const LiveopsTriageConfigSchema = z.object({
     .max(LT.regressionGracePeriodHours.max)
     .default(LT.regressionGracePeriodHours.default),
   autoCreateIssues: z.boolean().default(false),
+  approverIds: z.string().default(''),
 
   // Custom prompt template (optional)
   promptTemplate: z
@@ -2662,12 +2786,12 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
+      { key: 'pythonArtifactDataOrigins', order: 22 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnablePromptBuilder', order: 28 },
       { key: 'EnableBmPi', order: 30 },
-      { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
       { key: 'EnableDeepResearch', order: 40 },
       { key: 'EnableDeepResearchDefault', order: 41 },
@@ -2722,6 +2846,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioCreateV2', order: 300 },
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
+      { key: 'StudioProductionsAudience', order: 303 },
+      { key: 'StudioRenderPricing', order: 304 },
     ],
   },
   NOTEBOOK: {
@@ -2756,9 +2882,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
-      { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
-      { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
-      { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
@@ -2781,6 +2904,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
       { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
       { key: 'spendMonitorTrustedAccountCeilingCredits', order: 19.494 },
+      { key: 'spendMonitorMarginEnabled', order: 19.4941 },
+      { key: 'spendMonitorMarginMinRatio', order: 19.4942 },
+      { key: 'spendMonitorMarginWindowHours', order: 19.4943 },
+      { key: 'spendMonitorMarginCostFloorUsd', order: 19.4944 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
@@ -3102,9 +3229,14 @@ export const API_SERVICE_GROUPS = {
   API_CLIENTS: {
     id: 'apiClientsService',
     name: 'API Clients',
-    description: 'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served',
+    description:
+      'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served, and the native apps they trust',
     icon: 'Widgets',
-    settings: [{ key: 'minimumClientVersions', order: 1 }],
+    settings: [
+      { key: 'minimumClientVersions', order: 1 },
+      { key: 'androidAppCertFingerprints', order: 2 },
+      { key: 'iosAppTeamId', order: 3 },
+    ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
@@ -3460,6 +3592,39 @@ export const settingsMap = {
     // so Lake is the meaningful rung and the wider rungs are operator escape hatches.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
+  EnableSpaces: makeBooleanSetting({
+    key: 'EnableSpaces',
+    name: 'Enable Spaces',
+    defaultValue: false,
+    description:
+      'Server-side gate for Spaces (user-owned groups with invites and join links). Off by default; turn on to expose the Spaces APIs.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+  }),
+  SpaceCreationRequiresPaidStanding: makeBooleanSetting({
+    key: 'SpaceCreationRequiresPaidStanding',
+    name: 'Spaces: Creation requires paid standing',
+    defaultValue: true,
+    description:
+      'When on, only accounts with an active paid subscription or a credit purchase can create a Space. Admins and developer-tagged accounts are exempt. A verified email is required either way.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 304,
+    dependsOn: 'EnableSpaces',
+  }),
+  SpaceMaxMembers: makeNumberSetting({
+    key: 'SpaceMaxMembers',
+    name: 'Spaces: Max members',
+    defaultValue: 1000,
+    min: 1,
+    int: true,
+    description: 'Most members one Space may hold, not counting its owner. Lowering it never removes existing members.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 305,
+    dependsOn: 'EnableSpaces',
+  }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
     name: 'Enable Briefcase',
@@ -3604,6 +3769,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 21,
     dependsOn: 'EnableArtifacts',
+  }),
+  pythonArtifactDataOrigins: makeObjectSetting<string[]>({
+    key: 'pythonArtifactDataOrigins',
+    name: 'Python Artifact Data Origins',
+    defaultValue: [],
+    description:
+      'Public HTTPS origins that Python artifact code may fetch data from, one per line, such as https://data.example.com (at most 10). Origin only: no path, wildcard, IP address, local hostname or host on this app. Requests come from an isolated frame and carry none of the cookies or tokens of this app, but the code can send anything inside the artifact to a listed origin, so list only public data hosts you trust. The model is told the list. Empty (default): Python artifacts can reach only the Python package CDN. A change applies to pages loaded up to ten minutes after it is saved; a page that has already run Python keeps the earlier list until it is reloaded.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 22,
+    dependsOn: 'EnableArtifacts',
+    // The Python viewer shows the list to every user.
+    userReadable: true,
+    // Plain strings so the update route can name each bad entry; every reader applies
+    // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
+    schema: z.array(z.string()),
   }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',
@@ -3851,6 +4032,16 @@ export const settingsMap = {
     // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
     // silence every reviewer. The update route refuses invalid entries; readers filter with
     // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
+  ImageModerationEscalationEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationEscalationEmails',
+    name: 'Image Moderation Escalation Emails',
+    defaultValue: [],
+    description:
+      'Email addresses for the second review step, one per line: alerted when an image moderation incident is escalated, by a reviewer or automatically when it waits too long for a verdict. The email carries incident metadata and an admin link only, never the image or user content. Empty sends no escalation email.',
+    category: 'AI Moderation',
+    // Same shape and read rules as ImageModerationReviewerEmails.
     schema: z.array(z.string()),
   }),
   SkillMarketHighRiskTools: makeStringSetting({
@@ -4128,6 +4319,34 @@ export const settingsMap = {
     order: 1,
     schema: MinimumClientVersionsSchema,
   }),
+  // Read by apps/client/pages/api/well-known/assetlinks.ts.
+  androidAppCertFingerprints: makeObjectSetting<string[]>({
+    key: 'androidAppCertFingerprints',
+    name: 'Android App Signing Certificates',
+    defaultValue: [],
+    description:
+      'JSON array of SHA-256 signing-certificate fingerprints for the Android app (package com.bike4mind.app), as uppercase colon-separated hex exactly as the Play Console shows them, e.g. ["AB:CD:...:EF"]. Served in /.well-known/assetlinks.json so Android verifies the app\'s https sign-in redirect as an App Link. Empty means no app is verified and release sign-in cannot complete. Public by design, not a secret.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.API_CLIENTS.id,
+    order: 2,
+    schema: AndroidCertFingerprintsSchema,
+  }),
+  // Read by apps/client/pages/api/well-known/apple-app-site-association.ts.
+  iosAppTeamId: {
+    ...makeStringSetting({
+      key: 'iosAppTeamId',
+      name: 'iOS App Team ID',
+      defaultValue: '',
+      description:
+        'Apple Developer Team ID (10 uppercase letters or digits, e.g. "AB12CD34EF") that signs the iOS app (bundle id com.bike4mind.app). Served in /.well-known/apple-app-site-association so iOS lets the app complete its https sign-in callback and open universal links. Empty means no app is associated and signed builds cannot sign in. Public by design, not a secret.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.API_CLIENTS.id,
+      order: 3,
+    }),
+    schema: z.string().refine(value => value === '' || APPLE_TEAM_ID_RE.test(value), {
+      message: 'Use a 10-character Apple Team ID such as AB12CD34EF, or leave it empty.',
+    }),
+  },
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
@@ -4205,7 +4424,7 @@ export const settingsMap = {
     // defaults to paid-only so the gate is live without an admin write.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
     description:
-      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal), except that keys from an exchange are admitted for any usable account unless the app\'s OAuth client turns off "Starter and free accounts may use this app"; personal keys and CLI/desktop login stay paid-only, and "disabled" refuses exchange keys too. Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
@@ -4713,6 +4932,65 @@ export const settingsMap = {
       'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
     category: 'SecOps',
   }),
+  PersonaMintEnabled: makeBooleanSetting({
+    key: 'PersonaMintEnabled',
+    name: 'Test Persona Minting',
+    defaultValue: false,
+    description:
+      'Lets admins and developers create test persona accounts on this stage, with an API key holding the personas:mint scope. Off by default. Turning it off stops minting, and the hourly persona sweep then disables every live test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaMintDailyLimit: makeNumberSetting({
+    key: 'PersonaMintDailyLimit',
+    name: 'Test Persona Mints per Day',
+    defaultValue: PERSONA_MINT_DAILY_LIMIT_DEFAULT,
+    min: 0,
+    max: 1000,
+    int: true,
+    description:
+      'How many test persona accounts may be created in any 24 hours, across all minters. 0 turns minting off.',
+    category: 'SecOps',
+  }),
+  PersonaMaxLive: makeNumberSetting({
+    key: 'PersonaMaxLive',
+    name: 'Live Test Personas',
+    defaultValue: PERSONA_MAX_LIVE_DEFAULT,
+    min: 0,
+    max: 10_000,
+    int: true,
+    description:
+      'How many enabled test persona accounts may exist at once. Minting stops at this number until personas are deleted or expire.',
+    category: 'SecOps',
+  }),
+  PersonaTtlDays: makeNumberSetting({
+    key: 'PersonaTtlDays',
+    name: 'Test Persona Lifetime (days)',
+    defaultValue: PERSONA_TTL_DAYS_DEFAULT,
+    min: 1,
+    max: 90,
+    int: true,
+    description: 'Days after creation when the expiry sweep disables a test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaStartingCredits: makeNumberSetting({
+    key: 'PersonaStartingCredits',
+    name: 'Test Persona Starting Credits',
+    defaultValue: PERSONA_STARTING_CREDITS_DEFAULT,
+    min: 0,
+    max: 1_000_000,
+    int: true,
+    description:
+      'Credits each new test persona starts with. The daily and live persona caps bound the total. Re-minting an existing persona does not top it up.',
+    category: 'SecOps',
+  }),
+  PersonaEmailDomain: makeStringSetting({
+    key: 'PersonaEmailDomain',
+    name: 'Test Persona Email Domain',
+    defaultValue: '',
+    description:
+      'Mail domain for test personas minted on production, as <name>@<domain>. Use a dedicated subdomain: a public mail provider, a staff domain or any domain with entitlement or partner signup grants is refused, since every persona address is verified. Leave empty to keep minting off on production. Other stages use the -e2e@test.com addresses.',
+    category: 'SecOps',
+  }),
   AdminApprovalsEnabled: makeBooleanSetting({
     key: 'AdminApprovalsEnabled',
     name: 'Require Second-Admin Approval',
@@ -5120,7 +5398,7 @@ export const settingsMap = {
     name: 'Admin AI Suggestions: Modes and Limits',
     defaultValue: AdminAiConfigSchema.parse({}),
     description:
-      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (DLQ triage, morning brief) a model of None uses the operations model.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ADMIN_AI.id,
     order: 1,
@@ -5481,7 +5759,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantActivityPreviewTestMode: makeBooleanSetting({
@@ -5491,7 +5768,6 @@ export const settingsMap = {
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
     hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupUnlockPaymentHoldHours: makeNumberSetting({
@@ -5504,7 +5780,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInitialCredits: makeNumberSetting({
@@ -5896,6 +6171,49 @@ export const settingsMap = {
     min: 1,
     description:
       'Credits per 15-minute window. Replaces the account ceiling for trusted accounts: a trusted account spending this much in the window still raises a critical alert. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginEnabled: makeBooleanSetting({
+    key: 'spendMonitorMarginEnabled',
+    name: 'Spend Monitor: Model Margin Check',
+    defaultValue: true,
+    description:
+      'Once a day, shortly after 00:00 UTC and only while Spend Monitor is enabled, flag any model whose credits charged, converted to USD at the lowest per-credit price, fall below its provider cost over the margin window. Posts follow "Post Alerts to Slack".',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginMinRatio: makeNumberSetting({
+    key: 'spendMonitorMarginMinRatio',
+    name: 'Spend Monitor: Model Margin Min Ratio',
+    defaultValue: 1,
+    int: false,
+    min: 0.01,
+    max: 10,
+    description:
+      'Ratio of charged USD to provider cost. A model below it is flagged by the margin check. 1 (default) flags only models charged less than they cost; raise it to flag thin margins too.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginWindowHours: makeNumberSetting({
+    key: 'spendMonitorMarginWindowHours',
+    name: 'Spend Monitor: Model Margin Window',
+    defaultValue: 24,
+    int: true,
+    min: 1,
+    max: 168,
+    description: 'Hours of spend the daily margin check sums per model. 1 to 168.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginCostFloorUsd: makeNumberSetting({
+    key: 'spendMonitorMarginCostFloorUsd',
+    name: 'Spend Monitor: Model Margin Cost Floor',
+    defaultValue: 5,
+    int: true,
+    min: 1,
+    description:
+      'USD of provider cost a model needs in the margin window before the margin check can flag it, so low-volume models do not alert. Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -6514,6 +6832,7 @@ export const settingsMap = {
   logoSettings: makeObjectSetting({
     key: 'logoSettings',
     name: 'Logo Settings',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: {
       customLogoUrl: '',
       customDarkLogoUrl: '',
@@ -6549,6 +6868,7 @@ export const settingsMap = {
   SystemFiles: makeStringSetting({
     key: 'SystemFiles',
     name: 'System Prompt Files',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: undefined,
     description: 'The global system prompt files to be used for AI model configuration.',
     category: 'AI',
@@ -6659,7 +6979,7 @@ export const settingsMap = {
     name: 'Enable Studio Create v2',
     defaultValue: false,
     description:
-      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+      'The restructured Studio Create area, for every user. Off, everyone gets the legacy Studio tabs; this is the kill switch.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 300,
@@ -6668,7 +6988,8 @@ export const settingsMap = {
     key: 'EnableStudioImage',
     name: 'Enable Image in Studio',
     defaultValue: false,
-    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    description:
+      'The Image medium in Studio Create, for every user. Needs Enable Studio Create v2; off, the Image medium is hidden.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,
@@ -6679,11 +7000,38 @@ export const settingsMap = {
     name: 'Enable Studio Productions',
     defaultValue: false,
     description:
-      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+      'Studio Productions (assembling many assets into one piece). Off, nobody sees it. On, who it opens to is set by Studio Productions Audience.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 302,
     dependsOn: 'EnableStudioCreateV2',
+  }),
+  StudioProductionsAudience: makeStringSetting({
+    key: 'StudioProductionsAudience',
+    name: 'Studio Productions Audience',
+    defaultValue: 'admins',
+    description:
+      "Who Studio Productions opens to once enabled. 'admins' is the preview. 'paid' opens it to admins, developer-tagged users and users on a paid plan; free users see an upgrade prompt.",
+    options: [...STUDIO_PRODUCTIONS_AUDIENCES],
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+    dependsOn: 'EnableStudioProductions',
+  }),
+  // Read by the render job create path (b4m-core/services/src/renderJobs); snapshotted onto each job at create.
+  StudioRenderPricing: makeObjectSetting<StudioRenderPricing>({
+    key: 'StudioRenderPricing',
+    name: 'Studio Render Pricing',
+    defaultValue: DEFAULT_STUDIO_RENDER_PRICING,
+    description:
+      'JSON price of a Studio Productions export, in USD per started output second for each aspect ratio, e.g. {"usdPerOutputSecond": {"16:9": 0.01, "9:16": 0.01, "1:1": 0.01, "4:5": 0.01}}. Placeholder values until render pricing is decided. A change applies to exports started afterwards.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 304,
+    // The export panel quotes this price to every user; it is a rate card, not a secret.
+    userReadable: true,
+    dependsOn: 'EnableStudioProductions',
+    schema: StudioRenderPricingSchema,
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
@@ -7779,6 +8127,7 @@ export const settingsMap = {
   RapidReplySettings: makeObjectSetting({
     key: 'RapidReplySettings',
     name: 'Rapid Reply Settings',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: {
       enabled: false,
       allowedUserTags: [],
@@ -7823,6 +8172,16 @@ export const settingsMap = {
     // The Integrations page derives the inbound-email analysis capability's status from it.
     userReadable: true,
   }),
+  EnableEmailTriage: makeBooleanSetting({
+    key: 'EnableEmailTriage',
+    name: 'Enable Email Triage',
+    defaultValue: false,
+    description:
+      'After an ingested email is analyzed, sort it into needs-a-decision, handled or FYI and draft a reply for ' +
+      "decisions, for the owner's next assistant brief. Drafts are never sent. Runs only when analysis runs.",
+    category: 'AI',
+    order: 205,
+  }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
     name: 'Email Analysis Model',
@@ -7861,6 +8220,7 @@ export const settingsMap = {
   releaseNotesConfig: makeObjectSetting({
     key: 'releaseNotesConfig',
     name: 'Release Notes Configuration',
+    hideFromSettingsList: true, // edited in the Release notes tab
     defaultValue: ReleaseNotesConfigSchema.parse({}),
     description:
       'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
@@ -7992,16 +8352,6 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 30,
-  }),
-  EnableBmPiDefault: makeBooleanSetting({
-    key: 'EnableBmPiDefault',
-    name: 'B4M Pi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, B4M Pi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 31,
-    dependsOn: 'EnableBmPi',
   }),
   EnableBmPiJira: makeBooleanSetting({
     key: 'EnableBmPiJira',
@@ -8202,6 +8552,7 @@ export const settingsMap = {
   EnableContextTelemetry: makeBooleanSetting({
     key: 'EnableContextTelemetry',
     name: 'Enable Context Telemetry',
+    hideFromSettingsList: true, // managed in the Context Inspector tab
     defaultValue: false,
     description:
       'Enable privacy-first telemetry for LLM completions. Captures operational metadata for debugging without storing content or user identity.',
@@ -8233,16 +8584,25 @@ export const settingsMap = {
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
     name: 'SRE Agent Config',
+    hideFromSettingsList: true, // has its own admin tab
+    modelReferences: config =>
+      Object.fromEntries(
+        config.repos.flatMap((repo, index) => (repo.enabled ? [[`repos.${index}.modelId`, repo.modelId]] : []))
+      ),
     defaultValue: SreAgentConfigSchema.parse({}),
     description:
       'Configuration for the autonomous SRE Agent Trio pipeline (Sentinel → Diagnostician → Surgeon). Master kill switch defaults to disabled.',
     category: 'Admin',
     order: 130,
     schema: SreAgentConfigSchema,
+    nestedSecrets: [
+      { arrayKey: 'repos', identityFields: ['owner', 'repo'], secretFields: ['webhookSecret', 'callbackToken'] },
+    ],
   }),
   contextTelemetryAlerts: makeObjectSetting({
     key: 'contextTelemetryAlerts',
     name: 'Context Telemetry Alerts',
+    hideFromSettingsList: true, // managed in the Context Inspector tab
     defaultValue: {
       enabled: false,
       autoCreateIssues: false,
@@ -8274,9 +8634,10 @@ export const settingsMap = {
   secopsTriageConfig: makeObjectSetting({
     key: 'secopsTriageConfig',
     name: 'SecOps Triage Config',
+    hideFromSettingsList: true, // edited from the Security page's Scans view
     defaultValue: SecopsTriageConfigSchema.parse({}),
     description:
-      'Configuration for SecOps Triage — auto-creates GitHub issues for critical/high OWASP ZAP scan findings via the b4m-prod GitHub App. Disabled by default.',
+      'Configuration for SecOps triage: files a GitHub issue for each critical or high finding reported by a security scan through the system GitHub connection, and closes it when the finding is gone. Disabled by default.',
     category: 'SecOps',
     order: 131,
     schema: SecopsTriageConfigSchema,
@@ -8284,6 +8645,7 @@ export const settingsMap = {
   overwatchRollupSync: makeObjectSetting({
     key: 'overwatchRollupSync',
     name: 'Overwatch Rollup Sync Lock',
+    hideFromSettingsList: true, // internal cron-lock document
     defaultValue: {},
     description:
       'Internal lock document for the Overwatch daily rollup cron. Prevents concurrent executions. Not user-configurable.',
@@ -8352,6 +8714,45 @@ export const settingsMap = {
     category: 'AI',
     order: 148,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentImagesPerRun: makeNumberSetting({
+    key: 'agentImagesPerRun',
+    name: 'Agent Images Per Run',
+    defaultValue: 12,
+    min: 1,
+    int: true,
+    description:
+      'Most images image_generation and edit_image may start as jobs in one agent-mode run, counted across the run and all of its subagents. Each image still holds and settles its own credits.',
+    category: 'AI',
+    order: 149,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSpeechClipsPerRun: makeNumberSetting({
+    key: 'agentSpeechClipsPerRun',
+    name: 'Agent Speech Clips Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 150,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSoundEffectsPerRun: makeNumberSetting({
+    key: 'agentSoundEffectsPerRun',
+    name: 'Agent Sound Effects Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
+    category: 'AI',
+    order: 151,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
@@ -8432,14 +8833,25 @@ export const settingsMap = {
   modelListRevision: makeStringSetting({
     key: 'modelListRevision',
     name: 'Model List Revision',
+    hideFromSettingsList: true, // internal stamp rewritten by the model-list refresh
     defaultValue: '',
     description:
       'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
     category: 'AI',
   }),
+  modelAccessRevision: makeStringSetting({
+    key: 'modelAccessRevision',
+    name: 'Model Access Revision',
+    hideFromSettingsList: true, // internal stamp rewritten by model access writes
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever an admin changes model access (on / off, tags, entitlements, fallback, rank), so open pickers refetch it. Written by packages/server-utils/src/modelDiscovery/modelAccessRevision.ts; not user-configurable.',
+    category: 'AI',
+  }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',
     name: 'PR Report Repository',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     description:
       'The `owner/repo` whose open pull requests the PR status digest reports on. Validated against an anchored GitHub repo grammar before it is interpolated into any authenticated outbound URL (SSRF guard) - a value with an empty or `..` segment is rejected.',
@@ -8449,6 +8861,7 @@ export const settingsMap = {
   prReportIdentityMap: makeStringSetting({
     key: 'prReportIdentityMap',
     name: 'PR Report Identity Map',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     description:
       'Maps GitHub logins and synthetic role keys (`qa_*`, `devops_*`, `reviewer_*`) to Slack member IDs, one mapping per line. Accepts `key value`, `key=value` or `key: value`; blank and `#` comment lines are ignored. Values must be real Slack member IDs - display names do not produce notification mentions.',
@@ -8458,6 +8871,7 @@ export const settingsMap = {
   prReportWebhookUrl: makeStringSetting({
     key: 'prReportWebhookUrl',
     name: 'PR Report Slack Webhook URL',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     isSensitive: true,
     description:
@@ -8468,6 +8882,7 @@ export const settingsMap = {
   prReportEgressAllowlist: makeObjectSetting({
     key: 'prReportEgressAllowlist',
     name: 'PR Report Egress Allowlist',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: { hosts: ['hooks.slack.com'] },
     description:
       'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
@@ -8607,9 +9022,9 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  *  - a `settingName` with no entry in `settingsMap` (removed/renamed setting, orphaned row)
  *    is treated as sensitive and masked, rather than falling through unmasked,
  *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
- *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
- *    callbackToken masked; parsed through the schema first so the v1->v2 migration
- *    moves secrets into repos[] where the masking looks for them.
+ *  - a setting declaring `nestedSecrets` (which is NOT isSensitive) has those fields masked;
+ *    parsed through its schema first, so a value stored in an older shape is masked in the
+ *    shape the schema migrates it to. A value that does not parse is masked as stored.
  *
  * Shared by the authed fetch path and the public artifact (defense-in-depth -
  * publicSafe settings should never carry secrets, but redact anyway).
@@ -8620,24 +9035,15 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
 
-  if (setting.settingName !== 'sreAgentConfig' || !setting.settingValue) return setting;
-  let config: SreAgentConfig;
-  try {
-    config = SreAgentConfigSchema.parse(setting.settingValue);
-  } catch {
-    return setting;
+  const groups = definition.nestedSecrets;
+  if (!groups?.length || !setting.settingValue) return setting;
+  const parsed = definition.schema.safeParse(setting.settingValue);
+  const value: unknown = parsed.success ? parsed.data : setting.settingValue;
+  // Not an object, so there are no fields to mask one by one: withhold the whole value.
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...setting, settingValue: maskSensitiveSettingValue(value) };
   }
-  return {
-    ...setting,
-    settingValue: {
-      ...config,
-      repos: (config.repos ?? []).map(repo => ({
-        ...repo,
-        ...(repo.webhookSecret && { webhookSecret: SRE_SECRET_PLACEHOLDER }),
-        ...(repo.callbackToken && { callbackToken: SRE_SECRET_PLACEHOLDER }),
-      })),
-    },
-  };
+  return { ...setting, settingValue: redactNestedSecrets(value, groups) };
 }
 
 /**
@@ -8647,7 +9053,7 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
  * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
- * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ * /api/settings/fetch. Non-sensitive shapes (nestedSecrets) fall through to redactSettingSecrets.
  *
  * A `settingName` with no definition (core or contributed) is treated as sensitive too, matching
  * redactSettingSecrets - an orphaned row must never broadcast unmasked.
@@ -8661,19 +9067,16 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
   return redactSettingSecrets(setting);
 }
 
-/** Non-sensitive settings whose value embeds secrets that redactSettingSecrets masks field by field. */
-const SETTINGS_WITH_NESTED_SECRETS: ReadonlySet<string> = new Set(['sreAgentConfig']);
-
 /**
  * Setting keys whose raw stored document is safe to stream over a WebSocket subscription:
  * defined (core or contributed), not `isSensitive`, and not a shape that nests secrets
- * (sreAgentConfig, see redactSettingSecrets). An allowlist so an orphaned or newly added
+ * (`nestedSecrets`, see redactSettingSecrets). An allowlist so an orphaned or newly added
  * sensitive row is withheld by default. Sensitive settings reach admins only through the
  * redacting REST paths (/api/settings, /api/settings/fetch).
  */
 export function broadcastSafeSettingKeys(): string[] {
   return allSettingDefinitions()
-    .filter(definition => !definition.isSensitive && !SETTINGS_WITH_NESTED_SECRETS.has(definition.key))
+    .filter(definition => !definition.isSensitive && definition.nestedSecrets === undefined)
     .map(definition => definition.key);
 }
 
@@ -8797,8 +9200,22 @@ export interface ContributedSettingsRegistration {
   coreCollisions: string[];
   /** Keys an earlier contribution already registered; the first one is kept. */
   duplicates: string[];
-  /** Reserved object keys, definitions with no key or schema, sensitive ones with a default, and ones declaring a scope. */
+  /**
+   * Reserved object keys, definitions with no key or schema, sensitive ones with a default, ones
+   * declaring a scope, and ones whose `nestedSecrets` is malformed, sits on a non-object setting or
+   * has a default that already holds a secret.
+   */
   rejected: string[];
+}
+
+function hasUsableNestedSecrets(definition: SettingDefinition<string>): boolean {
+  if (definition.nestedSecrets === undefined) return true;
+  return (
+    definition.type === 'object' &&
+    definition.isSensitive !== true &&
+    isValidNestedSecretGroups(definition.nestedSecrets) &&
+    !hasNestedSecretValue(definition.defaultValue, definition.nestedSecrets)
+  );
 }
 
 /** Adds contributed setting definitions. Never replaces an existing definition. */
@@ -8814,7 +9231,8 @@ export function registerContributedSettings(
       RESERVED_SETTING_NAMES.has(key) ||
       typeof definition.schema?.safeParse !== 'function' ||
       (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '') ||
-      definition.scope !== undefined
+      definition.scope !== undefined ||
+      !hasUsableNestedSecrets(definition)
     ) {
       result.rejected.push(String(key));
     } else if (isCoreSettingKey(key)) {

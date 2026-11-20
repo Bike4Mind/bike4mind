@@ -21,15 +21,13 @@ import {
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
+import { storeGeneratedOutput } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import type { MusicJob, MusicJobDeps } from './types';
 
 const FEATURE_LABEL = 'music generation';
 const MP3_CONTENT_TYPE = 'audio/mpeg';
 const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
-// Fresh budget for the bucket fallback when the step signal already fired; must fit inside the engine's commit
-// margin (STEP_COMMIT_MARGIN_MS), like its FAILURE_CANCEL_BUDGET_MS.
-const FALLBACK_SAVE_BUDGET_MS = 10_000;
 
 type MusicStepResult = StepResult<'music'>;
 // The only shape the music job drives today. An async music provider would add a running state (poll + store,
@@ -107,10 +105,10 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
   ): Promise<MusicJobOutput> => {
     const { payload } = job;
     const { bytes, contentType, durationSeconds, lyrics } = params;
-    const common = { contentType, bytes: bytes.byteLength, durationSeconds, ...(lyrics !== undefined && { lyrics }) };
-    try {
-      const files = await deps.saveToFiles({
-        userId: job.requestedBy,
+    const { location } = await storeGeneratedOutput(
+      {
+        job,
+        noun: 'music',
         bytes,
         contentType,
         generation: {
@@ -123,26 +121,23 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
           durationSeconds,
           request: payload.request,
         },
-        ...(payload.sessionId !== undefined && { sessionId: payload.sessionId }),
-        ...(job.questId !== undefined && { questId: job.questId }),
+        sessionId: payload.sessionId,
+        questId: job.questId,
+        bucketFolder: 'generated-audio',
+        extension: extensionFromMimeType(contentType) ?? 'bin',
+        // A sync submit cannot retry, so a throwing Files save still keeps the song in the bucket.
+        onFilesError: 'fallback',
         signal,
-      });
-      if (files.saved) return { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
-      deps.logger.warn('music saved outside Files', { jobId: job.id, reason: files.reason });
-    } catch (error) {
-      deps.logger.warn('music save to Files threw; saving outside Files', { jobId: job.id, error });
-    }
-    // An aborted step signal rejects the fallback too, losing a song the provider already billed.
-    const fallbackSignal = signal.aborted ? AbortSignal.timeout(FALLBACK_SAVE_BUDGET_MS) : signal;
-    const key = `generated-audio/${job.ownerId}/${job.id}.${extensionFromMimeType(contentType) ?? 'bin'}`;
-    try {
-      const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
-      return { location: 'generated', s3Key, ...common };
-    } catch (error) {
-      // The song was generated and billed but cannot be kept: the throw fails the job as orphaned_submit.
-      deps.logger.error('music_job_output_unsaved', { jobId: job.id, bytes: bytes.byteLength, error });
-      throw error;
-    }
+      },
+      deps
+    );
+    return {
+      ...location,
+      contentType,
+      bytes: bytes.byteLength,
+      durationSeconds,
+      ...(lyrics !== undefined && { lyrics }),
+    };
   };
 
   const store = async (

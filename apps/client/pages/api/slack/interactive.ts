@@ -1,5 +1,5 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
 import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
-import { createSession } from '@server/managers/sessionManager';
+import { createSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -52,6 +52,7 @@ import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind
 import {
   executePendingAction,
   cancelPendingActionOnQuest,
+  claimPendingAction,
   isPendingActionRequester,
   MCP_DISABLED_MESSAGE,
 } from '@bike4mind/server-utils/utils/pendingActionExecutor';
@@ -63,6 +64,10 @@ import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { buildSlackInteractiveActionRegistry } from '@bike4mind/server-utils/integrations/slack/interactiveActionRegistry';
+import { coreSlackInteractiveActions } from '@bike4mind/server-utils/integrations/slack/coreInteractiveActions';
+import { SLACK_INTERACTIVE_RESERVED_ACTIONS } from '@bike4mind/server-utils/integrations/slack/interactiveReservedActions';
+import { premiumSlackInteractiveActions } from '@bike4mind/server-utils/premium-generated/premiumSlackInteractiveActions.generated';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -419,13 +424,31 @@ async function handleScheduleMessageSubmission(
   }
 }
 
+const interactiveActionRegistry = buildSlackInteractiveActionRegistry(
+  coreSlackInteractiveActions,
+  premiumSlackInteractiveActions,
+  SLACK_INTERACTIVE_RESERVED_ACTIONS
+);
+let registryProblemsLogged = false;
+
+function logRegistryProblemsOnce() {
+  if (registryProblemsLogged) return;
+  registryProblemsLogged = true;
+  if (interactiveActionRegistry.problems.length > 0) {
+    Logger.error('[Slack Interactive] Left out contributed action handlers', {
+      problems: interactiveActionRegistry.problems,
+    });
+  }
+}
+
 // Handler for different interactive actions
 async function handleInteractiveAction(
   payload: SlackInteractivePayload,
-  botToken?: string,
-  prefetchedUser?: SlackDbUser | null,
-  appName?: string,
-  workspaceId?: string
+  botToken: string | undefined,
+  prefetchedUser: SlackDbUser | null | undefined,
+  appName: string | undefined,
+  workspaceId: string | undefined,
+  deferredWork: Promise<void>[]
 ): Promise<object> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
 
@@ -631,21 +654,32 @@ async function handleInteractiveAction(
     }
   }
 
-  // Handle SRE approval actions (no linked account required - admin-only Slack action)
-  if (actions && actions.length > 0) {
-    const sreAction = actions[0];
-    if (sreAction.action_id === 'sre_approve_fix' || sreAction.action_id === 'sre_reject_fix') {
-      const { handleSreApprovalAction } = await import('@bike4mind/server-utils/integrations/slack/sreSlackApproval');
-      const { response, deferred } = await handleSreApprovalAction(
-        sreAction.action_id,
-        sreAction.value,
-        user,
-        response_url
+  // Registered handlers run without a linked account and authorize the Slack user themselves.
+  const firstAction = actions?.[0];
+  const registeredHandler = firstAction ? interactiveActionRegistry.find(firstAction.action_id) : undefined;
+  if (firstAction && registeredHandler) {
+    const { response, deferred } = await registeredHandler.handle({
+      actionId: firstAction.action_id,
+      value: firstAction.value,
+      user,
+      teamId: payload.team?.id,
+      channelId: payload.channel?.id,
+      messageTs: payload.message?.ts,
+      responseUrl: response_url,
+      triggerId: trigger_id,
+      workspaceId,
+      botToken,
+      appName,
+    });
+    if (deferred) {
+      // The response is already sent by the time this is awaited, so a failure can only be logged.
+      deferredWork.push(
+        deferred.catch(error => {
+          Logger.error('[Slack Interactive] Deferred work failed', { actionId: firstAction.action_id, error });
+        })
       );
-      // Stash deferred work - will be awaited after res.json()
-      (payload as Record<string, unknown>).__sreDeferred = deferred;
-      return response;
     }
+    return response;
   }
 
   // Find the user in our system (required for other actions)
@@ -828,15 +862,6 @@ async function handleInteractiveAction(
             text: '❓ Unknown attachment action',
             response_type: 'ephemeral',
           };
-        }
-
-        // URL-only buttons (sre_view_github_issue, sre_review_github_issue_fix_loop)
-        // Slack sends interaction payloads even for link buttons; just acknowledge.
-        if (
-          action.action_id.startsWith('sre_view_github_issue') ||
-          action.action_id.startsWith('sre_review_github_issue')
-        ) {
-          return {};
         }
 
         Logger.error('[Slack Interactive] Unknown action_id', { actionId: action.action_id });
@@ -1269,8 +1294,15 @@ async function handleImageModelSelection(
   const { prompt } = pendingImgParams;
   const modelDisplayName = getImageModelDisplayName(modelId);
 
-  // Clear pendingAction (image generation request consumed)
-  await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+  // A double click reads the same request; only the claim winner may queue a generation.
+  if (!pendingAction || !(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
+    logger.info('[IMAGE-GEN] Request already claimed', { questId });
+    return {
+      text: 'This image generation request was already handled.',
+      replace_original: false,
+      response_type: 'ephemeral',
+    };
+  }
 
   // Get workspace info from the quest's session to find the workspace
   const { slackDevWorkspaceRepository } = await import('@bike4mind/database');
@@ -2080,12 +2112,15 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     });
 
     try {
+      const deferredWork: Promise<void>[] = [];
+      logRegistryProblemsOnce();
       const response = await handleInteractiveAction(
         validatedPayload.data,
         botToken,
         prefetchedUser,
         appName,
-        workspace.id
+        workspace.id,
+        deferredWork
       );
 
       auditLogger.success();
@@ -2107,11 +2142,10 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
         }
       }
 
-      // Post-response: await SRE deferred work (approval processing).
+      // Post-response: await work a handler deferred until after the acknowledgement.
       // Same pattern as refreshAppHomeForAdmin - prevents Lambda freeze from killing it.
-      const sreDeferred = (validatedPayload.data as Record<string, unknown>).__sreDeferred as Promise<void> | undefined;
-      if (sreDeferred) {
-        await sreDeferred;
+      for (const work of deferredWork) {
+        await work;
       }
     } catch (handlerError) {
       auditLogger.failure(handlerError instanceof Error ? handlerError.message : 'Handler error');

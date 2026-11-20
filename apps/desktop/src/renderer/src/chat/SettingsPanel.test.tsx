@@ -2,6 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import { REPLY_STATS } from './replyStats';
 import { isSettingsSection, SETTINGS_SECTIONS, SettingsScreen, type SettingsSection } from './SettingsPanel';
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
@@ -45,6 +46,40 @@ describe('the Settings screen', () => {
       const html = page(section);
       for (const id of SETTINGS_SECTIONS) expect(html).toContain(`data-testid="settings-nav-${id}-btn"`);
     }
+  });
+
+  it('groups each General setting once under a named section', () => {
+    const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
+    expect(groups).toHaveLength(5);
+    expect(html).not.toContain('data-testid="settings-group-other"');
+    const expected = [
+      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
+      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+      ['local-context', 'reply-stats', 'curated-list'],
+      ['local-history', 'local-data-export'],
+      ['server', 'updates'],
+    ];
+    expected.forEach((entries, index) => {
+      for (const id of entries) {
+        expect(groups[index]).toContain(`data-entry="${id}"`);
+        expect(html.split(`data-entry="${id}"`)).toHaveLength(2);
+        expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
+      }
+    });
+  });
+
+  it('offers the notify scope next to the chime, agents only by default', () => {
+    expect(html).toContain('data-testid="settings-notify-scope-group"');
+    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(html).toContain('Agents only');
+    expect(html).toContain('All sessions');
+  });
+
+  it('keeps advanced worker settings behind an expandable disclosure', () => {
+    expect(html).toContain('<details');
+    expect(html).toContain('data-testid="settings-worker-models-details"');
+    expect(html).toContain('data-testid="orchestration-settings"');
   });
 
   it('gives Permissions and Import a page each', () => {
@@ -97,6 +132,11 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');
   });
 
+  it('offers the auto-fix attempts setting', () => {
+    expect(html).toContain('data-entry="autofix-attempts"');
+    expect(html).toContain('data-testid="settings-autofix-attempts-select"');
+  });
+
   it('offers the worktree-by-default preference', () => {
     expect(html).toContain('data-testid="settings-worktree-default-switch"');
   });
@@ -105,8 +145,12 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
   });
 
-  it('offers the self-hosted model speed preference', () => {
-    expect(html).toContain('data-testid="settings-token-rate-switch"');
+  it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
+    expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
+    for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(html).toContain('Share of draft tokens accepted');
+    expect(html).toContain('Draft acceptance is reported by llama-server');
+    expect(html).not.toContain('settings-token-rate-switch');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {

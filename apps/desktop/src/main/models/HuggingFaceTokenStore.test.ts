@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 
 const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
@@ -112,10 +113,58 @@ describe('HuggingFaceTokenStore', () => {
 
   it('does not activate a token when encryption fails', async () => {
     const encryption = cipher();
-    encryption.encryptString.mockImplementationOnce(() => { throw new Error('locked'); });
+    encryption.encryptString.mockImplementationOnce(() => {
+      throw new Error('locked');
+    });
     const store = new HuggingFaceTokenStore(encryption, disk(), logger());
     await expect(store.set(TOKEN)).rejects.toThrow('locked');
     expect(await store.get()).toBeNull();
   });
+});
 
+describe('HuggingFaceTokenStore.reencrypt', () => {
+  const stored = (prefix: 'old' | 'new') => disk(JSON.stringify({ version: 1, token: sealedAs(prefix, TOKEN) }));
+  const sealedToken = (file: { contents: string | null }) =>
+    openedAs((JSON.parse(file.contents ?? '{}') as { token: string }).token);
+
+  it('re-saves a legacy token once, and it still reads back', async () => {
+    const file = stored('old');
+    const store = new HuggingFaceTokenStore(versionedCipher('new'), file, logger());
+
+    await store.reencrypt();
+    await store.reencrypt();
+
+    expect(sealedToken(file)).toBe(`new:${TOKEN}`);
+    expect(file.write).toHaveBeenCalledTimes(1);
+    expect(await new HuggingFaceTokenStore(versionedCipher('new'), file, logger()).get()).toBe(TOKEN);
+  });
+
+  it('leaves a current token alone', async () => {
+    const file = stored('new');
+
+    await new HuggingFaceTokenStore(versionedCipher('new'), file, logger()).reencrypt();
+
+    expect(file.write).not.toHaveBeenCalled();
+  });
+
+  it('keeps a legacy token it cannot open, or has no keychain to re-save it to', async () => {
+    for (const current of [versionedCipher('new', { opensOld: false }), versionedCipher('new', { available: false })]) {
+      const file = stored('old');
+      const before = file.contents;
+
+      await new HuggingFaceTokenStore(current, file, logger()).reencrypt();
+
+      expect(file.write).not.toHaveBeenCalled();
+      expect(file.contents).toBe(before);
+    }
+  });
+
+  it('does not even read the file with a cipher that asks for no migration', async () => {
+    const file = stored('old');
+
+    await new HuggingFaceTokenStore(cipher(), file, logger()).reencrypt();
+
+    expect(file.read).not.toHaveBeenCalled();
+    expect(file.write).not.toHaveBeenCalled();
+  });
 });

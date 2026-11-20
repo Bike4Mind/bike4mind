@@ -1,0 +1,142 @@
+{{- if and (eq .Values.mode "renderWorkerOnly") (not .Values.renderWorker.enabled) }}
+{{- fail "mode renderWorkerOnly requires renderWorker.enabled" }}
+{{- end }}
+{{- if .Values.renderWorker.enabled }}
+{{- $rw := .Values.renderWorker }}
+{{- $podIdentity := eq $rw.aws.mode "podIdentity" }}
+{{- if eq .Values.mode "renderWorkerOnly" }}
+{{- if not $podIdentity }}{{ fail "mode renderWorkerOnly requires renderWorker.aws.mode podIdentity (there is no in-cluster SQS or object store)" }}{{ end }}
+{{- end }}
+{{- $serviceAccountName := default (printf "%s-renderworker" .Release.Name) $rw.serviceAccount.name }}
+{{- if $podIdentity }}
+{{- /* APP_STAGE and APP_NAME: a hosted MONGODB_URI contains %STAGE%, which the worker fills from Resource.App.stage (APP_STAGE, falling back to "selfhost"). */ -}}
+{{- range $key := list "RENDER_JOB_QUEUE" "GENERATION_JOB_QUEUE" "FAB_FILE_BUCKET" "GENERATED_IMAGES_BUCKET" "AWS_REGION" "APP_STAGE" "APP_NAME" }}
+{{- $_ := required (printf "renderWorker.env.%s is required when renderWorker.aws.mode is podIdentity" $key) (get $rw.env $key) }}
+{{- end }}
+{{- end }}
+{{- if and $rw.keda.enabled (not $podIdentity) }}{{ fail "renderWorker.keda.enabled requires renderWorker.aws.mode podIdentity (the aws-sqs-queue scaler cannot reach the in-cluster SQS)" }}{{ end }}
+{{- if $rw.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  {{- with $rw.serviceAccount.annotations }}
+  annotations: {{ toJson . }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-renderworker
+spec:
+  {{- if not $rw.keda.enabled }}
+  replicas: {{ $rw.replicas }}
+  {{- end }}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: renderworker}
+  template:
+    metadata:
+      annotations:
+        {{- if eq .Values.mode "full" }}
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- else }}
+        # No shared ConfigMap in worker-only mode: restart on a change to the worker's own env or Secret name.
+        checksum/config: {{ dict "env" $rw.env "existingSecret" .Values.existingSecret "initializationRevision" .Values.initializationRevision | toJson | sha256sum }}
+        {{- end }}
+        {{- range $key, $value := $rw.podAnnotations }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: renderworker}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      serviceAccountName: {{ $serviceAccountName }}
+      # The worker aborts an in-flight encode and hands its message back 90s after SIGTERM (RENDER_DRAIN_GRACE_MS);
+      # this adds upload and hand-back headroom before SIGKILL. It does not wait for the encode to finish.
+      terminationGracePeriodSeconds: {{ $rw.terminationGracePeriodSeconds }}
+      containers:
+        - name: renderworker
+          image: {{ required "renderWorker.image is required" $rw.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{- if not $podIdentity }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+          {{- end }}
+          env:
+            - {name: TMPDIR, value: /tmp}
+            {{- if $podIdentity }}
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "existingSecret must name an existing runtime Secret" .Values.existingSecret }}
+                  key: MONGODB_URI
+            {{- else }}
+            {{- range $key := list "AWS_ACCESS_KEY_ID" "AWS_SECRET_ACCESS_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "existingSecret must name an existing runtime Secret" $.Values.existingSecret }}
+                  key: {{ $key }}
+            {{- end }}
+            - name: MONGODB_URI
+              valueFrom:
+                {{- if .Values.externalMongo.enabled }}
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: MONGODB_URI
+                {{- else }}
+                configMapKeyRef:
+                  name: {{ .Release.Name }}-config
+                  key: MONGODB_URI
+                {{- end }}
+            {{- end }}
+            {{- range $key, $value := $rw.env }}
+            - name: {{ $key }}
+              value: {{ tpl ($value | toString) $ | quote }}
+            {{- end }}
+          resources: {{ $rw.resources | toJson }}
+          # No command: the image CMD starts the worker with the sst alias shim (apps/workers/Dockerfile.renderworker).
+          volumeMounts:
+            - {name: render-tmp, mountPath: /tmp}
+      volumes:
+        - name: render-tmp
+          emptyDir:
+            sizeLimit: {{ $rw.tmpSizeLimit }}
+{{- if $rw.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ .Release.Name }}-renderworker
+spec:
+  podIdentity:
+    provider: aws
+    identityOwner: {{ $rw.keda.identityOwner }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}-renderworker
+spec:
+  scaleTargetRef:
+    name: {{ .Release.Name }}-renderworker
+  minReplicaCount: {{ $rw.keda.minReplicaCount }}
+  maxReplicaCount: {{ $rw.keda.maxReplicaCount }}
+  pollingInterval: {{ $rw.keda.pollingInterval }}
+  # Idle seconds with an empty queue before scaling to minReplicaCount.
+  cooldownPeriod: {{ $rw.keda.cooldownPeriod }}
+  triggers:
+    - type: aws-sqs-queue
+      authenticationRef:
+        name: {{ .Release.Name }}-renderworker
+      metadata:
+        queueURL: {{ required "renderWorker.keda.queueURL is required when renderWorker.keda.enabled" $rw.keda.queueURL | quote }}
+        awsRegion: {{ required "renderWorker.keda.awsRegion is required when renderWorker.keda.enabled" $rw.keda.awsRegion | quote }}
+        queueLength: {{ $rw.keda.queueLength | quote }}
+        # Counts in-flight renders in the replica target. This does NOT protect a busy pod: when the target drops,
+        # the Deployment may delete any replica, including one mid-encode (it is handed back and retried).
+        scaleOnInFlight: 'true'
+{{- end }}
+{{- end }}

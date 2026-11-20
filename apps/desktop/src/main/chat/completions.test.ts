@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import axios, {
   AxiosError,
   type AxiosAdapter,
@@ -15,12 +15,15 @@ import {
   type RefreshingOAuthClient,
   type TokenStore,
 } from '@bike4mind/client-auth';
+import type { CompletionRunAttribution } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_HEADER_TIMEOUT_MS,
+  RunNotFoundError,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
+  withRunFallback,
 } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
@@ -410,13 +413,22 @@ describe('streamCompletion', () => {
     const done = streamCompletion(
       instance,
       '/c',
-      { model: 'm', messages: [{ role: 'user', content: 'Image from the call above.', continuesTurn: true }] },
+      {
+        model: 'm',
+        messages: [
+          { role: 'system', content: 'sys', cacheSplitAt: 1 },
+          { role: 'user', content: 'Image from the call above.', continuesTurn: true },
+        ],
+      },
       () => {}
     );
     stream.write(frame('[DONE]'));
     await done;
 
-    expect(post.mock.calls[0][1].messages).toEqual([{ role: 'user', content: 'Image from the call above.' }]);
+    expect(post.mock.calls[0][1].messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Image from the call above.' },
+    ]);
   });
 
   it("describes a 403 as not allowed, with the server's words, rather than as an expired session", async () => {
@@ -447,6 +459,94 @@ describe('streamCompletion', () => {
       );
     }
   );
+});
+
+describe('run attribution and request ids', () => {
+  const RUN: CompletionRunAttribution = {
+    runId: '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f',
+    role: 'root',
+    purpose: 'turn',
+  };
+
+  async function send(request: Parameters<typeof streamCompletion>[2]) {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', request, () => undefined);
+    stream.end();
+    await done;
+    return post.mock.calls[0] as [string, Record<string, unknown>, { headers?: Record<string, string> }];
+  }
+
+  it('sends a fresh X-Request-ID on every request', async () => {
+    const [, , first] = await send(REQUEST);
+    const [, , second] = await send(REQUEST);
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    expect(first.headers?.['X-Request-ID']).toMatch(uuid);
+    expect(second.headers?.['X-Request-ID']).toMatch(uuid);
+    expect(first.headers?.['X-Request-ID']).not.toBe(second.headers?.['X-Request-ID']);
+  });
+
+  it('sends run only when one is given', async () => {
+    expect((await send({ ...REQUEST, run: RUN }))[1].run).toEqual(RUN);
+    expect((await send(REQUEST))[1]).not.toHaveProperty('run');
+  });
+
+  function refused(status: number, body: unknown) {
+    return vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status, data: JSON.stringify(body) },
+      })
+    );
+  }
+
+  it('raises RunNotFoundError for a 404 that names run_not_found', async () => {
+    const post = refused(404, { error: 'Run not found', errorCode: 'run_not_found' });
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('raises RunNotFoundError when the 404 envelope arrives as a stream, as it does for a streamed request', async () => {
+    const body = JSON.stringify({ error: 'Run not found', errorCode: 'run_not_found' });
+    const post = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 404, data: Readable.from([Buffer.from(body.slice(0, 10)), Buffer.from(body.slice(10))]) },
+      })
+    );
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('keeps any other 404 an ordinary request error', async () => {
+    const post = refused(404, { error: 'Not found' });
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('resends without the run once the server refuses it', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValueOnce(new RunNotFoundError())
+      .mockResolvedValueOnce('ok');
+    const onRejected = vi.fn();
+    await expect(withRunFallback(RUN, send, onRejected)).resolves.toBe('ok');
+    expect(send.mock.calls).toEqual([[RUN], [undefined]]);
+    expect(onRejected).toHaveBeenCalledOnce();
+  });
+
+  it('passes any other failure through without resending', async () => {
+    const send = vi.fn().mockRejectedValue(new Error('boom'));
+    await expect(withRunFallback(RUN, send, vi.fn())).rejects.toThrow('boom');
+    expect(send).toHaveBeenCalledOnce();
+  });
 });
 
 describe('streamCompletion through the shared authenticated client', () => {
@@ -574,6 +674,20 @@ describe('withCacheBreakpoints', () => {
 
   it('marks the system message and the last message, and nothing between', () => {
     expect(withCacheBreakpoints(history).map(message => message.cache)).toEqual([true, undefined, undefined, true]);
+  });
+
+  it('sends a system prompt with a per-session tail as a cached shared block and the tail after it', () => {
+    const split = [{ role: 'system' as const, content: 'shared\ntail', cacheSplitAt: 7 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(split).slice(0, 3)).toEqual([
+      { role: 'system', content: 'shared\n', cache: true },
+      { role: 'system', content: 'tail' },
+      { role: 'user', content: 'one' },
+    ]);
+  });
+
+  it('keeps one block when the split leaves nothing after it', () => {
+    const whole = [{ role: 'system' as const, content: 'sys', cacheSplitAt: 3 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(whole)[0]).toEqual({ role: 'system', content: 'sys', cache: true });
   });
 
   it('never touches the messages it was given', () => {

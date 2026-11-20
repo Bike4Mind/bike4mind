@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {

@@ -13,10 +13,19 @@ import {
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, downloadImageAsBuffer, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import {
+  aiImageService,
+  downloadImageAsBuffer,
+  getSettingsMap,
+  getSettingsValue,
+  OpenaiModerationsService,
+} from '@bike4mind/utils';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { estimateImageCredits } from '../imageCost';
 import { ImageEditBodySchema, ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
+
+const notFrozen = { findActiveForSubject: async () => null };
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
@@ -176,6 +185,7 @@ describe('ImageEditService.process model dispatch', () => {
       assertModelAdmission,
       creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -286,6 +296,7 @@ describe('ImageEditService.process model dispatch', () => {
     expect(assertAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user1' }),
       ImageModels.GPT_IMAGE_1_5,
+      undefined,
       undefined
     );
     expect(creditHolds.hold).not.toHaveBeenCalled();
@@ -313,7 +324,7 @@ describe('ImageEditService.process model dispatch', () => {
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined, undefined);
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -339,12 +350,13 @@ describe('ImageEditService.process model dispatch', () => {
       seed: 12345,
     };
     await service.invoke({ body, userId: 'user1', adminRoleWithheld: true });
-    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true);
+    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true, undefined);
     expect(assertAdmission).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ id: 'user1' }),
       ImageModels.FLUX_PRO_FILL,
-      true
+      true,
+      undefined
     );
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
@@ -695,6 +707,31 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.creditHolds.release).not.toHaveBeenCalled();
     });
 
+    it('moderates the prompt with the shared admin key, not the user own OpenAI key', async () => {
+      vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ openai: 'user-key' } as never);
+      vi.mocked(getSettingsValue).mockImplementation((name => {
+        if (name === 'enforceCredits' || name === 'ModerationEnabled') return true;
+        if (name === 'openaiDemoKey') return 'shared-key';
+        return undefined;
+      }) as typeof getSettingsValue);
+      const usedKeys: string[] = [];
+      const checkPrompt = vi
+        .spyOn(OpenaiModerationsService.prototype, 'checkPrompt')
+        .mockImplementation(async function (this: { openai: { apiKey: string } }) {
+          usedKeys.push(this.openai.apiKey);
+        });
+
+      try {
+        const quest = await runCharged(vi.fn(async () => undefined));
+
+        expect(quest.status).toBe('done');
+        expect(checkPrompt).toHaveBeenCalledTimes(1);
+        expect(usedKeys).toEqual(['shared-key']);
+      } finally {
+        checkPrompt.mockRestore();
+      }
+    });
+
     describe('final debit rounding', () => {
       const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
         vi
@@ -817,6 +854,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -1081,6 +1119,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -1458,6 +1497,7 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: {
           findById: vi.fn(async () => ({
@@ -1541,6 +1581,7 @@ describe('ImageEditService quest partial writes', () => {
       assertModelAdmission: async () => {},
       creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: vi.fn(async () => richUser) },
@@ -1701,6 +1742,49 @@ describe('ImageEditService quest partial writes', () => {
       expect(creditHolds.settle).not.toHaveBeenCalled();
       expect(doneWrite(update)?.creditsUsed).toBe(7);
     });
+
+    describe('spend freeze with credit enforcement off', () => {
+      const arrangeFreeze = (freeze: { scopeType: 'User'; frozenAt: Date } | null) => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+        const findActiveForSubject = vi.fn(async () => freeze);
+        return {
+          findActiveForSubject,
+          ...makeService('session1', undefined, { spendFreezes: { findActiveForSubject } }),
+        };
+      };
+
+      it('refuses a frozen subject with spend_frozen before the provider call', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze({
+          scopeType: 'User',
+          frozenAt: new Date('2026-11-16T10:00:00.000Z'),
+        });
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: null,
+          apiKeyId: undefined,
+        });
+        expect(editSpy).not.toHaveBeenCalled();
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        const errorWrite = update.mock.calls
+          .map(c => c[0] as Record<string, unknown>)
+          .find(arg => arg.type === 'error');
+        expect(errorWrite?.errorCode).toBe('spend_frozen');
+      });
+
+      it('edits an unfrozen subject', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze(null);
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledTimes(1);
+        expect(editSpy).toHaveBeenCalledTimes(1);
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        expect(doneWrite(update)?.status).toBe('done');
+      });
+    });
   });
 
   describe('saving the edited image to the user files', () => {
@@ -1856,6 +1940,7 @@ describe('ImageEditService.process (settled quest and early failure)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: usersFindById },
         organizations: { findById: vi.fn(async () => null) },

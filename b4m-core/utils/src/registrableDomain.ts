@@ -1,4 +1,4 @@
-import { getDomain } from 'tldts';
+import { getDomain, getPublicSuffix } from 'tldts';
 
 export interface RegistrableDomainOptions {
   /**
@@ -33,4 +33,25 @@ export interface RegistrableDomainOptions {
 export function registrableDomain(input: string | null | undefined, opts?: RegistrableDomainOptions): string | null {
   if (!input) return null;
   return getDomain(input.trim().toLowerCase(), opts);
+}
+
+/**
+ * True when `entry` is itself a public suffix, ICANN or private-section (`com`, `co.uk`,
+ * `github.io`): a list entry that would cover every site anyone can create under it.
+ */
+export function isPublicSuffixEntry(entry: string): boolean {
+  const normalized = entry.trim().toLowerCase();
+  return normalized.length > 0 && getPublicSuffix(normalized, { allowPrivateDomains: true }) === normalized;
+}
+
+/**
+ * True only when `entry` equals, or sits below, the registrable domain of `host`. An entry above
+ * that (`amazonaws.com` for `x.s3.amazonaws.com`) never covers the host, even though a suffix match
+ * would, because the host belongs to whoever registered the label under the shared suffix.
+ */
+export function trustedEntryCoversHost(entry: string, host: string): boolean {
+  const domain = registrableDomain(host, { allowPrivateDomains: true });
+  const normalized = entry.trim().toLowerCase();
+  if (!domain || !normalized) return false;
+  return normalized === domain || normalized.endsWith(`.${domain}`);
 }

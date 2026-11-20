@@ -1,21 +1,58 @@
 // Tab identity and visibility rules for the organization detail route.
 
-import { isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin, type AdministrableOrg } from '@bike4mind/common';
+import {
+  canAdministerOrganization,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  type AdministrableOrg,
+} from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
+  Library = 'library',
   Members = 'members',
   Groups = 'groups',
   Usage = 'usage',
   Analysis = 'analysis',
-  Billing = 'billing',
   Integrations = 'integrations',
+  Billing = 'billing',
+  Domains = 'domains',
+  ApiKeys = 'api-keys',
+  Settings = 'settings',
+  Audit = 'audit',
+}
+
+/**
+ * The sub-sections of the Integrations tab, carried in `?section=`. Order is display order, and the
+ * first visible one is the default: Slack leads because a bare `?tab=integrations` meant the Slack
+ * panel before the merge, and the Slack OAuth callback (pages/api/slack/oauth/org-connect) still
+ * returns there.
+ */
+export enum IntegrationSections {
+  Slack = 'slack',
   GitHub = 'github',
   Webhooks = 'webhooks',
   Connectors = 'connectors',
-  Settings = 'settings',
 }
+
+/**
+ * `?tab=` values that named their own tab before GitHub API, Webhooks and Connectors moved under
+ * Integrations. The page rewrites them to `?tab=integrations&section=<section>` so old bookmarks
+ * and links keep landing on the same settings.
+ */
+export const LEGACY_INTEGRATION_TABS: Readonly<Record<string, IntegrationSections>> = {
+  github: IntegrationSections.GitHub,
+  webhooks: IntegrationSections.Webhooks,
+  connectors: IntegrationSections.Connectors,
+};
+
+/** Who may open and edit the Settings tab. Mirrors organizationService.update's team-role gate. */
+export const canManageOrgSettings = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
 
 /**
  * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
@@ -28,6 +65,19 @@ export enum OrganizationTabs {
  */
 export const canViewOrgAnalysis = hasOrgUpdateAccess;
 
+export const canViewOrgAudit = (
+  user: { id: string } | null | undefined,
+  org:
+    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
+    | null
+    | undefined
+): boolean =>
+  !!user &&
+  !!org &&
+  (org.userId === user.id ||
+    ((org.adminUserIds ?? []).includes(user.id) &&
+      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row))));
+
 /** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
 const ownerTierGate = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
@@ -35,14 +85,16 @@ const ownerTierGate = (
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
 /**
- * Who may see the Usage tab - the org's credit spend (`usage/index.ts`) and its ledger
- * (`admin/transactions.ts`, `admin/session-usage.ts`), all `verifyOrgOwner`. Owner or platform
- * admin; managers are refused.
+ * Usage and ledger reads use verifyOrgAccess: owner, current manager or platform admin.
+ * Billing actions retain their separate owner-only gate.
  */
-export const canViewOrgUsage = ownerTierGate;
+export const canViewOrgUsage = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
 /**
- * Who may see the Integrations, GitHub API and Webhooks tabs - Slack wiring
+ * Who may see the GitHub, Slack and Webhooks sections of the Integrations tab - Slack wiring
  * (`integrations/slack/*`), the org's GitHub connection, keys and PAT (`organizations/[id]/github/*`)
  * and webhook secrets (`organizations/[id]/webhooks/github*`), all `verifyOrgOwner`. Owner or
  * platform admin. Connecting a GitHub source to a data lake does not go through these routes, so a
@@ -51,21 +103,18 @@ export const canViewOrgUsage = ownerTierGate;
 export const canManageOrgIntegrations = ownerTierGate;
 
 /**
- * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied
- * by any member holding `share`/`update`. All three of the tab's actions are owner-gated, so a
+ * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which also admits
+ * managers. All three of the tab's actions are owner-gated, so a
  * member reaching it saw an enabled control for every one of them and an error back from each:
  * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts (verifyOrgOwner)
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
  * Must stay in sync with those three.
  *
- * A platform admin who is not the owner is deliberately excluded, though the first two routes would
- * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
- * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
- * is the same split the page already makes for member management.
- *
- * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
- * the Overview tab and the page header, which every member sees.
+ * This decides who gets the real tab. A platform admin who is not the owner is excluded, though the
+ * first two routes would admit them: portal.ts has no admin bypass, so they would get a Billing
+ * Portal button that rejects them. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
+ * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
  */
 export const canViewOrgBilling = (
   currentUser: { id: string } | null | undefined,
@@ -76,14 +125,24 @@ export const canViewOrgBilling = (
 };
 
 /**
- * Who may see the Connectors tab - the org's custom MCP connector policy and kill switch
- * (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or platform admin;
- * must stay in sync with that gate.
+ * Who may see the Connectors section of the Integrations tab - the org's custom MCP connector policy
+ * and kill switch (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or
+ * platform admin; must stay in sync with that gate.
  */
 export const canManageOrgConnectors = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
   organization: AdministrableOrg | null | undefined
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+
+/**
+ * Who may see the Domains tab: the same checks `loadOrgForDomainAdmin` runs for the
+ * `organizations/[id]/domains/*` routes (owner, current manager or platform admin; never a personal org).
+ */
+export const canManageOrgDomains = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: (AdministrableOrg & { personal?: boolean }) | null | undefined
+): boolean =>
+  !!currentUser && !!organization && !organization.personal && canAdministerOrganization(currentUser, organization);
 
 export interface OrgTabAccess {
   canManageOrg: boolean;
@@ -93,7 +152,43 @@ export interface OrgTabAccess {
   canManageGroups: boolean;
   canViewBilling: boolean;
   canManageConnectors: boolean;
+  canManageDomains: boolean;
+  canViewAudit?: boolean;
+  /**
+   * Owner, current manager or platform admin. Such a caller gets an owner-only tab they cannot open
+   * as a locked rail entry instead of having it vanish; a plain member is not shown admin tabs at all.
+   */
+  seesLockedTabs?: boolean;
 }
+
+/**
+ * Who may open each gated tab, for the notice a caller sees when a deep link names one they cannot.
+ * Tabs open to every member are absent. Billing is owner-only (canViewOrgBilling); every other gated
+ * tab admits the owner and current managers.
+ */
+export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers'>>> = {
+  [OrganizationTabs.Groups]: 'managers',
+  [OrganizationTabs.Usage]: 'managers',
+  [OrganizationTabs.Analysis]: 'managers',
+  [OrganizationTabs.Integrations]: 'managers',
+  [OrganizationTabs.Billing]: 'owner',
+  [OrganizationTabs.Domains]: 'managers',
+  [OrganizationTabs.ApiKeys]: 'managers',
+  [OrganizationTabs.Audit]: 'managers',
+  [OrganizationTabs.Settings]: 'managers',
+};
+
+/** Owner-only tabs shown to a manager as a locked entry with a read-only summary. */
+export const isOrgTabLocked = (tab: OrganizationTabs, access: OrgTabAccess): boolean =>
+  tab === OrganizationTabs.Billing && !!access.seesLockedTabs && !access.canViewBilling;
+
+/** The Integrations sub-sections this caller may see, in display order. */
+export const visibleIntegrationSections = (
+  access: Pick<OrgTabAccess, 'canManageIntegrations' | 'canManageConnectors'>
+): IntegrationSections[] =>
+  Object.values(IntegrationSections).filter(section =>
+    section === IntegrationSections.Connectors ? access.canManageConnectors : access.canManageIntegrations
+  );
 
 /**
  * The tab to actually show given what the caller may see - `selected` when they may see it, and
@@ -102,17 +197,46 @@ export interface OrgTabAccess {
  * is a redirect rather than only a conditional render.
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
+  if (!access.canViewAudit && selected === OrganizationTabs.Audit) return OrganizationTabs.Overview;
   if (!access.canManageOrg && selected === OrganizationTabs.Settings) return OrganizationTabs.Overview;
-  const integrationPinned =
-    selected === OrganizationTabs.Integrations ||
-    selected === OrganizationTabs.GitHub ||
-    selected === OrganizationTabs.Webhooks;
-  if (!access.canManageIntegrations && integrationPinned) return OrganizationTabs.Overview;
+  if (selected === OrganizationTabs.Integrations && visibleIntegrationSections(access).length === 0) {
+    return OrganizationTabs.Overview;
+  }
   if (!access.canViewUsage && selected === OrganizationTabs.Usage) return OrganizationTabs.Overview;
   if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
-  if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
+  if (!access.canManageDomains && selected === OrganizationTabs.Domains) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
+  // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
+  if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   return selected;
+};
+
+export interface OrgTabView {
+  /** The tab to select. */
+  tab: OrganizationTabs;
+  /** The tab is owner-only and shows its locked panel rather than its content. */
+  locked: boolean;
+  /** The requested tab, when the caller may not open it and was sent to Overview instead. */
+  denied?: OrganizationTabs;
+}
+
+/**
+ * resolveAccessibleTab, except that a locked tab stays selected (it renders its locked panel) and a
+ * refused one is reported, so the page can say why the link landed on Overview.
+ */
+export const resolveOrgTabView = (requested: OrganizationTabs, access: OrgTabAccess): OrgTabView => {
+  if (isOrgTabLocked(requested, access)) return { tab: requested, locked: true };
+  const tab = resolveAccessibleTab(requested, access);
+  return tab === requested ? { tab, locked: false } : { tab, locked: false, denied: requested };
+};
+
+/** The Integrations sub-section to show: the requested one when visible, else the first visible. */
+export const resolveIntegrationSection = (
+  requested: string | undefined,
+  access: Pick<OrgTabAccess, 'canManageIntegrations' | 'canManageConnectors'>
+): IntegrationSections | undefined => {
+  const visible = visibleIntegrationSections(access);
+  return visible.find(section => section === requested) ?? visible[0];
 };

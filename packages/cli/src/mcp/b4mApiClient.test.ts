@@ -164,6 +164,23 @@ describe('B4mApiClient', () => {
     expect(mockGet).not.toHaveBeenCalled();
   });
 
+  it('cannot tell the scopes of a key that may not list keys, so leaves them to the route', async () => {
+    mockGet.mockRejectedValueOnce(
+      new AxiosError('Forbidden', '403', undefined, undefined, {
+        status: 403,
+        data: { error: 'Insufficient API key permissions', required_scopes: ['api-keys:manage', 'admin:*'] },
+      } as AxiosResponse)
+    );
+    await expect(client.getOwnKeyScopes()).resolves.toBeUndefined();
+  });
+
+  it('still fails on an error other than 403', async () => {
+    mockGet.mockRejectedValueOnce(
+      new AxiosError('Server error', '500', undefined, undefined, { status: 500, data: {} } as AxiosResponse)
+    );
+    await expect(client.getOwnKeyScopes()).rejects.toThrow('Server error');
+  });
+
   it.each([
     ['a non-array response', {}],
     ['a null row', [null]],
@@ -1022,7 +1039,7 @@ describe('B4mApiClient publish', () => {
     expect(mockPut).not.toHaveBeenCalled();
     expect(globalFetch.mock.calls[0][1]).toEqual({
       method: 'PUT',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'If-None-Match': '*' },
       body: Buffer.from('abc'),
     });
   });
@@ -1031,7 +1048,7 @@ describe('B4mApiClient publish', () => {
     mockPut.mockResolvedValue({ ok: true });
     await client.uploadFileBytes('/api/files/f1/upload', Buffer.from('abc'), 'text/plain');
     expect(mockPut).toHaveBeenCalledWith('/api/files/f1/upload', Buffer.from('abc'), {
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'If-None-Match': '*' },
     });
     await expect(client.uploadFileBytes('//evil.example/steal', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
       'Unexpected'

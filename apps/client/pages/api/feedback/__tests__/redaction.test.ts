@@ -15,9 +15,13 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: (fn: unknown) => {
       mockRefs.getHandler = fn as (req: unknown, res: unknown) => unknown;
       return chain;

@@ -7,6 +7,7 @@ import Stripe from 'stripe';
 import { minorUnitsPerMajor } from '@bike4mind/server-utils/integrations/stripe/currency';
 import { planCreditsPerCycle } from '@bike4mind/server-utils/lib/userSubscriptions/planCreditsPerCycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { organizationRepository } from '@bike4mind/database/infra';
 
 /**
  * GET /api/subscriptions/checkout-session?id=cs_...
@@ -90,6 +91,15 @@ const handler = baseApi()
       quantity,
     }).catch(() => null);
 
+    const isNewTeam =
+      subscriptionMetadata?.ownerType === SubscriptionOwnerType.Organization &&
+      !!subscriptionMetadata.newOrganizationName;
+    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+    const team =
+      isNewTeam && customerId
+        ? await organizationRepository.findByStripeCustomerId(customerId).catch(() => null)
+        : null;
+
     return res.json({
       // The session id, not the subscription id: it is unique per checkout, so a
       // customer who cancels and resubscribes reports two distinct purchases,
@@ -101,6 +111,7 @@ const handler = baseApi()
       planName: lineItem?.description ?? undefined,
       quantity,
       credits: credits ?? undefined,
+      ...(isNewTeam ? { teamCheckout: true, organizationId: team?.userId === req.user.id ? team.id : undefined } : {}),
     });
   });
 

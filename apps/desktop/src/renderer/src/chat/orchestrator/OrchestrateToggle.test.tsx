@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isMac } from '../platform';
-import { OrchestrateToggle, describeAgentStates, isSurfaceToggleKey } from './OrchestrateToggle';
+import { OrchestrateToggle, isSurfaceToggleKey } from './OrchestrateToggle';
 import type { SessionSurface } from './orchestratorPrefs';
-import type { AgentState } from './roster';
+import { describeAgentStates, type AgentState } from './roster';
 import { createThemedMount, el, query } from './testUtils';
 
 const onSurfaceChange = vi.fn();
@@ -24,7 +24,7 @@ describe('OrchestrateToggle', () => {
     expect(query('chat-surface-toggle')).toBeNull();
   });
 
-  it('reads as navigation: a labelled Agents segment and an icon-only conversation one', async () => {
+  it('labels the conversation icon accessibly and shows the Agents label', async () => {
     await renderToggle(['working']);
     expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Show conversation');
     expect(el('chat-surface-toggle-chat').textContent).toBe('');
@@ -42,6 +42,20 @@ describe('OrchestrateToggle', () => {
     expect(onSurfaceChange).not.toHaveBeenCalled();
     act(() => el('chat-surface-toggle-chat').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
+  });
+
+  it('counts the orchestrating session waiting on the user, as the Tavern does', async () => {
+    await themed.render(
+      <OrchestrateToggle
+        states={['working', 'working']}
+        parentNeedsYou
+        surface="chat"
+        onSurfaceChange={onSurfaceChange}
+      />
+    );
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
+      `Show agents, ${describeAgentStates(['working', 'working'], 1)}`
+    );
   });
 
   it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
@@ -70,19 +84,32 @@ describe('OrchestrateToggle', () => {
   it('names the agents segment with the agent states, most urgent first, and hides the badge', async () => {
     await renderToggle(['done', 'working', 'needs-you', 'idle']);
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
-      'Show agents, 4 agents: 1 needs you, 1 working, 2 done'
+      'Show agents, 4 agents: 1 needs you, 1 working, 1 idle, 1 done'
     );
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toContain('1 needs you');
     expect(el('chat-orchestrate-count').getAttribute('aria-hidden')).toBe('true');
     expect(el('chat-orchestrate-count').hasAttribute('aria-label')).toBe(false);
     expect(describeAgentStates(['failed'])).toBe('1 agent: 1 failed');
     expect(describeAgentStates([])).toBe('No agents yet');
+    // Idle and stopped are never done; a waiting parent adds to "needs you" without adding an agent.
+    expect(describeAgentStates(['idle', 'stopped', 'done'], 1)).toBe(
+      '3 agents: 1 needs you, 1 stopped, 1 idle, 1 done'
+    );
   });
 
   it('marks the shown surface as pressed', async () => {
     await renderToggle(['done'], 'orchestrate');
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-pressed')).toBe('true');
     expect(el('chat-surface-toggle-chat').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it.each(['chat', 'orchestrate'] as const)('highlights only the active %s view', async surface => {
+    await renderToggle(['done'], surface);
+    const active = el(`chat-surface-toggle-${surface}`);
+    const inactive = el(`chat-surface-toggle-${surface === 'chat' ? 'orchestrate' : 'chat'}`);
+    expect(getComputedStyle(active).fontWeight).toBe('600');
+    expect(getComputedStyle(inactive).fontWeight).toBe('400');
+    expect(getComputedStyle(active).backgroundColor).not.toBe(getComputedStyle(inactive).backgroundColor);
   });
 
   it('keeps the same control, with the count, on the orchestrate surface', async () => {

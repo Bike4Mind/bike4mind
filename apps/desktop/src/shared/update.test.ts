@@ -288,6 +288,15 @@ describe('isNewerRelease', () => {
     expect(isNewerRelease('0.1.13', '0.1.12-local.0123456789ab')).toBe(true);
   });
 
+  it('does not offer a source run the release it was cut from', () => {
+    // scripts/dev-version.cjs names a run after desktop-v0.203.0 "0.203.0-dev.g<sha>[.dirty]".
+    expect(isNewerRelease('0.203.0', '0.203.0-dev.gabc123def456.dirty')).toBe(false);
+    expect(isNewerRelease('0.202.0', '0.203.0-dev.gabc123def456')).toBe(false);
+    expect(isNewerRelease('0.204.0', '0.203.0-dev.gabc123def456.dirty')).toBe(true);
+    expect(isNewerRelease('0.1.0', '0.0.0-dev.unknown')).toBe(true);
+    expect(isNewerRelease('0.0.0', '0.0.0-dev.unknown')).toBe(false);
+  });
+
   it('is false when either side does not parse', () => {
     expect(isNewerRelease('garbage', '0.1.10')).toBe(false);
     expect(isNewerRelease('0.2.0', '')).toBe(false);
@@ -321,5 +330,12 @@ describe('updateNoticeVersion', () => {
   it('hides the dismissed version only, and shows a later one again', () => {
     expect(updateNoticeVersion(offered('1.1.0', { dismissedVersion: '1.1.0' }))).toBeNull();
     expect(updateNoticeVersion(offered('1.2.0', { dismissedVersion: '1.1.0' }))).toBe('1.2.0');
+  });
+
+  it('keeps showing a download the user started, and one waiting for a restart, after the offer was dismissed', () => {
+    const declined = offered('1.1.0', { dismissedVersion: '1.1.0' });
+    const downloading = reduceUpdate(declined, { type: 'download-started' });
+    expect(updateNoticeVersion(downloading)).toBe('1.1.0');
+    expect(updateNoticeVersion(reduceUpdate(downloading, { type: 'downloaded', version: '1.1.0' }))).toBe('1.1.0');
   });
 });

@@ -1,4 +1,5 @@
 import type { IUserDocument } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('sst', () => ({
@@ -171,7 +172,32 @@ describe('isSignupNetworkOverLimit', () => {
     settings({ maxSignupsPerIpPerDay: '1' });
     mockRecentDistinctSignups.mockRejectedValue(new Error('timeout'));
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
-    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('signup-limit-failed-open', { error: 'timeout' });
+  });
+
+  it('fails open and logs the bare event when the settings read fails', async () => {
+    mockFindBySettingName.mockRejectedValue(new Error('db down'));
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('signup-limit-failed-open', { error: 'db down' });
+  });
+
+  it('emits the bare event as the JSON message through the real Logger', async () => {
+    mockFindBySettingName.mockRejectedValue(new Error('db down'));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const realLogger = new Logger({ logInJson: true, prettyPrint: false, minLevel: 'warn' });
+      expect(await isSignupNetworkOverLimit(network, realLogger)).toBe(false);
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(consoleWarn.mock.calls[0][0]))).toMatchObject({
+        message: 'signup-limit-failed-open',
+        error: 'db down',
+        severity: 'warn',
+      });
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   it('counts live signups only when the trace count fails, and warns', async () => {

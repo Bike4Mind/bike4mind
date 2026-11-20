@@ -130,6 +130,58 @@ describe('GroupRepository', () => {
     expect(raw?.deletedAt).toBeInstanceOf(Date);
   });
 
+  describe('renameIfNameMatches', () => {
+    it('restores a live group with one atomic tenant/name predicate', async () => {
+      const group = await Group.create({ name: 'Sales', type: 'sales', organizationId: 'org-undo' });
+      await groupRepository.update({ id: group.id, name: 'Revenue' });
+      const update = vi.spyOn(Group, 'findOneAndUpdate');
+      try {
+        const restored = await groupRepository.renameIfNameMatches({
+          groupId: group.id,
+          organizationId: 'org-undo',
+          expectedName: 'Revenue',
+          name: 'Sales',
+        });
+        expect(restored?.name).toBe('Sales');
+        expect(update).toHaveBeenCalledTimes(1);
+        expect(update.mock.calls[0]?.[0]).toMatchObject({
+          _id: group.id,
+          organizationId: 'org-undo',
+          deletedAt: null,
+          name: 'Revenue',
+        });
+      } finally {
+        update.mockRestore();
+      }
+      expect((await Group.findById(group.id))?.name).toBe('Sales');
+    });
+
+    it('does not overwrite a later rename, cross tenants or revive a deleted group', async () => {
+      const group = await Group.create({ name: 'Growth', type: 'sales', organizationId: 'org-undo' });
+      const input = { groupId: group.id, organizationId: 'org-undo', expectedName: 'Revenue', name: 'Sales' };
+      expect(await groupRepository.renameIfNameMatches(input)).toBeNull();
+      expect(
+        await groupRepository.renameIfNameMatches({ ...input, organizationId: 'other-org', expectedName: 'Growth' })
+      ).toBeNull();
+      expect((await Group.findById(group.id))?.name).toBe('Growth');
+      await groupRepository.delete(group.id);
+      expect(await groupRepository.renameIfNameMatches({ ...input, expectedName: 'Growth' })).toBeNull();
+      const stored = await mongoose.connection.collection('groups').findOne({ _id: group._id });
+      expect(stored?.name).toBe('Growth');
+      expect(stored?.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('has exactly one winner when conditional renames overlap', async () => {
+      const group = await Group.create({ name: 'Revenue', type: 'sales', organizationId: 'org-undo' });
+      const input = { groupId: group.id, organizationId: 'org-undo', expectedName: 'Revenue' };
+      const results = await Promise.all(
+        ['Sales', 'Growth'].map(name => groupRepository.renameIfNameMatches({ ...input, name }))
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(['Sales', 'Growth']).toContain((await Group.findById(group.id))?.name);
+    });
+  });
+
   describe('createIfMissing (org-groups #1222)', () => {
     it('creates normally when nothing exists yet', async () => {
       const group = await groupRepository.createIfMissing({

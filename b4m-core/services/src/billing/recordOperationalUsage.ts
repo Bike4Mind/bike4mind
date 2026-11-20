@@ -152,7 +152,7 @@ export interface RecordOperationalUsageAdapters {
  * `apps/workers/src/events/recordSessionOperationalUsage` and
  * `pages/api/data-lakes/semantic-search`; both are gated at their entry points, not here.
  * semantic-search runs its own per-member-cap and pool pre-flight before embedding, and the
- * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the
+ * session-event publishers run `packages/server-utils/src/utils/sessionOperationalCreditPreflight` (#1852) - the
  * ungated `SessionEvents` publishers are `POST /api/sessions/[id]/tag`,
  * `POST /api/sessions/[id]/summary`, the project-attach fan-out
  * (`pages/api/projects/[id]/sessions.ts`) and the admin spider. Every session-event handler also

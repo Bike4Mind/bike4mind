@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
   Box,
@@ -99,16 +100,10 @@ const grantedShare = (costUsd: IFundingCohortCost['costUsd']) => {
 
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
+const MARGIN_QUERY_KEY = ['admin', 'usage-margin'] as const;
+const MARGIN_STALE_TIME_MS = 5 * 60 * 1000;
+
 export const MarginDashboard: React.FC = () => {
-  const [modelDay, setModelDay] = useState<MarginResponse<IModelDayMargin> | null>(null);
-  const [byUser, setByUser] = useState<MarginResponse<NamedUserMargin> | null>(null);
-  const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
-  const [settlement, setSettlement] = useState<MarginResponse<ISettlementBreakdown> | null>(null);
-  const [fundingCohort, setFundingCohort] = useState<MarginResponse<IFundingCohortCost> | null>(null);
-  const [fundingCohortError, setFundingCohortError] = useState<string | null>(null);
-  const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
 
@@ -121,23 +116,16 @@ export const MarginDashboard: React.FC = () => {
 
   // Fetched apart from the other views: its aggregation joins users, and a failure there must
   // not blank the margin sections that loaded fine.
-  const fetchFundingCohort = useCallback(async () => {
-    setFundingCohortError(null);
-    try {
-      const res = await api.get<MarginResponse<IFundingCohortCost>>(
-        '/api/admin/usage-margin?view=funding-cohort&days=30'
-      );
-      setFundingCohort(res.data);
-    } catch (err) {
-      setFundingCohortError(apiErrorMessage(err, 'Failed to load cost by funding source'));
-    }
-  }, []);
-
-  const fetchAll = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    const fundingCohortRequest = fetchFundingCohort();
-    try {
+  const fundingCohortQuery = useQuery({
+    queryKey: [...MARGIN_QUERY_KEY, 'funding-cohort'],
+    queryFn: async () =>
+      (await api.get<MarginResponse<IFundingCohortCost>>('/api/admin/usage-margin?view=funding-cohort&days=30')).data,
+    staleTime: MARGIN_STALE_TIME_MS,
+  });
+  // Cached, so switching back to this tab does not re-run every margin aggregation.
+  const marginsQuery = useQuery({
+    queryKey: [...MARGIN_QUERY_KEY, 'views'],
+    queryFn: async () => {
       const [modelDayRes, userRes, providerRes, settlementRes, invoicesRes] = await Promise.all([
         api.get<MarginResponse<IModelDayMargin>>('/api/admin/usage-margin?view=model-day&days=30'),
         api.get<MarginResponse<NamedUserMargin>>('/api/admin/usage-margin?view=user&days=30'),
@@ -145,22 +133,30 @@ export const MarginDashboard: React.FC = () => {
         api.get<MarginResponse<ISettlementBreakdown>>('/api/admin/usage-margin?view=settlement&days=30'),
         api.get<{ invoices: IProviderInvoice[] }>('/api/admin/provider-invoices'),
       ]);
-      setModelDay(modelDayRes.data);
-      setByUser(userRes.data);
-      setByProvider(providerRes.data);
-      setSettlement(settlementRes.data);
-      setInvoices(invoicesRes.data.invoices);
-    } catch (err) {
-      setError((err as Error)?.message || 'Failed to load margin data');
-    } finally {
-      await fundingCohortRequest;
-      setIsLoading(false);
-    }
-  }, [fetchFundingCohort]);
+      return {
+        modelDay: modelDayRes.data,
+        byUser: userRes.data,
+        byProvider: providerRes.data,
+        settlement: settlementRes.data,
+        invoices: invoicesRes.data.invoices,
+      };
+    },
+    staleTime: MARGIN_STALE_TIME_MS,
+  });
 
-  useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+  const modelDay = marginsQuery.data?.modelDay ?? null;
+  const byUser = marginsQuery.data?.byUser ?? null;
+  const byProvider = marginsQuery.data?.byProvider ?? null;
+  const settlement = marginsQuery.data?.settlement ?? null;
+  const invoices = marginsQuery.data?.invoices ?? [];
+  const fundingCohort = fundingCohortQuery.data ?? null;
+  const fundingCohortError = fundingCohortQuery.error
+    ? apiErrorMessage(fundingCohortQuery.error, 'Failed to load cost by funding source')
+    : null;
+  const error = marginsQuery.error ? marginsQuery.error.message || 'Failed to load margin data' : null;
+  const isLoading = marginsQuery.isFetching || fundingCohortQuery.isFetching;
+  const fetchFundingCohort = () => fundingCohortQuery.refetch();
+  const fetchAll = () => Promise.all([marginsQuery.refetch(), fundingCohortQuery.refetch()]);
 
   const target = modelDay?.targetCreditsPerUsd ?? 0;
   const providerNeedle = providerFilter.trim().toLowerCase();
@@ -281,12 +277,12 @@ export const MarginDashboard: React.FC = () => {
             <DataTable
               label="By model by day"
               testId="margin-model-day-table"
+              pageResetKey={providerFilter}
               rows={modelDayRows}
               getRowId={row =>
                 `${row.day}-${row.provider}-${row.model}-${row.executedProvider ?? row.provider}-${row.executedModel ?? row.model}`
               }
               onRetry={() => void fetchAll()}
-              pagination={false}
               minWidth="64rem"
               maxHeight="320px"
               empty={<EmptyState title="No usage events yet" action={null} />}
@@ -327,10 +323,10 @@ export const MarginDashboard: React.FC = () => {
             <DataTable
               label="By user"
               testId="margin-user-table"
+              pageResetKey={`${providerFilter}-${userSearch}`}
               rows={userRows}
               getRowId={row => row.userId}
               onRetry={() => void fetchAll()}
-              pagination={false}
               maxHeight="320px"
               empty={<EmptyState title="No usage events yet" action={null} />}
               columns={[

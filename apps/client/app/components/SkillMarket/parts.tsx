@@ -81,6 +81,7 @@ export const StarInput: FC<{ value: number; onChange: (v: number) => void }> = (
 const VISIBILITY: Record<SkillListingVisibility, { label: string; icon: ReactElement }> = {
   public: { label: 'Public', icon: <PublicIcon /> },
   organization: { label: 'Organization', icon: <GroupsIcon /> },
+  space: { label: 'Space', icon: <GroupsIcon /> },
   unlisted: { label: 'Unlisted', icon: <LinkIcon /> },
 };
 
@@ -93,7 +94,7 @@ export const VisibilityChip: FC<{ visibility: SkillListingVisibility }> = ({ vis
 const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' | 'danger'; hint: string }> = {
   clean: { label: 'Low risk', color: 'success', hint: 'No findings that need a human' },
   review: {
-    label: 'Needs a look',
+    label: 'Scan: needs a look',
     color: 'warning',
     hint: 'Medium findings, low classifier confidence, or a description mismatch',
   },

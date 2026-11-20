@@ -12,13 +12,13 @@ import path from 'node:path';
  * deployable=true + docs-changed=true. That is the right call for a genuinely unresolvable range
  * (force-push, brand-new branch). It is the wrong call for an event that simply has no arm,
  * because then EVERY run of that trigger fails open, permanently, and the run looks entirely
- * normal: nothing errors, some extra jobs just run. `merge_group` sat in that state, so the merge
- * queue gated on a different signal than the PR's own CI - a queue run could fail a leg the PR
- * legitimately skipped, ejecting the PR with no reproduction on the author's branch.
+ * normal: nothing errors, some extra jobs just run. A trigger left in that state gates on a
+ * different signal than the PR's own CI - a run could fail a leg the PR legitimately skipped,
+ * with no reproduction on the author's branch.
  *
- * Nothing else can catch this. The action only ever executes inside a real workflow run, and the
- * `merge_group` path specifically cannot be reached from a `pull_request` run, so the PR that adds
- * a trigger to ci.yml is green regardless of what the action does with it. Hence a static
+ * Nothing else can catch this. The action only ever executes inside a real workflow run, and a
+ * non-`pull_request` path cannot be reached from a `pull_request` run, so the PR that adds a
+ * trigger to ci.yml is green regardless of what the action does with it. Hence a static
  * cross-check: every trigger ci.yml declares must have its own arm, and every env var an arm reads
  * must be plumbed into the step's `env:` block, bound to that event's own payload, and bound to the
  * end of the range its name claims. The plumbing half is not redundant - an arm on its own is a
@@ -147,7 +147,7 @@ function readShaRole(key: string): 'base' | 'head' | null {
   return null;
 }
 
-/** Payload fields that legitimately supply each end of the range, across all three events. */
+/** Payload fields that legitimately supply each end of the range, across the events. */
 const ROLE_FIELDS: Record<'base' | 'head', RegExp> = {
   base: /\.(base_sha|base\.sha|before)\b/,
   head: /\.(head_sha|head\.sha|after)\b/,
@@ -198,7 +198,6 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
 
   it("binds each event's SHA vars to that event's own payload", () => {
     const misbound = readStepEnvBindings(action).filter(({ key, value }) => {
-      if (key.startsWith('MERGE_GROUP_')) return !value.includes('github.event.merge_group.');
       if (key.startsWith('PR_')) return !value.includes('github.event.pull_request.');
       if (key.startsWith('PUSH_')) return !/github\.event\.(before|after)/.test(value);
       return false;
@@ -235,18 +234,18 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
 describe('readWorkflowTriggers', () => {
   it('reads the trigger keys and ignores their nested config', () => {
     const triggers = readWorkflowTriggers(
-      ['on:', '  push:', '    branches: [main]', '  merge_group:', '    branches: [main]', '', 'env:', '  X: 1'].join(
+      ['on:', '  push:', '    branches: [main]', '  pull_request:', '    branches: [main]', '', 'env:', '  X: 1'].join(
         '\n'
       )
     );
-    expect(triggers).toEqual(['push', 'merge_group']);
+    expect(triggers).toEqual(['push', 'pull_request']);
   });
 
   it('ignores comments inside the block instead of stopping at them', () => {
     const triggers = readWorkflowTriggers(
-      ['on:', '  push:', '# a column-0 comment', '  merge_group:', 'env:'].join('\n')
+      ['on:', '  push:', '# a column-0 comment', '  pull_request:', 'env:'].join('\n')
     );
-    expect(triggers).toEqual(['push', 'merge_group']);
+    expect(triggers).toEqual(['push', 'pull_request']);
   });
 
   it('stops at the next top-level key', () => {
@@ -270,21 +269,21 @@ describe('readCaseArms', () => {
   });
 
   it('splits an alternation label into both events', () => {
-    const arms = readCaseArms(dispatch('          push|merge_group)', '            BASE="$X" ;;'));
-    expect(arms[0].labels).toEqual(['push', 'merge_group']);
+    const arms = readCaseArms(dispatch('          push|pull_request)', '            BASE="$X" ;;'));
+    expect(arms[0].labels).toEqual(['push', 'pull_request']);
   });
 
   it('does not count a label-shaped phrase inside a comment as an arm', () => {
     const arms = readCaseArms(
-      dispatch('          # merge_group) used to be missing here', '          push)', '            BASE="$X" ;;')
+      dispatch('          # pull_request) used to be missing here', '          push)', '            BASE="$X" ;;')
     );
     expect(arms.map(arm => arm.labels)).toEqual([['push']]);
   });
 
-  // The pre-fix shape: push and pull_request handled, merge_group left to the default arm. This
-  // pins how readCaseArms reports that shape - it rebuilds the comparison rather than calling it,
-  // so the guard itself is asserted only by the live cross-check above, against the real files.
-  it('reports merge_group as unhandled when only push and pull_request have arms', () => {
+  // An event with no arm of its own is left to the default arm. This pins how readCaseArms
+  // reports that shape - it rebuilds the comparison rather than calling it, so the guard itself
+  // is asserted only by the live cross-check above, against the real files.
+  it('reports an event as unhandled when only push and pull_request have arms', () => {
     const arms = readCaseArms(
       dispatch(
         '          push)',
@@ -296,7 +295,7 @@ describe('readCaseArms', () => {
       )
     );
     const handled = new Set(arms.flatMap(arm => arm.labels));
-    expect(handled.has('merge_group')).toBe(false);
+    expect(handled.has('workflow_dispatch')).toBe(false);
   });
 
   it('finds nothing when the dispatch is absent', () => {
@@ -312,14 +311,14 @@ describe('readStepEnvBindings', () => {
         '      env:',
         '        EVENT_NAME: ${{ github.event_name }}',
         '        # a comment between keys does not end the block',
-        '        MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}',
+        '        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}',
         '      run: |',
         '        set -euo pipefail',
       ].join('\n')
     );
     expect(bindings).toEqual([
       { key: 'EVENT_NAME', value: '${{ github.event_name }}' },
-      { key: 'MERGE_GROUP_HEAD_SHA', value: '${{ github.event.merge_group.head_sha || github.sha }}' },
+      { key: 'PR_HEAD_SHA', value: '${{ github.event.pull_request.head.sha }}' },
     ]);
   });
 });
@@ -360,7 +359,7 @@ describe('readActionConsumers', () => {
 
 describe('readShaRole', () => {
   it('reads the range endpoint off the key name, including the push spelling', () => {
-    expect(readShaRole('MERGE_GROUP_BASE_SHA')).toBe('base');
+    expect(readShaRole('PR_BASE_SHA')).toBe('base');
     expect(readShaRole('PR_HEAD_SHA')).toBe('head');
     expect(readShaRole('PUSH_BEFORE')).toBe('base');
     expect(readShaRole('PUSH_AFTER')).toBe('head');
@@ -374,7 +373,6 @@ describe('readShaRole', () => {
   // Each of these passed the event-prefix check while pointing at the wrong end of the range.
   it('pairs with ROLE_FIELDS to catch base and head crossed inside one payload', () => {
     const crossed: Array<[string, string]> = [
-      ['MERGE_GROUP_BASE_SHA', '${{ github.event.merge_group.head_sha }}'],
       ['PR_BASE_SHA', '${{ github.event.pull_request.head.sha }}'],
       ['PUSH_BEFORE', '${{ github.event.after }}'],
     ];
@@ -385,17 +383,17 @@ describe('readShaRole', () => {
     }
   });
 
-  it('accepts the head fallback expression the action actually ships', () => {
-    expect(ROLE_FIELDS.head.test('${{ github.event.merge_group.head_sha || github.sha }}')).toBe(true);
-    expect(ROLE_FIELDS.base.test('${{ github.event.merge_group.head_sha || github.sha }}')).toBe(false);
+  it('accepts the payload fields the action actually ships', () => {
+    expect(ROLE_FIELDS.head.test('${{ github.event.pull_request.head.sha }}')).toBe(true);
+    expect(ROLE_FIELDS.base.test('${{ github.event.pull_request.head.sha }}')).toBe(false);
   });
 });
 
 describe('readEnvRefs', () => {
   it('picks up both the bare and braced forms and skips lowercase locals', () => {
-    expect(readEnvRefs('BASE="$MERGE_GROUP_BASE_SHA"; HEAD="${MERGE_GROUP_HEAD_SHA}"; x="$local"')).toEqual([
-      'MERGE_GROUP_BASE_SHA',
-      'MERGE_GROUP_HEAD_SHA',
+    expect(readEnvRefs('BASE="$PR_BASE_SHA"; HEAD="${PR_HEAD_SHA}"; x="$local"')).toEqual([
+      'PR_BASE_SHA',
+      'PR_HEAD_SHA',
     ]);
   });
 });

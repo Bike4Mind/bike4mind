@@ -68,9 +68,10 @@ import { noModelsPlaceholder, NoModelsPlaceholder, LowCreditsWarning } from '../
 import { ZeroCreditWarning } from '../ZeroCreditWarning';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
-import { CacheExpiryNotice, ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { ModelSwitchCostNotice } from './ModelSwitchCostNotice';
 import { usePromptCacheComposer } from './usePromptCacheComposer';
 import PromptCacheTtlChip from './PromptCacheTtlChip';
+import PromptCacheExpiryHint from './PromptCacheExpiryHint';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
@@ -644,9 +645,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         />
         {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
         {!creditUi.replaceComposer && <ModelSwitchCostNotice credits={promptCache.modelSwitchCredits} />}
-        {!creditUi.replaceComposer && (
-          <CacheExpiryNotice credits={promptCache.cacheExpiryCredits} expiresAt={promptCache.cacheExpiresAt} />
-        )}
       </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
@@ -673,7 +671,15 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               inputOverLimit={isOverContextWindow}
               attachment={attachmentFit}
             />
-            {promptCache.ttlChip && <PromptCacheTtlChip {...promptCache.ttlChip} />}
+            {/* The expired-cache hint hangs off the TTL chip, which every Claude chat has. */}
+            {promptCache.ttlChip && (
+              <PromptCacheExpiryHint
+                expiresAt={promptCache.cacheExpiresAt}
+                credits={creditUi.replaceComposer ? null : promptCache.cacheExpiryCredits}
+              >
+                <PromptCacheTtlChip {...promptCache.ttlChip} />
+              </PromptCacheExpiryHint>
+            )}
             <CreditBalanceChip session={currentSession} />
           </>
         }
@@ -689,20 +695,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           maxWidth: promptBarMaxWidth,
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isDockedLayout
-            ? { border: 'none' }
-            : isCompactLayout || isMobile || isFloatingLayout
-              ? {
-                  borderTop: '1px solid',
-                  borderTopColor: 'border.solid',
-                  borderLeft: 'none',
-                  borderRight: 'none',
-                  borderBottom: 'none',
-                }
-              : {
-                  border: '1px solid',
-                  borderColor: 'border.solid',
-                }),
+          // Docked and floating draw only the top line, under the status line: the panel supplies
+          // the sides. Keep in sync with the composer wrappers in SessionContainer.
+          ...(isDockedLayout || isCompactLayout || isMobile || isFloatingLayout
+            ? {
+                borderTop: '1px solid',
+                borderTopColor: isDockedLayout || isFloatingLayout ? 'divider' : 'border.solid',
+                borderLeft: 'none',
+                borderRight: 'none',
+                borderBottom: 'none',
+              }
+            : {
+                border: '1px solid',
+                borderColor: 'border.solid',
+              }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
           // 12px to every edge of the box. The pieces inside add nothing at the edges (editor wrapper

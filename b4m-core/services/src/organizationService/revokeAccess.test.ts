@@ -63,6 +63,9 @@ describe('organizationService - revokeAccess', () => {
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
         },
+        userApiKeys: {
+          revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]),
+        },
         users: {
           removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
           // Default: the removed user has no home-org pointer, so the clear below is a no-op and the
@@ -94,7 +97,7 @@ describe('organizationService - revokeAccess', () => {
       userId: 'user1',
     };
 
-    const result = await revokeAccess(mockOwnerUser as IUserDocument, revokeParams, mockAdapters);
+    const { organization: result } = await revokeAccess(mockOwnerUser as IUserDocument, revokeParams, mockAdapters);
 
     expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
 
@@ -111,6 +114,22 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
   });
 
+  it('revokes the removed member org-billed API keys, attributed to the removing admin', async () => {
+    mockAdapters.db.userApiKeys.revokeLiveOrgBilledByUserId.mockResolvedValue(['key-1', 'key-2']);
+
+    const { revokedOrgBilledApiKeyIds } = await revokeAccess(
+      mockOwnerUser as IUserDocument,
+      { id: 'org1', userId: 'user1' },
+      mockAdapters
+    );
+
+    expect(mockAdapters.db.userApiKeys.revokeLiveOrgBilledByUserId).toHaveBeenCalledWith('user1', 'org1', {
+      revokedBy: mockOwnerUser.id,
+      revokedReason: 'org-membership-ended',
+    });
+    expect(revokedOrgBilledApiKeyIds).toEqual(['key-1', 'key-2']);
+  });
+
   it('purges the removed user group ids and drops them from adminUserIds', async () => {
     mockAdapters.db.organizations.findById.mockResolvedValue({
       ...existingOrganization,
@@ -120,7 +139,11 @@ describe('organizationService - revokeAccess', () => {
     });
     mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'g-a' }, { id: 'g-b' }]);
 
-    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+    const { organization: result } = await revokeAccess(
+      mockOwnerUser as IUserDocument,
+      { id: 'org1', userId: 'user1' },
+      mockAdapters
+    );
 
     expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1');
     expect(mockAdapters.db.users.removeGroupsFromUser).toHaveBeenCalledWith('user1', ['g-a', 'g-b']);
@@ -334,7 +357,7 @@ describe('organizationService - revokeAccess', () => {
       userId: 'user1',
     };
 
-    const result = await revokeAccess(mockOwnerUser as IUserDocument, revokeParams, mockAdapters);
+    const { organization: result } = await revokeAccess(mockOwnerUser as IUserDocument, revokeParams, mockAdapters);
 
     expect(result).toEqual(
       expect.objectContaining({

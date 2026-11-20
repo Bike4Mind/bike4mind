@@ -9,6 +9,7 @@ import {
   resetConsumerLogsCacheForTests,
   resolveConsumerLogs,
   resolveConsumerLogsForSourceQueue,
+  resolveFunctionLogGroup,
   settleWithinBudget,
 } from './dlqConsumerLogs';
 
@@ -64,6 +65,35 @@ describe('resolveConsumerLogs', () => {
     mappings(fnArn('app-dev-webhook'));
     lambdaMock.on(GetFunctionConfigurationCommand).resolves({ FunctionName: 'app-dev-webhook' });
     expect((await resolveConsumerLogs(QUEUE_URL))?.logGroups).toEqual(['/aws/lambda/app-dev-webhook']);
+  });
+
+  it('retains deployment facts only for an unambiguous unqualified consumer', async () => {
+    mappings(fnArn('a'));
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+      FunctionName: 'a',
+      LastModified: '2026-01-02T00:00:00.000+0000',
+      Version: '$LATEST',
+      LastUpdateStatus: 'Successful',
+    });
+    expect(await resolveConsumerLogs(QUEUE_URL)).toMatchObject({
+      consumerDeployedAt: '2026-01-02T00:00:00.000Z',
+      consumerVersion: '$LATEST',
+    });
+    for (const targets of [[fnArn('a', 'live')], [fnArn('a'), fnArn('b')]]) {
+      resetConsumerLogsCacheForTests();
+      mappings(...targets);
+      expect(await resolveConsumerLogs(QUEUE_URL)).not.toHaveProperty('consumerDeployedAt');
+    }
+    for (const LastUpdateStatus of ['InProgress', 'Failed'] as const) {
+      resetConsumerLogsCacheForTests();
+      mappings(fnArn('a'));
+      lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+        FunctionName: 'a',
+        LastModified: '2026-01-02T00:00:00.000+0000',
+        LastUpdateStatus,
+      });
+      expect(await resolveConsumerLogs(QUEUE_URL)).not.toHaveProperty('consumerDeployedAt');
+    }
   });
 
   it('returns null when no mapping consumes the queue', async () => {
@@ -311,5 +341,51 @@ describe('settleWithinBudget', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('resolveFunctionLogGroup', () => {
+  beforeEach(() => {
+    lambdaMock.reset();
+    resetConsumerLogsCacheForTests();
+  });
+
+  it('uses the function LoggingConfig log group', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .resolves({ FunctionName: 'app-dev-Nightly', LoggingConfig: { LogGroup: '/sst/app/dev/Nightly-LogGroup' } });
+    await expect(resolveFunctionLogGroup('us-east-2', fnArn('app-dev-Nightly'))).resolves.toBe(
+      '/sst/app/dev/Nightly-LogGroup'
+    );
+    expect(lambdaMock.commandCalls(GetFunctionConfigurationCommand)[0].args[0].input).toEqual({
+      FunctionName: fnArn('app-dev-Nightly'),
+    });
+  });
+
+  it('falls back to /aws/lambda/<name> without a LoggingConfig', async () => {
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({});
+    await expect(resolveFunctionLogGroup('us-east-2', 'app-dev-Nightly')).resolves.toBe('/aws/lambda/app-dev-Nightly');
+    await expect(resolveFunctionLogGroup('us-east-2', fnArn('app-dev-Other'))).resolves.toBe(
+      '/aws/lambda/app-dev-Other'
+    );
+  });
+
+  it('resolves null on a failed lookup or a malformed region, and caches a result', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .rejects(Object.assign(new Error('no'), { name: 'AccessDeniedException' }));
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('not a region', 'f')).resolves.toBeNull();
+    expect(lambdaMock.commandCalls(GetFunctionConfigurationCommand)).toHaveLength(1);
+  });
+
+  it('does not cache a throttled lookup', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .rejectsOnce(Object.assign(new Error('slow down'), { name: 'TooManyRequestsException' }))
+      .resolves({ FunctionName: 'f', LoggingConfig: { LogGroup: '/sst/f' } });
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBe('/sst/f');
   });
 });

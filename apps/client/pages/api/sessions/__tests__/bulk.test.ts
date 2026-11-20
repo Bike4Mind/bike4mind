@@ -23,7 +23,7 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
 );
 
 const mockPurgeMedia = vi.hoisted(() => vi.fn());
-vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
 
@@ -37,7 +37,7 @@ const mockTag = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/sessions/sessionUpdateAdapters', () => ({ buildSessionUpdateAdapters: () => ({}) }));
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: (...a: unknown[]) => mockTag.credits(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', async orig => ({

@@ -89,6 +89,12 @@ const handler = baseApi()
     });
 
     const [updatedItem] = preview.items.data;
+    const { recordOrganizationAuditEventSafe } = await import('@bike4mind/server-utils/utils/organizationAudit');
+    await recordOrganizationAuditEventSafe({
+      organizationId: organization.id,
+      actorUserId: req.user.id,
+      action: 'billing.updated',
+    });
 
     // The webhook will handle updating the seats in our database
     const currentTeamSize = organization.users.length + 1 + pendingInviteCount;

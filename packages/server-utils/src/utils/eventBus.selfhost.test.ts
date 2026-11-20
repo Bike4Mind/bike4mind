@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { sendToQueueMock, sendEmailMock, hostedSend } = vi.hoisted(() => ({
+const { sendToQueueMock, sendEmailMock, hostedSend, recordOutcomeMock } = vi.hoisted(() => ({
   sendToQueueMock: vi.fn(),
   sendEmailMock: vi.fn(),
   hostedSend: vi.fn(),
+  recordOutcomeMock: vi.fn(),
 }));
 
 vi.mock('./sqs', () => ({ sendToQueue: sendToQueueMock }));
@@ -18,10 +19,54 @@ vi.mock('@aws-sdk/client-eventbridge', () => ({
 vi.mock('sst', () => ({ Resource: { App: { name: 'local' }, AppEventBus: { name: 'events' } } }));
 
 vi.mock('./mailer/index', () => ({ default: { sendEmail: sendEmailMock } }));
+vi.mock('./mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: recordOutcomeMock }));
 
 const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = await import('./eventBus');
 
 const startDetail = { sessionId: 's1', userId: 'u1', curationJobId: 'j1' };
+
+describe('EmailEvents.Send schema', () => {
+  it('keeps text, mirror and logRecipient instead of stripping them', () => {
+    const detail = {
+      to: 'a@b.com',
+      subject: 'Hi',
+      body: '<p>hello</p>',
+      text: 'hello',
+      category: 'otc' as const,
+      mirror: false,
+      logRecipient: false,
+    };
+
+    expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+
+  it('keeps an attempt or incident-alert delivery ref', () => {
+    const base = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+    const attempt = { ...base, ref: { kind: 'emailAttempt' as const, attemptId: 'att-1' } };
+    const alert = {
+      ...base,
+      ref: { kind: 'incidentAlert' as const, incidentId: 'inc-1', alert: 'escalation' as const },
+    };
+
+    expect(EmailEvents.Send.schema.parse(attempt)).toEqual(attempt);
+    expect(EmailEvents.Send.schema.parse(alert)).toEqual(alert);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'invoice', attemptId: 'att-1' }],
+    ['an empty attempt id', { kind: 'emailAttempt', attemptId: '' }],
+    ['an empty incident id', { kind: 'incidentAlert', incidentId: '', alert: 'review' }],
+    ['an unknown alert', { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'digest' }],
+  ])('rejects a ref with %s', (_label, ref) => {
+    expect(EmailEvents.Send.schema.safeParse({ to: 'a@b.com', subject: 'Hi', body: 'x', ref }).success).toBe(false);
+  });
+
+  it('does not require any of the optional fields', () => {
+    const detail = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+
+    expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+});
 
 describe('eventBus publishSelfHost', () => {
   const originalSelfHost = process.env.B4M_SELF_HOST;
@@ -47,9 +92,54 @@ describe('eventBus publishSelfHost', () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock).toHaveBeenCalledWith(
       'a@b.com',
-      expect.objectContaining({ subject: 'Hi', html: '<p>hello</p>' })
+      expect.objectContaining({ subject: 'Hi', html: '<p>hello</p>' }),
+      {}
+    );
+    expect(sendEmailMock.mock.calls[0][1]).not.toHaveProperty('text');
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the plain-text body and the send options through to the mailer', async () => {
+    delete process.env.SELF_HOST_EVENT_QUEUE;
+    await EmailEvents.Send.publish({
+      to: 'a@b.com',
+      subject: 'Hi',
+      body: '<p>hello</p>',
+      text: 'hello',
+      category: 'otc',
+      mirror: false,
+      logRecipient: false,
+      attachments: [{ filename: 'a.txt', content: Buffer.from('hi').toString('base64'), contentType: 'text/plain' }],
+    });
+
+    expect(sendEmailMock).toHaveBeenCalledExactlyOnceWith(
+      'a@b.com',
+      {
+        subject: 'Hi',
+        html: '<p>hello</p>',
+        text: 'hello',
+        attachments: [{ filename: 'a.txt', content: Buffer.from('hi'), contentType: 'text/plain' }],
+      },
+      { category: 'otc', mirror: false, logRecipient: false }
     );
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sent', { messageId: 'smtp-1' }, { ok: true, at: expect.any(Date) }],
+    ['failed', false, { ok: false, error: expect.any(String) }],
+  ])('records a %s delivery against the ref of a direct publish', async (_label, mailResult, outcome) => {
+    sendEmailMock.mockResolvedValue(mailResult);
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'att-1' };
+
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x', ref });
+
+    expect(recordOutcomeMock).toHaveBeenCalledExactlyOnceWith(ref, outcome);
+  });
+
+  it('records nothing for a self-host email without a ref', async () => {
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x' });
+    expect(recordOutcomeMock).not.toHaveBeenCalled();
   });
 
   it('enqueues a non-email event to SELF_HOST_EVENT_QUEUE as { detailType, detail }', async () => {

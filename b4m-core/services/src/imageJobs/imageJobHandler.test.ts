@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ALL_IMAGE_MODELS,
+  BFL_IMAGE_MODELS,
   CreditHolderType,
   IMAGE_MODEL_CATALOG,
   ImageModels,
@@ -8,7 +9,12 @@ import {
 } from '@bike4mind/common';
 import {
   createImageProviderRegistry,
+  ProviderOutputTooLargeError,
+  ProviderOutputUnavailableError,
+  ProviderSubmitError,
+  type AsyncImageProvider,
   type ImageProvider,
+  type ProviderPollResult,
   type ProviderTerminalResult,
 } from '@bike4mind/utils/imageProviders';
 import { Logger } from '@bike4mind/observability';
@@ -139,6 +145,67 @@ beforeEach(() => {
 });
 
 describe('image job handler through the real engine', () => {
+  it('links a chat-made job output to its quest and bills it to that quest', async () => {
+    const t = setup(vi.fn<Generate>(async () => succeeded));
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    const job = t.jobOf(created);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ questId: 'q-1' }));
+    expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ sessionId: 'q-1', questId: 'q-1' });
+  });
+
+  it("counts a delivered chat-made image once on its notebook's badge", async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(countNotebookImage).toHaveBeenCalledTimes(1);
+    expect(countNotebookImage).toHaveBeenCalledWith('q-1');
+  });
+
+  it('counts nothing for a Studio job or a blocked chat job, and a failed count never fails the job', async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const studio = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    await create(studio);
+    await studio.runToCompletion();
+
+    const blocked = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage, moderate: vi.fn(async () => ({ blocked: true as const, reason: 'no' })) }
+    );
+    await createImageJobs({ user, request: request(), count: 1, source: 'agent', questId: 'q-1' }, blocked.deps);
+    await blocked.runToCompletion();
+    expect(countNotebookImage).not.toHaveBeenCalled();
+
+    const throwing = setup(
+      vi.fn<Generate>(async () => succeeded),
+      {
+        countNotebookImage: vi.fn(async () => {
+          throw new Error('db down');
+        }),
+      }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      throwing.deps
+    );
+    await throwing.runToCompletion();
+    expect(throwing.jobOf(created).state).toBe('succeeded');
+  });
+
   it('generates, moderates, saves to Files and settles the hold', async () => {
     const generate = vi.fn<Generate>(async () => succeeded);
     const t = setup(generate);
@@ -235,6 +302,32 @@ describe('image job handler through the real engine', () => {
     expect(job.payload.output?.fileId).toBeUndefined();
     expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
       expect.objectContaining({ key: `generated-images/u1/${job.id}.png`, contentType: 'image/png' })
+    );
+  });
+
+  it('moderates and stores a WebP render as image/webp', async () => {
+    // A real 32x32 lossy WebP, the container gpt-image returns for outputFormat webp.
+    const webp = Buffer.from(
+      'UklGRkoAAABXRUJQVlA4ID4AAABQAwCdASogACAAPjEYikOiIaEUBAAgAwSygDsAfgAARr/YAAD+9r4H//zBK/IN2of//pcH6XB+lwf+i4AAAA==',
+      'base64'
+    );
+    const t = setup(
+      vi.fn<Generate>(async () => ({
+        status: 'succeeded',
+        output: { kind: 'inline', base64: webp.toString('base64'), contentType: 'image/webp' },
+      })),
+      { saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) }
+    );
+    t.provider.fetchOutput.mockResolvedValue(webp);
+    const created = await create(t, request({ outputFormat: 'webp' }));
+    await t.runToCompletion();
+
+    const job = t.jobOf(created);
+    expect(job.state).toBe('succeeded');
+    expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ bytes: webp, mimeType: 'image/webp' }));
+    expect(job.payload.output).toMatchObject({ contentType: 'image/webp', bytes: webp.byteLength });
+    expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
+      expect.objectContaining({ key: `generated-images/u1/${job.id}.webp`, bytes: webp, contentType: 'image/webp' })
     );
   });
 
@@ -388,5 +481,197 @@ describe('image job handler through the real engine', () => {
     expect(generate).not.toHaveBeenCalled();
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('image job handler with an async (submit then poll) provider', () => {
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7]);
+  const DELIVERY_URL = 'https://delivery.example/sample.png';
+  const handle = { provider: 'bfl' as const, data: { id: 'task-1', pollingUrl: 'https://api.bfl.ai/v1/r' } };
+  const fluxRequest = () => request({ model: ImageModels.FLUX_PRO_1_1 });
+
+  const makeAsyncProvider = (polls: ProviderPollResult[]) => {
+    const queue = [...polls];
+    return {
+      mode: 'async' as const,
+      id: 'bfl' as const,
+      models: BFL_IMAGE_MODELS,
+      submit: vi.fn<AsyncImageProvider['submit']>(async () => handle),
+      poll: vi.fn<AsyncImageProvider['poll']>(async () => queue.shift() ?? { status: 'running' }),
+      fetchOutput: vi.fn<AsyncImageProvider['fetchOutput']>(async () => PNG_MAGIC),
+    } satisfies AsyncImageProvider;
+  };
+
+  it('falls back to the payload for the submit mode of an unregistered provider', () => {
+    const t = setupAsync([]);
+    const handler = createImageJobHandler({ ...t.deps, providers: createImageProviderRegistry([]) });
+    const job = (payload: Record<string, unknown>) =>
+      ({ payload: { providerId: 'bfl', ...payload } }) as unknown as ImageJob;
+    expect(handler.submitMode?.(job({ providerHandle: handle }))).toBe('async');
+    expect(handler.submitMode?.(job({}))).toBe('sync');
+  });
+
+  const setupAsync = (polls: ProviderPollResult[]) => {
+    const bfl = makeAsyncProvider(polls);
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { providers: createImageProviderRegistry([bfl]) }
+    );
+    return { ...t, bfl };
+  };
+
+  const readyPoll: ProviderPollResult = {
+    status: 'succeeded',
+    output: { kind: 'url', url: DELIVERY_URL, requiresAuth: false },
+  };
+
+  it('submits, polls across steps, then downloads, moderates, saves and settles', async () => {
+    const t = setupAsync([{ status: 'running' }, readyPoll]);
+    const created = await create(t, fluxRequest());
+    const job = t.jobOf(created);
+
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.jobOf(created)).toMatchObject({ state: 'running', payload: { providerHandle: handle } });
+
+    await t.runToCompletion();
+    const done = t.jobOf(created);
+    expect(done.state).toBe('succeeded');
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+    expect(t.bfl.poll).toHaveBeenCalledTimes(2);
+    expect(t.bfl.fetchOutput).toHaveBeenCalledWith(readyPoll.output, expect.objectContaining({ apiKey: 'key' }));
+    // A delivery URL carries no type: the bytes are sniffed.
+    expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'image/png' }));
+    expect(done.payload.output).toMatchObject({ location: 'files', contentType: 'image/png' });
+    // The handle and delivery URL only drive the steps; the terminal payload drops them.
+    expect(done.payload).not.toHaveProperty('providerHandle');
+    expect(done.payload).not.toHaveProperty('providerOutput');
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ provider: 'bfl' }) })
+    );
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('lets a running async job be cancelled, unlike a sync one mid-call', async () => {
+    const t = setupAsync([{ status: 'running' }]);
+    const created = await create(t, fluxRequest());
+    const job = t.jobOf(created);
+    await t.engine.step(job.id);
+    const outcome = await t.engine.requestCancel(t.jobOf(created));
+    expect(outcome.status).toBe('requested');
+  });
+
+  it('fails a definitive, non-retryable submit rejection and releases the hold', async () => {
+    const t = setupAsync([]);
+    t.bfl.submit.mockRejectedValue(new ProviderSubmitError('422 invalid', true, { status: 422 }, false));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a submit with an unknown outcome as orphaned_submit, never resubmitting', async () => {
+    const t = setupAsync([]);
+    t.bfl.submit.mockRejectedValue(new Error('socket hang up'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks on a provider moderation verdict and releases the hold', async () => {
+    const t = setupAsync([{ status: 'blocked', reason: 'Content Moderated', raw: {} }]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'blocked', error: { code: 'content_blocked' } });
+    expect(t.bfl.fetchOutput).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses inline output from an async provider: its bytes would ride on the payload', async () => {
+    const t = setupAsync([
+      {
+        status: 'succeeded',
+        output: { kind: 'inline', base64: PNG_MAGIC.toString('base64'), contentType: 'image/png' },
+      },
+    ]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+  });
+
+  it('fails a download that is not an image', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockResolvedValue(Buffer.from('<html>expired</html>'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.deps.moderate).not.toHaveBeenCalled();
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+  });
+
+  it('fails an expired delivery link without retrying the download', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockRejectedValue(new ProviderOutputUnavailableError(410));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.fetchOutput).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails an output over the size cap as output_too_large and releases the hold', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockRejectedValue(new ProviderOutputTooLargeError(10, 11));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a poll that reports a definitive failure and releases the hold', async () => {
+    const t = setupAsync([{ status: 'failed', retryable: false, message: 'render failed', raw: {} }]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.fetchOutput).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the store step when the moderation scan throws, saving once', async () => {
+    const t = setupAsync([readyPoll]);
+    vi.mocked(t.deps.moderate).mockRejectedValueOnce(new Error('scan down'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(t.bfl.poll).toHaveBeenCalledTimes(1);
+    expect(t.deps.moderate).toHaveBeenCalledTimes(2);
+    expect(t.deps.saveToFiles).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the store step when saving throws, saving once it succeeds', async () => {
+    const t = setupAsync([readyPoll]);
+    const saved = t.deps.saveToFiles as ReturnType<typeof vi.fn>;
+    const original = saved.getMockImplementation()!;
+    saved.mockRejectedValueOnce(new Error('db down')).mockImplementation(original);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+
+  it.each(['poll', 'store'] as const)('fails provider_error when the API key is gone at the %s step', async step => {
+    const t = setupAsync([readyPoll]);
+    const created = await create(t, fluxRequest());
+    if (step === 'store') await t.engine.step(t.jobOf(created).id);
+    await t.engine.step(t.jobOf(created).id);
+    if (step === 'store') await t.engine.step(t.jobOf(created).id);
+    vi.mocked(t.deps.resolveApiKey).mockResolvedValue(null as never);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
   });
 });

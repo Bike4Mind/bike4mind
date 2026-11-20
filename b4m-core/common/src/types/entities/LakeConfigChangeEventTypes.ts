@@ -116,12 +116,18 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'membership-succession',
   /**
-   * A producer-proposed source cleared the acquisition queue (#1671) into the lake, recorded under
+   * A producer-proposed source cleared the acquisition queue into the lake, recorded under
    * whichever rung reviewed it. Split from `decline-proposal`/`restore-proposal` below for the same
    * reason `grant-access`/`revoke-access` are split from each other: one uniform action per verb the
    * reviewer actually took, rather than a status field the reader would have to re-derive.
    */
   'approve-proposal',
+  /**
+   * A proposed source entered the lake because a research config's trusted-site rule admitted it,
+   * with no reviewer. Its own literal so the history never reads as a person's approval; the config
+   * and the matched site are named in the change entry.
+   */
+  'auto-approve-proposal',
   /** The reviewer's decline of a proposed source. See `approve-proposal`. */
   'decline-proposal',
   /**

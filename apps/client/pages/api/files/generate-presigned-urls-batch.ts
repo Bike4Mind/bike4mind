@@ -26,7 +26,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   checkStorageLimitForOwner,
   getSettingsMap,
@@ -308,10 +308,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       );
 
       // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
+      // Create-only: the uploader must send `If-None-Match: *` (uploadFileToUrl, the CLI's uploadFileBytes).
       const command = new PutObjectCommand({
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
         ContentLength: fileItem.fileSize,
+        IfNoneMatch: '*',
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL

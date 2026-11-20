@@ -257,7 +257,7 @@ export type UserDetectionLinks = {
 };
 
 /** Sign-in and signup methods as admins read them. Stored values are free strings (auth strategy names). */
-export const AUTH_METHODS = ['otc', 'password', 'google', 'github', 'okta', 'saml', 'other'] as const;
+export const AUTH_METHODS = ['otc', 'password', 'google', 'github', 'okta', 'saml', 'persona', 'other'] as const;
 export const AuthMethodSchema = z.enum(AUTH_METHODS);
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 
@@ -268,6 +268,7 @@ export const AUTH_METHOD_LABELS: Readonly<Record<AuthMethod, string>> = {
   github: 'GitHub',
   okta: 'Okta',
   saml: 'SSO (SAML)',
+  persona: 'Persona login code',
   other: 'Other',
 };
 

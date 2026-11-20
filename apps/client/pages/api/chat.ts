@@ -17,13 +17,14 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
   getDefaultChatCompletionOptions,
   getSharedTokenizer,
   isChatModelUsable,
   resolveDefaultChatModel,
-} from '@server/utils/chatCompletionDefaults';
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -31,6 +32,7 @@ import {
   projectRepository,
   questRepository,
   sessionRepository,
+  spendFreezeRepository,
   usageEventRepository,
   User,
   Session,
@@ -40,6 +42,8 @@ import {
   BadGatewayError,
   chatContract,
   filterKnownTools,
+  ForbiddenError,
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   GatewayTimeoutError,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -55,15 +59,20 @@ import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
+import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
-import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -97,6 +106,7 @@ const handler = nextRouteForContract(chatContract, {
         owner: req.user,
         ownerUntrusted: req.apiKeyInfo?.ownerUntrusted,
         billingOwnerType: req.apiKeyInfo?.billingOwnerType,
+        unpaidAccountLimits: req.apiKeyInfo?.unpaidAccountLimits,
         holdSlot: Boolean(req.validated.wait),
         req,
       })
@@ -132,6 +142,18 @@ async function handleChat(
 
   const simplifiedRequest = req.validated;
 
+  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
+  // caller's home-org field. When the request names an organizationId we validate the caller
+  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
+  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
+  // is what lets an org member whose org pool is empty still spend their own credits.
+  // An org-billed API key is the exception: its org pays whether or not the body names one, the
+  // same rule as sseRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
+  // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
+  const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
+    ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)
+    : await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
   // An explicit request model wins. Otherwise fall back to the admin default, which on a
   // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
   // only probe when no explicit model was sent.
@@ -143,7 +165,7 @@ async function handleChat(
       logger: req.logger,
     });
     // A free account must not start on a paid-only admin default.
-    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, { organizationId });
     // Self-host, no-explicit-model guard: apiKeys/models are populated only on self-host.
     // If even the resolved default is unusable (no provider key and no local model), fail
     // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.
@@ -187,14 +209,12 @@ async function handleChat(
     );
   }
 
-  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
-  // caller's home-org field. When the request names an organizationId we validate the caller
-  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
-  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
-  // is what lets an org member whose org pool is empty still spend their own credits.
-  const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
-
-  // Refuse capped turns before creating a notebook or quest.
+  assertAiAccessAllowed(req.user);
+  // Refuse frozen and capped turns before creating a notebook or quest. The freeze goes first so a
+  // frozen caller is not told to wait for the daily reset; process() re-checks it for queued turns.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   await checkFreeTierDailySpendCap({
     user: req.user,
     req,
@@ -236,6 +256,8 @@ async function handleChat(
     // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
     // the queued path registers it in questProcessor, so the inline wait=true path must too.
     customMcp: customMcpToolHost,
+    // As questProcessor: the inline wait=true path runs audio_generation itself.
+    audioToolJobs: buildAudioToolJobs(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,
@@ -254,6 +276,7 @@ async function handleChat(
         sessionId,
         organizationId,
         apiKeyId: req.apiKeyInfo?.keyId,
+        apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
@@ -277,15 +300,32 @@ async function handleChat(
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const turnAuth = requestTurnAuth(req);
   let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
-  try {
-    quest = await invokeService.invoke({
+  const invokeTurn = () =>
+    invokeService.invoke({
       body: internalRequest,
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
+    });
+  try {
+    quest = await invokeTurn().catch(error => {
+      if (
+        simplifiedRequest.enableQuestMaster === undefined &&
+        !simplifiedRequest.toolMode &&
+        simplifiedRequest.enableTools === true &&
+        error instanceof ForbiddenError &&
+        error.additionalInfo?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE
+      ) {
+        // Admission refuses before quest creation, so the legacy default can safely fall back.
+        internalRequest.enableQuestMaster = false;
+        return invokeTurn();
+      }
+      throw error;
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -320,10 +360,13 @@ async function handleChat(
             body: {
               ...internalRequest,
               ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
+              questMasterStartId: invokeService.questMasterStartId,
+              questAdmittedAs: invokeService.questAdmittedAs,
               questId: quest.id,
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
               ...turnAuth,
+              apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
               embeddingModel: currentEmbeddingModel,
               queryComplexity: 'simple',
               // Optional schema fields - declared for QuestStartBodySchema type conformance
@@ -449,7 +492,7 @@ async function handleChat(
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
-      // conditional since only the billing failures set it.
+      // conditional since only the billing failures and a moderation refusal set it.
       type: completedQuest.type,
       ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which

@@ -208,7 +208,7 @@ Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when
 A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 
 ```caddyfile
-@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+@completions path /api/ai/v1/completions
 handle @completions {
 	reverse_proxy chatcompletion:8080
 }

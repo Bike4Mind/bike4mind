@@ -57,7 +57,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }),
 }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
-vi.mock('@server/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: () => ({}) }));
+vi.mock('@bike4mind/server-utils/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
@@ -75,7 +75,7 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://test' }, fabFileChunkQueue: { url: 'http://sqs/chunk' } },
 }));
 
-vi.mock('@server/s3/moderationScan', async importOriginal => ({
+vi.mock('@bike4mind/server-utils/s3/moderationScan', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   recordLandedObject: h.recordLandedObject,
 }));

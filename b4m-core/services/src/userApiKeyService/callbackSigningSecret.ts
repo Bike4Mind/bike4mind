@@ -37,7 +37,9 @@ export interface RotateCallbackSigningSecretResult {
  * plus the literal no-escalation rule in assertNoScopeEscalation, because it hands back a secret
  * the minter's receiver will trust. No org-admin fallback: rotate.ts re-owns the key before
  * minting a secret so holder and owner never split, and minting here without re-owning would split
- * them. Replacing it takes effect on the next delivery attempt, including retries of callbacks
+ * them. An org-owned key is the exception: its holder is always the org's service account, which the
+ * org route (pages/api/organizations/[id]/api-keys/[keyId]/callback-secret.ts) passes here after
+ * verifyOrgAccess. Replacing it takes effect on the next delivery attempt, including retries of callbacks
  * already queued.
  */
 export const rotateCallbackSigningSecret = async (

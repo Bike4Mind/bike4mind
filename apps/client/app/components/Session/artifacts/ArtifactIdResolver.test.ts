@@ -3,12 +3,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { getCachedArtifactId, getProvisionalArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
 import { getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
-import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
+import { findReadableArtifactId } from '@client/app/utils/artifactPersistence';
 
 vi.mock('@client/app/utils/artifactPersistence', () => ({
-  findExistingArtifactId: vi.fn(),
+  findReadableArtifactId: vi.fn(),
 }));
-const lookup = vi.mocked(findExistingArtifactId);
+const lookup = vi.mocked(findReadableArtifactId);
 
 type CacheWindow = {
   __artifactIdCache?: Map<string, string>;

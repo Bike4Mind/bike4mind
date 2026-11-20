@@ -1,6 +1,12 @@
 import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
-import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  inboxRepository,
+  spaceRepository,
+  SkillListing,
+  SkillListingVersion,
+} from '@bike4mind/database';
 import type { RequestHandler } from 'express';
 import { rateLimit } from '../middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -17,6 +23,7 @@ import {
 } from '@bike4mind/common';
 import type { ISkillListingDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { isFeatureEnabled } from '../middlewares/featureFlag';
 
 const logger = new Logger({ metadata: { service: 'skillMarket' } });
 
@@ -101,25 +108,46 @@ export function meetsPublicAccountAge(
   return ageDays >= settings.publicMinAccountAgeDays;
 }
 
-/** Orgs whose Organization listings the user may see: any membership, plus orgs they run. */
-export async function memberOrgIdsFor(userId: string): Promise<string[]> {
-  const [member, administered] = await Promise.all([
+/** The orgs and Spaces whose listings a user may see (or, for the admin form, review). */
+export type MarketAudience = { orgIds: string[]; spaceIds: string[] };
+
+/** Orgs the user belongs to or runs, plus their live Spaces; no Spaces at all while `EnableSpaces` is off. */
+export async function audienceIdsFor(userId: string): Promise<MarketAudience> {
+  const [member, administered, spaceIds] = await Promise.all([
     organizationRepository.findMembershipOrgIds(userId),
     organizationRepository.findIdsAdministeredBy(userId),
+    spaceIdsWhenEnabled(() => spaceRepository.findIdsForUser(userId)),
   ]);
-  return [...new Set([...member, ...administered])];
+  return { orgIds: [...new Set([...member, ...administered])], spaceIds };
+}
+
+/** Orgs and Spaces the user may review listings for: org owners and managers, Space owners and admins. */
+export async function adminAudienceIdsFor(userId: string): Promise<MarketAudience> {
+  const [orgIds, spaceIds] = await Promise.all([
+    organizationRepository.findIdsAdministeredBy(userId),
+    spaceIdsWhenEnabled(() => spaceRepository.findIdsAdministeredBy(userId)),
+  ]);
+  return { orgIds, spaceIds };
+}
+
+async function spaceIdsWhenEnabled(load: () => Promise<string[]>): Promise<string[]> {
+  return (await isFeatureEnabled('EnableSpaces')) ? load() : [];
 }
 
 /**
  * The market's visibility gate as a Mongo filter. Unlisted listings are deliberately absent: they
  * are reachable only by token, never by browse/search/recommendations.
  */
-export function marketVisibilityFilter(memberOrgIds: string[]): Record<string, unknown> {
+export function marketVisibilityFilter(audience: MarketAudience): Record<string, unknown> {
   return {
     status: 'approved',
     deletedAt: null,
     hiddenByReports: { $ne: true },
-    $or: [{ visibility: 'public' }, { visibility: 'organization', organizationId: { $in: memberOrgIds } }],
+    $or: [
+      { visibility: 'public' },
+      { visibility: 'organization', organizationId: { $in: audience.orgIds } },
+      { visibility: 'space', spaceId: { $in: audience.spaceIds } },
+    ],
   };
 }
 
@@ -137,37 +165,42 @@ const tokenMatches = (expected: string, given: string | undefined): boolean => {
  */
 export function canSeeListing(
   listing: ISkillListing,
-  memberOrgIds: string[],
+  audience: MarketAudience,
   token?: string,
   hasImported = false
 ): boolean {
   if (listing.status !== 'approved' || listing.deletedAt || listing.hiddenByReports) return false;
   if (listing.visibility === 'public') return true;
-  if (listing.visibility === 'organization') return memberOrgIds.includes(listing.organizationId ?? '');
+  if (listing.visibility === 'organization') return audience.orgIds.includes(listing.organizationId ?? '');
+  if (listing.visibility === 'space') return audience.spaceIds.includes(listing.spaceId ?? '');
   return hasImported || tokenMatches(listing.shareToken, token);
 }
 
 /**
  * Who may approve/reject/delist/audit a listing. Public and unlisted: super-admins, but never on
  * their own Public listing. Organization: the org's owner or manager (the `verifyOrgAccess`
- * predicate, i.e. `findIdsAdministeredBy`), self-approval allowed, or a super-admin.
+ * predicate, i.e. `findIdsAdministeredBy`), self-approval allowed, or a super-admin. Space: the
+ * Space's owner or an admin member, on the same terms.
  */
-export function canReviewListing(listing: ISkillListing, actor: MarketActor, adminOrgIds: string[]): boolean {
+export function canReviewListing(listing: ISkillListing, actor: MarketActor, adminAudience: MarketAudience): boolean {
   if (listing.visibility === 'organization') {
-    return Boolean(actor.isAdmin) || adminOrgIds.includes(listing.organizationId ?? '');
+    return Boolean(actor.isAdmin) || adminAudience.orgIds.includes(listing.organizationId ?? '');
+  }
+  if (listing.visibility === 'space') {
+    return Boolean(actor.isAdmin) || adminAudience.spaceIds.includes(listing.spaceId ?? '');
   }
   if (!actor.isAdmin) return false;
   return !(listing.visibility === 'public' && listing.authorUserId === actor.id);
 }
 
 /** Delisting is a takedown, so a super-admin may always do it (even on their own listing). */
-export function canDelistListing(listing: ISkillListing, actor: MarketActor, adminOrgIds: string[]): boolean {
-  return Boolean(actor.isAdmin) || canReviewListing(listing, actor, adminOrgIds);
+export function canDelistListing(listing: ISkillListing, actor: MarketActor, adminAudience: MarketAudience): boolean {
+  return Boolean(actor.isAdmin) || canReviewListing(listing, actor, adminAudience);
 }
 
 /** Must stay in sync with the restore guard in pages/api/skills/market/[id]/moderate.ts. */
-export function canRestoreListing(listing: ISkillListing, actor: MarketActor, adminOrgIds: string[]): boolean {
-  if (!canDelistListing(listing, actor, adminOrgIds)) return false;
+export function canRestoreListing(listing: ISkillListing, actor: MarketActor, adminAudience: MarketAudience): boolean {
+  if (!canDelistListing(listing, actor, adminAudience)) return false;
   if (actor.isAdmin) return true;
   return listing.authorUserId !== actor.id && !(listing.status === 'delisted' && listing.delistedBySuperAdmin);
 }
@@ -250,6 +283,7 @@ export const publicVersionView = (v: ISkillListingVersion, authorUserId: string)
   honestSummary: v.honestSummary,
   riskTier: v.riskTier,
   selfApproved: isSelfApproved(v, authorUserId),
+  reviewStatus: v.reviewStatus,
   createdAt: v.createdAt,
 });
 

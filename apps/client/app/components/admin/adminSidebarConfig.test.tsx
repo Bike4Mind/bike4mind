@@ -9,9 +9,16 @@ import {
   SIDEBAR_MORE_THRESHOLD,
   SIDEBAR_MORE_VISIBLE,
   SIDEBAR_SECTIONS,
+  filterSidebarSections,
   findSectionKeyForTab,
+  isSamePagePath,
+  sectionEntries,
+  splitSectionEntries,
   splitSectionItems,
+  type SidebarPageLink,
+  type SidebarSection,
 } from './adminSidebarConfig';
+import { ADMIN_SIDEBAR_SECTION_KEYS } from './adminSidebarSectionKeys';
 
 const allItems = SIDEBAR_SECTIONS.flatMap(section => section.items);
 
@@ -61,9 +68,7 @@ describe('SIDEBAR_SECTIONS', () => {
     const testidByTab = new Map(allItems.filter(i => i.testid).map(i => [i.tab, i.testid]));
     // Spot-check the testids referenced by existing E2E flows.
     expect(testidByTab.get(AdminTab.Users)).toBe('admin-users-tab-btn');
-    expect(testidByTab.get(AdminTab.RegistrationInvites)).toBe('admin-invite-center-tab-btn');
     expect(testidByTab.get(AdminTab.Waitlist)).toBe('admin-waitlist-tab-btn');
-    expect(testidByTab.get(AdminTab.SecOpsTriage)).toBe('admin-secops-triage-btn');
     expect(testidByTab.get(AdminTab.SecurityDashboard)).toBe('admin-security-dashboard-btn');
     expect(testidByTab.get(AdminTab.DlqReplay)).toBe('admin-dlq-replay-btn');
     expect(testidByTab.get(AdminTab.HelpAnalytics)).toBe('admin-help-analytics-btn');
@@ -77,13 +82,16 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.size).toBe(2);
   });
 
+  it('has no item for the retired issue filing page, which lives on the Security page', () => {
+    expect(allItems.some(i => i.tab === AdminTab.SecOpsTriage)).toBe(false);
+  });
+
   it('labels the Waitlist item Invite Center', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
-  it('labels the secrets items with their page titles', () => {
+  it('labels the secrets item with its page title', () => {
     expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
-    expect(allItems.find(i => i.tab === AdminTab.SecretsRotation)?.label).toBe('Secrets rotation');
   });
 
   it('names the event, Slack and help metrics items like their page titles', () => {
@@ -114,8 +122,8 @@ describe('findSectionKeyForTab', () => {
     expect(findSectionKeyForTab(AdminTab.Waitlist)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
-    expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('trust');
-    expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');
+    expect(findSectionKeyForTab(AdminTab.SystemSecrets)).toBe('trust');
+    expect(findSectionKeyForTab(AdminTab.Models)).toBe('ai');
     expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('platform');
     expect(findSectionKeyForTab(AdminTab.AdminSettings)).toBe('settings');
   });
@@ -227,5 +235,122 @@ describe('AdminPage tab wiring', () => {
     );
     const orphans = allItems.map(item => tabNameByValue.get(item.tab)).filter(name => !name || !panelTabs.has(name));
     expect(orphans).toEqual([]);
+  });
+});
+
+describe('ADMIN_SIDEBAR_SECTION_KEYS', () => {
+  it('lists the keys of SIDEBAR_SECTIONS, in order, so a contributed page can name a section', () => {
+    expect([...ADMIN_SIDEBAR_SECTION_KEYS]).toEqual(SIDEBAR_SECTIONS.map(section => section.key));
+  });
+
+  it('leaves SIDEBAR_SECTIONS free of contributed pages', () => {
+    expect(SIDEBAR_SECTIONS.filter(section => section.pages !== undefined)).toEqual([]);
+  });
+});
+
+describe('contributed pages in a section', () => {
+  const Icon = () => null;
+  const link = (label: string, path = `/admin/ext/${label.toLowerCase()}`): SidebarPageLink => ({
+    Icon,
+    label,
+    path,
+    testid: `page-${label.toLowerCase()}`,
+  });
+  const gates = { userMigration: true, liveOpsTriage: true };
+  const withPages = (key: string, pages: SidebarPageLink[]): SidebarSection[] =>
+    SIDEBAR_SECTIONS.map(section => (section.key === key ? { ...section, pages } : section));
+
+  it('lists the tab items first, then the pages', () => {
+    const money = withPages('money', [link('Reports'), link('Audits')]).find(section => section.key === 'money')!;
+    const entries = sectionEntries(money);
+
+    expect(entries.map(entry => entry.kind)).toEqual([...money.items.map(() => 'tab'), 'page', 'page']);
+    expect(entries.slice(-2).map(entry => (entry.kind === 'page' ? entry.page.label : ''))).toEqual([
+      'Reports',
+      'Audits',
+    ]);
+  });
+
+  it('counts a page toward the More threshold and hides it behind More like a trailing item', () => {
+    const entries = sectionEntries(withPages('platform', [link('Reports')]).find(s => s.key === 'platform')!);
+    const page = entries[entries.length - 1];
+
+    const collapsed = splitSectionEntries(entries, false, () => false);
+    expect(collapsed.shown).toEqual(entries.slice(0, SIDEBAR_MORE_VISIBLE));
+    expect(collapsed.hiddenCount).toBe(entries.length - SIDEBAR_MORE_VISIBLE);
+    expect(collapsed.shown).not.toContain(page);
+
+    expect(splitSectionEntries(entries, true, () => false).shown).toEqual(entries);
+    expect(splitSectionEntries(entries, false, entry => entry === page).shown).toEqual([
+      ...entries.slice(0, SIDEBAR_MORE_VISIBLE),
+      page,
+    ]);
+  });
+
+  it('keeps a short section whole when a page brings it to the threshold, and cuts it one past', () => {
+    const overview = SIDEBAR_SECTIONS.find(section => section.key === 'overview')!;
+    const room = SIDEBAR_MORE_THRESHOLD - overview.items.length;
+    const fits = sectionEntries({ ...overview, pages: Array.from({ length: room }, (_, i) => link(`P${i}`)) });
+    const over = sectionEntries({ ...overview, pages: Array.from({ length: room + 1 }, (_, i) => link(`P${i}`)) });
+
+    expect(splitSectionEntries(fits, false, () => false).hiddenCount).toBe(0);
+    expect(splitSectionEntries(over, false, () => false).hiddenCount).toBe(over.length - SIDEBAR_MORE_VISIBLE);
+  });
+
+  it('keeps splitSectionItems identical to the generic split for tab items', () => {
+    const people = SIDEBAR_SECTIONS.find(section => section.key === 'people')!.items;
+    expect(splitSectionItems(people, AdminTab.Users, false)).toEqual(
+      splitSectionEntries(people, false, item => item.tab === AdminTab.Users)
+    );
+  });
+
+  it('filters pages by label and by section label, and drops a section left empty', () => {
+    const sections = withPages('money', [link('Reports')]);
+
+    const byLabel = filterSidebarSections(sections, gates, 'report');
+    expect(byLabel.map(section => section.key)).toEqual(['money']);
+    expect(byLabel[0].items).toEqual([]);
+    expect(byLabel[0].pages?.map(page => page.label)).toEqual(['Reports']);
+
+    const bySection = filterSidebarSections(sections, gates, 'money');
+    expect(bySection[0].pages?.map(page => page.label)).toEqual(['Reports']);
+    expect(bySection[0].items.length).toBeGreaterThan(0);
+
+    expect(filterSidebarSections(sections, gates, 'zzz-no-match')).toEqual([]);
+  });
+
+  it('drops the pages canOpenPage refuses, and the section they leave empty', () => {
+    const sections = withPages('money', [link('Reports')]);
+
+    const refused = filterSidebarSections(
+      sections,
+      gates,
+      'report',
+      () => true,
+      () => false
+    );
+    expect(refused).toEqual([]);
+
+    const unfiltered = filterSidebarSections(
+      sections,
+      gates,
+      '',
+      () => true,
+      () => false
+    );
+    expect(unfiltered.find(section => section.key === 'money')?.pages).toEqual([]);
+  });
+
+  it('adds no pages key to a section that had none', () => {
+    const sections = filterSidebarSections(SIDEBAR_SECTIONS, gates, '');
+    expect(sections.every(section => !('pages' in section))).toBe(true);
+    expect(sections).toEqual(SIDEBAR_SECTIONS);
+  });
+
+  it('compares page paths across a trailing slash and letter case', () => {
+    expect(isSamePagePath('/admin/ext/reports', '/admin/ext/reports')).toBe(true);
+    expect(isSamePagePath('/admin/ext/reports', '/admin/ext/reports/')).toBe(true);
+    expect(isSamePagePath('/admin/ext/reports', '/Admin/Ext/Reports')).toBe(true);
+    expect(isSamePagePath('/admin/ext/reports', '/admin/ext/reports-2')).toBe(false);
   });
 });

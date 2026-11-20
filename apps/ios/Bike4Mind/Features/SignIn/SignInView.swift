@@ -32,10 +32,10 @@ struct SignInView: View {
 
   private var header: some View {
     VStack(spacing: Tokens.Spacing.m) {
-      Image(systemName: "brain.head.profile")
-        .font(.largeTitle)
-        .imageScale(.large)
-        .foregroundStyle(Tokens.Palette.brand)
+      Image("LaunchMark")
+        .resizable()
+        .scaledToFit()
+        .frame(width: Tokens.Spacing.xxl, height: Tokens.Spacing.xxl)
         .accessibilityHidden(true)
       Text("Bike4Mind")
         .font(Tokens.Typography.wordmark)
@@ -76,7 +76,7 @@ struct SignInView: View {
       }
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
-      .buttonBorderShape(.roundedRectangle(radius: Tokens.Radius.control))
+      .buttonBorderShape(.roundedRectangle(radius: Tokens.Radius.md))
       .disabled(isSigningIn)
       .accessibilityIdentifier("signin-submit-btn")
 

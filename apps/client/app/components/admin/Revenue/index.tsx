@@ -16,6 +16,8 @@ import {
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import {
   AdminPageHeader,
+  ChartDataTable,
+  ChartSection,
   DataTable,
   EmptyState,
   ErrorState,
@@ -24,7 +26,9 @@ import {
   StatStrip,
   StatTile,
   StatusChip,
+  ViewTabs,
   formatMoney,
+  type ChartSectionBody,
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
@@ -51,11 +55,20 @@ import {
 import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway } from './revenueFormat';
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
+import { PaymentFulfillmentReview } from './PaymentFulfillmentReview';
+import { PaymentsView } from './payments/PaymentsView';
+import { useRevenueView } from './payments/usePaymentsTabParams';
+import type { RevenueView } from './revenueTabSearch';
 
 const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
   { value: '30d', label: '30 days' },
   { value: '90d', label: '90 days' },
   { value: '12m', label: '12 months' },
+];
+
+const VIEW_TABS: readonly { id: RevenueView; label: string }[] = [
+  { id: 'subscriptions', label: 'Subscriptions' },
+  { id: 'payments', label: 'Payments' },
 ];
 
 const rangeLabel = (range: RevenueRange) => `Last ${RANGE_OPTIONS.find(option => option.value === range)?.label}`;
@@ -158,79 +171,42 @@ type ChartSectionProps = {
   table: (trend: RevenueTrendPoint[], data: AdminRevenueData) => ReactNode;
 };
 
-/** A chart in a SectionCard with its takeaway, a "View as table" fallback, and loading and empty states (spec 5.7). */
-function ChartSection({ title, testId, data, loading, lead = false, caption, chart, table }: ChartSectionProps) {
-  const [asTable, setAsTable] = useState(false);
+/** Revenue's adapter over the shared ChartSection: every chart reads the same snapshot trend. */
+function TrendChartSection({ title, testId, data, loading, lead = false, caption, chart, table }: ChartSectionProps) {
   const trend = data?.trend ?? [];
-  const hasTrend = trend.length > 0;
-  let body: ReactNode;
+  let body: ChartSectionBody;
   if (!data || loading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <Skeleton
-          variant="rectangular"
-          height={lead ? 240 : 200}
-          sx={{ borderRadius: '8px' }}
-          data-testid={`${testId}-skeleton`}
-        />
-      </Box>
-    );
-  } else if (!hasTrend) {
+    body = { kind: 'loading' };
+  } else if (trend.length === 0) {
     // trendStartsOn is today until the first snapshot; one before the range means the snapshots stopped.
     const notStarted = data.trendStartsOn >= data.from;
     const emptyTitle = notStarted
       ? `Trend starts collecting on ${formatLongDay(data.trendStartsOn)}`
       : 'No snapshots in this range';
-    body = lead ? (
-      <Box data-testid={`${testId}-empty`}>
-        <EmptyState
-          title={emptyTitle}
-          description={
-            notStarted
-              ? 'A snapshot is taken once a day. The numbers above are current.'
-              : `Snapshots began on ${formatLongDay(data.trendStartsOn)}, but none fall in this range. The numbers above are current.`
-          }
-          action={null}
-        />
-      </Box>
-    ) : (
-      <Typography level="body-sm" sx={{ color: 'admin.inkMuted', p: 2 }} data-testid={`${testId}-empty`}>
-        {`${emptyTitle}.`}
-      </Typography>
-    );
-  } else {
-    body = (
-      <Stack gap={1.5} sx={{ p: 2 }}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid={`${testId}-caption`}>
-          {caption(trend, data)}
+    body = {
+      kind: 'notice',
+      content: lead ? (
+        <Box data-testid={`${testId}-empty`}>
+          <EmptyState
+            title={emptyTitle}
+            description={
+              notStarted
+                ? 'A snapshot is taken once a day. The numbers above are current.'
+                : `Snapshots began on ${formatLongDay(data.trendStartsOn)}, but none fall in this range. The numbers above are current.`
+            }
+            action={null}
+          />
+        </Box>
+      ) : (
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', p: 2 }} data-testid={`${testId}-empty`}>
+          {`${emptyTitle}.`}
         </Typography>
-        {asTable ? table(trend, data) : chart(trend, data)}
-      </Stack>
-    );
+      ),
+    };
+  } else {
+    body = { kind: 'ready', caption: caption(trend, data), chart: chart(trend, data), table: table(trend, data) };
   }
-  return (
-    <SectionCard
-      title={title}
-      body="custom"
-      data-testid={testId}
-      action={
-        hasTrend && (
-          <Button
-            size="sm"
-            variant="plain"
-            onClick={() => setAsTable(previous => !previous)}
-            aria-pressed={asTable}
-            data-testid={`${testId}-table-toggle-btn`}
-            sx={adminFocus}
-          >
-            {asTable ? 'View as chart' : 'View as table'}
-          </Button>
-        )
-      }
-    >
-      {body}
-    </SectionCard>
-  );
+  return <ChartSection title={title} testId={testId} body={body} skeletonHeight={lead ? 240 : 200} />;
 }
 
 const moneyColumn = <Row,>(id: string, label: string, amount: (row: Row) => number): DataColumn<Row> => ({
@@ -297,17 +273,7 @@ const chartTable = <Row,>(
   rows: readonly Row[],
   columns: DataColumn<Row>[],
   getRowId: (row: Row) => string
-) => (
-  <DataTable
-    label={label}
-    testId={testId}
-    rows={[...rows]}
-    columns={columns}
-    getRowId={getRowId}
-    onRetry={() => undefined}
-    minWidth="24rem"
-  />
-);
+) => <ChartDataTable label={label} testId={testId} rows={rows} columns={columns} getRowId={getRowId} />;
 
 function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: boolean }) {
   const unit = PERIOD_UNIT[data?.range ?? '30d'];
@@ -317,7 +283,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
   const shared = { data, loading };
   return (
     <>
-      <ChartSection
+      <TrendChartSection
         {...shared}
         lead
         title="MRR over time"
@@ -327,7 +293,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
         table={trend => chartTable('MRR over time', 'admin-revenue-trend-table', trend, TREND_COLUMNS, row => row.date)}
       />
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, minWidth: 0 }}>
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="MRR movement"
           testId="admin-revenue-movement"
@@ -337,7 +303,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             chartTable('MRR movement', 'admin-revenue-movement-table', periods, MOVEMENT_COLUMNS, row => row.start)
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="MRR by plan over time"
           testId="admin-revenue-plan-trend"
@@ -353,7 +319,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             )
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="Paying customers by owner type"
           testId="admin-revenue-by-owner"
@@ -369,7 +335,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             )
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="At-risk MRR"
           testId="admin-revenue-at-risk-trend"
@@ -539,6 +505,7 @@ function TablesSection({ data, loading, openView }: { data?: AdminRevenueData; l
 
 const AdminRevenue: React.FC = () => {
   const [range, setRange] = useState<RevenueRange>('30d');
+  const [view, setView] = useRevenueView();
   const query = useAdminRevenue(range);
   const navigate = useNavigate();
   const openView: OpenView = (viewId, filters) =>
@@ -547,28 +514,22 @@ const AdminRevenue: React.FC = () => {
   const response = query.data;
   const data = response?.stripeConfigured ? response : undefined;
   const loading = query.isLoading || (query.isPlaceholderData && query.isFetching);
+  const stripeUnconfigured = response !== undefined && !response.stripeConfigured;
 
   const header = (
     <AdminPageHeader
-      title="Revenue"
-      description={`Monthly recurring revenue from Stripe subscriptions, in ${MRR_CURRENCY.toUpperCase()}.`}
-      actions={
-        response?.stripeConfigured !== false && (
-          <SegmentedControl
-            options={RANGE_OPTIONS}
-            value={range}
-            onChange={setRange}
-            aria-label="Revenue range"
-            data-testid="admin-revenue-range"
-          />
-        )
-      }
+      title="Revenue & payments"
+      description="Recurring revenue and the payments behind it, from Stripe and the credit ledger."
     />
   );
 
-  let content: ReactNode;
-  if (response && !response.stripeConfigured) {
-    content = (
+  // The Payments view reads the credit ledger and stored billing events, so only the Stripe-backed
+  // Subscriptions view gives way to the unconfigured notice.
+  let viewContent: ReactNode;
+  if (view === 'payments') {
+    viewContent = <PaymentsView />;
+  } else if (stripeUnconfigured) {
+    viewContent = (
       <Box data-testid="admin-revenue-stripe-unconfigured">
         <EmptyState
           title="Stripe isn't configured on this deployment"
@@ -589,9 +550,9 @@ const AdminRevenue: React.FC = () => {
       </Box>
     );
   } else if (query.isError && !data) {
-    content = <ErrorState message="Could not load revenue." onRetry={() => void query.refetch()} />;
+    viewContent = <ErrorState message="Could not load revenue." onRetry={() => void query.refetch()} />;
   } else {
-    content = (
+    viewContent = (
       <>
         <RevenueStrip data={data} isError={query.isError} />
         <TrendSections data={data} loading={loading} />
@@ -603,7 +564,35 @@ const AdminRevenue: React.FC = () => {
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-revenue-tab">
       {header}
-      {content}
+      <PaymentFulfillmentReview />
+      <Stack
+        direction="row"
+        flexWrap="wrap"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={1}
+        sx={{ minWidth: 0 }}
+      >
+        <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
+          <ViewTabs
+            views={VIEW_TABS}
+            activeId={view}
+            onSelect={id => setView(id === 'payments' ? 'payments' : 'subscriptions')}
+            aria-label="Revenue views"
+            data-testid="admin-revenue-view"
+          />
+        </Box>
+        {view === 'subscriptions' && !stripeUnconfigured && (
+          <SegmentedControl
+            options={RANGE_OPTIONS}
+            value={range}
+            onChange={setRange}
+            aria-label="Revenue range"
+            data-testid="admin-revenue-range"
+          />
+        )}
+      </Stack>
+      {viewContent}
     </Stack>
   );
 };

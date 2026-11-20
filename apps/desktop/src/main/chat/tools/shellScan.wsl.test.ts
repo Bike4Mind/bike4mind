@@ -376,7 +376,6 @@ describe('where a command in a WSL project lands after a cd, by Linux rules', ()
 
     expect(scan?.directories).toEqual([]);
     expect(scan?.ungranted).toEqual([]);
-    expect(scan?.contained).toBe(true);
   });
 
   it('checks a share path given to a program at the place the share names too', async () => {

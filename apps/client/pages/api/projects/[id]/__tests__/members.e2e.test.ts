@@ -159,10 +159,9 @@ describe('DELETE /api/projects/[id]/members - pinned files the leaver can no lon
       password: null,
       hasUsablePassword: false,
     });
-    await Project.updateOne(
-      { _id: projectId },
-      { $push: { users: { userId: stayer.id, permissions: [Permission.read, Permission.update] } } }
-    );
+    await projectRepository.shareable.updateUserShares(projectId, {
+      add: [{ userId: stayer.id, permissions: [Permission.read, Permission.update] }],
+    });
     const ownerFile = await FabFile.create({
       userId: owner.id,
       fileName: 'owner.md',
@@ -251,10 +250,9 @@ describe("DELETE /api/projects/[id]/members - the owner's grant on a departing m
       password: null,
       hasUsablePassword: false,
     });
-    await Project.updateOne(
-      { _id: projectId },
-      { $push: { users: { userId: stayer.id, permissions: [Permission.read, Permission.update] } } }
-    );
+    await projectRepository.shareable.updateUserShares(projectId, {
+      add: [{ userId: stayer.id, permissions: [Permission.read, Permission.update] }],
+    });
     const file = await addOwnFileAsMember(member, projectId);
     expect(await canRead(owner, file.id)).toBe(true);
     expect(await canRead(stayer, file.id)).toBe(true);

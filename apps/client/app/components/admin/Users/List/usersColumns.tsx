@@ -206,7 +206,8 @@ export function usersColumns({
       label: 'Credits',
       sortable: true,
       numeric: true,
-      width: '6rem',
+      // Fits 10,000,000: a truncated number reads as a different number.
+      width: '7rem',
       render: row => {
         const held = row.signupGrant?.heldUnlock;
         if (!held) return formatNumber(row.currentCredits ?? 0);

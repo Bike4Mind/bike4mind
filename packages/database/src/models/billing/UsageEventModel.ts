@@ -1,6 +1,8 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  COMPLETION_RUN_PURPOSES,
+  COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
@@ -40,7 +42,12 @@ import {
   USAGE_PRICE_SOURCES,
   attributeChargeToFundingSources,
   type IUsageFundingBreakdown,
+  type SpendBreakdown,
+  type SpendBreakdownParams,
+  type SpendTimelineParams,
+  type SpendTimelineRow,
 } from '@bike4mind/common';
+import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -54,11 +61,9 @@ const SPEND_ACCOUNT_LIMIT = 50;
 // model pair; without it a large catalog would ship every one.
 const SPEND_MODEL_LIMIT = 100;
 
-// Old rows lack executed*, so always coalesce to the requested provider/model.
-const EXECUTED_MODEL_GROUP_KEY = {
-  executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
-  executedModel: { $ifNull: ['$executedModel', '$model'] },
-} as const;
+// Spend explorer scans can span a year of events; stop a runaway one instead of holding a connection.
+const SPEND_EXPLORER_MAX_TIME_MS = 20_000;
+
 const EXECUTED_MODEL_FIELDS = {
   executedProvider: '$_id.executedProvider',
   executedModel: '$_id.executedModel',
@@ -76,6 +81,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     ownerId: { type: String, required: true },
     ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
     sessionId: { type: String, required: false },
+    projectId: { type: String, required: false },
     dataLakeId: { type: String, required: false },
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
@@ -179,6 +185,22 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           attachmentCount: { type: Number, required: false },
           attachmentBytes: { type: Number, required: false },
           operation: { type: String, required: false, enum: [...USAGE_EVENT_OPERATIONS] },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRun. No index yet: run totals are read by a later reader.
+    run: {
+      type: new Schema(
+        {
+          runId: { type: String, required: true },
+          role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
+          purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
+          taskId: { type: String, required: false, maxlength: 128 },
+          attemptId: { type: String, required: false, maxlength: 128 },
+          parentSessionId: { type: String, required: false, maxlength: 128 },
+          sessionId: { type: String, required: false, maxlength: 128 },
         },
         { _id: false }
       ),
@@ -676,6 +698,29 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     };
   }
 
+  async spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]> {
+    return this.model
+      .aggregate<SpendTimelineRow>(spendTimelinePipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+  }
+
+  async spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown> {
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<{ costUsd: number }>;
+        byProvider: SpendBreakdown['byProvider'];
+        bySegment: SpendBreakdown['bySegment'];
+        topActors: SpendBreakdown['topActors'];
+      }>(spendBreakdownPipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return {
+      totalCostUsd: result?.totals?.[0]?.costUsd ?? 0,
+      byProvider: result?.byProvider ?? [],
+      bySegment: result?.bySegment ?? [],
+      topActors: result?.topActors ?? [],
+    };
+  }
+
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     // Both provider counts must be real positive counts to compare against the
@@ -806,6 +851,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     const [result] = await this.model.aggregate<{
       overTime: IOwnerSpendDay[];
       byMember: IOwnerSpendMember[];
+      byProject: IOwnerUsageSummary['byProject'];
       byModel: IOwnerSpendModel[];
       byFeature: IOwnerSpendFeature[];
       totals: IUsageSpendBucket[];
@@ -828,6 +874,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $project: { _id: 0, userId: '$_id', ...spendFields } },
             { $sort: { creditsCharged: -1 } },
           ],
+          byProject: [
+            { $group: { _id: { $ifNull: ['$projectId', null] }, ...spendSums } },
+            { $project: { _id: 0, projectId: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1, projectId: 1 } },
+          ],
           byModel: [
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
             { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
@@ -847,6 +898,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return {
       overTime: result?.overTime ?? [],
       byMember: result?.byMember ?? [],
+      byProject: result?.byProject ?? [],
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.

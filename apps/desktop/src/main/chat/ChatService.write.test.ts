@@ -6,6 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -27,6 +28,7 @@ describe('ChatService write gate', () => {
   let root: string;
   let outside: string;
   let target: string;
+  let grants: Parameters<NonNullable<ConstructorParameters<typeof ChatService>[0]['capabilities']>['grant']>[0][];
 
   const toolEvents = (status: ChatToolCall['status']) =>
     events.filter(event => (event.type === 'tool-start' || event.type === 'tool-end') && event.call.status === status);
@@ -50,6 +52,8 @@ describe('ChatService write gate', () => {
     await writeFile(target, 'alpha\nbeta\ngamma\n', 'utf8');
 
     approvals = new ApprovalGate();
+    const granted: typeof grants = [];
+    grants = granted;
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
@@ -66,6 +70,13 @@ describe('ChatService write gate', () => {
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-write-sessions-')), 'test-model'),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
+      capabilities: {
+        grant: vi.fn().mockImplementation(async grant => {
+          granted.push(grant);
+          return grant;
+        }),
+        revokeMatching: vi.fn(),
+      },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -211,6 +222,94 @@ describe('ChatService write gate', () => {
       await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nsomeone else got here\ngamma\n');
     });
   });
+  // Each edit carries different text, so "Allow in this chat" has to stand for the file, not for
+  // the one change it was given on.
+  describe('"Allow in this chat" on a file change', () => {
+    async function settled(count: number): Promise<void> {
+      await vi.waitUntil(() => post.mock.calls.length === count, { timeout: 5000, interval: 10 });
+    }
+
+    it('covers later, different changes to the same file in this conversation', async () => {
+      await startTurn('change the file a few times');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+
+      streams[1].write(toolTurn('c2', 'file_edit', { path: target, oldText: 'gamma', newText: 'GAMMA' }));
+      streams[1].write(frame('[DONE]'));
+      await settled(3);
+      streams[2].write(
+        toolTurn('c3', 'file_edit', {
+          path: target,
+          edits: [
+            { oldText: 'alpha', newText: 'ALPHA' },
+            { oldText: 'GAMMA', newText: 'Gamma' },
+          ],
+        })
+      );
+      streams[2].write(frame('[DONE]'));
+      await settled(4);
+      streams[3].write(toolTurn('c4', 'file_write', { path: target, content: 'rewritten\n' }));
+      streams[3].write(frame('[DONE]'));
+      await settled(5);
+
+      expect(toolEvents('awaiting-approval')).toHaveLength(1);
+      await expect(readFile(target, 'utf8')).resolves.toBe('rewritten\n');
+    });
+
+    it('asks again once the recorded grant for the file is revoked', async () => {
+      await startTurn('change the file twice');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+
+      const [grant] = grants;
+      expect(revokeSessionCapability(grant as Parameters<typeof revokeSessionCapability>[0], approvals)).toBe(true);
+
+      streams[1].write(toolTurn('c2', 'file_edit', { path: target, oldText: 'gamma', newText: 'GAMMA' }));
+      streams[1].write(frame('[DONE]'));
+      await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+      await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nBETA\ngamma\n');
+    });
+
+    it('still asks before changing a different file', async () => {
+      const other = join(root, 'other.md');
+      await writeFile(other, 'one\n', 'utf8');
+      await startTurn('change two files');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+
+      streams[1].write(toolTurn('c2', 'file_edit', { path: other, oldText: 'one', newText: 'ONE' }));
+      streams[1].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+      await expect(readFile(other, 'utf8')).resolves.toBe('one\n');
+    });
+
+    it('is not carried into another conversation', async () => {
+      await startTurn('fix the second line');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+      streams[1].write(frame('Done.'));
+      streams[1].write(frame('[DONE]'));
+
+      const { id } = await service.createSession();
+      await service.setApprovalMode(id, 'ask');
+      await service.send(id, 'and the third');
+      await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+      streams[2].write(toolTurn('c2', 'file_edit', { path: target, oldText: 'gamma', newText: 'GAMMA' }));
+      streams[2].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+    });
+  });
+
   describe('editing tools by model', () => {
     const declared = (request: number): string[] =>
       post.mock.calls[request][1].options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name);

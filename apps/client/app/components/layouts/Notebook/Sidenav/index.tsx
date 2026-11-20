@@ -5,12 +5,13 @@ import { useTranslation } from 'react-i18next';
 import { gray } from '@client/app/utils/themes/colors';
 import SidenavFooter from './Footer';
 import SideNavHeader from './Header';
-import { useIsTablet } from '@client/app/hooks/useIsMobile';
+import { useIsMobile, useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useNotebookLayout } from '..';
 import { useShallow } from 'zustand/react/shallow';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { getWorkspaceSurface } from '@bike4mind/common';
 import { hostedWorkspaceAt } from '@client/app/utils/premiumHostedWorkspace';
+import { coachCover } from '@client/app/components/tutorial/coachCover';
 
 // Lazy load CombinedNotebooks to reduce initial bundle size
 const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
@@ -54,6 +55,7 @@ const NotebookSideNav = () => {
   // Tablet + mobile: slide off-screen when closed and show a dismiss backdrop
   // when open (overlay behavior). Desktop pins the sidebar in flow.
   const isTablet = useIsTablet();
+  const isMobile = useIsMobile();
   const [openSideNav, setOpenSideNav] = useNotebookLayout(useShallow(s => [s.openSideNav, s.setOpenSideNav]));
   // A route an overlay claims owns its dedicated, surface-scoped nav; every other route uses the
   // shared one. A claim is the route itself, or - for a workspace core registers - any app-shell
@@ -73,6 +75,7 @@ const NotebookSideNav = () => {
       component="nav"
       aria-label={t('sidenav.sidebar', 'Sidebar')}
       data-testid="sidenav-container"
+      {...coachCover(isMobile && openSideNav)}
       sx={theme => ({
         height: '100dvh',
         backgroundColor: theme.palette.background.surface2,

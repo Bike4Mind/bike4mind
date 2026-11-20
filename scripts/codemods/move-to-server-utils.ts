@@ -33,7 +33,7 @@
  * shim of its package path (the move did not happen, or the target belongs to another file).
  * Idempotent: a second run changes nothing, including after the shims are added.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
@@ -304,8 +304,15 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
     }
   });
 
+  const isFile = (rel: string) => existsSync(path.join(root, rel)) && statSync(path.join(root, rel)).isFile();
+  // A non-source asset (e.g. a .json the moved code imports) keeps its extension in the specifier,
+  // so it counts as moved only when that exact path is a package file and its old copy is gone.
   const isPackageFile = (target: string) =>
-    ['.ts', '/index.ts'].some(ext => existsSync(path.join(root, `${target}${ext}`)));
+    ['.ts', '/index.ts'].some(ext => isFile(`${target}${ext}`)) ||
+    (!SOURCE_EXT.test(target) &&
+      path.extname(target) !== '' &&
+      isFile(target) &&
+      !existsSync(path.join(root, `${CLIENT_SERVER}${target.slice(PACKAGE_SRC.length)}`)));
   // Two passes: findRewrites throws on a left-behind import, and that must happen before any write.
   const pending: { absFile: string; file: string; next: string }[] = [];
   const warnings: string[] = [];

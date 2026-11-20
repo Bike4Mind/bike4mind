@@ -12,9 +12,13 @@ export const cleanUpRevokedFileReferences = (targets: sharingService.RevokedFile
     // Imported at call time, like the session routes: the resolver's graph reaches the Mongoose models.
     // requireCompleteView: a lake view narrowed by an outage must not read as "no longer reachable".
     resolveAttachmentLakeAccess: async user =>
-      (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, logger, {
-        requireCompleteView: true,
-      })(),
+      (await import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
+        user,
+        logger,
+        {
+          requireCompleteView: true,
+        }
+      )(),
     logger,
   });
 

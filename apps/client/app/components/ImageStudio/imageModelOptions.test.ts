@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ImageModels } from '@bike4mind/common';
+import { IMAGE_MODEL_STRENGTHS, ImageModels, usdToCredits } from '@bike4mind/common';
+import { estimateImageUsd } from '@bike4mind/services/imageCost';
 import {
-  buildImageModelOptions,
+  EMPTY_IMAGE_INTENT,
   imageAspectRatioOptions,
+  imageCreditsPerImage,
+  imageFieldProblems,
+  imageIntentInputs,
+  imageMaskSupport,
+  imageModelCards,
   imageModelWhyNot,
   imageSizeOptions,
   pickDefaultImageModel,
@@ -10,49 +16,133 @@ import {
 
 const available = [
   { id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' },
+  { id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' },
   { id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' },
   { id: ImageModels.GPT_IMAGE_1_5, name: 'GPT Image 1.5' },
   { id: 'not-an-image-model', name: 'Unknown' },
 ];
 
-describe('buildImageModelOptions', () => {
-  it('keeps catalog models only, labelled by the model list', () => {
-    const options = buildImageModelOptions(available, {});
-    expect(options.map(option => option.model)).toEqual([
-      ImageModels.FLUX_KONTEXT_PRO,
-      ImageModels.GEMINI_3_1_FLASH_IMAGE,
+const cardOf = (cards: ReturnType<typeof imageModelCards>, id: string) => {
+  const card = cards.find(candidate => candidate.id === id);
+  if (!card) throw new Error(`no card for ${id}`);
+  return card;
+};
+
+describe('imageModelCards', () => {
+  it('keeps catalog models only, ranked for the request, with the name, provider, strength and modes', () => {
+    const cards = imageModelCards(available, EMPTY_IMAGE_INTENT);
+    expect(cards.map(card => card.id)).toEqual([
       ImageModels.GPT_IMAGE_1_5,
+      ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
+      ImageModels.FLUX_KONTEXT_PRO,
     ]);
-    expect(options[2]).toEqual({ model: ImageModels.GPT_IMAGE_1_5, label: 'GPT Image 1.5', disabledReason: null });
+    expect(cardOf(cards, ImageModels.GPT_IMAGE_1_5)).toMatchObject({
+      name: 'GPT Image 1.5',
+      provider: 'OpenAI',
+      strength: IMAGE_MODEL_STRENGTHS[ImageModels.GPT_IMAGE_1_5],
+      outputNoun: 'image',
+      pickedFor: 'sharp detail and text',
+      whyNotCode: null,
+      unavailableReason: null,
+      mismatchReason: null,
+    });
   });
 
-  it('disables an edit-only model with its why-not reason', () => {
-    const [kontext] = buildImageModelOptions(available, {});
-    expect(kontext?.disabledReason).toEqual(expect.any(String));
-    expect(kontext?.disabledReason).not.toBe('');
+  it('says what each fitting model was picked for, naming attached references', () => {
+    const intent = { ...EMPTY_IMAGE_INTENT, references: [{ fileId: 'f1', fileName: 'mug.png' }] };
+    const [top] = imageModelCards(available, intent);
+    expect(top).toMatchObject({ id: ImageModels.GPT_IMAGE_1_5, pickedFor: 'sharp detail and text + reference' });
   });
 
-  it('disables a model that cannot honour the chosen size', () => {
-    expect(imageModelWhyNot(ImageModels.GEMINI_3_1_FLASH_IMAGE, { size: '1024x1536' })).toEqual(expect.any(String));
-    expect(imageModelWhyNot(ImageModels.GPT_IMAGE_1_5, { size: '1024x1536' })).toBeNull();
+  it('ranks a model that cannot honour the request below the ones that can, with the validator code', () => {
+    const cards = imageModelCards(available, { ...EMPTY_IMAGE_INTENT, size: '1024x1536' });
+    expect(cards.map(card => card.id)).toEqual([
+      ImageModels.GPT_IMAGE_1_5,
+      ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
+      ImageModels.FLUX_KONTEXT_PRO,
+    ]);
+    expect(cardOf(cards, ImageModels.GEMINI_3_1_FLASH_IMAGE)).toMatchObject({
+      pickedFor: null,
+      whyNotCode: 'unsupported_size',
+      mismatchReason: expect.any(String),
+    });
+  });
+
+  it('makes an edit-only model unavailable with its why-not reason', () => {
+    const kontext = cardOf(imageModelCards(available, EMPTY_IMAGE_INTENT), ImageModels.FLUX_KONTEXT_PRO);
+    expect(kontext.unavailableReason).toEqual(expect.any(String));
+    expect(kontext.unavailableReason).not.toBe('');
+  });
+
+  // The server lists only models the caller can run, so a FLUX or Grok model it lists is runnable.
+  it('leaves a listed FLUX model available', () => {
+    const ultra = cardOf(imageModelCards(available, EMPTY_IMAGE_INTENT), ImageModels.FLUX_PRO_ULTRA);
+    expect(ultra.unavailableReason).toBeNull();
+  });
+
+  it('makes a retired model that the job route serves under its successor unavailable', () => {
+    const [retired] = imageModelCards([{ id: ImageModels.GPT_IMAGE_1, name: 'GPT Image 1' }], EMPTY_IMAGE_INTENT);
+    expect(retired.unavailableReason).toMatch(/Retired/);
+  });
+
+  it('greys a model that cannot honour the request, keeping it pickable', () => {
+    const intent = { ...EMPTY_IMAGE_INTENT, size: '1024x1536' };
+    const gemini = cardOf(imageModelCards(available, intent), ImageModels.GEMINI_3_1_FLASH_IMAGE);
+    expect(gemini.unavailableReason).toBeNull();
+    expect(gemini.mismatchReason).toBe(imageModelWhyNot(ImageModels.GEMINI_3_1_FLASH_IMAGE, intent));
+    expect(gemini.mismatchReason).toEqual(expect.any(String));
+  });
+
+  it('prices one image with the hold cost tables', () => {
+    const card = cardOf(imageModelCards(available, EMPTY_IMAGE_INTENT), ImageModels.GEMINI_3_1_FLASH_IMAGE);
+    expect(card.creditsPerOutput).toBe(
+      usdToCredits(
+        estimateImageUsd(ImageModels.GEMINI_3_1_FLASH_IMAGE, 1, { model: ImageModels.GEMINI_3_1_FLASH_IMAGE })
+      )
+    );
+  });
+});
+
+describe('imageCreditsPerImage', () => {
+  it('prices the chosen quality on a model that takes it', () => {
+    const low = imageCreditsPerImage(ImageModels.GPT_IMAGE_1_5, { ...EMPTY_IMAGE_INTENT, quality: 'low' });
+    const high = imageCreditsPerImage(ImageModels.GPT_IMAGE_1_5, { ...EMPTY_IMAGE_INTENT, quality: 'high' });
+    expect(low).not.toBeNull();
+    expect(high).toBeGreaterThan(low ?? Infinity);
+  });
+});
+
+describe('imageFieldProblems', () => {
+  it('keys each value the model does not take to the field that holds it', () => {
+    const intent = {
+      ...EMPTY_IMAGE_INTENT,
+      aspectRatio: '16:9',
+      size: '1024x1536',
+      references: [{ fileId: 'f1', fileName: 'a.png' }],
+    };
+    const problems = imageFieldProblems(ImageModels.GEMINI_3_1_FLASH_IMAGE, intent);
+    expect(problems.size).toEqual(expect.any(String));
+    expect(imageFieldProblems(ImageModels.GPT_IMAGE_1_5, intent)).toEqual({ aspect: expect.any(String) });
   });
 });
 
 describe('pickDefaultImageModel', () => {
-  it('opens on the first preferred model that can generate', () => {
-    expect(pickDefaultImageModel(buildImageModelOptions(available, {}))).toBe(ImageModels.GPT_IMAGE_1_5);
+  it('opens on the top-ranked model that can run', () => {
+    expect(pickDefaultImageModel(imageModelCards(available, EMPTY_IMAGE_INTENT))).toBe(ImageModels.GPT_IMAGE_1_5);
   });
 
-  it('falls back to the first usable model, and to none when nothing can generate', () => {
-    const fluxOnly = buildImageModelOptions(
+  it('falls back to the first runnable model, and to none when nothing can run', () => {
+    const cards = imageModelCards(
       [
         { id: ImageModels.FLUX_KONTEXT_PRO, name: 'Kontext' },
-        { id: ImageModels.FLUX_PRO_ULTRA, name: 'Ultra' },
+        { id: ImageModels.GEMINI_3_PRO_IMAGE, name: 'Nano Banana Pro' },
       ],
-      {}
+      EMPTY_IMAGE_INTENT
     );
-    expect(pickDefaultImageModel(fluxOnly)).toBe(ImageModels.FLUX_PRO_ULTRA);
-    expect(pickDefaultImageModel(fluxOnly.slice(0, 1))).toBeUndefined();
+    expect(pickDefaultImageModel(cards)).toBe(ImageModels.GEMINI_3_PRO_IMAGE);
+    expect(pickDefaultImageModel(cards.filter(card => card.id === ImageModels.FLUX_KONTEXT_PRO))).toBeUndefined();
   });
 });
 
@@ -63,9 +153,63 @@ describe('size and aspect ratio options', () => {
   });
 
   it('lists the ratios inside a ranged model and none for a model without ratios', () => {
-    const ultra = imageAspectRatioOptions(ImageModels.FLUX_PRO_ULTRA);
+    const ultra = imageAspectRatioOptions(ImageModels.FLUX_PRO_ULTRA, 'generate');
     expect(ultra).toContain('16:9');
     expect(ultra).toContain('21:9');
-    expect(imageAspectRatioOptions(ImageModels.GPT_IMAGE_1_5)).toEqual([]);
+    expect(imageAspectRatioOptions(ImageModels.GPT_IMAGE_1_5, 'generate')).toEqual([]);
+  });
+});
+
+describe('edit mode', () => {
+  const source = { fileId: 'src', fileName: 'cat.png' };
+  const mask = { fileId: 'msk', fileName: 'mask.png' };
+  const edit = { ...EMPTY_IMAGE_INTENT, mode: 'edit' as const };
+
+  it('makes a generate-only model unavailable with its why-not, and opens the edit-only ones', () => {
+    const cards = imageModelCards(available, edit);
+    expect(cardOf(cards, ImageModels.FLUX_PRO_ULTRA).unavailableReason).toMatch(/edit/i);
+    expect(cardOf(cards, ImageModels.FLUX_KONTEXT_PRO).unavailableReason).toBeNull();
+    expect(cardOf(cards, ImageModels.GPT_IMAGE_1_5).unavailableReason).toBeNull();
+  });
+
+  it('ranks by what a model can edit before a source is chosen, without blaming every model for the gap', () => {
+    expect(imageModelWhyNot(ImageModels.GPT_IMAGE_1_5, edit)).toBeNull();
+  });
+
+  it('greys a model that takes no mask once one is drawn, keyed to the mask field', () => {
+    const masked = { ...edit, editSource: source, mask };
+    expect(imageModelWhyNot(ImageModels.GPT_IMAGE_1_5, masked)).toBeNull();
+    const kontext = cardOf(imageModelCards(available, masked), ImageModels.FLUX_KONTEXT_PRO);
+    expect(kontext.mismatchReason).toEqual(expect.any(String));
+    expect(imageFieldProblems(ImageModels.FLUX_KONTEXT_PRO, masked).mask).toEqual(expect.any(String));
+  });
+
+  it('says FLUX Fill needs a mask until one is drawn', () => {
+    const unmasked = { ...edit, editSource: source };
+    expect(imageFieldProblems(ImageModels.FLUX_PRO_FILL, unmasked).mask).toEqual(expect.any(String));
+    expect(imageFieldProblems(ImageModels.FLUX_PRO_FILL, { ...unmasked, mask }).mask).toBeUndefined();
+  });
+
+  it('reads mask support from the catalog', () => {
+    expect(imageMaskSupport(ImageModels.GPT_IMAGE_1_5)).toBe('optional');
+    expect(imageMaskSupport(ImageModels.FLUX_PRO_FILL)).toBe('required');
+    expect(imageMaskSupport(ImageModels.FLUX_KONTEXT_PRO)).toBe('none');
+  });
+
+  it('sends the source, mask and references with their roles in edit mode, and only references in generate', () => {
+    const reference = { fileId: 'ref', fileName: 'mug.png' };
+    const intent = { ...edit, editSource: source, mask, references: [reference] };
+    expect(imageIntentInputs(intent).map(({ role, file }) => [role, file.fileId])).toEqual([
+      ['edit_source', 'src'],
+      ['mask', 'msk'],
+      ['reference', 'ref'],
+    ]);
+    expect(imageIntentInputs({ ...intent, mode: 'generate' }).map(({ role }) => role)).toEqual(['reference']);
+  });
+
+  it('bills the edit source as an input image but not the mask', () => {
+    const withSource = imageCreditsPerImage(ImageModels.GPT_IMAGE_1_5, { ...edit, editSource: source });
+    const withMask = imageCreditsPerImage(ImageModels.GPT_IMAGE_1_5, { ...edit, editSource: source, mask });
+    expect(withMask).toBe(withSource);
   });
 });

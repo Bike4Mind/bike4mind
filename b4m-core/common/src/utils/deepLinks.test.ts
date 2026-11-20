@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_TAB_PARAM,
   ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
+  DLQ_QUEUE_PARAM,
   FEEDBACK_ID_PARAM,
   MODERATION_INCIDENT_ID_PARAM,
   QUEST_ID_PARAM,
   adminAuditLogPath,
+  adminDlqReplayPath,
   adminFeedbackRecordPath,
   adminModerationIncidentPath,
   adminUserProfilePath,
@@ -24,6 +27,13 @@ describe('deepLinks', () => {
     expect(url.pathname).toBe('/admin');
     expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
     expect(url.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1');
+  });
+
+  it('addresses the Dead letters tab, optionally on one queue', () => {
+    expect(adminDlqReplayPath()).toBe(`/admin?${ADMIN_TAB_PARAM}=${ADMIN_DLQ_REPLAY_TAB_SLUG}`);
+    const url = new URL(adminDlqReplayPath('fab-file-chunk'), 'https://app.example');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_DLQ_REPLAY_TAB_SLUG);
+    expect(url.searchParams.get(DLQ_QUEUE_PARAM)).toBe('fab-file-chunk');
   });
 
   it('addresses a moderation incident by tab slug and id', () => {

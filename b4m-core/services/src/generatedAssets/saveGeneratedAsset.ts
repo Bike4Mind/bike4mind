@@ -27,6 +27,8 @@ const MODALITY: Record<GeneratedAssetGenerator, Modality> = {
   speech: 'audio',
   sound_effect: 'audio',
   video: 'video',
+  // A Scene is an MP4: the video with the soundtrack muxed in.
+  scene: 'video',
   image: 'image',
 };
 
@@ -77,6 +79,7 @@ export type SaveGeneratedAssetParams = {
 };
 
 export type SaveGeneratedAssetDeps = {
+  retentionOrganizationId?: string;
   db: CreateFabFileAdapters['db'] & {
     fabFiles: CreateFabFileAdapters['db']['fabFiles'] & Pick<IBaseRepository<IFabFileDocument>, 'findOne'>;
   };
@@ -151,6 +154,7 @@ export async function saveGeneratedAsset(
         provenance: {
           sourceType: FabFileSourceType.TOOL_GENERATED,
           sourceMetadata: {
+            ...(deps.retentionOrganizationId && { retentionOrganizationId: deps.retentionOrganizationId }),
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
             ...(params.generatedCopyKey && { generatedCopyKey: params.generatedCopyKey }),

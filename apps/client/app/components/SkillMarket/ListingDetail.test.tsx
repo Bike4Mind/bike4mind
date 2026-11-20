@@ -205,6 +205,21 @@ describe('ListingDetail review chip', () => {
   });
 });
 
+describe('ListingDetail scan tier chip', () => {
+  it('labels the tier as a scan result for the author of a person-approved version', () => {
+    const base = makeData();
+    renderListing(
+      makeData({
+        listing: { ...base.listing, autoChecked: false, riskTier: 'review' },
+        version: { ...base.version!, reviewStatus: 'approved' },
+        viewer: { ...base.viewer, isAuthor: true },
+      })
+    );
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.getByTestId('market-tier-review')).toHaveTextContent('Scan: needs a look');
+  });
+});
+
 describe('ListingDetail report dialog Escape handling', () => {
   const openReportDialog = async (user: ReturnType<typeof userEvent.setup>) => {
     renderListing(makeData());

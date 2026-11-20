@@ -23,8 +23,9 @@ import {
 } from '@mui/joy';
 import { useMemo, useRef, useState } from 'react';
 import { useSettingsDraft } from './SettingsDraftProvider';
+import { useDlqQueues } from '@client/app/hooks/data/dlqManagement';
 import { AdminDialog } from './shared/AdminDialog';
-import { SettingsSection } from './shared/SettingsSection';
+import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import {
   describeFields,
@@ -57,6 +58,52 @@ function readStored(stored: unknown): ConfigObject {
 }
 
 const sameValue = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+function DlqQueueModes({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange(next: ConfigObject): void;
+}) {
+  const queues = useDlqQueues();
+  const modes = toConfigObject(value);
+  const labels = [...new Set([...(queues.data?.map(queue => queue.label) ?? []), ...Object.keys(modes)])].sort();
+  return (
+    <Stack gap={1}>
+      <Typography level="title-sm">DLQ queue modes</Typography>
+      <Typography level="body-sm">
+        Unlisted queues recommend by default. Act remains recommend-only; no autonomous actions run.
+      </Typography>
+      {queues.isError && (
+        <Typography level="body-sm">
+          Queue discovery failed. Saved overrides remain editable; refresh to load other queues.
+        </Typography>
+      )}
+      {labels.map(label => (
+        <FormControl key={label}>
+          <FormLabel>{label}</FormLabel>
+          <Select
+            value={typeof modes[label] === 'string' ? modes[label] : 'recommend'}
+            disabled={disabled}
+            slotProps={{ button: { 'data-testid': `admin-setting-dlq-mode-${label}` } }}
+            onChange={(_, mode) => {
+              if (mode) onChange({ ...modes, [label]: mode });
+            }}
+          >
+            {['off', 'recommend', 'act'].map(mode => (
+              <Option key={mode} value={mode}>
+                {mode}
+              </Option>
+            ))}
+          </Select>
+        </FormControl>
+      ))}
+    </Stack>
+  );
+}
 
 const parseNumber = (text: string) => (text.trim() === '' ? NaN : Number(text));
 const formatNumber = (value: unknown) => (typeof value === 'number' && !Number.isNaN(value) ? String(value) : '');
@@ -173,6 +220,8 @@ function FieldControl({
           sx={{ alignSelf: 'flex-start', mt: 0.5 }}
         />
       );
+    case 'dlqQueueModes':
+      return <DlqQueueModes value={value} disabled={disabled} onChange={onChange} />;
     case 'unsupported':
       return (
         <Typography level="body-sm" data-testid={testId}>
@@ -201,11 +250,7 @@ function FieldGrid({ fields, value, defaults, errors, disabled, testIdPrefix, on
         if (field.kind === 'group') {
           return (
             <Grid xs={12} key={id}>
-              <Box
-                component="fieldset"
-                data-testid={`${testId}-group`}
-                sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'md', m: 0, px: 2, pb: 2, pt: 1 }}
-              >
+              <Box component="fieldset" data-testid={`${testId}-group`} sx={{ border: 0, m: 0, p: 0, minWidth: 0 }}>
                 <Typography component="legend" level="title-sm" sx={{ px: 0.5 }}>
                   {field.label}
                 </Typography>
@@ -346,7 +391,6 @@ const AdminSchemaSettingField = ({
   setting,
   structured: { schema, confirmations },
   storedValue,
-  index,
 }: {
   setting: { key: SettingKey; name: string; description: string };
   structured: StructuredSetting;
@@ -404,11 +448,7 @@ const AdminSchemaSettingField = ({
   const handleSave = () => (warnings.length ? setConfirming(true) : commit());
 
   return (
-    <SettingsSection
-      variant="outlined"
-      data-testid={`${testIdPrefix}-form`}
-      sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
-    >
+    <SettingFieldRow data-testid={`${testIdPrefix}-form`}>
       <Stack
         ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
@@ -530,7 +570,7 @@ const AdminSchemaSettingField = ({
           </Stack>
         </AdminDialog>
       )}
-    </SettingsSection>
+    </SettingFieldRow>
   );
 };
 

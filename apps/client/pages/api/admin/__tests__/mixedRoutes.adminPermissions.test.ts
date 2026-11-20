@@ -13,8 +13,17 @@ const readWrite = (file: string, write: string): AdminPermissionCase[] => [
   { file, method: write, permission: 'settings:manage', allowedMethods: ['GET', write] },
 ];
 
+/** A settings page read (SETTINGS_PAGE_READ): support:read or settings:manage, and nothing else. */
+const settingsPageRead = (file: string, allowedMethods: string[]): AdminPermissionCase[] => [
+  { file, method: 'GET', permission: 'support:read', allowedMethods, rejectedPermission: 'users:moderate' },
+  { file, method: 'GET', permission: 'settings:manage', allowedMethods, rejectedPermission: 'users:moderate' },
+];
+
 const cases: AdminPermissionCase[] = [
-  ...readWrite('../operations-model', 'PUT'),
+  ...settingsPageRead('../operations-model', ['GET', 'PUT']),
+  { file: '../operations-model', method: 'PUT', permission: 'settings:manage', allowedMethods: ['GET', 'PUT'] },
+  ...settingsPageRead('../system-prompts/index', ['GET', 'POST']),
+  ...settingsPageRead('../system-prompts/[promptId]', ['GET', 'PUT', 'DELETE']),
   ...readWrite('../model-prices', 'POST'),
   ...readWrite('../provider-invoices', 'POST'),
   ...readWrite('../integration-health-dashboard', 'POST'),

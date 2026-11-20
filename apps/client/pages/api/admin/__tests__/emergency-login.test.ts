@@ -177,6 +177,15 @@ describe('POST /api/admin/emergency-login', () => {
     });
   });
 
+  it('refuses a delegate even with every permission and an enrolled second factor', async () => {
+    const { ADMIN_PERMISSIONS } = await import('@bike4mind/common');
+    mockRefs.userDoc = { ...mockRefs.userDoc, isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] };
+    const { outcome, res } = await callHandler();
+    expect(outcome).toBeInstanceOf(UnauthorizedError);
+    expect(res._getData()).toBe('');
+    expect(mockResolveSecondFactor).not.toHaveBeenCalled();
+  });
+
   it('refuses an admin with no second factor enrolled, generically, without a session or challenge', async () => {
     mockRefs.userDoc = { ...mockRefs.userDoc, mfa: { totpEnabled: false } };
 

@@ -27,6 +27,12 @@ vi.mock('@bike4mind/database/infra', async importOriginal => ({
 
 // The route handlers build their classifier from the operations model; inject the same stub the
 // direct-call tests use so route-level publish/rescan can scan without reaching an LLM.
+const spaces = vi.hoisted(() => ({ on: true }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  isFeatureEnabled: async () => spaces.on,
+}));
+
 const classifier = vi.hoisted(() => ({
   model: 'stub',
   complete: async (system: string, user: string) => {
@@ -82,6 +88,7 @@ import {
   inboxRepository,
   Skill,
   SkillBundle,
+  Space,
   SkillListing,
   SkillListingImport,
   SkillListingReport,
@@ -110,7 +117,6 @@ import rescanHandler from '@pages/api/skills/market/versions/[vid]/rescan';
 import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
-import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
 import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -131,6 +137,7 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 beforeEach(async () => {
+  spaces.on = true;
   orgs.members.clear();
   orgs.admins.clear();
   orgs.info.clear();
@@ -142,6 +149,7 @@ beforeEach(async () => {
       'skill_listing_imports',
       'skill_listing_reports',
       'skill_bundles',
+      'spaces',
       'inboxes',
       'users',
     ].map(c => mongoose.connection.db!.collection(c).deleteMany({}))
@@ -196,7 +204,13 @@ async function publish(
   return { listing: (await SkillListing.findById(listing.id))!.toJSON() as unknown as ISkillListing, version };
 }
 
-const browse = (orgIds: string[] = []) => searchListings(orgIds, { page: 1, limit: 50, sort: 'top' });
+const browse = (orgIds: string[] = []) =>
+  searchListings({ orgIds: orgIds, spaceIds: [] }, { page: 1, limit: 50, sort: 'top' });
+
+/** Opens an unlisted listing the way every client does: the share token in the `x-share-token` header. */
+function openByShareToken(userId: string, token: string) {
+  return call(byTokenHeaderHandler, 'GET', userId, {}, {}, false, new Date(0), { 'x-share-token': token });
+}
 
 async function call(
   handler: (req: unknown, res: unknown) => unknown,
@@ -282,11 +296,16 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(detailHandler, 'GET', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
 
     await expect(
-      decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve' })
+      decideVersion(version.id, { id: ADMIN, isAdmin: true }, { orgIds: [], spaceIds: [] }, { action: 'approve' })
     ).rejects.toMatchObject({
       statusCode: 400,
     });
-    await decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve', ackMismatch: true });
+    await decideVersion(
+      version.id,
+      { id: ADMIN, isAdmin: true },
+      { orgIds: [], spaceIds: [] },
+      { action: 'approve', ackMismatch: true }
+    );
     const live = await browse();
     expect(live.data[0]).toMatchObject({ id: listing.id, descriptionMatches: false, autoChecked: false });
   });
@@ -321,25 +340,35 @@ describe('Skill Market (real mongod)', () => {
       // Neither the org feed nor the share link serves a version that is still pending.
       if (visibility === 'organization') expect((await browse([ORG])).data).toEqual([]);
       else
-        await expect(call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken })).rejects.toMatchObject({
+        await expect(openByShareToken(OTHER, listing.shareToken!)).rejects.toMatchObject({
           statusCode: 404,
         });
 
       // An org admin must be refused outright, not merely be absent from the queue that lists it.
       if (visibility === 'unlisted')
         await expect(
-          decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackMismatch: true })
+          decideVersion(
+            version.id,
+            { id: 'org-admin' },
+            { orgIds: [ORG], spaceIds: [] },
+            { action: 'approve', ackMismatch: true }
+          )
         ).rejects.toMatchObject({ statusCode: 403 });
 
       const reviewer = visibility === 'organization' ? { id: 'org-admin' } : { id: ADMIN, isAdmin: true };
-      await decideVersion(version.id, reviewer, visibility === 'organization' ? [ORG] : [], {
-        action: 'approve',
-        ackMismatch: true,
-      });
+      await decideVersion(
+        version.id,
+        reviewer,
+        { orgIds: visibility === 'organization' ? [ORG] : [], spaceIds: [] },
+        {
+          action: 'approve',
+          ackMismatch: true,
+        }
+      );
 
       expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBe(version.id);
       if (visibility === 'organization') expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
-      else expect((await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken }))._getStatusCode()).toBe(200);
+      else expect((await openByShareToken(OTHER, listing.shareToken!))._getStatusCode()).toBe(200);
     }
   );
 
@@ -365,7 +394,7 @@ describe('Skill Market (real mongod)', () => {
       const detail =
         visibility === 'organization'
           ? await call(detailHandler, 'GET', OTHER, { id: listing.id })
-          : await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken! });
+          : await openByShareToken(OTHER, listing.shareToken!);
       expect(detail._getJSONData().version).toMatchObject({
         id: approved.id,
         snapshot: { body: source.body },
@@ -389,7 +418,12 @@ describe('Skill Market (real mongod)', () => {
   it('never lets anyone approve their own Public listing', async () => {
     const { version } = await publish(await makeSkill(ADMIN, 'MISMATCH'), 'public');
     await expect(
-      decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve', ackMismatch: true })
+      decideVersion(
+        version.id,
+        { id: ADMIN, isAdmin: true },
+        { orgIds: [], spaceIds: [] },
+        { action: 'approve', ackMismatch: true }
+      )
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 
@@ -404,12 +438,19 @@ describe('Skill Market (real mongod)', () => {
     );
     expect(version).toMatchObject({ riskTier: 'high', reviewStatus: 'pending' });
     await expect(
-      decideVersion(version.id, { id: OTHER }, [], { action: 'approve', ackHighRisk: true })
+      decideVersion(version.id, { id: OTHER }, { orgIds: [], spaceIds: [] }, { action: 'approve', ackHighRisk: true })
     ).rejects.toMatchObject({ statusCode: 403 });
-    await expect(decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+    await expect(
+      decideVersion(version.id, { id: 'org-admin' }, { orgIds: [ORG], spaceIds: [] }, { action: 'approve' })
+    ).rejects.toMatchObject({
       statusCode: 400,
     });
-    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackHighRisk: true });
+    await decideVersion(
+      version.id,
+      { id: 'org-admin' },
+      { orgIds: [ORG], spaceIds: [] },
+      { action: 'approve', ackHighRisk: true }
+    );
 
     expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
     expect((await browse([])).data).toEqual([]);
@@ -426,10 +467,17 @@ describe('Skill Market (real mongod)', () => {
       ORG
     );
     // Self-approval still has to acknowledge the high-risk findings.
-    await expect(decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+    await expect(
+      decideVersion(version.id, { id: AUTHOR }, { orgIds: [ORG], spaceIds: [] }, { action: 'approve' })
+    ).rejects.toMatchObject({
       statusCode: 400,
     });
-    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve', ackHighRisk: true });
+    const approved = await decideVersion(
+      version.id,
+      { id: AUTHOR },
+      { orgIds: [ORG], spaceIds: [] },
+      { action: 'approve', ackHighRisk: true }
+    );
     expect(approved).toMatchObject({ reviewStatus: 'approved', auditSample: true, auditedAt: null });
 
     // The audit is recorded on its own field: the original approver is kept.
@@ -520,8 +568,8 @@ describe('Skill Market (real mongod)', () => {
     const { listing, version: v1 } = await publish(skill, 'public');
     const admin = { id: ADMIN, isAdmin: true };
     const results = await Promise.allSettled([
-      decideVersion(v1.id, admin, [], { action: 'approve', ackMismatch: true }),
-      decideVersion(v1.id, admin, [], { action: 'approve', ackMismatch: true }),
+      decideVersion(v1.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true }),
+      decideVersion(v1.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true }),
     ]);
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { statusCode: 409 } });
@@ -532,7 +580,9 @@ describe('Skill Market (real mongod)', () => {
     await skillRepository.update({ id: skill.id, body: 'MISMATCH v3' });
     const v3 = await submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps);
     expect((await SkillListingVersion.findById(v2.id))!.reviewStatus).toBe('superseded');
-    await expect(decideVersion(v2.id, admin, [], { action: 'approve', ackMismatch: true })).rejects.toMatchObject({
+    await expect(
+      decideVersion(v2.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true })
+    ).rejects.toMatchObject({
       statusCode: 409,
     });
     // Until v3 is approved, the market still serves v1.
@@ -543,7 +593,7 @@ describe('Skill Market (real mongod)', () => {
       expect(serializeListing(held)).not.toHaveProperty(key);
     }
     expect(serializeListing(held, { privileged: true })).toMatchObject({ pendingVersion: 3 });
-    await decideVersion(v3.id, admin, [], { action: 'approve', ackMismatch: true });
+    await decideVersion(v3.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true });
     expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(3);
   });
 
@@ -572,7 +622,12 @@ describe('Skill Market (real mongod)', () => {
       ORG
     );
     expect(version).toMatchObject({ riskTier: 'high', snapshot: { claudeCodeAllowedTools: tools } });
-    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackHighRisk: true });
+    await decideVersion(
+      version.id,
+      { id: 'org-admin' },
+      { orgIds: [ORG], spaceIds: [] },
+      { action: 'approve', ackHighRisk: true }
+    );
 
     const copyId = (await call(importHandler, 'POST', 'member-2', { id: listing.id }))._getJSONData().skill.id;
     const copy = (await skillRepository.findById(copyId))!;
@@ -647,7 +702,7 @@ describe('Skill Market (real mongod)', () => {
       expect.objectContaining({ rule: 'script_present', severity: 'medium' })
     );
     expect(version.reviewStatus).toBe('pending');
-    await decideVersion(version.id, admin, [], { action: 'approve' });
+    await decideVersion(version.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve' });
 
     const res = await call(importHandler, 'POST', OTHER, { id: listing.id });
     expect(res._getStatusCode()).toBe(201);
@@ -662,7 +717,7 @@ describe('Skill Market (real mongod)', () => {
     // v2 drops a file; updating the unmodified copy must drop it too.
     await skillRepository.update({ id: source.id, files: [files[1], files[2]] });
     const v2 = await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
-    await decideVersion(v2.id, admin, [], { action: 'approve' });
+    await decideVersion(v2.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve' });
     [status] = await attachMarketStatus([copy]);
     expect(status.marketStatus).toMatchObject({ state: 'stale', importedVersion: 1, latestVersion: 2 });
     await call(importHandler, 'POST', OTHER, { id: listing.id }, { targetSkillId: copyId });
@@ -781,6 +836,32 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('reports: the queue splits counting reports from the total, and an importer sees the hidden state', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    // A newer version exists, so the copy is stale; the report hold must still win.
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+    for (const u of ['new-1', 'new-2']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' }, false, new Date());
+    }
+    for (const u of ['old-1', 'old-2', 'old-3']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' });
+    }
+
+    const queue = (await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'reports' }, {}, true))._getJSONData();
+    expect(queue.data).toHaveLength(1);
+    expect(queue.data[0]).toMatchObject({ count: 5, countingCount: 3 });
+
+    let [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('hidden');
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('stale');
+  });
+
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing, version: v1 } = await publish(source, 'public');
@@ -872,17 +953,27 @@ describe('Skill Market (real mongod)', () => {
     const v2 = await submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps);
     expect(v2.reviewStatus).toBe('pending');
 
-    const rejected = await decideVersion(v2.id, { id: ADMIN, isAdmin: true }, [], {
-      action: 'reject',
-      note: 'understated',
-    });
+    const rejected = await decideVersion(
+      v2.id,
+      { id: ADMIN, isAdmin: true },
+      { orgIds: [], spaceIds: [] },
+      {
+        action: 'reject',
+        note: 'understated',
+      }
+    );
     expect(rejected.reviewStatus).toBe('rejected');
     const after = (await SkillListing.findById(listing.id))!;
     expect(after.pendingVersionId).toBeNull();
     expect(after.currentVersion).toBe(1);
     expect(after.status).toBe('approved');
     await expect(
-      decideVersion(v2.id, { id: ADMIN, isAdmin: true }, [], { action: 'reject', note: 'again' })
+      decideVersion(
+        v2.id,
+        { id: ADMIN, isAdmin: true },
+        { orgIds: [], spaceIds: [] },
+        { action: 'reject', note: 'again' }
+      )
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -1166,17 +1257,7 @@ describe('Skill Market (real mongod)', () => {
       await SkillListingImport.create({ listingId, userId: u, skillId: `s-${u}`, version: 1 });
     }
 
-    expect((await recommendListings('viewer-1', [ORG])).map(r => r.id)).toEqual([pub.id]);
-  });
-
-  it('by-token (deprecated path route): opens an unlisted listing and 404s a malformed token', async () => {
-    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
-    const res = await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken });
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().listing).toMatchObject({ id: listing.id, visibility: 'unlisted' });
-    await expect(call(byTokenHandler, 'GET', OTHER, { token: 'x'.repeat(31) })).rejects.toMatchObject({
-      statusCode: 404,
-    });
+    expect((await recommendListings('viewer-1', { orgIds: [ORG], spaceIds: [] })).map(r => r.id)).toEqual([pub.id]);
   });
 
   it('by-token: opens an unlisted listing from the x-share-token header and 404s without one', async () => {
@@ -1207,17 +1288,23 @@ describe('Skill Market (real mongod)', () => {
     await SkillListing.updateOne({ _id: b.id }, { $set: { tags: ['research'], importCount: 1 } });
 
     const ids = async (params: Parameters<typeof searchListings>[1]) =>
-      (await searchListings([], params)).data.map(l => l.id);
+      (await searchListings({ orgIds: [], spaceIds: [] }, params)).data.map(l => l.id);
 
     expect(await ids({ page: 1, limit: 50, sort: 'top', tags: ['writing'] })).toEqual([a.id]);
     expect(await ids({ page: 1, limit: 50, sort: 'top', tools: 'with' })).toEqual([b.id]);
     expect((await ids({ page: 1, limit: 50, sort: 'top', tools: 'without' })).sort()).toEqual([a.id]);
     expect(
-      (await searchListings([ORG], { page: 1, limit: 50, sort: 'top', tools: 'without' })).data.map(l => l.id).sort()
+      (
+        await searchListings({ orgIds: [ORG], spaceIds: [] }, { page: 1, limit: 50, sort: 'top', tools: 'without' })
+      ).data
+        .map(l => l.id)
+        .sort()
     ).toEqual([a.id, orgListing.id].sort());
     expect(await ids({ page: 1, limit: 50, sort: 'top', scope: 'org' })).toEqual([]);
     expect(
-      (await searchListings([ORG], { page: 1, limit: 50, sort: 'top', scope: 'org' })).data.map(l => l.id)
+      (
+        await searchListings({ orgIds: [ORG], spaceIds: [] }, { page: 1, limit: 50, sort: 'top', scope: 'org' })
+      ).data.map(l => l.id)
     ).toEqual([orgListing.id]);
     expect(await ids({ page: 1, limit: 50, sort: 'imports' })).toEqual([a.id, b.id]);
 
@@ -1232,11 +1319,14 @@ describe('Skill Market (real mongod)', () => {
     await SkillListing.updateOne({ _id: a.id }, { $set: { ratingSum: 5, ratingCount: 1 } });
     expect(await ids({ page: 1, limit: 50, sort: 'top', minRating: 4 })).toEqual([a.id]);
 
-    const byText = await searchListings([], { page: 1, limit: 50, sort: 'relevance', q: 'alpha' });
+    const byText = await searchListings(
+      { orgIds: [], spaceIds: [] },
+      { page: 1, limit: 50, sort: 'relevance', q: 'alpha' }
+    );
     expect(byText.data.map(l => l.id)).toEqual([a.id]);
     expect(byText.hasMore).toBe(false);
 
-    const paged = await searchListings([], { page: 1, limit: 1, sort: 'imports' });
+    const paged = await searchListings({ orgIds: [], spaceIds: [] }, { page: 1, limit: 1, sort: 'imports' });
     expect(paged.data).toHaveLength(1);
     expect(paged.hasMore).toBe(true);
   });
@@ -1248,12 +1338,17 @@ describe('Skill Market (real mongod)', () => {
     );
     expect(version).toMatchObject({ riskTier: 'high', reviewStatus: 'pending' });
     await expect(
-      decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve' })
+      decideVersion(version.id, { id: ADMIN, isAdmin: true }, { orgIds: [], spaceIds: [] }, { action: 'approve' })
     ).rejects.toMatchObject({ statusCode: 400 });
-    const approved = await decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], {
-      action: 'approve',
-      ackHighRisk: true,
-    });
+    const approved = await decideVersion(
+      version.id,
+      { id: ADMIN, isAdmin: true },
+      { orgIds: [], spaceIds: [] },
+      {
+        action: 'approve',
+        ackHighRisk: true,
+      }
+    );
     expect(approved.reviewStatus).toBe('approved');
   });
 
@@ -1457,10 +1552,15 @@ describe('Skill Market (real mongod)', () => {
       expect(published._getStatusCode()).toBe(201);
 
       const held = await publish(await makeSkill(AUTHOR, 'MISMATCH formatter'), 'public');
-      const approved = await decideVersion(held.version.id, { id: ADMIN, isAdmin: true }, [], {
-        action: 'approve',
-        ackMismatch: true,
-      });
+      const approved = await decideVersion(
+        held.version.id,
+        { id: ADMIN, isAdmin: true },
+        { orgIds: [], spaceIds: [] },
+        {
+          action: 'approve',
+          ackMismatch: true,
+        }
+      );
       expect(approved.reviewStatus).toBe('approved');
 
       const delisted = await call(
@@ -1487,7 +1587,12 @@ describe('Skill Market (real mongod)', () => {
     const spy = vi.spyOn(SkillListingVersion, 'findById').mockResolvedValueOnce(readWhilePending as never);
     try {
       await expect(
-        decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'reject', note: 'no' })
+        decideVersion(
+          version.id,
+          { id: ADMIN, isAdmin: true },
+          { orgIds: [], spaceIds: [] },
+          { action: 'reject', note: 'no' }
+        )
       ).rejects.toMatchObject({ statusCode: 409 });
     } finally {
       spy.mockRestore();
@@ -1499,8 +1604,10 @@ describe('Skill Market (real mongod)', () => {
   it('approve after a reject is refused, and the rejected version is never published', async () => {
     const { listing, version } = await publish(await makeSkill(AUTHOR, 'MISMATCH formatter'), 'public');
     const admin = { id: ADMIN, isAdmin: true };
-    await decideVersion(version.id, admin, [], { action: 'reject', note: 'no' });
-    await expect(decideVersion(version.id, admin, [], { action: 'approve', ackMismatch: true })).rejects.toMatchObject({
+    await decideVersion(version.id, admin, { orgIds: [], spaceIds: [] }, { action: 'reject', note: 'no' });
+    await expect(
+      decideVersion(version.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true })
+    ).rejects.toMatchObject({
       statusCode: 409,
     });
     const after = (await SkillListing.findById(listing.id))!;
@@ -1513,8 +1620,8 @@ describe('Skill Market (real mongod)', () => {
     const { listing, version } = await publish(await makeSkill(AUTHOR, 'MISMATCH formatter'), 'public');
     const admin = { id: ADMIN, isAdmin: true };
     const results = await Promise.allSettled([
-      decideVersion(version.id, admin, [], { action: 'approve', ackMismatch: true }),
-      decideVersion(version.id, admin, [], { action: 'reject', note: 'no' }),
+      decideVersion(version.id, admin, { orgIds: [], spaceIds: [] }, { action: 'approve', ackMismatch: true }),
+      decideVersion(version.id, admin, { orgIds: [], spaceIds: [] }, { action: 'reject', note: 'no' }),
     ]);
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
     const stored = (await SkillListingVersion.findById(version.id))!;
@@ -1529,7 +1636,12 @@ describe('Skill Market (real mongod)', () => {
     // The pointer moved on (e.g. a newer submit) after this version was read as pending.
     await SkillListing.updateOne({ _id: listing.id }, { $set: { pendingVersionId: 'someone-else' } });
     await expect(
-      decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve', ackMismatch: true })
+      decideVersion(
+        version.id,
+        { id: ADMIN, isAdmin: true },
+        { orgIds: [], spaceIds: [] },
+        { action: 'approve', ackMismatch: true }
+      )
     ).rejects.toMatchObject({ statusCode: 409 });
     const stored = (await SkillListingVersion.findById(version.id))!;
     expect(stored.reviewStatus).toBe('superseded');
@@ -1755,5 +1867,104 @@ describe('global-skill write races (real mongod)', () => {
         description: 'scanned against the old body',
       })
     ).rejects.toMatchObject({ name: 'ConcurrencyConflictError', statusCode: 409 });
+  });
+});
+
+describe('Space audience (real mongod)', () => {
+  const joined = { joinedVia: 'invite' as const, joinedAt: new Date() };
+  const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn() } as never;
+  const author = { id: AUTHOR, createdAt: new Date(0) };
+
+  async function space(members: { userId: string; role: 'admin' | 'member' }[] = []) {
+    const doc = await Space.create({
+      name: 'Team',
+      ownerUserId: 'space-owner',
+      members: members.map(m => ({ ...m, ...joined })),
+    });
+    return String(doc._id);
+  }
+
+  it('publishes to a Space the author belongs to, owning the listing by spaceId', async () => {
+    const spaceId = await space([{ userId: AUTHOR, role: 'member' }]);
+    const skill = await makeSkill(AUTHOR, 'Format text.');
+    const { listing } = await publishListing(author, { skillId: skill.id, visibility: 'space', spaceId }, logger);
+    expect(listing).toMatchObject({ visibility: 'space', spaceId });
+    expect(listing.organizationId).toBeFalsy();
+  });
+
+  it('refuses a non-member, a missing spaceId, and every publish while EnableSpaces is off', async () => {
+    const spaceId = await space([{ userId: OTHER, role: 'member' }]);
+    const skill = await makeSkill(AUTHOR, 'Format text.');
+    await expect(
+      publishListing(author, { skillId: skill.id, visibility: 'space', spaceId }, logger)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(publishListing(author, { skillId: skill.id, visibility: 'space' }, logger)).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    spaces.on = false;
+    const memberSpace = await space([{ userId: AUTHOR, role: 'member' }]);
+    await expect(
+      publishListing(author, { skillId: skill.id, visibility: 'space', spaceId: memberSpace }, logger)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(await SkillListing.countDocuments({})).toBe(0);
+  });
+
+  it('shows an approved Space listing to its members only, via scope=space, and never to the org filter', async () => {
+    const spaceId = await space([{ userId: OTHER, role: 'member' }]);
+    const skill = await makeSkill(AUTHOR, 'Format text.');
+    const doc = await SkillListing.create({
+      sourceSkillId: skill.id,
+      authorUserId: AUTHOR,
+      visibility: 'space',
+      spaceId,
+      tags: ['writing'],
+      name: skill.name,
+      description: skill.description,
+    });
+    const listing = doc.toJSON() as unknown as ISkillListing;
+    await submitListingVersion(listing, skill, deps);
+
+    const params = { page: 1, limit: 50, sort: 'top' as const };
+    const inSpace = { orgIds: [], spaceIds: [spaceId] };
+    const names = async (audience: { orgIds: string[]; spaceIds: string[] }, extra = {}) =>
+      (await searchListings(audience, { ...params, ...extra })).data.map(l => l.id);
+
+    expect(await names(inSpace)).toEqual([listing.id]);
+    expect(await names(inSpace, { scope: 'space' })).toEqual([listing.id]);
+    expect(await names(inSpace, { scope: 'space', spaceId })).toEqual([listing.id]);
+    expect(await names(inSpace, { scope: 'space', spaceId: 'another' })).toEqual([]);
+    expect(await names(inSpace, { scope: 'org' })).toEqual([]);
+    expect(await names({ orgIds: [spaceId], spaceIds: [] })).toEqual([]);
+    expect(await names({ orgIds: [], spaceIds: [] })).toEqual([]);
+  });
+
+  it('lets a Space admin approve a held Space listing and refuses a plain member', async () => {
+    const spaceId = await space([
+      { userId: 'space-admin', role: 'admin' },
+      { userId: AUTHOR, role: 'member' },
+    ]);
+    const skill = await makeSkill(AUTHOR, 'Fetch and MISMATCH.');
+    const doc = await SkillListing.create({
+      sourceSkillId: skill.id,
+      authorUserId: AUTHOR,
+      visibility: 'space',
+      spaceId,
+      name: skill.name,
+      description: skill.description,
+    });
+    const listing = doc.toJSON() as unknown as ISkillListing;
+    const version = await submitListingVersion(listing, skill, deps);
+    const adminAudience = { orgIds: [], spaceIds: [spaceId] };
+    const none = { orgIds: [], spaceIds: [] };
+
+    await expect(decideVersion(version.id, { id: AUTHOR }, none, { action: 'approve' })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    const approved = await decideVersion(version.id, { id: 'space-admin' }, adminAudience, {
+      action: 'approve',
+      ackMismatch: true,
+    });
+    expect(approved).toBeTruthy();
+    expect((await SkillListing.findById(listing.id))!.status).toBe('approved');
   });
 });

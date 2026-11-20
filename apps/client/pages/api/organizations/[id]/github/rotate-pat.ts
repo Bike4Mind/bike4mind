@@ -17,6 +17,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -44,7 +45,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const parseResult = RotatePATSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -77,11 +78,18 @@ const handler = baseApi()
       patExpiresAt: patExpiresAt ? new Date(patExpiresAt) : undefined,
     });
 
-    logPatRotated({
+    await logPatRotated({
       connectionId: connection.id,
       organizationId: orgId,
       actorUserId: user.id,
       connectionType: 'service_account',
+    });
+    await recordAdminActionFromRequest(req, {
+      action: 'org.github_connection.pat_rotated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: 'rotated the GitHub access token',
+      details: { connectionId: connection.id },
     });
 
     logger.info('[Org] Rotated GitHub PAT', {

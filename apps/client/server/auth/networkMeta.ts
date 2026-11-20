@@ -4,7 +4,7 @@ import { authEventRepository, User } from '@bike4mind/database';
 import { isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
-import { DATACENTER_ASNS } from './datacenterAsns';
+import { DATACENTER_ASNS } from '@bike4mind/server-utils/auth/datacenterAsns';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { alertSignupNetworkBurst } from './signupNetworkAlerts';
 import { withAccountNotPurging } from './withAccountNotPurging';

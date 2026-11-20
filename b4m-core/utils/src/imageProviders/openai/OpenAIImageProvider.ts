@@ -9,10 +9,11 @@ import {
   raceAbort,
   toDataUrl,
 } from '../shared';
-import type { ImageInputs, ImageProvider } from '../types';
+import { withProviderMask } from '../editMask';
+import type { ImageInputs, SyncImageProvider } from '../types';
 
 export type OpenAIImageProviderOptions = {
-  /** The ImageProcessor Lambda, which a masked edit needs (the mask is converted to PNG there). Read per call. */
+  /** The ImageProcessor Lambda, which coerces a source OpenAI cannot take as-is. Read per call. */
   imageProcessorLambdaName?: () => string | undefined;
 };
 
@@ -24,7 +25,7 @@ type SdkSize = OpenAIImageGenerationOptions['size'];
  * prompt (references go through the edit endpoint, as the chat path does); `edit` mode edits the edit_source image,
  * optionally masked.
  */
-export class OpenAIImageProvider implements ImageProvider {
+export class OpenAIImageProvider implements SyncImageProvider {
   readonly mode = 'sync' as const;
   readonly id = 'openai' as const;
   readonly models = OPENAI_IMAGE_MODELS;
@@ -39,7 +40,10 @@ export class OpenAIImageProvider implements ImageProvider {
     const service = new OpenAIImageService(ctx.apiKey, ctx.logger, this.options.imageProcessorLambdaName?.());
     let dataUrl: string;
     try {
-      dataUrl = await raceAbort(() => this.render(service, request, inputs), ctx.signal);
+      dataUrl = await raceAbort(async () => {
+        const prepared = request.mode === 'edit' ? await withProviderMask(inputs, 'transparent') : inputs;
+        return this.render(service, request, prepared);
+      }, ctx.signal);
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const classified = classifyImageProviderError(error);

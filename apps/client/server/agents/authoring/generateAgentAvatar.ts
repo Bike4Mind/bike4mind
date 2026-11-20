@@ -1,8 +1,9 @@
 import { randomUUID } from 'crypto';
 import { estimateImageCredits } from '@bike4mind/services/imageCost';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { usdToCreditsStochastic } from '@bike4mind/common';
-import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
+import { assertMediaModelAdmission } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
 import type { Logger } from '@bike4mind/observability';
 import { agentRepository } from '@bike4mind/database';
 import { ImageModels, isGPTImageModel, IAgent, ModelInfo, UNKNOWN_MODEL_ERROR_CODE } from '@bike4mind/common';
@@ -190,7 +191,12 @@ export async function generateAgentAvatar(
     imageBackend: imageModelInfo.backend,
   });
 
-  await assertMediaModelAdmission(user, imageModelId, !user.isAdmin);
+  await assertMediaModelAdmission(
+    user,
+    imageModelId,
+    !user.isAdmin,
+    resolveRequestBillingOrgId(billingRequest ?? { user }, undefined)
+  );
 
   const userPrompt = buildAgentVisualPrompt(agent);
   let generatedPrompt = '';
@@ -388,7 +394,7 @@ export async function generateAgentAvatar(
     }
     // The version the up-front 'clean' below covers, so this upload's own S3 event does not send it
     // back to pending (recordLandedObject). Unknown only costs that one rescan.
-    const { normalizeETag } = await import('@server/s3/moderationScan');
+    const { normalizeETag } = await import('@bike4mind/server-utils/s3/moderationScan');
     const moderationETag = await getFilesStorage()
       .getMetadata(uploadedPath)
       .then(head => normalizeETag(head.etag))

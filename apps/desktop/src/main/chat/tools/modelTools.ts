@@ -8,15 +8,17 @@ import {
   type ModelBuildReport,
   type ModelLighting,
   type ModelPose,
+  type ModelVersion,
   type ModelView,
   formatModelSummary,
   modelKindFor,
   siblingGlbPath,
+  versionLabel,
 } from '@shared/model3d';
 import { realpathNearest, resolveWithinRoots } from './paths';
 import { showImage } from './toolImages';
 import { resolveWritablePath, withPathLock } from './writeTools';
-import { requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
+import { optionalNumber, requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
 
 /**
  * The 3D model tools: open a model in the user's live pane and look at it. The agent writes and
@@ -92,6 +94,11 @@ const MODEL_FILE_CONTRACT = [
   'leave hard parts (horns, claws, spines, wings, a base) faceted so they stay crisp. Keep refine at 2-3: a whole',
   'creature smoothed this way builds in well under a second. Seams where hulled pieces meet can show as streaks, so',
   'prefer one hull per limb over many short hulls unioned together.',
+  'Point-and-edit: the user can click parts in the pane and type a change. That turn carries a note naming the parts,',
+  'the lines that build each one (the build traces every manifold call back to its line), the line that lists it and',
+  'its bounds in mm, with a close-up image. Re-read the file, change only those parts, and keep the others byte for',
+  'byte; a listed line that also builds other parts is shared, so change it only when the request needs it and say',
+  'so. Keep part names stable, since they are how the pane finds a part again.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {
@@ -196,6 +203,8 @@ export const modelView: ToolDefinition = {
       'Never call this in the same batch as the write or edit it should check: tools in one batch run together, so it can',
       'read the file before the save lands and report the previous build.',
       '3. Check the finished model with model_screenshot before telling the user it is done.',
+      'Every good build of a .model.js is kept as a numbered version (v1, v2, ...) that the user can preview, compare and',
+      "restore in the pane; model_versions lists them and returns any version's source.",
       '',
       MODEL_FILE_CONTRACT,
     ].join('\n'),
@@ -308,4 +317,82 @@ export const modelRecord: ToolDefinition = {
   },
 };
 
-export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot, modelRecord];
+function describeVersion(version: ModelVersion, current: boolean): string {
+  const when = new Date(version.createdAt).toISOString().replace('T', ' ').slice(0, 16);
+  const note = version.note ? ` (${version.note})` : '';
+  return `${versionLabel(version.number)}  ${when} UTC  ${version.path}${note}${current ? '  <- current' : ''}`;
+}
+
+function describePose(angles: Record<string, number>): string {
+  const entries = Object.entries(angles);
+  return entries.length ? entries.map(([name, value]) => `${name}=${value}`).join(', ') : 'at rest';
+}
+
+export const modelVersions: ToolDefinition = {
+  schema: {
+    name: 'model_versions',
+    description: [
+      "List this conversation's kept 3D model versions, or get one version's source. Every good build of a .model.js",
+      'is kept as a numbered version (v1, v2, ...); the user sees them as a strip in the model pane and may preview,',
+      'compare and restore them there. Call it without `version` to list them, newest last, with the current one',
+      "marked. Call it with `version` to get that version's full source and joint pose, for example when the user asks",
+      'to go back to v3 or to bring back a part an edit removed. To restore a version, write its source back to its',
+      'file with the file tools (a whole-file write), then call model_view: the rebuild is kept as a new version, so',
+      'history is never lost.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        version: {
+          type: 'integer',
+          minimum: 1,
+          description: 'The version number (3 for v3). Omit it to list the versions.',
+        },
+      },
+    },
+  },
+  async run(input, context) {
+    const model = requireModel(context);
+    const requested = optionalNumber(input, 'version');
+    // Only versions of files inside this session's folders: another may be a file the user opened from anywhere.
+    const all = await model.view.versions();
+    const visible: ModelVersion[] = [];
+    for (const version of all) {
+      const inside = await resolveWithinRoots(version.path, context.roots, context.workingDirectory).then(
+        () => true,
+        () => false
+      );
+      if (inside) visible.push(version);
+    }
+    if (requested === undefined) {
+      if (!visible.length) return 'No versions are kept in this conversation yet. Each good model build adds one.';
+      const { path, source } = model.view.current();
+      const newestCurrent = visible.findLast(version => version.path === path && version.source === source);
+      context.report?.label('Listed model versions');
+      return [
+        `${visible.length} kept version${visible.length === 1 ? '' : 's'}, oldest first (the oldest are pruned as new ones are kept):`,
+        ...visible.map(version => describeVersion(version, version === newestCurrent)),
+        'Call model_versions with a version number for its source.',
+      ].join('\n');
+    }
+    const version = visible.find(entry => entry.number === requested);
+    if (!version) {
+      const range = visible.length
+        ? ` Kept: ${versionLabel(visible[0].number)} to ${versionLabel(visible[visible.length - 1].number)}.`
+        : '';
+      return `There is no ${versionLabel(requested)} in this conversation.${range}`;
+    }
+    context.report?.label(`Read ${versionLabel(version.number)}`);
+    const restored = version.restoredFrom ? ` It restored ${versionLabel(version.restoredFrom)}.` : '';
+    return [
+      `${describeVersion(version, false)}${restored}`,
+      `Joint pose: ${describePose(version.jointAngles)}.`,
+      `To restore it, write this source back to ${version.path} with the file tools, then call model_view.`,
+      '```js',
+      version.source,
+      '```',
+    ].join('\n');
+  },
+};
+
+export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot, modelRecord, modelVersions];

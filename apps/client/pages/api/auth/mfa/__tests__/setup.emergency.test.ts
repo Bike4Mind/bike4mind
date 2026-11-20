@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const mocks = vi.hoisted(() => ({
   findByIdWithMfaSecrets: vi.fn(),
   setupMFA: vi.fn(),
+  recordForcedEnrollmentStep: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -17,10 +18,18 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_q: any, _s: any, next: any) => next(),
 }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findByIdWithMfaSecrets: mocks.findByIdWithMfaSecrets } }));
-vi.mock('@bike4mind/services', () => ({ mfaService: { setupMFA: mocks.setupMFA } }));
+vi.mock('@bike4mind/services', () => ({
+  mfaService: {
+    setupMFA: mocks.setupMFA,
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
+  },
+}));
 vi.mock('@server/auth/signInSecondFactor', () => ({
   readSignInOrigin: (user: { mfaSignIn?: unknown } | undefined) => user?.mfaSignIn,
 }));
+
+vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({ recordForcedEnrollmentStep: mocks.recordForcedEnrollmentStep }));
 
 import handler from '../setup';
 
@@ -47,6 +56,7 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(mocks.setupMFA).not.toHaveBeenCalled();
+    expect(mocks.recordForcedEnrollmentStep).not.toHaveBeenCalled();
   });
 
   it('still starts setup for an ordinary sign-in', async () => {
@@ -54,6 +64,11 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.setupMFA).toHaveBeenCalledTimes(1);
+    expect(mocks.recordForcedEnrollmentStep).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: 'u1', mfa: { totpEnabled: false } },
+      'mfa_enrollment_shown'
+    );
   });
 
   it('hands setup the user with its pending secret so a repeat call can re-serve it', async () => {
@@ -64,5 +79,25 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(mocks.findByIdWithMfaSecrets).toHaveBeenCalledWith('u1');
     expect(mocks.setupMFA).toHaveBeenCalledWith(expect.objectContaining({ user: pendingUser }), expect.anything());
+  });
+});
+
+describe('POST /api/auth/mfa/setup - account that already has a passkey', () => {
+  beforeEach(() => {
+    mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false, passkeyEnabled: true } });
+  });
+
+  it('refuses a pending token without touching the backup codes', async () => {
+    const res = await setupAs({ id: 'u1', mfaPending: true, mfaSignIn: { strategy: 'local', createdVia: 'password' } });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.setupMFA).not.toHaveBeenCalled();
+  });
+
+  it('lets a full session start app setup', async () => {
+    const res = await setupAs({ id: 'u1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.setupMFA).toHaveBeenCalledTimes(1);
   });
 });

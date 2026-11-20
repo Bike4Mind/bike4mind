@@ -1,4 +1,5 @@
 import { ADMIN_TAB_PARAM } from '@bike4mind/common';
+import { SUBSCRIPTION_USAGE_COHORTS } from '@bike4mind/server-utils/app/utils/subscriptionUsage';
 import {
   ADMIN_SUBSCRIPTIONS_LIST_MAX,
   ADMIN_SUBSCRIPTIONS_PAGE_SIZES,
@@ -62,6 +63,7 @@ export const SUBSCRIPTIONS_FILTER_PARAMS = {
   renews: 'subsRenews',
   cancel: 'subsCancel',
   mismatch: 'subsMismatch',
+  usageCohort: 'subsUsage',
 } as const satisfies Record<SubscriptionsFilterKey, string>;
 export const SUBSCRIPTIONS_FILTER_KEYS = Object.keys(SUBSCRIPTIONS_FILTER_PARAMS) as SubscriptionsFilterKey[];
 
@@ -91,6 +93,7 @@ export type SubscriptionsSearch = {
   subsRenews?: SubscriptionsListView['renews'];
   subsCancel?: SubscriptionsListView['cancel'];
   subsMismatch?: SubscriptionsListView['mismatch'];
+  subsUsage?: SubscriptionsListView['usageCohort'];
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -153,6 +156,7 @@ export const SUBSCRIPTIONS_SEARCH_PARSERS: {
   subsRenews: oneOf(SUBSCRIPTION_RENEWS_FILTERS),
   subsCancel: oneOf(SUBSCRIPTION_CANCEL_FILTERS),
   subsMismatch: oneOf(['yes'] as const),
+  subsUsage: oneOf(SUBSCRIPTION_USAGE_COHORTS),
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<SubscriptionsListView, SubscriptionsFilterKey> {
@@ -166,6 +170,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<SubscriptionsL
     renews: parsers.subsRenews(search.subsRenews),
     cancel: parsers.subsCancel(search.subsCancel),
     mismatch: parsers.subsMismatch(search.subsMismatch),
+    usageCohort: parsers.subsUsage(search.subsUsage),
   };
 }
 
@@ -212,6 +217,7 @@ export function subscriptionsViewToSearch(view: SubscriptionsListView): Subscrip
     subsRenews: view.renews,
     subsCancel: view.cancel,
     subsMismatch: view.mismatch,
+    subsUsage: view.usageCohort,
   };
 }
 
@@ -232,7 +238,8 @@ export function isSameSubscriptionsView(a: SubscriptionsListView, b: Subscriptio
     a.interval === b.interval &&
     a.renews === b.renews &&
     a.cancel === b.cancel &&
-    a.mismatch === b.mismatch
+    a.mismatch === b.mismatch &&
+    a.usageCohort === b.usageCohort
   );
 }
 

@@ -122,10 +122,23 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.SnsTopic', reason: 'Topic only; subscribe() is inventoried as snsSubscription.' },
   { shape: 'aws.sns.Topic', reason: 'Topic only; aws.sns.TopicSubscription is inventoried as snsSubscription.' },
   { shape: 'aws.cloudwatch.MetricAlarm', reason: 'Alarm only; delivery is inventoried at the topic subscription.' },
+  {
+    shape: 'aws.appautoscaling.Policy',
+    reason: 'Desired-count rule for an inventoried service, no compute of its own.',
+  },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
+  {
+    shape: 'aws.cloudwatch.ContributorInsightRule',
+    reason: 'Per-key log aggregation feeding alarms, no compute; self-host has no CloudWatch log group to evaluate.',
+  },
   { shape: 'aws.ssm.Parameter', reason: 'Secret storage for ECS task secrets, no compute.' },
   { shape: 'aws.cloudwatch.LogGroup', reason: 'Log storage, no compute.' },
+  { shape: 'aws.cloudwatch.LogResourcePolicy', reason: 'IAM grant for a log group, no compute.' },
+  { shape: 'aws.kms.Key', reason: 'Encryption key for hosted secret storage, no compute.' },
+  { shape: 'aws.kms.Alias', reason: 'Name for an aws.kms.Key, no compute.' },
+  { shape: 'aws.secretsmanager.Secret', reason: 'Secret storage read by inventoried schedules, no compute.' },
+  { shape: 'aws.secretsmanager.SecretPolicy', reason: 'IAM grant for an aws.secretsmanager.Secret, no compute.' },
   { shape: 'aws.lambda.Permission', reason: 'IAM grant for an inventoried trigger.' },
   { shape: 'aws.sqs.QueuePolicy', reason: 'IAM grant for an inventoried queue.' },
   { shape: 'aws.sns.TopicPolicy', reason: 'IAM grant for an inventoried topic.' },
@@ -146,6 +159,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.SecurityGroupRule', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.VpcEndpoint', reason: 'Network plumbing.' },
+  { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
+  { shape: 'aws.acm.CertificateValidation', reason: 'Waits for the certificate above to be issued, no compute.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },
   { shape: 'aws.servicediscovery.PrivateDnsNamespace', reason: 'Service discovery plumbing.' },
   { shape: 'aws.wafv2.WebAcl', reason: 'Hosted edge protection, no compute.' },
@@ -361,6 +376,8 @@ class InfraIndex {
   readonly resources = new Map<string, Resource>();
   readonly definitions = new Map<string, Definition>();
   private readonly aliases = new Map<string, string>();
+  // Identifiers bound to a NOT_COVERED constructor: valid targets that deliver to no function.
+  private readonly passive = new Set<string>();
 
   constructor(readonly parsed: ts.SourceFile[]) {
     const imports: { key: string; target: string }[] = [];
@@ -411,6 +428,7 @@ class InfraIndex {
   private register(file: string, name: string, node: ts.NewExpression): void {
     const type = resourceType(node.expression);
     if (type) this.resources.set(`${file}:${name}`, { type, file, node });
+    else if (NOT_COVERED.some(entry => entry.shape === node.expression.getText())) this.passive.add(`${file}:${name}`);
   }
 
   /** The alias-terminal key for an identifier, following re-exports and `const a = b`. */
@@ -443,6 +461,7 @@ class InfraIndex {
     const receiver = unwrap(value.expression);
     if (!ts.isIdentifier(receiver)) return undefined;
     const target = this.resolve(file, receiver.text);
+    if (!target && this.passive.has(this.terminal(file, receiver.text))) return undefined;
     if (!target) throw new Error(`${context}: unresolved target ${value.getText()}`);
     return target;
   }

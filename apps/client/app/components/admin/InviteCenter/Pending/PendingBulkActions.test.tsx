@@ -139,6 +139,23 @@ describe('PendingBulkDialog', () => {
     invalidate.mockRestore();
   });
 
+  it('blocks a release until a reason is entered, while the dry run goes out without one', async () => {
+    routeTo({
+      '/api/admin/held-signup-grants/release': () => preview([{ userId: A, outcome: 'would_apply' }]),
+    });
+    renderDialog('release');
+    await waitFor(() => expect(screen.getByTestId('pending-bulk-would-apply')).toBeInTheDocument());
+    expect(mocks.post).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [A, B], dryRun: true });
+
+    const confirm = screen.getByTestId('pending-bulk-release-confirm-btn');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocks.post.mock.calls.every(([, body]) => body.dryRun)).toBe(true);
+
+    fireEvent.click(screen.getByTestId('pending-bulk-release-reason-input-preset-0'));
+    expect(confirm).not.toBeDisabled();
+  });
+
   it('runs a release, then its undo revokes the batch', async () => {
     routeTo({
       '/api/admin/held-signup-grants/release': body =>
@@ -161,7 +178,7 @@ describe('PendingBulkDialog', () => {
 
     await waitFor(() => expect(mocks.showUndoToast).toHaveBeenCalledTimes(1));
     const realCall = mocks.post.mock.calls.find(([, body]) => !body.dryRun)!;
-    expect(realCall[1]).toEqual({ userIds: [A, B] });
+    expect(realCall[1]).toEqual({ userIds: [A, B], reason: expect.stringContaining('Goodwill grant') });
 
     await mocks.showUndoToast.mock.calls[0][0].onUndo();
     expect(mocks.post).toHaveBeenLastCalledWith('/api/admin/held-signup-grants/revoke', { batchId: 'c'.repeat(24) });

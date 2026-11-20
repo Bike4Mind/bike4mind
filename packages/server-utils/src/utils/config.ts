@@ -1,5 +1,6 @@
 import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
+import { isUnconfiguredSecret, requireConfiguredSecret } from '@bike4mind/common';
 
 /**
  * Safe read for a manifest-optional secret (see b4m-core/resource manifest.ts
@@ -29,16 +30,28 @@ function readOptionalSecret(name: string, read: () => string | undefined): strin
   }
 }
 
+function unlessUnconfigured(value: string | undefined): string | undefined {
+  return isUnconfiguredSecret(value) ? undefined : value;
+}
+
 const Config = {
-  // Hard-required core boot secrets (see manifest.ts) - intentionally left
-  // unguarded so a missing one fails fast at startup rather than degrading.
+  // Hard-required core secrets (see manifest.ts), never degraded. The two signing secrets are read
+  // on use, so a stage still on a placeholder fails every sign/verify instead of signing with it.
   MONGODB_URI: Resource.MONGODB_URI.value,
-  SESSION_SECRET: Resource.SESSION_SECRET.value,
-  JWT_SECRET: Resource.JWT_SECRET.value,
+  get SESSION_SECRET(): string {
+    return requireConfiguredSecret('SESSION_SECRET', Resource.SESSION_SECRET.value);
+  },
+  get JWT_SECRET(): string {
+    return requireConfiguredSecret('JWT_SECRET', Resource.JWT_SECRET.value);
+  },
   // These are manifest-optional (self-host env-var fallback) but every real deployed
   // stage has always had them linked with a default, so callers assume `string` and
   // are out of scope for the premium-overlay eager-read fix below - left untouched.
   SLACK_WEBHOOK_URL: Resource.SLACK_WEBHOOK_URL.value,
+  SLACK_FEEDBACK_DESTINATIONS: readOptionalSecret(
+    'SLACK_FEEDBACK_DESTINATIONS',
+    () => Resource.SLACK_FEEDBACK_DESTINATIONS.value
+  ),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: Resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value,
   GOOGLE_CLIENT_ID: Resource.GOOGLE_CLIENT_ID.value,
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
@@ -73,6 +86,8 @@ const Config = {
   APNS_TEAM_ID: readOptionalSecret('APNS_TEAM_ID', () => Resource.APNS_TEAM_ID.value),
   APNS_KEY: readOptionalSecret('APNS_KEY', () => Resource.APNS_KEY.value),
   APNS_TOPIC: readOptionalSecret('APNS_TOPIC', () => Resource.APNS_TOPIC.value),
+  // FCM (Android push) service account JSON; resolved by readFcmConfig in ./pushDelivery.
+  FCM_SERVICE_ACCOUNT: readOptionalSecret('FCM_SERVICE_ACCOUNT', () => Resource.FCM_SERVICE_ACCOUNT.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,
@@ -95,7 +110,8 @@ const Config = {
   // NOTE: manifest.ts marks this hard-required (unlike the other entries below);
   // left as pre-existing `?.` behavior here rather than reconciled, since changing
   // encryption-key requiredness is out of scope for this change.
-  SECRET_ENCRYPTION_KEY: Resource.SECRET_ENCRYPTION_KEY?.value,
+  // A placeholder reads as unset, so callers take their existing "not configured" path.
+  SECRET_ENCRYPTION_KEY: unlessUnconfigured(Resource.SECRET_ENCRYPTION_KEY?.value),
   // RSA private key for OIDC ID token signing (RS256). Base64-encoded PEM.
   // If not set, an ephemeral key is generated at startup (dev only).
   OAUTH_RSA_PRIVATE_KEY: readOptionalSecret('OAUTH_RSA_PRIVATE_KEY', () => Resource.OAUTH_RSA_PRIVATE_KEY.value),

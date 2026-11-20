@@ -100,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -172,6 +175,8 @@ export interface ChatToolCall {
   name: string;
   input: Record<string, unknown>;
   status: ChatToolStatus;
+  /** Trusted local skill result; retained so resumed replies preserve its provenance. */
+  ownContent?: true;
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
@@ -189,8 +194,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode because it acts as the
+   * signed-in user (`askInFull`). Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -256,12 +273,6 @@ export interface ChatToolCall {
    */
   label?: string;
   /**
-   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
-   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
-   * Kept on the row so a continued reply, which replays it, judges it the same way.
-   */
-  ownContent?: true;
-  /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
    *
@@ -325,7 +336,10 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  /**
+   * Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop),
+   * or, in Full access, which of its stops held the call.
+   */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -487,6 +501,23 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
+
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -737,6 +768,14 @@ export interface ChatMessage {
   model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /**
+   * A plain reply's one request: its server request id and settled charge, which a reply with
+   * `rounds` keeps per round instead (see ChatReplyRound.requestId). Absent on older replies.
+   */
+  requestId?: string;
+  settled?: ChatSettledCharge;
+  /** How long the reply took and how much of it was thinking, on every assistant reply; absent on older ones. */
+  stats?: ChatReplyStats;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -897,7 +936,7 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
-  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  /** A Skill Market import, written by someone else, so its body is framed as theirs. */
   imported?: true;
 }
 
@@ -1158,6 +1197,13 @@ export interface ChatUsage {
   cacheReadInputTokens?: number;
   /** Input written to the prompt cache this request, billed above the input rate. */
   cacheCreationInputTokens?: number;
+  /** Thinking tokens the server reported; part of outputTokens, not on top of it. */
+  reasoningTokens?: number;
+  /**
+   * Of inputTokens, what a self-hosted server served from its prompt cache, from the usage details.
+   * Unset where llama-server's timings already put it in `rate.cachedPromptTokens`.
+   */
+  cachedPromptTokens?: number;
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
@@ -1178,11 +1224,67 @@ export interface ChatTokenRate {
   promptMs?: number;
   /** Time spent loading the model into memory before the request ran. */
   loadMs?: number;
+  /** True where the server reports its load (Ollama): no loadMs is none. False for llama-server, which never does. */
+  loadReported?: boolean;
+  /** Prompt tokens the server reused from its cache instead of evaluating; not part of `promptTokens`. */
+  cachedPromptTokens?: number;
   /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
   draftTokens?: number;
   draftAccepted?: number;
   /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
   estimated?: boolean;
+  /** Output tokens an estimate left out of `evalTokens` on purpose: the first read's, whose time is the prompt's. */
+  untimedTokens?: number;
+}
+
+/** A model load or server wait at least this long is named apart from the reply's own time, in ms. */
+export const REPLY_STATS_SIGNIFICANT_WAIT_MS = 1000;
+
+/** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
+export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
+
+/**
+ * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
+ * than its rounds, because a plain reply stores no rounds.
+ */
+export interface ChatReplyStats {
+  /**
+   * Wall time from the reply's first request to its end, tools and approval waits included; on a
+   * continued reply, the pause before Continue is left out.
+   */
+  totalMs: number;
+  /** Waiting on the model, summed over the reply's requests. */
+  modelMs: number;
+  /** Running tools between requests, approval waits included. */
+  toolMs: number;
+  /** Of modelMs, each request's model load the server reported, where at least REPLY_STATS_SIGNIFICANT_WAIT_MS; left out of the displayed total. */
+  loadMs?: number;
+  /** Of firstTokenMs, the reported load of the request it was measured on. */
+  firstTokenLoadMs?: number;
+  /** Of modelMs, each request's wait derived from llama-server timings (load, queue or connection), where long enough; see roundLoad. Kept in the total. */
+  waitMs?: number;
+  /** Of firstTokenMs, the derived wait of the request it was measured on. */
+  firstTokenWaitMs?: number;
+  /**
+   * Of modelMs, from each request's first delta to its end: generation, with load, queueing and
+   * prompt processing left out. The thinking share's time base.
+   */
+  outputMs?: number;
+  /** From the first request that streamed anything to its first delta. */
+  firstTokenMs?: number;
+  /** Thinking, summed over the requests that thought. */
+  reasoningMs?: number;
+  /** Thinking tokens: the server's count, else on a self-hosted model the readable thinking frames. */
+  reasoningTokens?: number;
+  /**
+   * A hosted reply's output tokens over the time spent generating them, summed over the requests
+   * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
+   * is its usage's rate. `outputTokens` is the output of the reply's own requests, which leaves out
+   * sub-agents' that its usage includes.
+   */
+  generation?: { tokens: number; ms: number; untimedTokens?: number; outputTokens?: number };
+  /** The figures above that are estimates; the thread marks them approximate. */
+  derived?: ChatReplyStatsEstimate[];
 }
 
 /**
@@ -1200,18 +1302,16 @@ export type ChatSessionMode = 'chat' | 'code';
  * goes ahead.
  *
  * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
- * may do without stopping, and it governs one axis only: filesystem and execution. The
- * generation tools are gated on COST, not safety, and ask in every mode - approving
- * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ * may do without stopping.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
- *           opencode's permission defaults; see ChatService.autoApproves.
- *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
- *           this user can read and reach the internet with nobody looking. Chosen per
- *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *           command that writes outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, or the same call a third time in a row.
+ *           Commands that cannot be parsed or fully followed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
+ *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
+ *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
  * output can raise it; see ChatService.setApprovalMode and HostContext.
@@ -1393,6 +1493,8 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
   /** How the last assistant turn ended; absent when the session has no assistant message. */
   lastOutcome?: ChildOutcome;
@@ -1408,6 +1510,9 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.
@@ -1523,6 +1628,7 @@ export type ChatStreamEvent =
       promptCache?: ChatPromptCacheStamp;
       /** See ChatMessage.questComplete. */
       questComplete?: true;
+      stats?: ChatReplyStats;
     }
   | {
       type: 'error';
@@ -1531,6 +1637,8 @@ export type ChatStreamEvent =
       message: string;
       stopReason?: string;
       contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+      /** What was measured before it failed; absent when the reply was already stored whole. */
+      stats?: ChatReplyStats;
     }
   | {
       type: 'background-output';
@@ -1620,6 +1728,11 @@ export interface SendMessageRequest {
   text: string;
   /** Descriptors returned by `addAttachments`; their bytes are already on disk. */
   attachments?: ChatAttachment[];
+  /**
+   * App-written context for this turn only, sent to the model and never drawn (ChatMessage.notes);
+   * e.g. the part a point-and-edit request in the 3D pane is about.
+   */
+  notes?: string[];
 }
 
 /**
@@ -2024,6 +2137,11 @@ export interface ChatRoundTiming {
   startedAt: number;
   /** The first streamed delta of any kind; absent when the stream produced nothing. */
   firstTokenAt?: number;
+  /** The first and last thinking frames, readable or a bare marker around omitted thinking. */
+  firstReasoningAt?: number;
+  lastReasoningAt?: number;
+  /** The first delta with visible text. */
+  firstTextAt?: number;
   endedAt: number;
 }
 
@@ -2052,6 +2170,26 @@ export interface ChatReplyRound {
    * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
    */
   sent?: ChatSentRound;
+  /**
+   * The server's id for this round's request: the `X-Request-ID` it was sent with, as the stream's
+   * `meta` event echoed it. The key that counts the round's charge exactly once. Absent on older
+   * rounds and on servers that send no `meta`.
+   */
+  requestId?: string;
+  /** What the server's ledger recorded for this round's request; see ChatSettledCharge. */
+  settled?: ChatSettledCharge;
+}
+
+/**
+ * The charge the server committed for one request, from the stream's `settled` event. Unlike
+ * `usage.creditsUsed`, computed before settlement, this is what the ledger holds. Stored only:
+ * totals still come from `usage`.
+ */
+export interface ChatSettledCharge {
+  creditsCharged: number;
+  usdCost?: number;
+  /** The server run the charge was billed under, as the `settled` event echoed it; absent outside a run. */
+  runId?: string;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   getDlqByLabel: vi.fn(),
   getDlqUrl: vi.fn(() => 'dlq-url'),
   getSourceQueueUrl: vi.fn(() => 'source-url'),
+  suggestion: vi.fn(),
+  transition: vi.fn(),
 }));
 
 type Route = (req: unknown, res: unknown) => unknown;
@@ -50,7 +52,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { countAttempts: h.countAttempts, logReplay: h.logReplay },
+  adminAiSuggestionRepository: { transition: h.transition },
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
+vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
@@ -58,7 +63,12 @@ import handler from '../replay';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.getDlqByLabel.mockReturnValue({ label: 'quest', displayName: 'Quest queue', sourceQueue: 'questQueue' });
+  h.getDlqByLabel.mockReturnValue({
+    label: 'quest',
+    displayName: 'Quest queue',
+    sourceQueue: 'questQueue',
+    replay: 'safe',
+  });
   h.audit.mockResolvedValue(null);
   h.sendToQueue.mockResolvedValue(undefined);
   h.deleteFromQueue.mockResolvedValue(undefined);
@@ -67,6 +77,103 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/dlq/replay admin audit', () => {
+  it('claims approval once and audits the approving admin before SQS work', async () => {
+    const id = 'a'.repeat(24);
+    h.suggestion.mockResolvedValue({
+      id,
+      proposedAction: {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded transient failure',
+      },
+    });
+    h.transition.mockResolvedValueOnce({ id, status: 'accepted' }).mockResolvedValue(null);
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+    const invoke = async () => {
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: { queueLabel: 'quest', messageIds: ['m1'], aiSuggestionId: id, reason: 'Reviewed transient failure' },
+      });
+      (req as unknown as Record<string, unknown>).user = {
+        id: 'admin-1',
+        name: 'Admin',
+        username: 'admin',
+        isAdmin: true,
+      };
+      return (handler as unknown as Route)(req, res);
+    };
+    await invoke();
+    expect(h.transition).toHaveBeenCalledWith(id, ['pending'], 'accepted', {
+      decidedBy: { userId: 'admin-1', name: 'Admin' },
+    });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.triage.accepted',
+      reason: 'Reviewed transient failure',
+      details: { aiSuggestionId: id },
+    });
+    expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+    await expect(invoke()).rejects.toThrow('already been decided');
+    expect(h.sendToQueue).toHaveBeenCalledOnce();
+  });
+  it('requires a reason for suggestion approval even on a safe queue', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        queueLabel: 'quest',
+        messageIds: ['m1'],
+        aiSuggestionId: 'a'.repeat(24),
+      },
+    });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await expect((handler as unknown as Route)(req, res)).rejects.toThrow('reason');
+    expect(h.transition).not.toHaveBeenCalled();
+    expect(h.receiveFromQueue).not.toHaveBeenCalled();
+  });
+  it.each(['missing', 'id', 'action', 'queueLabel', 'messageId', 'malformed'])(
+    'rejects a %s recommendation mismatch before claiming or SQS work',
+    async mismatch => {
+      const id = 'a'.repeat(24);
+      const action = {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded failure',
+      };
+      h.suggestion.mockResolvedValue(
+        mismatch === 'missing'
+          ? null
+          : {
+              id: mismatch === 'id' ? 'b'.repeat(24) : id,
+              proposedAction:
+                mismatch === 'malformed'
+                  ? {}
+                  : {
+                      ...action,
+                      ...(mismatch === 'action' ? { action: 'discard' } : {}),
+                      ...(mismatch === 'queueLabel' ? { queueLabel: 'other' } : {}),
+                      ...(mismatch === 'messageId' ? { messageId: 'other' } : {}),
+                    },
+            }
+      );
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: {
+          queueLabel: 'quest',
+          messageIds: ['m1'],
+          aiSuggestionId: id,
+          reason: 'Reviewed failure',
+        },
+      });
+      Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+      await expect((handler as unknown as Route)(req, res)).rejects.toThrow('does not match');
+      expect(h.transition).not.toHaveBeenCalled();
+      expect(h.receiveFromQueue).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
   it.each([
     { replay: 'safe', sourceQueue: null },
     { replay: 'side-effects', sourceQueue: null },
@@ -98,13 +205,55 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
         { batchSize: 1 },
         { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
       ]) {
-        const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
+        const { req, res } = createMocks({
+          method: 'POST',
+          body: { queueLabel: 'quest', reason: 'Reviewed side effects', ...replayBody },
+        });
         (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
         await (handler as unknown as Route)(req, res);
         expect(res._getStatusCode()).toBe(200);
       }
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith(expect.anything(), 1, 60, 2);
       expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
+    }
+  );
+
+  it.each(['side-effects', 'unsafe', 'future-class', undefined])(
+    'requires and audits a reason for %s in both replay paths',
+    async replay => {
+      h.getDlqByLabel.mockReturnValue({
+        label: 'quest',
+        displayName: 'Quest queue',
+        sourceQueue: 'questQueue',
+        replay,
+      });
+      h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+      for (const replayBody of [
+        { batchSize: 1 },
+        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
+      ]) {
+        for (const reason of [undefined, '', '    ', 'four', 'x'.repeat(501)]) {
+          const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody, reason } });
+          (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+          await expect((handler as unknown as Route)(req, res)).rejects.toThrow();
+        }
+      }
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.receiveFromQueue).not.toHaveBeenCalled();
+      expect(h.audit).not.toHaveBeenCalled();
+      for (const replayBody of [
+        { batchSize: 1 },
+        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
+      ]) {
+        const { req, res } = createMocks({
+          method: 'POST',
+          body: { queueLabel: 'quest', ...replayBody, reason: '  Reviewed side effects  ' },
+        });
+        (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+        await (handler as unknown as Route)(req, res);
+        expect(h.audit).toHaveBeenLastCalledWith(req, expect.objectContaining({ reason: 'Reviewed side effects' }));
+      }
     }
   );
 
@@ -150,6 +299,46 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps receiving past a short batch and stops at the first empty receive', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([
+        { MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' },
+        { MessageId: 'm2', ReceiptHandle: 'r2', Body: '{}' },
+      ])
+      .mockResolvedValueOnce([{ MessageId: 'm3', ReceiptHandle: 'r3', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(3);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(1, 'dlq-url', 10, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(2, 'dlq-url', 8, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(3, 'dlq-url', 7, 60, 2);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      details: { messageCount: 3, replayedMessageIds: ['m1', 'm2', 'm3'] },
+    });
+  });
+
+  it('replays a message received twice in one run once, deleting it with its latest receipt handle', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }])
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1-latest', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'r1-latest');
   });
 });
 

@@ -1,15 +1,22 @@
 import {
   Organization,
+  User,
   erasureRecordRepository,
   realtimeConnectionRepository,
   userRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
+  deleteOrgAlertsForUser,
+  eraseOrganizationRetentionForUser,
+  FeedbackNoteModel,
   type IErasureRecord,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
-import { purgeAccountContent } from './purgeAccountContent';
+import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDeletedUserData';
+import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
+import { erasureRegistry } from '../dataSubject/erasureRegistry';
+import { assertContributedRegistryValid } from '../dataSubject/registry';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 
@@ -17,7 +24,11 @@ type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
  * Erase an account again after a database restore brought its rows back, repeating what the original
  * path removed (record.initiatedBy): a self-serve or unknown-path erasure also purges files, content and
  * the personal org (completeAccountDeletion.ts); an admin one deletes the row and runs the shared
- * purge (pages/api/users/[id]/delete.ts). Keep in sync with those and with hardDeleteUser.ts.
+ * purge only. An admin Delete (server/admin/deleteUserAsAdmin.ts) now stamps `deletion.source: 'admin'`
+ * and runs the full purge like an admin erasure; records written before that change carry no such
+ * stamp and purged no content, so the restored row decides: a scheduled admin deletion
+ * (`deletion.source` or the `deletion.erasureScope` snapshot) was an erasure and is repeated in full.
+ * Keep in sync with those and with hardDeleteUser.ts.
  *
  * Sends no notifications or billing calls: no subscription cancel, deletion email, analytics event or
  * Slack/email notification, and `integrationGrants: null` skips the provider revokes. The original
@@ -38,20 +49,38 @@ export async function reapplyErasure(
 ): Promise<{ ownedOrganizationIds: string[] }> {
   const owned = await Organization.find({ userId, deletedAt: null, personal: { $ne: true } }, { _id: 1 }).lean();
   const writeRecord = () => erasureRecordRepository.record(record);
+  const restored = await User.findById(userId, { email: 1, deletion: 1 }).lean<{
+    email?: string | null;
+    deletion?: { source?: string; erasureScope?: unknown } | null;
+  }>();
+  const subject = { userId, email: restored?.email ?? null };
+  const adminErasure = restored?.deletion?.source === 'admin' || restored?.deletion?.erasureScope != null;
   // Fail before deleting the retry anchor if realtime invalidation cannot complete. Unlike the
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
-  if (record.initiatedBy !== 'admin') {
-    const assertLease = async () => {}; // no purge lease: the account is already past its grace period
+  if (record.initiatedBy !== 'admin' || adminErasure) {
+    // File erasure acquires its own User lease and permanent export fence, including restored
+    // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
+    const assertLease = async () => {};
+    assertContributedRegistryValid();
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
-    await withTransaction(async () => {
+    await erasureRegistry.erase(subject, assertLease);
+    await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+      await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });
   } else {
-    await withTransaction(async () => {
+    await withTransaction(async session => {
+      await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });

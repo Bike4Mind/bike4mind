@@ -18,13 +18,15 @@ export function useAccessibleModels() {
   const {
     data: modelInfos,
     isPending: isModelInfosPending,
-    isError: isModelsError,
+    isError: isModelInfosError,
     refetch: refetchModelInfos,
   } = useModelInfo();
-  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(
-    modelInfos,
-    isModelInfosPending
-  );
+  const {
+    data: modelConfigs,
+    isLoading: isConfigsLoading,
+    error: configurationsError,
+    refetch: refetchConfigurations,
+  } = useLLMModelConfigurationsWithDefaults(modelInfos, isModelInfosPending);
   const { data: lockedInfos, isPending: isLockedInfosPending } = useLockedModels();
   const { data: lockedConfigs } = useLLMModelConfigurationsWithDefaults(lockedInfos, isLockedInfosPending);
   // Resolved entitlement keys (subscription- + tag-derived). Gates
@@ -97,12 +99,14 @@ export function useAccessibleModels() {
     // on "Loading AI models..." forever. Once `currentUser` is set we resolve;
     // while it's still null (not yet hydrated) we keep loading.
     isLoading: isConfigsLoading || !currentUser,
-    // Distinguishes a failed /api/models fetch (retryable) from a user with no model access.
-    isModelsError,
+    // A failed catalog or access read is retryable, not an account with no model access.
+    isModelsError: isModelInfosError || Boolean(configurationsError),
     // Until the first entitlements fetch settles, models gated by entitlement (including the
     // universal 'base' key) are missing from accessibleModels, so the list is a partial one.
     isEntitlementsLoading,
-    refetchModels: refetchModelInfos,
+    refetchModels: useCallback(async () => {
+      await Promise.all([refetchModelInfos(), refetchConfigurations()]);
+    }, [refetchModelInfos, refetchConfigurations]),
     userTags,
     isAdmin,
     isModelAccessible: useCallback(

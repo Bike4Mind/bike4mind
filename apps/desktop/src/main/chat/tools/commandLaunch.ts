@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
 import { COMMAND_TAG_ENV } from './commandTree';
 import { resolveGitBash } from './gitBash';
 import { wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../../wsl/wslPath';
-import { resolveUserPath } from './userPath';
+import { resolveLoginShellVariables, resolveUserPath } from './userPath';
 import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandbox';
 
 /**
@@ -60,6 +61,36 @@ export async function launchCommand(
 export const spawnsDetached = (launch: Pick<SandboxedCommand, 'wslDistro'>): boolean => !launch.wslDistro;
 
 /**
+ * What a failed spawn in `cwd` reports. Node blames the shell with ENOENT when it is `cwd` that is missing, and says
+ * only ENOTDIR when it is a file; a WSL folder is left unchecked, since a stat of one can block while the distro starts.
+ */
+export function spawnFailure(
+  error: NodeJS.ErrnoException,
+  cwd: string,
+  launch: Pick<SandboxedCommand, 'wslDistro'>
+): Error {
+  if (launch.wslDistro) return error;
+  if (error.code === 'ENOENT' && !existsSync(cwd)) {
+    return new Error(
+      `The working folder ${cwd} no longer exists. It may have been moved, renamed or deleted, so the command was not run.`,
+      { cause: error }
+    );
+  }
+  if (error.code === 'ENOTDIR' && !isDirectory(cwd)) {
+    return new Error(`The working folder ${cwd} is not a directory, so the command was not run.`, { cause: error });
+  }
+  return error;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * `env` with `safe.bareRepository=explicit` appended to git's GIT_CONFIG_COUNT entries and to a GIT_CONFIG_PARAMETERS
  * that is set (git reads it last), and the names it set. Command-line scope no repository's config can override.
  */
@@ -85,7 +116,10 @@ function withoutName(env: NodeJS.ProcessEnv, name: string): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== name));
 }
 
-/** The user's own environment, with the PATH a terminal would have rather than Finder's. */
+/**
+ * The user's own environment, with the PATH and exported variables a terminal would have rather than Finder's.
+ * The app's own environment wins over the login shell's, so only what a Finder launch lacks is filled in.
+ */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   if (launch.wslDistro) {
     const crossing: NodeJS.ProcessEnv = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
@@ -100,7 +134,8 @@ export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.Process
     const bare = withExplicitBareRepositories(counted);
     return wslCommandEnv(bare.env, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV, ...bare.names]);
   }
-  const base: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
+  const [login, path] = await Promise.all([resolveLoginShellVariables(), resolveUserPath()]);
+  const base: NodeJS.ProcessEnv = { ...login, ...process.env, PATH: path, ...extra, ...launch.env };
   const env = withExplicitBareRepositories(base).env;
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
   if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;

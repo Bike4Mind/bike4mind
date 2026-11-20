@@ -296,6 +296,17 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         return `Error: delegate_to_agent requires an "agent" parameter. Available agents: ${agentNames.join(', ')}`;
       }
 
+      if (
+        params.thoroughness !== undefined &&
+        params.thoroughness !== 'quick' &&
+        params.thoroughness !== 'medium' &&
+        params.thoroughness !== 'very_thorough'
+      ) {
+        const error = 'thoroughness must be one of: quick, medium, very_thorough';
+        reportValidationFailure({ ...params, thoroughness: undefined }, startTime, error);
+        return `Error: delegate_to_agent ${error}`;
+      }
+
       const agentDef = agentStore.getAgent(params.agent);
       if (!agentDef) {
         const available = agentNames.join(', ');

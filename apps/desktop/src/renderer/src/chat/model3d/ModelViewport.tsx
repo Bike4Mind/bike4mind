@@ -4,7 +4,21 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
-import { explodeModel, fitAngle, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
+import { changedParts, startEditFlash, type EditFlash } from './editFlash';
+import { measureLabel, type ModelTool } from './inspection';
+import { CLICK_SLOP, JointDragController } from './jointDragController';
+import { addMeasurePoint, featureEdges, snapPoint, stillOnSurface, type MeasurePoint, type SnapKind } from './measure';
+import { MeasureOverlay } from './measureOverlay';
+import {
+  explodeModel,
+  extendsPastView,
+  fitAngle,
+  frameCamera,
+  meshAt,
+  partsBox,
+  poseJoints,
+  VIEW_DIRECTIONS,
+} from './modelScene';
 import {
   addGlowLights,
   enableShadows,
@@ -14,6 +28,8 @@ import {
   type StageLighting,
   viewportPixelRatio,
 } from './modelStage';
+import { keptBy, type SectionState } from './section';
+import { SectionCut } from './sectionCut';
 import {
   recordCanvas,
   swing,
@@ -33,11 +49,26 @@ export type ModelViewportHandle = {
   recordTurntable: (joints: readonly ModelJoint[], onProgress?: (progress: number) => void) => Promise<Uint8Array>;
   /** Frames the model from one side, or from the default three-quarter view when `view` is null. */
   setView: (view: ModelView | null) => void;
+  /** Glides the camera back until the whole model is in view, from the angle it is looked at now. */
+  fit: () => void;
   /** Orbits the camera by these angles (radians): positive azimuth turns right, positive polar tilts down. */
   orbit: (azimuth: number, polar: number) => void;
   /** Moves the camera towards the target (factor below 1) or away from it (above 1). */
   zoom: (factor: number) => void;
+  /**
+   * Where the named parts' centre shows on screen, in CSS px from the viewport's top left: where
+   * the edit prompt opens when the parts were picked from the keyboard. Null when none is shown.
+   */
+  partPoint: (names: readonly string[]) => ViewportPoint | null;
+  /** False when the section cut has removed every part of the named part (its box is wholly on the cut side). */
+  partKept: (name: string) => boolean;
 };
+
+/** A point on the viewport, in CSS px from its top left. */
+export type ViewportPoint = { x: number; y: number };
+
+/** A click on a part: `additive` (shift held) adds it to the selection or takes it out. */
+export type ViewportPick = { name: string | null; additive: boolean; point: ViewportPoint };
 
 type Props = {
   object: THREE.Group | null;
@@ -55,30 +86,59 @@ type Props = {
   pose: Record<string, number>;
   /** Pulls the parts apart (animated); a rebuild keeps the view exploded. */
   exploded: boolean;
-  /** The part to highlight, by name. */
-  picked: string | null;
-  /** A click (not an orbit drag) on a part, or on empty space (null). */
-  onPick: (name: string | null) => void;
+  /** The parts to highlight, by name. */
+  picked: readonly string[];
+  /** A click (not an orbit or joint drag) on a part, or on empty space (a null name). */
+  onPick: (pick: ViewportPick) => void;
+  /** A joint dragged in the view (jointDragController.ts), clamped to its range. */
+  onPoseChange?: (name: string, value: number) => void;
+  /** A joint drag began. */
+  onJointDragStart?: () => void;
+  /**
+   * Parts a point-and-edit turn is waiting on. The next rebuild settles the request: the ones it
+   * changed get the before/after moment (editFlash.ts), and `onEditSettled` fires either way, so a
+   * turn that never touched them does not leave a later, unrelated rebuild flashing.
+   */
+  editing: readonly string[];
+  onEditSettled: () => void;
   /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
   clip: string | null;
+  /**
+   * Hears whether the model has grown past a camera the user placed: a rebuild never moves that
+   * camera, so the pane offers a fit instead. False again once the model is back in view.
+   */
+  onCroppedChange?: (cropped: boolean) => void;
+  /** A parameter slider is being dragged: its preview rebuilds never move the camera. */
+  adjusting?: boolean;
   /** Filled with the viewport's handle while it is mounted. */
   handleRef?: MutableRefObject<ModelViewportHandle | null>;
+  /**
+   * The inspection tool on, if any. Measure takes clicks for its points (no part picking or joint
+   * dragging meanwhile); section cuts the model, and what it cuts away cannot be picked or dragged.
+   */
+  tool?: ModelTool | null;
+  /** The section tool's plane, used while `tool` is 'section'. */
+  section?: SectionState;
+  /** The model's units, for the dimension label. */
+  units?: string;
+  /** The measure tool's picked points (none, one or two, world space) whenever they change. */
+  onMeasure?: (points: THREE.Vector3[]) => void;
 };
 
-/** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
-const CLICK_SLOP = 4;
 const PICK_GLOW = new THREE.Color('#2f7cf6');
 /** Quiet time, in ms, after the last orbit or slider frame before the AO pass is drawn again. */
 const IDLE_RENDER_DELAY = 150;
 /** How long the parts take to pull apart or come back together, in ms. */
 const EXPLODE_MS = 700;
+/** How long a refit glides when a rebuild grows the model out of frame, in ms. */
+const FIT_MS = 450;
 
-/** Tints the picked part's (cloned, per-view) material so it reads as selected; clears the rest. */
-function highlightPart(root: THREE.Object3D, name: string | null): void {
+/** Tints the picked parts' (cloned, per-view) materials so they read as selected; clears the rest. */
+function highlightParts(root: THREE.Object3D, names: readonly string[]): void {
   root.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return;
     const material = child.material as THREE.MeshStandardMaterial;
-    const picked = name !== null && child.name === name;
+    const picked = names.includes(child.name);
     // A part's own glow (partMaterial records it) comes back when it is no longer picked.
     const own = typeof material.userData.emissive === 'number' ? material.userData.emissive : 0x000000;
     const ownIntensity =
@@ -101,6 +161,17 @@ type Viewer = {
   render: () => void;
   /** Frames the current model again, unless the user has moved the camera since it was framed. */
   reframe: () => void;
+  /** Stops a fit glide midway, so another camera move (explode, the user) takes over from there. */
+  stopFit: () => void;
+  /** Hover guide and press-and-drag posing of the model's joints. */
+  joints: JointDragController;
+  /** Re-checks whether the shown model reaches past the view and tells the pane when that changes. */
+  checkCropped: () => boolean;
+  /** Cuts (or uncuts) the shown copy as the `tool` and `section` props say now. */
+  applySection: () => void;
+  /** Redraws the dimension; with `rebuilt`, first drops it unless both points are still on the model. */
+  refreshMeasure: (rebuilt?: boolean) => void;
+  clearMeasure: () => void;
 } & ModelViewportHandle;
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
@@ -116,8 +187,18 @@ export function ModelViewport({
   exploded,
   picked,
   onPick,
+  onPoseChange,
+  onJointDragStart,
+  editing,
+  onEditSettled,
   clip,
+  onCroppedChange,
+  adjusting = false,
   handleRef,
+  tool = null,
+  section,
+  units = '',
+  onMeasure,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
@@ -136,9 +217,32 @@ export function ModelViewport({
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const onPoseChangeRef = useRef(onPoseChange);
+  onPoseChangeRef.current = onPoseChange;
+  const onJointDragStartRef = useRef(onJointDragStart);
+  onJointDragStartRef.current = onJointDragStart;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const onEditSettledRef = useRef(onEditSettled);
+  onEditSettledRef.current = onEditSettled;
+  const flash = useRef<{ frame: number; run: EditFlash } | null>(null);
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
   const userMoved = useRef(false);
+  // Set by any camera move since the model was last framed whole; a rebuild only refits while false.
+  const movedSinceFit = useRef(false);
+  const onCroppedChangeRef = useRef(onCroppedChange);
+  onCroppedChangeRef.current = onCroppedChange;
+  const adjustingRef = useRef(adjusting);
+  adjustingRef.current = adjusting;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
 
   useEffect(() => {
     const element = host.current;
@@ -162,21 +266,65 @@ export function ModelViewport({
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     // While a turntable records, it alone draws: orbit, rebuild and resize frames would land in the clip.
     let recording = false;
+    // Assigned just below; a joint drag holds the AO pass back until it settles, as an orbit does.
+    let jointDrag: JointDragController | null = null;
+    const cut = new SectionCut();
+    const measureOverlay = new MeasureOverlay();
+    scene.add(cut.group, measureOverlay.group);
+    stage.unreflected.add(cut.group);
+    stage.unreflected.add(measureOverlay.group);
+    const clip = () => (cut.active ? cut.plane : null);
+    let measurePoints: MeasurePoint[] = [];
     const render = () => {
       if (recording) return;
       composer.render(false);
       clearTimeout(idleTimer);
+      if (jointDrag?.busy) return;
       idleTimer = setTimeout(() => composer.render(true), IDLE_RENDER_DELAY);
     };
-    controls.addEventListener('change', render);
+    jointDrag = new JointDragController({
+      host: element,
+      canvas: renderer.domElement,
+      camera,
+      controls,
+      scene,
+      shown: () => shownCopy.current,
+      pose: () => poseRef.current,
+      enabled: () => !recording && toolRef.current !== 'measure',
+      clip,
+      onChange: (name, value) => onPoseChangeRef.current?.(name, value),
+      onStart: () => onJointDragStartRef.current?.(),
+      render,
+    });
+    stage.unreflected.add(jointDrag.overlay);
+    let fitFrame = 0;
+    const stopFit = () => cancelAnimationFrame(fitFrame);
+    let cropped = false;
+    const checkCropped = () => {
+      const shown = shownCopy.current;
+      const now = !!shown && extendsPastView(camera, new THREE.Box3().setFromObject(shown));
+      if (now !== cropped) {
+        cropped = now;
+        onCroppedChangeRef.current?.(now);
+      }
+      return now;
+    };
+    controls.addEventListener('change', () => {
+      render();
+      // Only while flagged: the box walk is not worth doing on every orbit frame otherwise.
+      if (cropped) checkCropped();
+    });
     controls.addEventListener('start', () => {
       userMoved.current = true;
+      movedSinceFit.current = true;
+      stopFit();
     });
     // A camera the user placed keeps its angle and target, and moves in or out as the pane's
     // narrower side does, so the model keeps its size in the pane instead of cropping.
     const reframe = (previousFit = fitAngle(camera)) => {
       if (!shownObject.current) return;
       if (!userMoved.current) {
+        stopFit();
         controls.target.copy(frameCamera(camera, shownObject.current));
       } else {
         const offset = camera.position.clone().sub(controls.target);
@@ -193,7 +341,86 @@ export function ModelViewport({
       const previousFit = fitAngle(camera);
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
+      measureOverlay.setAspect(camera.aspect);
       reframe(previousFit);
+      checkCropped();
+      render();
+    };
+    const pointerNdc = (event: PointerEvent, bounds: DOMRect) =>
+      new THREE.Vector2(
+        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+      );
+    /** The point a measuring click at `event` would place, snapped to a corner or edge when close. */
+    const measurePointAt = (event: PointerEvent): MeasurePoint | null => {
+      const shown = shownCopy.current;
+      if (!shown) return null;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+      const hit = meshAt(shown, camera, pointerNdc(event, bounds), clip());
+      if (!hit || !(hit.object instanceof THREE.Mesh)) return null;
+      const toScreen = (world: THREE.Vector3) => {
+        const projected = world.clone().project(camera);
+        return new THREE.Vector2(((projected.x + 1) / 2) * bounds.width, ((1 - projected.y) / 2) * bounds.height);
+      };
+      const cursor = new THREE.Vector2(event.clientX - bounds.left, event.clientY - bounds.top);
+      let snapped: { point: THREE.Vector3; kind: SnapKind } = snapPoint(
+        hit.point,
+        cursor,
+        featureEdges(hit.object),
+        toScreen
+      );
+      // A corner the cut took away is not there to snap to.
+      if (!keptBy(clip(), snapped.point)) snapped = { point: hit.point.clone(), kind: 'surface' };
+      const normal = hit.face
+        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+        : camera.position.clone().sub(hit.point).normalize();
+      return { ...snapped, normal };
+    };
+    const showMeasure = () => {
+      const points = measurePoints.map(entry => entry.point);
+      measureOverlay.setPoints(points, measureLabel(points, unitsRef.current));
+    };
+    const reportMeasure = () => onMeasureRef.current?.(measurePoints.map(entry => entry.point.clone()));
+    const clearMeasure = () => {
+      const had = measurePoints.length > 0;
+      measurePoints = [];
+      measureOverlay.clear();
+      renderer.domElement.style.cursor = '';
+      if (had) reportMeasure();
+    };
+    const refreshMeasure = (rebuilt = false) => {
+      const shown = shownCopy.current;
+      if (rebuilt && measurePoints.length) {
+        const tolerance = Math.max(stage.radius, 1e-6) * 1e-3;
+        shown?.updateMatrixWorld(true);
+        if (!shown || !measurePoints.every(entry => stillOnSurface(shown, entry, tolerance))) {
+          clearMeasure();
+          return;
+        }
+      }
+      showMeasure();
+    };
+    const applySection = () => {
+      const state = toolRef.current === 'section' ? (sectionRef.current ?? null) : null;
+      cut.apply(shownCopy.current, state, stage.bounds);
+      composer.setInspection([cut.group, measureOverlay.group], clip());
+    };
+    applySection();
+    let hoverFrame = 0;
+    const onPointerMove = (event: PointerEvent) => {
+      if (toolRef.current !== 'measure' || event.buttons !== 0 || recording) return;
+      cancelAnimationFrame(hoverFrame);
+      hoverFrame = requestAnimationFrame(() => {
+        const found = measurePointAt(event);
+        measureOverlay.setHover(found?.point ?? null, found?.kind);
+        renderer.domElement.style.cursor = found ? 'crosshair' : '';
+        render();
+      });
+    };
+    const onPointerLeave = () => {
+      cancelAnimationFrame(hoverFrame);
+      measureOverlay.setHover(null);
       render();
     };
     let pressedAt: { x: number; y: number } | null = null;
@@ -206,18 +433,27 @@ export function ModelViewport({
       if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP) return;
       const shown = shownCopy.current;
       if (!shown) return;
+      if (toolRef.current === 'measure') {
+        const found = measurePointAt(event);
+        if (!found) return;
+        measurePoints = addMeasurePoint(measurePoints, found);
+        showMeasure();
+        reportMeasure();
+        render();
+        return;
+      }
       const bounds = renderer.domElement.getBoundingClientRect();
-      const pointer = new THREE.Vector2(
-        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-        -((event.clientY - bounds.top) / bounds.height) * 2 + 1
-      );
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
-      onPickRef.current(hit ? hit.object.name : null);
+      const hit = meshAt(shown, camera, pointerNdc(event, bounds), clip());
+      onPickRef.current({
+        name: hit ? hit.object.name : null,
+        additive: event.shiftKey,
+        point: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+      });
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave);
     const observer = new ResizeObserver(resize);
     observer.observe(element);
 
@@ -227,10 +463,69 @@ export function ModelViewport({
       controls.target.copy(frameCamera(camera, shown, view === null ? VIEW_DIRECTIONS.iso : VIEW_DIRECTIONS[view]));
       // A preset is a deliberate camera; only the default view goes back to following the pane's size.
       userMoved.current = view !== null;
+      movedSinceFit.current = false;
+      stopFit();
       controls.update();
+    };
+    const partPoint = (names: readonly string[]): ViewportPoint | null => {
+      const shown = shownCopy.current;
+      if (!shown) return null;
+      const box = partsBox(shown, names);
+      if (box.isEmpty()) return null;
+      const centre = box.getCenter(new THREE.Vector3()).project(camera);
+      const bounds = renderer.domElement.getBoundingClientRect();
+      return { x: ((centre.x + 1) / 2) * bounds.width, y: ((1 - centre.y) / 2) * bounds.height };
+    };
+    const partKept = (name: string): boolean => {
+      const shown = shownCopy.current;
+      const box = shown ? partsBox(shown, [name]) : null;
+      if (!box || box.isEmpty()) return true;
+      const plane = clip();
+      return (
+        !plane ||
+        [0, 1].some(x =>
+          [0, 1].some(y =>
+            [0, 1].some(z =>
+              keptBy(
+                plane,
+                new THREE.Vector3(x ? box.max.x : box.min.x, y ? box.max.y : box.min.y, z ? box.max.z : box.min.z)
+              )
+            )
+          )
+        )
+      );
+    };
+    const fit = () => {
+      const shown = shownCopy.current;
+      if (!shown || recording) return;
+      stopFit();
+      movedSinceFit.current = false;
+      const fromPosition = camera.position.clone();
+      const fromTarget = controls.target.clone();
+      const direction = fromPosition.clone().sub(fromTarget);
+      const toTarget = frameCamera(camera, shown, [direction.x, direction.y, direction.z]);
+      const toPosition = camera.position.clone();
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        controls.target.copy(toTarget);
+        controls.update();
+        checkCropped();
+        return;
+      }
+      camera.position.copy(fromPosition);
+      const started = performance.now();
+      fitFrame = requestAnimationFrame(function step(now) {
+        const t = Math.min(1, (now - started) / FIT_MS);
+        const eased = swing(t / 2);
+        camera.position.lerpVectors(fromPosition, toPosition, eased);
+        controls.target.lerpVectors(fromTarget, toTarget, eased);
+        controls.update();
+        if (t < 1) fitFrame = requestAnimationFrame(step);
+        else checkCropped();
+      });
     };
     const orbit = (azimuth: number, polar: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       spherical.theta -= azimuth;
@@ -238,13 +533,16 @@ export function ModelViewport({
       spherical.phi = THREE.MathUtils.clamp(spherical.phi + polar, 0.05, Math.PI - 0.05);
       camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
       userMoved.current = true;
+      movedSinceFit.current = true;
       controls.update();
     };
     const zoom = (factor: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       camera.position.copy(controls.target).add(offset);
       userMoved.current = true;
+      movedSinceFit.current = true;
       controls.update();
     };
     const recordTurntable = async (
@@ -256,6 +554,7 @@ export function ModelViewport({
       if (!shown) throw new Error('There is no model to record.');
       recording = true;
       clearTimeout(idleTimer);
+      stopFit();
       controls.enabled = false;
       const canvas = renderer.domElement;
       const startPosition = camera.position.clone();
@@ -269,6 +568,7 @@ export function ModelViewport({
       composer.setSize(width, height, 1);
       canvas.style.objectFit = 'contain';
       camera.aspect = width / height;
+      measureOverlay.setAspect(camera.aspect);
       // Framed for the landscape clip from the angle the user was looking at it.
       const shots = turntableShots(camera, shown, startPosition.clone().sub(startTarget), startPose);
       try {
@@ -312,18 +612,36 @@ export function ModelViewport({
       composer,
       render,
       reframe,
+      stopFit,
+      joints: jointDrag,
+      checkCropped,
+      applySection,
+      refreshMeasure,
+      clearMeasure,
+      fit,
       recordTurntable,
       setView,
       orbit,
       zoom,
+      partPoint,
+      partKept,
     };
     resize();
     return () => {
       observer.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
+      cancelAnimationFrame(hoverFrame);
       clearTimeout(idleTimer);
+      stopFit();
+      onCroppedChangeRef.current?.(false);
       cancelAnimationFrame(buildFrame.current);
+      if (flash.current) cancelAnimationFrame(flash.current.frame);
+      jointDrag.dispose();
+      cut.dispose();
+      measureOverlay.dispose();
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -342,8 +660,11 @@ export function ModelViewport({
         return viewer.current.recordTurntable(joints, onProgress);
       },
       setView: view => viewer.current?.setView(view),
+      fit: () => viewer.current?.fit(),
       orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
       zoom: factor => viewer.current?.zoom(factor),
+      partPoint: names => viewer.current?.partPoint(names) ?? null,
+      partKept: name => viewer.current?.partKept(name) ?? true,
     };
     return () => {
       handleRef.current = null;
@@ -357,6 +678,12 @@ export function ModelViewport({
     // Parts the agent just added print in; a model opened afresh builds up whole.
     const previous = framedFor.current === frameKey ? shownObject.current : null;
     const added = object && previous !== object ? newPartNames(previous, object) : new Set<string>();
+    if (flash.current) {
+      cancelAnimationFrame(flash.current.frame);
+      flash.current.run.finish();
+      flash.current = null;
+    }
+    current.joints.reset();
     current.content.clear();
     current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
@@ -377,25 +704,43 @@ export function ModelViewport({
           child.material = material;
         }
       });
-      highlightPart(shown, pickedRef.current);
+      highlightParts(shown, pickedRef.current);
       enableShadows(shown);
       if (lightingGlows(lighting)) addGlowLights(shown, current.stage.radius);
       current.content.add(shown);
-      // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
+      // Re-frame when a different model opens. A rebuild keeps the camera unless it grew the model
+      // out of frame: then an untouched camera glides back to fit, and a placed one is only flagged.
       if (framedFor.current !== frameKey) {
         framedFor.current = frameKey;
         userMoved.current = false;
+        movedSinceFit.current = false;
         current.reframe();
       }
       current.controls.update();
+      if (current.checkCropped() && !movedSinceFit.current && !adjustingRef.current) current.fit();
       const carried = building.current?.frameKey === frameKey ? building.current : null;
       const names = new Set([...(carried?.names ?? []), ...added]);
       const start = carried?.start ?? performance.now();
       building.current = null;
-      const build =
-        names.size && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          ? startBuildIn(shown, names, start)
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const build = names.size && !still ? startBuildIn(shown, names, start) : null;
+      const settles = !!previous && previous !== object && editingRef.current.length > 0;
+      const edited = settles ? changedParts(previous, object, editingRef.current) : [];
+      const run =
+        previous && edited.length
+          ? startEditFlash(current.content, shown, previous, edited, performance.now(), still)
           : null;
+      if (run) {
+        const playing = { run, frame: 0 };
+        flash.current = playing;
+        playing.frame = requestAnimationFrame(function step(now) {
+          const going = run.step(now);
+          current.render();
+          if (going && flash.current === playing) playing.frame = requestAnimationFrame(step);
+          else if (flash.current === playing) flash.current = null;
+        });
+      }
+      if (settles) onEditSettledRef.current();
       if (build) {
         building.current = { frameKey, names, start };
         buildFrame.current = requestAnimationFrame(function step(now) {
@@ -405,14 +750,32 @@ export function ModelViewport({
           else building.current = null;
         });
       }
+    } else {
+      current.checkCropped();
     }
+    current.applySection();
+    current.refreshMeasure(true);
     current.render();
   }, [object, wireframe, grid, lighting, dark, dimmed, frameKey]);
+
+  useEffect(() => {
+    const current = viewer.current;
+    if (!current) return;
+    current.applySection();
+    if (tool !== 'measure') current.clearMeasure();
+    current.render();
+  }, [tool, section]);
+
+  useEffect(() => {
+    viewer.current?.refreshMeasure();
+    viewer.current?.render();
+  }, [units]);
 
   // A slider drag or playback only turns nodes: no re-clone, no re-frame.
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
-    poseJoints(shownCopy.current, pose);
+    poseJoints(shownCopy.current, viewer.current.joints.posed(pose));
+    viewer.current.refreshMeasure(true);
     viewer.current.render();
   }, [pose]);
 
@@ -423,9 +786,11 @@ export function ModelViewport({
     const shown = shownCopy.current;
     if (from === target || !current || !shown) {
       explodeAmount.current = target;
+      current?.refreshMeasure(true);
       return;
     }
     const { camera, controls } = current;
+    current.stopFit();
     // The camera glides to fit the parts where they end up, from the angle the user is looking at.
     const fromPosition = camera.position.clone();
     const fromTarget = controls.target.clone();
@@ -449,13 +814,18 @@ export function ModelViewport({
       controls.update();
       current.render();
       if (t < 1) frame = requestAnimationFrame(step);
+      else {
+        current.refreshMeasure(true);
+        current.render();
+        current.checkCropped();
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [exploded]);
 
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
-    highlightPart(shownCopy.current, picked);
+    highlightParts(shownCopy.current, picked);
     viewer.current.render();
   }, [picked]);
 

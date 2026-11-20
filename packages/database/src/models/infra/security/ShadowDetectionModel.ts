@@ -158,7 +158,7 @@ const directUserIds = (group: AccountCampaignGroup) =>
 /** Recent records sharing a direct member that one sweep's group is matched against. */
 const CAMPAIGN_MATCH_CANDIDATES = 20;
 
-// Matches the automation grader time budget (apps/client/server/security/shadowDetectionAutoGrade.ts).
+// Matches the automation grader time budget (apps/workers/src/security/shadowDetectionAutoGrade.ts).
 const FLAGGED_BY_OTHERS_MAX_TIME_MS = 20_000;
 
 /**
@@ -563,6 +563,17 @@ class ShadowDetectionRepository {
       .limit(query.limit + 1)
       .lean<LeanShadowDetection[]>();
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
+  }
+
+  /** Which of `userIds` are named by a detection an admin graded confirmed abuse. */
+  async findConfirmedAbuseUserIds(userIds: string[]): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    const named: unknown[] = await ShadowDetectionModel.distinct('userIds', {
+      userIds: { $in: userIds },
+      verdict: 'confirmed_abuse',
+    });
+    const wanted = new Set(userIds);
+    return named.filter((id): id is string => typeof id === 'string' && wanted.has(id));
   }
 
   /**

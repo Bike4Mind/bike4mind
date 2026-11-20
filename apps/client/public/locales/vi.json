@@ -102,7 +102,9 @@
     "no_subscription": "Không có đăng ký",
     "x_members": "{{count}} thành viên",
     "x_credits": "{{count}} tín dụng",
-    "owner": "Chủ sở hữu"
+    "roles": {
+      "owner": "Chủ sở hữu"
+    }
   },
   "session": {
     "typeYourMessage": "Nhập tin nhắn của bạn ở đây",

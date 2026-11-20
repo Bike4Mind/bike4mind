@@ -5,16 +5,16 @@ import ArtifactRenderer from './ArtifactRenderer';
 import { getCachedArtifactId } from './ArtifactIdResolver';
 import { registerArtifactType } from './registry';
 import { getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
-import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
+import { findReadableArtifactId } from '@client/app/utils/artifactPersistence';
 
 // The handler registry is populated at module scope by './handlers', which pulls in the
 // whole preview-card tree. Register a stub type instead, so this covers the renderer.
 vi.mock('./handlers', () => ({}));
 
 vi.mock('@client/app/utils/artifactPersistence', () => ({
-  findExistingArtifactId: vi.fn(),
+  findReadableArtifactId: vi.fn(),
 }));
-const lookup = vi.mocked(findExistingArtifactId);
+const lookup = vi.mocked(findReadableArtifactId);
 
 registerArtifactType({
   type: 'stub',

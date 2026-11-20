@@ -15,7 +15,7 @@ const m = vi.hoisted(() => ({
   posts: [] as ((req: unknown, res: unknown) => unknown)[],
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
@@ -26,7 +26,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: m.assertOwnerCanAfford }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  assertOwnerCanAfford: m.assertOwnerCanAfford,
+}));
 vi.mock('@bike4mind/server-utils/utils/researchTasks', () => ({ researchTaskJobs: {} }));
 vi.mock('@bike4mind/services', () => ({ researchTaskService: { create: m.create, retry: m.retry } }));
 vi.mock('@bike4mind/database', () => ({

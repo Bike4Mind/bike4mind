@@ -190,6 +190,13 @@ describe('credential census', () => {
     expect(censusExitCode(await runCredentialCensus(db))).toBe(1);
   });
 
+  it('names the backfill for plaintext TOTP seeds', async () => {
+    await db.collection('users').insertOne({ mfa: { totpSecret: 'JBSWY3DPEHPK3PXP' } });
+    const row = (await runCredentialCensus(db)).find(r => r.label === 'users.mfa.totpSecret')!;
+    expect(row).toMatchObject({ checked: 1, plaintext: 1 });
+    expect(formatCensus([row])).toContain('[backfill: migrate:protect-credentials]');
+  });
+
   it('counts unbound ciphertext alone as pending', async () => {
     await db.collection('apikeys').insertOne({ apiKey: unprefixedCiphertext });
     const row = (await runCredentialCensus(db)).find(r => r.label === 'apikeys.apiKey')!;

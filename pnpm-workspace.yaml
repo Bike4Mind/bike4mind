@@ -91,6 +91,8 @@ onlyBuiltDependencies:
   - "@vscode/ripgrep"
   - "electron"
   - "esbuild"
+  # Its install script downloads the static ffmpeg binary the generation-job worker renders Scenes with.
+  - "ffmpeg-static"
   - "isolated-vm"
   - "protobufjs"
   - "sharp"

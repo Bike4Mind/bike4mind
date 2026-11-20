@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACCESS_REVIEW_COUNT_LABELS,
+  ACCESS_REVIEW_GRACE_DAYS,
+  isAccessReviewOverdue,
+  isDormant,
+  quarterStart,
   formatAccessReviewMarkdown,
   formatAccessReviewSlackMessage,
   isAccessReviewReminderDay,
@@ -20,6 +24,7 @@ const snapshot = (overrides: Partial<AccessReviewSnapshot> = {}): AccessReviewSn
   allApiKeysListed: false,
   counts: { ...zeroCounts, fullAdmins: 2, activeApiKeys: 5 },
   admins: [],
+  roles: [],
   apiKeys: [],
   supportAccess: [],
   impersonation: [],
@@ -88,6 +93,7 @@ describe('formatAccessReviewMarkdown', () => {
     expect(markdown).toContain('| Full admin accounts | 2 |');
     expect(markdown).toContain('| Active API keys | 5 |');
     expect(markdown).toContain('## Admin accounts (0)\n\nNone.');
+    expect(markdown).toContain('## Admin roles (0)\n\nNone.');
     expect(markdown).toContain('## Privileged API keys (0)');
     expect(markdown).toContain('The counts above cover every key.');
     expect(markdown).toContain('## Active support access (0)\n\nNone.');
@@ -107,8 +113,17 @@ describe('formatAccessReviewMarkdown', () => {
             username: 'one',
             fullAdmin: true,
             permissions: [],
+            directPermissions: [],
+            adminRoleIds: [],
+            roles: [],
+            permissionSources: [],
             status: 'active',
             lastActiveAt: '2026-12-30T10:00:00.000Z',
+            lastAdminActionAt: '2026-12-29T10:00:00.000Z',
+            lastSignInAt: '2026-12-30T09:00:00.000Z',
+            mfaEnabled: true,
+            grantedBy: null,
+            grantedAt: null,
             activeSessions: 2,
             trustedDevices: 1,
             passkeys: 1,
@@ -121,9 +136,25 @@ describe('formatAccessReviewMarkdown', () => {
             email: null,
             username: null,
             fullAdmin: false,
-            permissions: ['support:read', 'keys:revoke'],
+            permissions: ['support:read', 'users:moderate', 'keys:revoke'],
+            directPermissions: ['support:read', 'keys:revoke'],
+            adminRoleIds: ['r1', 'r-dead'],
+            roles: [
+              { id: 'r1', name: 'Support | <ops>', deleted: false },
+              { id: 'r-dead', name: null, deleted: true },
+            ],
+            permissionSources: [
+              { permission: 'support:read', direct: true, roles: [{ id: 'r1', name: 'Support | <ops>' }] },
+              { permission: 'users:moderate', direct: false, roles: [{ id: 'r1', name: 'Support | <ops>' }] },
+              { permission: 'keys:revoke', direct: true, roles: [] },
+            ],
             status: 'banned',
             lastActiveAt: null,
+            lastAdminActionAt: null,
+            lastSignInAt: null,
+            mfaEnabled: false,
+            grantedBy: { userId: 'u1', name: 'One', email: 'one@example.org' },
+            grantedAt: '2026-10-01T00:00:00.000Z',
             activeSessions: 0,
             trustedDevices: 0,
             passkeys: 0,
@@ -131,6 +162,16 @@ describe('formatAccessReviewMarkdown', () => {
             bridgeDevices: 0,
             activeApiKeys: 0,
           },
+        ],
+        roles: [
+          {
+            id: 'r1',
+            name: 'Support | <ops>',
+            description: '',
+            permissions: ['support:read', 'users:moderate'],
+            members: [{ userId: 'u2', email: null, username: null, status: 'banned' }],
+          },
+          { id: 'r2', name: 'Billing', description: '', permissions: ['credits:adjust'], members: [] },
         ],
         apiKeys: [
           {
@@ -166,13 +207,27 @@ describe('formatAccessReviewMarkdown', () => {
             expiresAt: '2027-01-05T00:00:00.000Z',
           },
         ],
-        impersonation: [{ sessionId: 'impersonation-session-1', adminId: 'u3', adminEmail: null, userId: 'u8', startedAt: null, expiresAt: null }],
+        impersonation: [
+          {
+            sessionId: 'impersonation-session-1',
+            adminId: 'u3',
+            adminEmail: null,
+            userId: 'u8',
+            startedAt: null,
+            expiresAt: null,
+          },
+        ],
       })
     );
     expect(markdown).toContain(
-      '| one | one@example.org | active | full admin | 2026-12-30 | 2 | 1 | 1 | 0 | 0 | 1 |  |  |'
+      '| one | one@example.org | active | - | full admin | 2026-12-30 | 2 | 1 | 1 | 0 | 0 | 1 |  |  |'
     );
-    expect(markdown).toContain('| u2 | - | banned | support:read, keys:revoke | - | 0 | 0 | 0 | 0 | 0 | 0 |  |  |');
+    expect(markdown).toContain(
+      '| u2 | - | banned | Support \\| &lt;ops&gt;, deleted role r-dead | support:read (direct + role "Support \\| &lt;ops&gt;"), users:moderate (role "Support \\| &lt;ops&gt;"), keys:revoke (direct) | - | 0 | 0 | 0 | 0 | 0 | 0 |  |  |'
+    );
+    expect(markdown).toContain('## Admin roles (2)');
+    expect(markdown).toContain('| Support \\| &lt;ops&gt; | support:read, users:moderate | u2 |');
+    expect(markdown).toContain('| Billing | credits:adjust | - |');
     expect(markdown).toContain('## Active API keys (2)');
     expect(markdown).toContain('Every active, unexpired API key.');
     expect(markdown).toContain(
@@ -256,5 +311,46 @@ describe('formatAccessReviewSlackMessage', () => {
     expect(message).toContain('- Active API keys: 5');
     expect(message.split('\n')).toHaveLength(Object.keys(ACCESS_REVIEW_COUNT_LABELS).length + 3);
     expect(message).toContain('`docs/security/quarterly-access-review.md`');
+  });
+});
+
+describe('isDormant', () => {
+  const now = new Date('2027-05-20T12:00:00.000Z');
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  it('treats an admin with no recorded action as dormant', () => {
+    expect(isDormant(null, now, 90)).toBe(true);
+  });
+
+  it('is dormant at exactly the threshold and active one day inside it', () => {
+    expect(isDormant(daysAgo(90), now, 90)).toBe(true);
+    expect(isDormant(daysAgo(89), now, 90)).toBe(false);
+  });
+
+  it('is not dormant for an action stamped in the future', () => {
+    expect(isDormant(daysAgo(-2), now, 90)).toBe(false);
+  });
+});
+
+describe('isAccessReviewOverdue', () => {
+  const start = quarterStart(new Date('2027-05-20T12:00:00.000Z'));
+  const graceEnd = new Date(start.getTime() + ACCESS_REVIEW_GRACE_DAYS * 24 * 60 * 60 * 1000);
+
+  it('starts the quarter at midnight UTC on its first day', () => {
+    expect(start.toISOString()).toBe('2027-04-01T00:00:00.000Z');
+  });
+
+  it('is not overdue at the start of the quarter or just before the grace period ends', () => {
+    expect(isAccessReviewOverdue(null, start)).toBe(false);
+    expect(isAccessReviewOverdue(null, new Date(graceEnd.getTime() - 1))).toBe(false);
+  });
+
+  it('is overdue once the grace period ends with no review this quarter', () => {
+    expect(isAccessReviewOverdue(null, graceEnd)).toBe(true);
+    expect(isAccessReviewOverdue(new Date('2027-03-28T00:00:00.000Z'), graceEnd)).toBe(true);
+  });
+
+  it('is not overdue when a review was completed this quarter', () => {
+    expect(isAccessReviewOverdue(start, new Date('2027-06-30T00:00:00.000Z'))).toBe(false);
   });
 });

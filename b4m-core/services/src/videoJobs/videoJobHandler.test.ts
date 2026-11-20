@@ -46,7 +46,9 @@ vi.mock('../creditService/creditHold', () => ({
 import { holdCredits, releaseCreditHold, settleCreditHold } from '../creditService/creditHold';
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const setup = (overrides: Partial<VideoJobDeps> = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
@@ -352,6 +354,37 @@ describe('video job end to end with the test provider', () => {
       saveError
     );
     expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
+  });
+
+  it('keeps the clip in the bucket with a fresh signal when the step signal fired during the Files save', async () => {
+    const controller = new AbortController();
+    const t = setup({
+      saveToFiles: vi.fn(async () => {
+        controller.abort();
+        return { saved: false as const, reason: 'storage_limit' as const };
+      }),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    };
+
+    const result = await createVideoJobHandler(t.deps).store(storing, { signal: controller.signal });
+
+    expect(result).toMatchObject({ next: 'succeeded', payload: { output: { location: 'generated' } } });
+    const { signal } = vi.mocked(t.deps.saveToGeneratedBucket).mock.calls[0][0];
+    expect(signal).not.toBe(controller.signal);
+    expect(signal.aborted).toBe(false);
   });
 
   it.each([

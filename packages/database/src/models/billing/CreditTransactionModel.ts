@@ -17,9 +17,16 @@ import {
   UNCLASSIFIED_SOURCE,
   CREDIT_ADD_TRANSACTION_TYPES,
   PURCHASE_REVERSAL_REASONS,
+  type CompletionRunPurpose,
+  type CompletionRunRole,
+  type CompletionRunSpend,
+  type CompletionRunUsage,
+  COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
+  PAYER_STANDINGS,
   type CreditTransactionType,
   type PurchaseReversalReason,
 } from '@bike4mind/common';
+import { exchangeAttributionFor } from './exchangeAttribution';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
 
@@ -97,6 +104,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     cacheReadTokens: { type: Number, required: false },
     cacheWriteTokens: { type: Number, required: false },
     apiKeyId: { type: String, required: false }, // For completion_api_usage (optional - present for API key auth, undefined for JWT)
+    // Stamped by createTransaction for a federated exchange key's charges; absent for every other row.
+    oauthClientId: { type: String, required: false },
+    payerStanding: { type: String, required: false, enum: [...PAYER_STANDINGS] },
 
     // Transfer and received credit fields
     recipientId: { type: String, required: false },
@@ -160,7 +170,25 @@ CreditTransactionSchema.index(
   }
 );
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
+// Serves the cross-owner purchase reads of the admin Payments report (server/admin/payments). Partial on
+// purchases, so a query must say `type: 'purchase'`. Built by the 20260921241030 ensure migration.
+CreditTransactionSchema.index(
+  { createdAt: -1, _id: -1 },
+  { name: 'credit_tx_purchases_by_date', partialFilterExpression: { type: 'purchase' } }
+);
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
+// Serves completionRunSpend(): the ledger rows of completions attributed to a run (metadata.run, see
+// cliCompletions.ts). Partial, so only run-attributed rows are stored. Built by the 20261116061329 ensure migration.
+CreditTransactionSchema.index(
+  { 'metadata.run.runId': 1 },
+  { name: 'credit_tx_completion_run', partialFilterExpression: { 'metadata.run.runId': { $exists: true } } }
+);
+// Serves per-app spend rollups. Partial, so it holds only exchange-key charges.
+// Built by the 20261115120000 ensure migration.
+CreditTransactionSchema.index(
+  { oauthClientId: 1, createdAt: -1 },
+  { name: 'credit_tx_oauth_client', partialFilterExpression: { oauthClientId: { $exists: true } } }
+);
 
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
 
@@ -205,6 +233,43 @@ export type AiSpendSummary = {
 
 export const API_KEY_REQUEST_TRANSACTION_TYPES = ['completion_api_usage', 'decision_usage'];
 
+/** A run's settled spend and its breakdowns: CompletionRunUsage without the run's own fields. */
+export type CompletionRunSpendBreakdown = Omit<CompletionRunUsage, 'runId' | 'rootSessionId' | 'createdAt'>;
+
+const RUN_SPEND_ACCUMULATORS = {
+  // Usage is stored negative; report the spend magnitude.
+  creditsCharged: { $sum: { $abs: '$credits' } },
+  requests: { $sum: 1 },
+  inputTokens: { $sum: { $ifNull: ['$inputTokens', 0] } },
+  outputTokens: { $sum: { $ifNull: ['$outputTokens', 0] } },
+  cacheReadTokens: { $sum: { $ifNull: ['$cacheReadTokens', 0] } },
+  cacheWriteTokens: { $sum: { $ifNull: ['$cacheWriteTokens', 0] } },
+};
+
+// $facet stages cannot spill to disk, and byAttempt groups on caller-supplied ids, so bound the read (ms).
+const COMPLETION_RUN_SPEND_MAX_TIME_MS = 10_000;
+
+// Largest spend first; the group key breaks ties so equal buckets keep a stable order.
+const groupRunSpendBy = (key: unknown) => [
+  { $group: { _id: key, ...RUN_SPEND_ACCUMULATORS } },
+  { $sort: { creditsCharged: -1 as const, _id: 1 as const } },
+];
+
+type RunSpendRow<K> = CompletionRunSpend & { _id: K };
+
+const EMPTY_RUN_SPEND: CompletionRunSpend = {
+  creditsCharged: 0,
+  requests: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
+function toRunSpend<K>({ _id, ...spend }: RunSpendRow<K>): CompletionRunSpend {
+  return spend;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const AI_SPEND_DAILY_WINDOW_DAYS = 90;
 
@@ -230,10 +295,15 @@ export class CreditTransactionRepository
     type: T,
     data: Omit<Extract<ICreditTransaction, { type: T }>, 'type' | 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<ICreditTransactionDocument | null> {
+    const apiKeyId = (data as { apiKeyId?: string | null }).apiKeyId;
+    const attribution = apiKeyId
+      ? await exchangeAttributionFor(apiKeyId, { ownerType: data.ownerType, ownerId: data.ownerId })
+      : {};
     try {
       return await this.create({
         type,
         ...data,
+        ...attribution,
       } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     } catch (err) {
       // E11000 on transactionId = idempotent duplicate (SQS retry or concurrent handler)
@@ -404,23 +474,6 @@ export class CreditTransactionRepository
       .sort({ createdAt: -1 })
       .limit(limit)
       .exec();
-  }
-
-  async queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage> {
-    const query: Record<string, unknown> = { ...ADMIN_ADJUSTMENT_FILTER };
-
-    if (options.days !== undefined) {
-      const from = new Date();
-      from.setDate(from.getDate() - options.days);
-      query.createdAt = { $gte: from };
-    }
-
-    const [data, total] = await Promise.all([
-      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
-      this.model.countDocuments(query),
-    ]);
-
-    return { data, total };
   }
 
   /**
@@ -667,6 +720,72 @@ export class CreditTransactionRepository
       { $project: { _id: 0, creditsCharged: 1, transactions: 1 } },
     ]);
     return total ?? { creditsCharged: 0, transactions: 0 };
+  }
+
+  /**
+   * The settled spend of one completion run, from the completion_api_usage rows its requests wrote
+   * (cliCompletions.ts records the verified run under metadata.run). Each ledger row is one settled
+   * request, so a replayed stream or a re-read never counts a charge twice. Scoped to the billing
+   * owner as well as the run, so a run id alone never reads another holder's rows.
+   */
+  async completionRunSpend(
+    runId: string,
+    owner: { ownerId: string; ownerType: CreditHolderType }
+  ): Promise<CompletionRunSpendBreakdown> {
+    const [facets] = await this.model
+      .aggregate<{
+        settled: RunSpendRow<null>[];
+        byRole: RunSpendRow<CompletionRunRole>[];
+        byPurpose: RunSpendRow<CompletionRunPurpose>[];
+        byModel: RunSpendRow<string>[];
+        byAttempt: RunSpendRow<{ role: CompletionRunRole; taskId?: string; attemptId?: string }>[];
+      }>([
+        {
+          $match: {
+            'metadata.run.runId': runId,
+            ownerId: owner.ownerId,
+            ownerType: owner.ownerType,
+            // Settled-only by construction: cliCompletions.ts writes this row, negative, after the credit
+            // charge settles. A writer that records it earlier or unsigned breaks this sum and the $abs.
+            type: 'completion_api_usage',
+          },
+        },
+        {
+          $facet: {
+            settled: groupRunSpendBy(null),
+            byRole: groupRunSpendBy('$metadata.run.role'),
+            // Stored as sent; a request sent without a purpose was a turn (UsageEventRun).
+            byPurpose: groupRunSpendBy({ $ifNull: ['$metadata.run.purpose', 'turn'] }),
+            byModel: groupRunSpendBy({ $ifNull: ['$model', 'unknown'] }),
+            // One more than the cap, so a cut-off list can be told apart from one that fits exactly.
+            byAttempt: [
+              ...groupRunSpendBy({
+                role: '$metadata.run.role',
+                taskId: '$metadata.run.taskId',
+                attemptId: '$metadata.run.attemptId',
+              }),
+              { $limit: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1 },
+            ],
+          },
+        },
+      ])
+      .option({ maxTimeMS: COMPLETION_RUN_SPEND_MAX_TIME_MS });
+
+    const [settled] = facets?.settled ?? [];
+    const attempts = facets?.byAttempt ?? [];
+    return {
+      settled: settled ? toRunSpend(settled) : EMPTY_RUN_SPEND,
+      byRole: (facets?.byRole ?? []).map(row => ({ role: row._id, ...toRunSpend(row) })),
+      byPurpose: (facets?.byPurpose ?? []).map(row => ({ purpose: row._id, ...toRunSpend(row) })),
+      byModel: (facets?.byModel ?? []).map(row => ({ model: row._id, ...toRunSpend(row) })),
+      byAttempt: attempts.slice(0, COMPLETION_RUN_USAGE_MAX_ATTEMPTS).map(row => ({
+        role: row._id.role,
+        ...(row._id.taskId !== undefined && { taskId: row._id.taskId }),
+        ...(row._id.attemptId !== undefined && { attemptId: row._id.attemptId }),
+        ...toRunSpend(row),
+      })),
+      byAttemptTruncated: attempts.length > COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
+    };
   }
 
   async sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ISourceUsage[]> {

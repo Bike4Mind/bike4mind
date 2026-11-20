@@ -16,7 +16,10 @@ These agreements go **into force as drafted** to gate the public launch. Formal 
 |---|---|---|---|
 | [`terms-of-service.md`](./terms-of-service.md) | `1.0.0` (effective 2026-11-09) | [Consumer Terms of Service](https://www.anthropic.com/legal/consumer-terms) | [Terms of Use](https://openai.com/policies/terms-of-use/) |
 | [`usage-policy.md`](./usage-policy.md) | `1.0.0` (effective 2026-10-10) | [Usage Policy](https://www.anthropic.com/legal/aup) | [Usage Policies](https://openai.com/policies/usage-policies/) |
+| [`data-handling.md`](./data-handling.md) | `1.0.0` (last updated 2026-11-13) | Sub-processors list | Sub-processor list |
 | Privacy Policy — *separate track* | — | [Privacy Policy](https://www.anthropic.com/legal/privacy) | [Privacy Policy](https://openai.com/policies/privacy-policy/) |
+
+The app links each document on the marketing site by its file name as the slug (`ExternalLinks` in `apps/client/app/utils/externalLinks.ts`): `/terms-of-service`, `/usage-policy`, `/data-handling`. `data-handling.md` is the API data-handling statement and sub-processor list; it is not part of the signup acceptance gate.
 
 **Privacy** currently lives at `apps/client/content/privacy.mdx` (a JSX component, unversioned). It is a **separate workstream** (data-handling / GDPR) and should graduate into this folder as `privacy-policy.md` on the same versioned format in a follow-up. It is *linked* from the ToS but is **not** part of the P0-B signup acceptance gate (which is ToS + Usage Policy).
 
@@ -28,7 +31,7 @@ This folder **supersedes** `apps/client/content/terms.mdx` — that copy is unve
 
 ## Versioning scheme
 
-- Each doc carries a **semver** and an **effective date** in its frontmatter (`version`, `effectiveDate`, `status`).
+- Each doc carries a **semver** and an **effective date** in its frontmatter (`version`, `effectiveDate`, `status`). `data-handling.md` is a living list and carries `lastUpdated` instead of `effectiveDate`.
 - At acceptance the app persists `{ type, version, acceptedAt (UTC), ip }` on the user (see the wiring spec below).
 - **Re-acceptance** is prompted only on a **major** version bump (material change). Minor/patch edits (typos, clarifications) do not force re-acceptance.
 

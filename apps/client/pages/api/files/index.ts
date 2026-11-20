@@ -17,7 +17,7 @@ import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
 import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import {

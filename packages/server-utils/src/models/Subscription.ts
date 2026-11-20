@@ -111,6 +111,7 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
     intervalCount: { type: Number, required: false },
     cancelAtPeriodEnd: { type: Boolean, required: false },
     cancelAt: { type: Date, required: false },
+    endedAt: { type: Date, required: false },
     trialEndsAt: { type: Date, required: false },
     stripeCustomerId: { type: String, required: false },
     lastSyncedAt: { type: Date, required: false },
@@ -208,6 +209,18 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         status: 'active',
       })
       .lean({ virtuals: true });
+  }
+
+  async hasLapsedSubscriptionsByOwners(
+    ownerType: SubscriptionOwnerType,
+    ownerIds: readonly string[]
+  ): Promise<boolean> {
+    if (ownerIds.length === 0) return false;
+    return !!(await this.model.exists({
+      ownerType,
+      ownerId: { $in: [...ownerIds] },
+      status: { $in: ['canceled', 'past_due', 'unpaid', 'paused'] },
+    }));
   }
 
   /**

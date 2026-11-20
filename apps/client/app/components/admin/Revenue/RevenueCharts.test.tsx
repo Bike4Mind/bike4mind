@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMPARISON_OPACITY, INK_MUTED } from './chartParts';
+import { COMPARISON_OPACITY, INK_MUTED } from '../shared/chartParts';
 import { planColor } from './RevenueCharts';
 import { OTHER_PLANS_KEY, type PlanSeries } from './revenueChartData';
 

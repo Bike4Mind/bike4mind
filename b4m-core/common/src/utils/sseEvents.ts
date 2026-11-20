@@ -92,7 +92,16 @@ export interface SSEProviderBlockEvent extends ProviderBlock {
   type: 'provider_block';
 }
 
-export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent;
+/** Sent once after the ledger commits, before `[DONE]`; see CompletionSettledEventSchema. */
+export interface SSESettledEvent {
+  type: 'settled';
+  requestId: string;
+  creditsCharged: number;
+  usdCost?: number;
+  runId?: string;
+}
+
+export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent | SSESettledEvent;
 
 export interface CompletionInfo {
   toolsUsed?: Array<{
@@ -329,6 +338,25 @@ export function formatSSEError(error: unknown, requestId?: string, code?: Comple
  */
 export function buildMetaEvent(requestId: string): SSEMetaEvent {
   return { type: 'meta', requestId };
+}
+
+/**
+ * The settlement receipt for a first-party (account-holder) stream. Carries `usdCost`, so a public
+ * surface that withholds it (see buildPublicSSEEvent) must not send this event.
+ */
+export function buildSettledEvent(settlement: {
+  requestId: string;
+  creditsCharged: number;
+  usdCost?: number;
+  runId?: string;
+}): SSESettledEvent {
+  return {
+    type: 'settled',
+    requestId: settlement.requestId,
+    creditsCharged: settlement.creditsCharged,
+    ...(settlement.usdCost !== undefined && { usdCost: settlement.usdCost }),
+    ...(settlement.runId !== undefined && { runId: settlement.runId }),
+  };
 }
 
 /**

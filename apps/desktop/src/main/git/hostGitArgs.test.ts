@@ -7,6 +7,7 @@ import { gitArgumentPath, gitCommand, hostGitArgs, hostNetworkGitArgs, type Scop
 
 vi.mock('../chat/tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('../chat/tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   hostProgram: async (name: string) => name,
 }));
 

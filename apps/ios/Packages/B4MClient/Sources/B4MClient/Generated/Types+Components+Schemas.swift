@@ -54,6 +54,56 @@ extension Components {
                 case name
             }
         }
+        /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse`.
+        public struct UpgradeRequiredResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/error`.
+            public var error: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/request_id`.
+            public var requestId: Swift.String?
+            /// Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/name`.
+            @available(*, deprecated)
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/errorCode`.
+            public var errorCode: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/client_name`.
+            public var clientName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/minimum_version`.
+            public var minimumVersion: Swift.String
+            /// Creates a new `UpgradeRequiredResponse`.
+            ///
+            /// - Parameters:
+            ///   - error:
+            ///   - requestId:
+            ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///   - errorCode:
+            ///   - clientName:
+            ///   - minimumVersion:
+            public init(
+                error: Swift.String,
+                requestId: Swift.String? = nil,
+                name: Swift.String? = nil,
+                errorCode: Swift.String,
+                clientName: Swift.String,
+                minimumVersion: Swift.String
+            ) {
+                self.error = error
+                self.requestId = requestId
+                self.name = name
+                self.errorCode = errorCode
+                self.clientName = clientName
+                self.minimumVersion = minimumVersion
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case requestId = "request_id"
+                case name
+                case errorCode
+                case clientName = "client_name"
+                case minimumVersion = "minimum_version"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse`.
         public struct ScopeForbiddenResponse: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/error`.
@@ -149,56 +199,6 @@ extension Components {
                 case alsoRequiredScopes = "also_required_scopes"
             }
         }
-        /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse`.
-        public struct UpgradeRequiredResponse: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/error`.
-            public var error: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/request_id`.
-            public var requestId: Swift.String?
-            /// Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-            ///
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/name`.
-            @available(*, deprecated)
-            public var name: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/errorCode`.
-            public var errorCode: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/client_name`.
-            public var clientName: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/minimum_version`.
-            public var minimumVersion: Swift.String
-            /// Creates a new `UpgradeRequiredResponse`.
-            ///
-            /// - Parameters:
-            ///   - error:
-            ///   - requestId:
-            ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-            ///   - errorCode:
-            ///   - clientName:
-            ///   - minimumVersion:
-            public init(
-                error: Swift.String,
-                requestId: Swift.String? = nil,
-                name: Swift.String? = nil,
-                errorCode: Swift.String,
-                clientName: Swift.String,
-                minimumVersion: Swift.String
-            ) {
-                self.error = error
-                self.requestId = requestId
-                self.name = name
-                self.errorCode = errorCode
-                self.clientName = clientName
-                self.minimumVersion = minimumVersion
-            }
-            public enum CodingKeys: String, CodingKey {
-                case error
-                case requestId = "request_id"
-                case name
-                case errorCode
-                case clientName = "client_name"
-                case minimumVersion = "minimum_version"
-            }
-        }
         /// - Remark: Generated from `#/components/schemas/getSessionResponse200`.
         public struct GetSessionResponse200: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/id`.
@@ -209,6 +209,8 @@ extension Components {
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/userId`.
             public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionResponse200/organizationId`.
+            public var organizationId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/knowledgeIds`.
             public var knowledgeIds: [Swift.String]?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/artifactIds`.
@@ -269,6 +271,7 @@ extension Components {
             ///   - _id:
             ///   - name:
             ///   - userId:
+            ///   - organizationId:
             ///   - knowledgeIds:
             ///   - artifactIds:
             ///   - tags:
@@ -285,6 +288,7 @@ extension Components {
                 _id: Swift.String? = nil,
                 name: Swift.String,
                 userId: Swift.String,
+                organizationId: Swift.String? = nil,
                 knowledgeIds: [Swift.String]? = nil,
                 artifactIds: [Swift.String]? = nil,
                 tags: Components.Schemas.GetSessionResponse200.TagsPayload? = nil,
@@ -301,6 +305,7 @@ extension Components {
                 self._id = _id
                 self.name = name
                 self.userId = userId
+                self.organizationId = organizationId
                 self.knowledgeIds = knowledgeIds
                 self.artifactIds = artifactIds
                 self.tags = tags
@@ -318,6 +323,7 @@ extension Components {
                 case _id
                 case name
                 case userId
+                case organizationId
                 case knowledgeIds
                 case artifactIds
                 case tags
@@ -859,6 +865,8 @@ extension Components {
                 public var name: Swift.String
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/userId`.
                 public var userId: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/organizationId`.
+                public var organizationId: Swift.String?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/knowledgeIds`.
                 public var knowledgeIds: [Swift.String]?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/artifactIds`.
@@ -919,6 +927,7 @@ extension Components {
                 ///   - _id:
                 ///   - name:
                 ///   - userId:
+                ///   - organizationId:
                 ///   - knowledgeIds:
                 ///   - artifactIds:
                 ///   - tags:
@@ -935,6 +944,7 @@ extension Components {
                     _id: Swift.String? = nil,
                     name: Swift.String,
                     userId: Swift.String,
+                    organizationId: Swift.String? = nil,
                     knowledgeIds: [Swift.String]? = nil,
                     artifactIds: [Swift.String]? = nil,
                     tags: Components.Schemas.ListSessionsResponse200.DataPayloadPayload.TagsPayload? = nil,
@@ -951,6 +961,7 @@ extension Components {
                     self._id = _id
                     self.name = name
                     self.userId = userId
+                    self.organizationId = organizationId
                     self.knowledgeIds = knowledgeIds
                     self.artifactIds = artifactIds
                     self.tags = tags
@@ -968,6 +979,7 @@ extension Components {
                     case _id
                     case name
                     case userId
+                    case organizationId
                     case knowledgeIds
                     case artifactIds
                     case tags
@@ -1002,6 +1014,144 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case data
                 case nextCursor = "next_cursor"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200`.
+        public struct GetSessionByIdResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/_id`.
+            public var _id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/userId`.
+            public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/organizationId`.
+            public var organizationId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/tags`.
+            public typealias TagsPayload = [Components.Schemas.GetSessionByIdResponse200.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/tags`.
+            public var tags: Components.Schemas.GetSessionByIdResponse200.TagsPayload?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/retrievalTags`.
+            public var retrievalTags: [Swift.String]?
+            /// True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lakeScopeExplicit`.
+            public var lakeScopeExplicit: Swift.Bool?
+            /// Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/firstCreated`.
+            public var firstCreated: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lastUpdated`.
+            public var lastUpdated: Foundation.Date
+            /// Creates a new `GetSessionByIdResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _id:
+            ///   - name:
+            ///   - userId:
+            ///   - organizationId:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - forceKnowledgeRetrieval:
+            ///   - retrievalTags:
+            ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///   - lastUsedModel:
+            ///   - firstCreated:
+            ///   - lastUpdated:
+            public init(
+                id: Swift.String,
+                _id: Swift.String? = nil,
+                name: Swift.String,
+                userId: Swift.String,
+                organizationId: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.GetSessionByIdResponse200.TagsPayload? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                retrievalTags: [Swift.String]? = nil,
+                lakeScopeExplicit: Swift.Bool? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                lastUsedModel: Swift.String? = nil,
+                firstCreated: Foundation.Date,
+                lastUpdated: Foundation.Date
+            ) {
+                self.id = id
+                self._id = _id
+                self.name = name
+                self.userId = userId
+                self.organizationId = organizationId
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.retrievalTags = retrievalTags
+                self.lakeScopeExplicit = lakeScopeExplicit
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.lastUsedModel = lastUsedModel
+                self.firstCreated = firstCreated
+                self.lastUpdated = lastUpdated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _id
+                case name
+                case userId
+                case organizationId
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case forceKnowledgeRetrieval
+                case retrievalTags
+                case lakeScopeExplicit
+                case includeLibraryFiles
+                case promptCacheTtl
+                case lastUsedModel
+                case firstCreated
+                case lastUpdated
             }
         }
         /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200`.

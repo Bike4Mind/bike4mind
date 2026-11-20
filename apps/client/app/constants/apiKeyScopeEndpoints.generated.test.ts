@@ -18,7 +18,7 @@ import { NON_MINTABLE_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constan
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 
 const GENERATED_FILE = path.resolve(
   __dirname,

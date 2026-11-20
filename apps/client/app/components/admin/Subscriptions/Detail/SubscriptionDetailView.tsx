@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SubscriptionUsageSummary } from '../SubscriptionUsageSummary';
 import { Box, Link, Stack, Typography } from '@mui/joy';
 import { useAdminSubscriptionStripe } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { isCompSubscription, type AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
@@ -135,6 +136,7 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         onOpenOwner={link => void navigation.openOwner(link)}
       />
       <SubscriptionDetailStats detail={detail} stripe={stripe} />
+      <SubscriptionUsageSummary subscriptionId={detail.subscription.id} status={detail.subscription.status} />
       <Box>
         <SubscriptionDetailTabs value={tab} onChange={onTabChange} />
         <Box

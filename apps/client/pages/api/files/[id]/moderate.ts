@@ -9,7 +9,7 @@ import {
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
-} from '@server/s3/moderationScan';
+} from '@bike4mind/server-utils/s3/moderationScan';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';

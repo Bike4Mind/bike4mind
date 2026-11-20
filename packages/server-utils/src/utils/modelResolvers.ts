@@ -1,4 +1,4 @@
-import { ModelInfo } from '@bike4mind/common';
+import { ImageModels, ModelInfo } from '@bike4mind/common';
 import { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ModelBackend, ApiKeyType } from '@bike4mind/common';
 
@@ -55,6 +55,17 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
   }
 };
 
+/** The operations image model used when the `operationsModel` admin setting names none it can run. */
+export const DEFAULT_OPERATIONS_IMAGE_MODEL = ImageModels.FLUX_3_IMAGE_KLEIN;
+
+/** getDefaultImageModel tries these in order before any other image model. */
+const OPERATIONS_IMAGE_MODEL_PRIORITY: readonly string[] = [
+  DEFAULT_OPERATIONS_IMAGE_MODEL,
+  ImageModels.FLUX_PRO_1_1,
+  ImageModels.FLUX_KONTEXT_PRO,
+  ImageModels.GPT_IMAGE_2,
+];
+
 /**
  * Get default image model with fallback priority. `excludeIds` skips models
  * already tried and found unusable (e.g. a backend that failed to construct),
@@ -66,8 +77,7 @@ export function getDefaultImageModel(
   excludeIds: ReadonlySet<string> | string[] = []
 ): ModelInfo | undefined {
   const exclude = excludeIds instanceof Set ? excludeIds : new Set(excludeIds);
-  // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_2 -> any image model
-  for (const id of ['flux-pro-1.1', 'flux-kontext-pro', 'gpt-image-2']) {
+  for (const id of OPERATIONS_IMAGE_MODEL_PRIORITY) {
     const match = models.find(m => m.id === id);
     if (match && !exclude.has(match.id)) return match;
   }

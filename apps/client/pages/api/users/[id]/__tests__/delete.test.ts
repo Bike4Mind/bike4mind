@@ -1,28 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const {
-  mockAdminDeleteUser,
-  mockRepoDelete,
-  mockFindById,
-  mockPurge,
-  mockReadGrants,
-  mockRecord,
-  mockRecordErasure,
-  mockDeny,
-  mockWithTransaction,
-  mockCancelSubscriptions,
-} = vi.hoisted(() => ({
-  mockCancelSubscriptions: vi.fn(),
-  mockRecord: vi.fn(),
-  mockRecordErasure: vi.fn(),
-  mockDeny: vi.fn(),
-  mockWithTransaction: vi.fn(),
-  mockAdminDeleteUser: vi.fn(),
-  mockRepoDelete: vi.fn(),
-  mockFindById: vi.fn(),
-  mockPurge: vi.fn(),
-  mockReadGrants: vi.fn(),
+const m = vi.hoisted(() => ({
+  users: {} as Record<string, unknown>,
+  record: vi.fn(),
+  deny: vi.fn(),
+  requestErasure: vi.fn(),
+  sendToQueue: vi.fn(),
+  policy: vi.fn(),
+  requestApproval: vi.fn(),
+  publish: vi.fn(),
+  slack: vi.fn(),
+  settings: vi.fn(),
+  erasureState: vi.fn(),
 }));
 
 const route = vi.hoisted(() => ({
@@ -46,67 +36,55 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
-const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
-const { mockPolicy, mockRequestApproval } = vi.hoisted(() => ({
-  mockPolicy: vi.fn(),
-  mockRequestApproval: vi.fn(),
-}));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: m.slack }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: m.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: m.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: (name: string) => `queue:${name}` }));
+vi.mock('@bike4mind/server-utils/auth/adminRoles', () => ({ resolveRoleAdminPermissions: async (u: unknown) => u }));
 vi.mock('@server/admin/approvals/service', () => ({
-  getApprovalPolicy: () => mockPolicy(),
-  requestApproval: (...a: unknown[]) => mockRequestApproval(...a),
+  getApprovalPolicy: () => m.policy(),
+  requestApproval: (...a: unknown[]) => m.requestApproval(...a),
 }));
-vi.mock('@bike4mind/services', () => ({
-  userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
+vi.mock('@server/users/accountDeletion', () => ({ requestAdminErasure: (...a: unknown[]) => m.requestErasure(...a) }));
+vi.mock('@server/dataSubject/adminErasure', () => ({
+  readAdminErasureState: (...a: unknown[]) => m.erasureState(...a),
 }));
+vi.mock('@bike4mind/services', () => ({ adminAuditService: {} }));
 vi.mock('@bike4mind/database', () => ({
-  erasureRecordRepository: { record: mockRecordErasure },
-  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-  userRepository: {
-    delete: (...a: unknown[]) => mockRepoDelete(...a),
-    findById: (...a: unknown[]) => mockFindById(...a),
+  adminAuditLogRepository: {},
+  userRepository: { findById: async (id: string) => m.users[id] ?? null },
+  adminSettingsRepository: {
+    findBySettingNames: () => m.settings(),
+    findAllByTag: async () => [{ settingValue: 'feedback@example.com' }],
   },
-  adminSettingsRepository: {},
-  withTransaction: (fn: () => unknown) => mockWithTransaction(fn),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return {
     ...actual,
-    recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
-    denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
+    recordAdminActionFromRequest: (...a: unknown[]) => m.record(...a),
+    denySelfAdminAction: (...a: unknown[]) => m.deny(...a),
   };
 });
-const { mockEmitBillingEvent } = vi.hoisted(() => ({ mockEmitBillingEvent: vi.fn() }));
-vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
-vi.mock('@server/services/purgeDeletedUserData', () => ({
-  purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
-  readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
-}));
-
-vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
-  cancelAccountSubscriptions: (...a: unknown[]) => mockCancelSubscriptions(...a),
-}));
 
 import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
-import { erasureIdHash, erasureKeyId } from '@bike4mind/server-utils/privacy/erasureHash';
 import handler from '../delete';
 import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
-type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
-
 type Actor = { id: string; isAdmin: boolean; adminPermissions?: string[] };
+const NO_SUBS = { canceled: [], failed: [] };
 
-async function run(options: { user?: Actor; body?: unknown; id?: string } = {}) {
+async function run(options: { user?: Actor; storedActor?: Actor | null; body?: unknown; id?: string } = {}) {
+  const user = options.user ?? { id: 'admin1', isAdmin: true };
+  if ('storedActor' in options) m.users[user.id] = options.storedActor;
+  else m.users[user.id] ??= user;
   const { req, res } = createMocks({
     method: 'DELETE',
     query: { id: options.id ?? 'u1' },
-    body: 'body' in options ? options.body : { reason: 'Confirmed duplicate account' },
   });
+  req.body = 'body' in options ? options.body : { reason: 'Confirmed duplicate account' };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  Object.assign(req, { user: options.user ?? { id: 'admin1', isAdmin: true }, logger });
+  Object.assign(req, { user, logger });
   const call = (async () => {
     route.guard!(req, res, () => {});
     return (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
@@ -115,172 +93,174 @@ async function run(options: { user?: Actor; body?: unknown; id?: string } = {}) 
 }
 
 beforeEach(() => {
-  mockPolicy.mockReset().mockResolvedValue({ enabled: false, expiryHours: 24 });
-  mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
-  mockAdminDeleteUser.mockReset();
-  mockRepoDelete.mockReset().mockResolvedValue({ deletedCount: 1 });
-  mockFindById.mockReset().mockResolvedValue({ id: 'u1', name: 'Target' });
-  mockPurge.mockReset().mockResolvedValue(undefined);
-  mockReadGrants.mockReset().mockResolvedValue(null);
-  mockRecord.mockReset().mockResolvedValue(null);
-  mockRecordErasure.mockReset().mockResolvedValue(undefined);
-  mockEmitBillingEvent.mockReset().mockResolvedValue([]);
-  mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
-  mockCancelSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
-  mockDeny.mockReset().mockImplementation(async () => {
+  vi.clearAllMocks();
+  m.users = { admin1: { id: 'admin1', isAdmin: true }, u1: { id: 'u1', name: 'Target', email: 't@example.com' } };
+  m.policy.mockResolvedValue({ enabled: false, expiryHours: 24 });
+  m.requestApproval.mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+  m.erasureState.mockResolvedValue({ state: 'none', ownedOrganizations: [] });
+  m.record.mockResolvedValue(null);
+  m.sendToQueue.mockResolvedValue(undefined);
+  m.settings.mockResolvedValue([false, false]);
+  // Stands in for the stamp transaction: runs the hook, as lockDownAccount does, then answers.
+  m.requestErasure.mockImplementation(
+    async (_req: unknown, _id: string, _now: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+      await opts.recordInTransaction();
+      return { deletion: { source: 'admin' }, subscriptions: NO_SUBS };
+    }
+  );
+  m.deny.mockImplementation(async () => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
 });
 
 describe('DELETE /api/users/[id]/delete', () => {
-  it('purges the user data after the delete commits', async () => {
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
-
+  it('stamps an admin erasure, audits user.deleted with the reason, and queues the purge', async () => {
     const { res, call } = await run();
     await call;
 
-    expect(mockRepoDelete).toHaveBeenCalledWith('u1');
-    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
-    expect(res._getJSONData()).toMatchObject({ id: 'u1' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ id: 'u1', queued: true });
+    expect(m.requestErasure).toHaveBeenCalledWith(expect.anything(), 'u1', expect.any(Date), expect.anything());
+    expect(m.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.deleted', reason: 'Confirmed duplicate account' })
+    );
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: 'u1' });
   });
 
-  it('reports the deletion to Overwatch, as no action of the user, keyed on a pseudonym', async () => {
-    // The account as read just before the delete, with the touches its credit follows.
-    const deleted = {
-      id: 'u1',
-      level: 'PaidUser',
-      subscribedUntil: '2099-01-01T00:00:00.000Z',
-      createdAt: new Date(Date.now() - 10.5 * 24 * 60 * 60 * 1000),
-      acquisition: { firstTouch: { source: 'widgets' } },
-    };
-    mockFindById.mockResolvedValue(deleted);
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
+  it('uses the stored canonical ID for erasure, audit and queue payloads', async () => {
+    const canonicalId = 'abcdef0123456789abcdef01';
+    const alias = canonicalId.toUpperCase();
+    const target = { id: canonicalId, name: 'Target' };
+    m.users[canonicalId] = target;
+    m.users[alias] = target;
 
-    const { call } = await run();
+    const { call } = await run({ id: alias });
     await call;
 
-    expect(mockEmitBillingEvent).toHaveBeenCalledTimes(1);
-    const [sent] = mockEmitBillingEvent.mock.calls[0];
-    expect(sent).toMatchObject({
-      user: deleted,
-      event: 'account_deleted',
-      metadata: { wasSubscriber: true, daysSinceSignup: 10 },
-    });
-    // The eventId is sent verbatim beside a hash of this, so it is never the raw user id.
-    expect(sent.occurrence).not.toBe('u1');
-    expect(sent.occurrence).toMatch(/^[0-9a-f]{64}$/);
+    expect(m.requestErasure).toHaveBeenCalledWith(expect.anything(), canonicalId, expect.any(Date), expect.anything());
+    expect(m.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: expect.objectContaining({ id: canonicalId }) })
+    );
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: canonicalId });
   });
 
-  it('reports nothing when the delete never ran', async () => {
-    mockAdminDeleteUser.mockRejectedValue(new Error('not found'));
+  it.each([
+    { label: 'revoked', storedActor: { id: 'admin1', isAdmin: false } },
+    { label: 'missing', storedActor: null },
+  ])(
+    'rejects a $label stored actor even when the authenticated snapshot still has permission',
+    async ({ storedActor }) => {
+      const { call } = await run({ storedActor });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 401 });
+      expect(m.requestErasure).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
+      expect(m.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+
+  it('records user.deleted inside the stamp transaction, so an audit failure leaves nothing queued', async () => {
+    m.record.mockRejectedValue(new Error('audit down'));
     const { call } = await run();
-    await expect(call).rejects.toThrow('not found');
-    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+
+    await expect(call).rejects.toThrow('audit down');
+    expect(m.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('escapes names and email in the admin notification body', async () => {
-    mockAdminDeleteUser.mockImplementation(
-      async (
-        _admin: string,
-        _p: unknown,
-        { mailer }: { mailer: { sendDeleteUserEmail: (to: string[], u: unknown, a: unknown) => Promise<void> } }
-      ) => {
-        await mailer.sendDeleteUserEmail(
-          ['ops@example.com'],
-          { name: '<b>U</b>', email: 'u&x@example.com' },
-          { name: '<i>A</i>' }
-        );
-        return { id: 'u1' };
+  it('answers 200 with queued:false when the queue is unreachable, leaving the sweep to run it', async () => {
+    m.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    const { res, call, logger } = await run();
+    await call;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ queued: false });
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an owner of a shared organization', 'ACCOUNT_DELETION_ORG_OWNER'],
+    ['an account with a deletion already pending', 'ALREADY_PENDING'],
+  ])('answers 409 for %s and queues nothing', async (_label, code) => {
+    const { ConflictError } = await import('@bike4mind/common');
+    m.requestErasure.mockRejectedValue(new ConflictError('refused', { code }));
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.record).not.toHaveBeenCalled();
+    expect(m.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('records the subscription cancellation on its own entry', async () => {
+    m.requestErasure.mockResolvedValue({
+      deletion: { source: 'admin' },
+      subscriptions: { canceled: ['sub_1'], failed: [] },
+    });
+    const { res, call } = await run();
+    await call;
+
+    expect(res._getJSONData()).toMatchObject({ subscriptionCancellation: { canceled: ['sub_1'] } });
+    expect(m.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.subscriptions.canceled', reason: 'Confirmed duplicate account' })
+    );
+  });
+
+  it('lets a full admin delete an admin target with approvals off, with no in-transaction role check', async () => {
+    m.users.u1 = { id: 'u1', name: 'Other Admin', isAdmin: true };
+    const { res, call } = await run();
+    await call;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.record).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'user.deleted' }));
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: 'u1' });
+  });
+
+  it('still answers 200 and queues the purge when the cancellation audit write fails', async () => {
+    m.requestErasure.mockImplementation(
+      async (_r: unknown, _id: string, _n: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+        await opts.recordInTransaction();
+        return { deletion: {}, subscriptions: { canceled: ['sub_1'], failed: [] } };
       }
     );
-
-    const { call } = await run();
+    m.record.mockImplementation(async (_req: unknown, entry: { action: string }) => {
+      if (entry.action === 'user.subscriptions.canceled') throw new Error('audit down');
+      return null;
+    });
+    const { res, call, logger } = await run();
     await call;
 
-    const body: string = mockPublish.mock.calls[0][0].body;
-    expect(body).not.toContain('<b>');
-    expect(body).not.toContain('<i>');
-    expect(body).toContain('&lt;b&gt;U&lt;/b&gt;');
-    expect(body).toContain('u&amp;x@example.com');
-    expect(body).toContain('&lt;i&gt;A&lt;/i&gt;');
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ queued: true });
+    expect(logger.error).toHaveBeenCalled();
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: 'u1' });
   });
 
-  it('still purges, and still reports the deletion, when a notification throws after the delete committed', async () => {
-    const order: string[] = [];
-    mockPurge.mockImplementation(async () => void order.push('purge'));
-    mockEmitBillingEvent.mockImplementation(async () => {
-      order.push('report');
-      return [];
-    });
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      throw new Error('mailer down');
-    });
-
-    const { call } = await run();
-
-    await expect(call).rejects.toThrow('mailer down');
-    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
-    // A retry would 404, so this is the only chance to send it.
-    expect(mockEmitBillingEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }), event: 'account_deleted' })
-    );
-    expect(order).toEqual(['purge', 'report']);
-  });
-
-  it('does not purge when the delete never ran (unauthorized or not found)', async () => {
-    mockAdminDeleteUser.mockRejectedValue(new Error('You are not authorized to delete users'));
-
-    const { call } = await run();
-
-    await expect(call).rejects.toThrow('not authorized');
-    expect(mockRepoDelete).not.toHaveBeenCalled();
-    expect(mockPurge).not.toHaveBeenCalled();
-    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
-  });
-
-  it('reads the integration grants before the delete and hands them to the purge', async () => {
-    const grants = { googleDrive: { refreshToken: 'enc-refresh' }, atlassianConnect: { accessToken: 'enc-access' } };
-    mockReadGrants.mockImplementation(async () => {
-      expect(mockRepoDelete).not.toHaveBeenCalled();
-      return grants;
-    });
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
-
-    const { call } = await run();
+  it('sends the escaped admin notifications when enabled, and a failure there does not fail the delete', async () => {
+    m.users.u1 = { id: 'u1', name: '<b>Tgt</b>', email: 't@example.com' };
+    m.settings.mockResolvedValue([true, true]);
+    m.slack.mockRejectedValue(new Error('slack down'));
+    const { res, call } = await run();
     await call;
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.sendToQueue).toHaveBeenCalled();
 
-    expect(mockReadGrants).toHaveBeenCalledWith('u1');
-    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ integrationGrants: grants }));
-  });
-
-  it('does not delete when the grants cannot be read, so the revoke is never lost', async () => {
-    mockReadGrants.mockRejectedValue(new Error('mongo down'));
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
-
-    const { call } = await run();
-
-    await expect(call).rejects.toThrow('mongo down');
-    expect(mockRepoDelete).not.toHaveBeenCalled();
-    expect(mockPurge).not.toHaveBeenCalled();
+    m.slack.mockResolvedValue(undefined);
+    const second = await run();
+    await second.call;
+    const { body } = m.publish.mock.calls[0][0] as { body: string };
+    expect(body).toContain('&lt;b&gt;Tgt&lt;/b&gt;');
+    expect(body).not.toContain('<b>Tgt');
   });
 
   it('returns the serialized user shape with none of the USER_SECRET_FIELDS', async () => {
-    const secrets = Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x']));
-    mockAdminDeleteUser.mockResolvedValue({ id: 'u1', name: 'N', email: 'n@example.com', ...secrets });
-
+    m.users.u1 = {
+      id: 'u1',
+      name: 'N',
+      email: 'n@example.com',
+      ...Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x'])),
+    };
     const { res, call } = await run();
     await call;
 
@@ -290,7 +270,7 @@ describe('DELETE /api/users/[id]/delete', () => {
     for (const f of USER_SECRET_FIELDS) expect(body).not.toHaveProperty(f);
   });
 
-  describe('audit trail', () => {
+  describe('access', () => {
     it('is gated on users:delete for the DELETE method', () => {
       expect(route.options).toMatchObject({ allowedMethods: ['DELETE'] });
     });
@@ -299,275 +279,82 @@ describe('DELETE /api/users/[id]/delete', () => {
       const { call } = await run({ user: { id: 'user1', isAdmin: false } });
 
       await expect(call).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
-      expect(mockRecord).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
     });
 
     it('rejects a delegate without users:delete, naming the missing permission', async () => {
       const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } });
 
       await expect(call).rejects.toMatchObject({ statusCode: 403, message: 'Missing permission: users:delete' });
-      expect(mockFindById).not.toHaveBeenCalled();
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
     });
 
     it('lets a delegate with users:delete delete a non-admin account', async () => {
-      mockPolicy.mockResolvedValue({ enabled: false, expiryHours: 24 });
-      mockFindById.mockResolvedValue({ id: 'u1', name: 'Target', isAdmin: false });
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
       const { res, call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
       await call;
 
       expect(res._getStatusCode()).toBe(200);
-      expect(mockAdminDeleteUser).toHaveBeenCalledWith('d1', { id: 'u1' }, expect.anything());
+      expect(m.requestErasure).toHaveBeenCalledOnce();
     });
 
     it('stops a delegate whose target gained admin access after the check, even with approvals off', async () => {
-      mockPolicy.mockResolvedValue({ enabled: false, expiryHours: 24 });
-      mockFindById.mockResolvedValueOnce({ id: 'u1', isAdmin: false }).mockResolvedValue({ id: 'u1', isAdmin: true });
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
+      m.requestErasure.mockImplementation(
+        async (_r: unknown, _id: string, _n: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+          m.users.u1 = { id: 'u1', isAdmin: true };
+          await opts.recordInTransaction();
+          return { deletion: {}, subscriptions: NO_SUBS };
+        }
+      );
       const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
 
       await expect(call).rejects.toMatchObject({ statusCode: 409 });
-      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
-      expect(mockRepoDelete).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
+      expect(m.sendToQueue).not.toHaveBeenCalled();
     });
 
     it.each([
       ['approvals off', false],
       ['approvals on', true],
     ])('refuses a delegate deleting an account with admin access (%s)', async (_label, enabled) => {
-      mockPolicy.mockResolvedValue({ enabled, expiryHours: 24 });
-      mockFindById.mockResolvedValue({ id: 'u1', name: 'Boss', isAdmin: false, adminPermissions: ['support:read'] });
-
+      m.policy.mockResolvedValue({ enabled, expiryHours: 24 });
+      m.users.u1 = { id: 'u1', name: 'Boss', isAdmin: false, adminPermissions: ['support:read'] };
       const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
 
       await expect(call).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockRequestApproval).not.toHaveBeenCalled();
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
-      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
+      expect(m.requestApproval).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
     });
 
     it('denies deleting your own account with a 403 and a user.deletion.denied entry', async () => {
       const { call } = await run({ id: 'admin1' });
 
       await expect(call).rejects.toBeInstanceOf(ForbiddenError);
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(m.deny).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ action: 'user.deletion.denied', attempted: 'user.deleted' })
       );
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
     });
 
     it('denies an impersonating admin deleting the account they impersonate from', async () => {
       const { call } = await run({ user: { id: 'B', isAdmin: true, impersonatedBy: 'A' } as never, id: 'A' });
 
       await expect(call).rejects.toBeInstanceOf(ForbiddenError);
-      expect(mockDeny).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ action: 'user.deletion.denied', attempted: 'user.deleted' })
-      );
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(m.deny).toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
     });
 
     it.each([
       ['missing', {}],
       ['too short', { reason: ' abc ' }],
       ['too long', { reason: 'x'.repeat(501) }],
-    ])('answers 400 and deletes nothing when the reason is %s', async (_label, body) => {
+    ])('answers 400 and erases nothing when the reason is %s', async (_label, body) => {
       const { call } = await run({ body });
 
       await expect(call).rejects.toMatchObject({ statusCode: 400 });
-      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
-      expect(mockRepoDelete).not.toHaveBeenCalled();
-      expect(mockRecord).not.toHaveBeenCalled();
-    });
-
-    it('records the erasure and user.deleted inside the delete transaction', async () => {
-      const order: string[] = [];
-      mockWithTransaction.mockImplementation(async (fn: () => unknown) => {
-        order.push('tx:start');
-        const result = await fn();
-        order.push('tx:end');
-        return result;
-      });
-      mockRepoDelete.mockImplementation(async () => {
-        order.push('delete');
-        return { deletedCount: 1 };
-      });
-      mockRecord.mockImplementation(async () => {
-        order.push('record');
-        return null;
-      });
-      mockRecordErasure.mockImplementation(async () => {
-        order.push('erasure');
-      });
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call } = await run({ body: { reason: '  Confirmed duplicate account  ' } });
-      await call;
-
-      expect(order).toEqual(['tx:start', 'delete', 'erasure', 'record', 'tx:end']);
-      expect(mockRecordErasure).toHaveBeenCalledExactlyOnceWith({
-        idHash: erasureIdHash('u1'),
-        keyId: erasureKeyId(),
-        pseudonym: expect.toBeOneOf([null, expect.any(String)]),
-        erasedAt: expect.any(Date),
-        initiatedBy: 'admin',
-      });
-      expect(mockRecord).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          action: 'user.deleted',
-          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
-          reason: 'Confirmed duplicate account',
-        })
-      );
-    });
-
-    it('cancels the Stripe subscriptions before the row goes, and records them on user.deleted', async () => {
-      const order: string[] = [];
-      mockCancelSubscriptions.mockImplementation(async () => {
-        order.push('cancel');
-        return {
-          canceled: ['sub_a'],
-          failed: [{ customerId: 'cus_org', subscriptionId: null, reason: 'stripe down' }],
-        };
-      });
-      mockRepoDelete.mockImplementation(async () => {
-        order.push('delete');
-        return { deletedCount: 1 };
-      });
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call } = await run();
-      await call;
-
-      expect(order).toEqual(['cancel', 'delete']);
-      expect(mockCancelSubscriptions).toHaveBeenCalledWith(
-        { userId: 'u1', reason: 'account_deleted', deadline: expect.any(Number) },
-        expect.anything()
-      );
-      expect(mockRecord).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          action: 'user.deleted',
-          summary: expect.stringContaining('canceled 1 Stripe subscription(s)'),
-          details: {
-            canceledSubscriptions: ['sub_a'],
-            failedSubscriptions: [{ customerId: 'cus_org', subscriptionId: null, reason: 'stripe down' }],
-          },
-        })
-      );
-      // A Stripe failure never blocks the delete.
-      expect(mockPurge).toHaveBeenCalled();
-    });
-
-    it('returns what the cancel did only when it canceled or failed something', async () => {
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-      const failed = { customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' };
-      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [failed] });
-
-      const withCancel = await run();
-      await withCancel.call;
-      expect(withCancel.res._getJSONData()).toMatchObject({
-        id: 'u1',
-        subscriptionCancellation: { canceled: ['sub_a'], failed: [failed] },
-      });
-
-      mockCancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
-      const quiet = await run();
-      await quiet.call;
-      expect(quiet.res._getJSONData().subscriptionCancellation).toBeUndefined();
-    });
-
-    it('records the cancel on its own entry when the delete transaction fails after it', async () => {
-      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
-      mockRepoDelete.mockRejectedValue(new Error('delete failed'));
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call } = await run();
-
-      await expect(call).rejects.toThrow('delete failed');
-      expect(mockRecord).toHaveBeenCalledTimes(1);
-      expect(mockRecord).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          action: 'user.subscriptions.canceled',
-          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
-          details: { canceledSubscriptions: ['sub_a'], failedSubscriptions: [] },
-        })
-      );
-      expect(mockPurge).not.toHaveBeenCalled();
-    });
-
-    it('cancels nothing when the delete is refused', async () => {
-      const { call } = await run({ user: { id: 'u1', isAdmin: true }, id: 'u1' });
-      await expect(call).rejects.toThrow(ForbiddenError);
-      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
-    });
-
-    it('rethrows the original error when the fallback cancellation audit also fails', async () => {
-      mockCancelSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
-      mockRecord.mockRejectedValueOnce(new Error('tx failed')).mockRejectedValueOnce(new Error('audit down'));
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call, logger } = await run();
-
-      await expect(call).rejects.toThrow('tx failed');
-      expect(logger.error).toHaveBeenCalled();
-    });
-
-    it('does not purge or report completion when the erasure record write fails', async () => {
-      mockRecordErasure.mockRejectedValue(new Error('erasure record down'));
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call } = await run();
-
-      await expect(call).rejects.toThrow('erasure record down');
-      expect(mockPurge).not.toHaveBeenCalled();
-      expect(mockEmitBillingEvent).not.toHaveBeenCalled();
-      expect(mockRecord).not.toHaveBeenCalled();
-    });
-
-    it('does not purge when the audit write aborts the delete transaction', async () => {
-      mockRecord.mockRejectedValue(new Error('audit down'));
-      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-        await db.users.delete('u1');
-        return { id: 'u1' };
-      });
-
-      const { call } = await run();
-
-      await expect(call).rejects.toThrow('audit down');
-      expect(mockPurge).not.toHaveBeenCalled();
-      expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
     });
   });
 });
@@ -579,21 +366,17 @@ describe('deleting an admin account needs approval', () => {
   };
 
   beforeEach(() => {
-    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
-    mockFindById.mockResolvedValue({ id: 'u1', name: 'Other Admin', isAdmin: true });
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
+    m.policy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    m.users.u1 = { id: 'u1', name: 'Other Admin', isAdmin: true };
   });
 
-  it('answers 202 for an admin target and deletes nothing', async () => {
+  it('answers 202 for an admin target and erases nothing', async () => {
     const { res, call } = await run();
     await call;
 
     expect(res._getStatusCode()).toBe(202);
     expect(res._getJSONData()).toMatchObject({ approvalId: 'appr1', status: 'pending' });
-    expect(mockRequestApproval).toHaveBeenCalledWith(
+    expect(m.requestApproval).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         action: 'user.delete_admin',
@@ -603,25 +386,48 @@ describe('deleting an admin account needs approval', () => {
       }),
       expect.anything()
     );
-    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
-    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(m.requestErasure).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 and files no approval when the admin target already has a deletion pending', async () => {
+    m.erasureState.mockResolvedValue({
+      state: 'requested',
+      requestedAt: '2026-01-01T00:00:00.000Z',
+      requestedBy: null,
+      purgeStartedAt: null,
+    });
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 with the org-owner code and files no approval when the admin target owns organizations', async () => {
+    m.erasureState.mockResolvedValue({ state: 'none', ownedOrganizations: [{ id: 'o1', name: 'Org' }] });
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({
+      statusCode: 409,
+      additionalInfo: { code: 'ACCOUNT_DELETION_ORG_OWNER', organizations: [{ id: 'o1', name: 'Org' }] },
+    });
+    expect(m.requestApproval).not.toHaveBeenCalled();
   });
 
   it('gates a delegated admin target too', async () => {
-    mockFindById.mockResolvedValue({ id: 'u1', isAdmin: false, adminPermissions: ['support:read'] });
+    m.users.u1 = { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] };
     const { res, call } = await run();
     await call;
     expect(res._getStatusCode()).toBe(202);
   });
 
-  it('deletes a non-admin target immediately', async () => {
-    mockFindById.mockResolvedValue({ id: 'u1', name: 'Target', isAdmin: false });
+  it('erases a non-admin target immediately', async () => {
+    m.users.u1 = { id: 'u1', name: 'Target', isAdmin: false };
     const { res, call } = await run();
     await call;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockRequestApproval).not.toHaveBeenCalled();
-    expect(mockRepoDelete).toHaveBeenCalled();
+    expect(m.requestApproval).not.toHaveBeenCalled();
+    expect(m.requestErasure).toHaveBeenCalledOnce();
   });
 
   it('runs an approved delete as the approver and points user.deleted at the approval', async () => {
@@ -634,8 +440,7 @@ describe('deleting an admin account needs approval', () => {
     await expect(
       executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
     ).resolves.toEqual({ deletedUserId: 'u1' });
-    expect(mockAdminDeleteUser).toHaveBeenCalledWith('admin1', { id: 'u1' }, expect.anything());
-    expect(mockRecord).toHaveBeenCalledWith(
+    expect(m.record).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         action: 'user.deleted',
@@ -643,6 +448,62 @@ describe('deleting an admin account needs approval', () => {
         details: expect.objectContaining({ approval: expect.objectContaining({ id: 'appr1' }) }),
       })
     );
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: 'u1' });
+  });
+
+  it('links the cancellation entry to the approval and survives its audit write failing', async () => {
+    m.requestErasure.mockImplementation(
+      async (_r: unknown, _id: string, _n: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+        await opts.recordInTransaction();
+        return { deletion: {}, subscriptions: { canceled: ['sub_1'], failed: [] } };
+      }
+    );
+    const { req } = createMocks({ method: 'POST' });
+    Object.assign(req, {
+      user: { id: 'admin1', isAdmin: true },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const run = () =>
+      executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never);
+
+    await run();
+    expect(m.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscriptions.canceled',
+        details: expect.objectContaining({ approval: expect.objectContaining({ id: 'appr1' }) }),
+      })
+    );
+
+    m.record.mockImplementation(async (_req: unknown, entry: { action: string }) => {
+      if (entry.action === 'user.subscriptions.canceled') throw new Error('audit down');
+      return null;
+    });
+    m.sendToQueue.mockClear();
+    await expect(run()).resolves.toEqual({ deletedUserId: 'u1' });
+    expect(m.sendToQueue).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['an isAdmin target', { id: 'u1', isAdmin: true }],
+    ['a delegated-admin target', { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] }],
+  ])('answers 409 and audits nothing when %s is demoted inside the stamp transaction', async (_label, target) => {
+    m.users.u1 = target;
+    m.requestErasure.mockImplementation(
+      async (_r: unknown, _id: string, _n: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+        m.users.u1 = { id: 'u1', isAdmin: false, adminPermissions: [] };
+        await opts.recordInTransaction();
+        return { deletion: {}, subscriptions: NO_SUBS };
+      }
+    );
+    const { req } = createMocks({ method: 'POST' });
+    Object.assign(req, { user: { id: 'admin1', isAdmin: true }, logger: { info: vi.fn(), error: vi.fn() } });
+
+    await expect(
+      executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.record).not.toHaveBeenCalled();
+    expect(m.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('refuses an approved delete of the approver themselves', async () => {
@@ -652,23 +513,35 @@ describe('deleting an admin account needs approval', () => {
     await expect(
       executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
     ).rejects.toBeInstanceOf(ForbiddenError);
-    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    expect(m.requestErasure).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 and stamps nothing when the approved target was demoted', async () => {
+    m.users.u1 = { id: 'u1', isAdmin: false, adminPermissions: [] };
+    const { req } = createMocks({ method: 'POST' });
+    Object.assign(req, { user: { id: 'admin1', isAdmin: true }, logger: { info: vi.fn(), error: vi.fn() } });
+
+    await expect(
+      executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.requestErasure).not.toHaveBeenCalled();
   });
 });
 
 describe('direct deletion target role changes', () => {
-  it('stops a promoted target before canceling subscriptions or deleting it', async () => {
-    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
-    mockAdminDeleteUser.mockImplementation(async (_admin: string, _params: unknown, { db }: DeleteAdapters) => {
-      await db.users.delete('u1');
-      return { id: 'u1' };
-    });
-    mockFindById.mockResolvedValueOnce({ id: 'u1', isAdmin: false }).mockResolvedValue({ id: 'u1', isAdmin: true });
+  it('stops a promoted target inside the stamp transaction when approvals are on', async () => {
+    m.policy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    m.requestErasure.mockImplementation(
+      async (_r: unknown, _id: string, _n: Date, opts: { recordInTransaction: () => Promise<void> }) => {
+        m.users.u1 = { id: 'u1', isAdmin: true };
+        await opts.recordInTransaction();
+        return { deletion: {}, subscriptions: NO_SUBS };
+      }
+    );
     const { call } = await run();
 
     await expect(call).rejects.toMatchObject({ statusCode: 409 });
-    expect(mockCancelSubscriptions).not.toHaveBeenCalled();
-    expect(mockRepoDelete).not.toHaveBeenCalled();
-    expect(mockAdminDeleteUser).toHaveBeenCalledOnce();
+    expect(m.record).not.toHaveBeenCalled();
+    expect(m.sendToQueue).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,7 @@
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, type ApiCompletionOutcome } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
@@ -13,6 +15,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
+  buildSettledEvent,
   buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
@@ -23,6 +26,7 @@ import {
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
+  type CompletionRunAttribution,
   type CompletionSource,
   type CompletionSseErrorCode,
   type IMessage,
@@ -45,10 +49,13 @@ import {
   usageEventRepository,
   organizationRepository,
   cacheRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
-import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
-import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { findCallerCompletionRun, type CompletionRunCaller } from '@server/completionRuns/callerCompletionRun';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
@@ -64,10 +71,11 @@ import {
   admitApiKeyCompletion,
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
-} from '@server/utils/untrustedCompletionQuota';
+} from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
+import { recordPlatformEndUserSeen, resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -115,6 +123,15 @@ function isUpstreamCallerError(error: unknown): error is Error {
   return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
 }
 
+/** The attribution, with the stored run id, once findCallerCompletionRun confirms this caller minted it. */
+async function verifyRunOwnership(
+  run: CompletionRunAttribution,
+  caller: CompletionRunCaller
+): Promise<CompletionRunAttribution> {
+  const stored = await findCallerCompletionRun(run.runId, caller);
+  return { ...run, runId: stored.runId };
+}
+
 function requestIdFrom(headers: Record<string, string | undefined>): string {
   return resolveRequestId(headers[REQUEST_ID_HEADER.toLowerCase()], headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]);
 }
@@ -124,6 +141,8 @@ function toJsonError(
   error: unknown,
   requestId: string
 ): { status: number; headers: Record<string, string>; body: Record<string, unknown> } {
+  // A freeze is a 403 with its scope, not the 422 every other quest code maps to.
+  if (isSpendFrozenError(error)) return httpErrorToResponse(error, requestId);
   const questCode = resolveQuestErrorCode(error);
   if (questCode) {
     const message = error instanceof Error ? error.message : 'Insufficient credits';
@@ -289,7 +308,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       let authResult;
       try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
+        authResult = await resolveContractAuth(headers, createCompletionContract, { allowExchangeKeys: true });
       } catch (authError) {
         logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
         // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
@@ -326,12 +345,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           owner: apiKeyInfo.userId,
           ownerUntrusted: apiKeyInfo.ownerUntrusted,
           billingOwnerType: apiKeyInfo.billingOwnerType,
+          unpaidAccountLimits: apiKeyInfo.unpaidAccountLimits,
           holdSlot: true,
         });
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
+      const platformEndUser = resolvePlatformEndUser(body.end_user_id, { userId, apiKeyInfo });
 
       timing?.phase('rateLimited');
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
@@ -347,6 +368,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      const run = body.run
+        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId: apiKeyInfo?.organizationId })
+        : undefined;
+
       // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
       let finalOutputTokens = 0;
@@ -355,6 +380,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalTurnUsage: TurnUsage[] | undefined;
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
+      // A holder, not a `let`: control-flow analysis does not see the assignment inside the callback.
+      const settled: { outcome?: CompletionSettlement } = {};
+
+      // Before the free-tier cap and every hold; executeCompletion skips its own lookup once this has run.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, apiKeyInfo?.organizationId ?? null),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
 
       // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
       await checkFreeTierDailySpendCap({
@@ -365,11 +398,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger,
       });
 
+      // Tracked, not awaited: the drain waits for it, the stream does not.
+      if (platformEndUser) track(recordPlatformEndUserSeen(platformEndUser, logger));
+
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
         getThinkingVisibility: resolveThinkingVisibility,
-        creditHolds: createCompletionCreditHolds(logger),
+        creditHolds: createCompletionCreditHolds(logger, apiKeyInfo?.keyId),
         userId,
         model: body.model,
         messages: body.messages as IMessage[],
@@ -387,18 +423,26 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           organizations: organizationRepository,
           cache: cacheRepository,
           recordLimitEvent: recordUserLimitEvent,
+          spendFreezes: spendFreezeRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
         scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
         billingOrganizationId: apiKeyInfo?.organizationId,
+        apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
+        spendFreezeChecked: true,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
         sessionId: body.sessionId,
+        run,
+        providerEndUserId: platformEndUser?.providerEndUserId,
         logger,
         onReady,
+        onSettled: outcome => {
+          settled.outcome = outcome;
+        },
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -413,6 +457,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
 
       completionOutcome = 'completed';
+
+      // After the last content event and before [DONE]. Embed streams never send it: it carries usdCost.
+      if (settled.outcome?.committed) {
+        write(serializeSSEEvent(buildSettledEvent({ ...settled.outcome, runId: run?.runId })));
+      }
+
       // Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
       end();

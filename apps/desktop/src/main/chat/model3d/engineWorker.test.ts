@@ -34,9 +34,11 @@ async function boot(source: string, wasm: object | null): Promise<{ worker: Work
   const manifold = pathToFileURL(manifoldPath).href;
   const file = join(scratch, `worker-${Math.random().toString(36).slice(2)}.mjs`);
   writeFileSync(file, asset.body.replace("'./manifold.js'", JSON.stringify(manifold)));
-  const modelFile = join(scratch, `model-${Math.random().toString(36).slice(2)}.mjs`);
-  writeFileSync(modelFile, source);
-  vi.spyOn(URL, 'createObjectURL').mockReturnValue(pathToFileURL(modelFile).href);
+  // A data: URL shows up verbatim in V8 stacks, as the blob: URL does in the engine (a file URL
+  // would be printed as a path), so the worker's stack-line parsing sees what it sees in Electron.
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue(
+    `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+  );
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   const posted: unknown[] = [];
   (globalThis as { self?: unknown }).self = { postMessage: (data: unknown) => posted.push(data) };
@@ -111,6 +113,30 @@ describe('model worker', () => {
       emissiveIntensity: 3,
       texture: 'wood',
     });
+  });
+
+  it('records the source lines that built each part, through helpers and booleans', async () => {
+    const source = [
+      'function post(m, x) {', // 1
+      '  return m.Manifold.cylinder(40, 2).translate([x, 0, 0]);', // 2
+      '}', // 3
+      'export default function model({ m }) {', // 4
+      '  const { Manifold } = m;', // 5
+      '  const base = Manifold.cube([30, 30, 4]);', // 6
+      '  const hole = Manifold.cylinder(4, 3);', // 7
+      '  const plate = base.subtract(hole);', // 8
+      '  const posts = Manifold.union([post(m, 2), post(m, 28)]);', // 9
+      '  return [', // 10
+      "    { name: 'base', shape: plate },", // 11
+      "    { name: 'posts', shape: posts },", // 12
+      "    { name: 'cap', shape: Manifold.sphere(5) },", // 13
+      '  ];', // 14
+      '}', // 15
+    ].join('\n');
+    const reply = await build(source, false);
+    if (!reply.ok) throw new Error(reply.error);
+    const lines = Object.fromEntries(reply.parts.map(part => [part.name, (part as Part & { lines?: number[] }).lines]));
+    expect(lines).toEqual({ base: [6, 7, 8], posts: [2, 9], cap: [13] });
   });
 
   it('reports a part that is not a shape the same way for a print', async () => {

@@ -55,6 +55,9 @@ vi.mock('@client/app/components/subscription/usePayFailedInvoice', () => ({
   usePayFailedInvoice: () => ({ pay: payInvoice, isPending: false, isPaid: false, declineMessage: null }),
 }));
 
+const useOrgInvoices = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/useOrgInvoices', () => ({ useOrgInvoices }));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const org = {
@@ -90,6 +93,9 @@ beforeEach(() => {
   teamPlanFlag.current = true;
   currentUser.current = { id: 'owner_1' };
   payInvoice.mockReset();
+  useOrgInvoices
+    .mockReset()
+    .mockReturnValue({ isLoading: false, isError: false, data: { invoices: [], hasMore: false } });
   plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
 });
 
@@ -347,5 +353,24 @@ describe('OrganizationBillingSection - Pay now', () => {
     renderSection();
 
     expect(payNowButton()).toBeNull();
+  });
+});
+
+describe('OrganizationBillingSection - billing history', () => {
+  it("lists the org's invoices once it has a plan", () => {
+    subscriptionsData.current = [row('active')];
+
+    renderSection();
+
+    expect(screen.getByText('Billing History')).toBeTruthy();
+    expect(useOrgInvoices).toHaveBeenCalledWith('org1');
+    expect(screen.getByTestId('org-invoices-empty')).toBeTruthy();
+  });
+
+  it('is absent without a plan', () => {
+    renderSection();
+
+    expect(screen.queryByText('Billing History')).toBeNull();
+    expect(useOrgInvoices).not.toHaveBeenCalled();
   });
 });

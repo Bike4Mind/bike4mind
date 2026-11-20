@@ -1,7 +1,14 @@
-import { IFabFileDocument, IFabFileRepository, ISessionRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  IFabFileRepository,
+  IOrganizationRepository,
+  ISessionRepository,
+  IUserDocument,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { generateSignedUrl, type GetFabFileAdapter } from '../fabFileService/get';
+import { assertContentPublicLinkPolicy } from './organizationPolicy';
 
 const updateDocumentSharingSchema = z.object({
   id: z.string(),
@@ -16,6 +23,7 @@ interface UpdateDocumentSharingAdapters {
   db: {
     sessions: Pick<ISessionRepository, 'shareable' | 'update'>;
     fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
   };
   storage: GetFabFileAdapter['storage'];
 }
@@ -38,6 +46,11 @@ export const updateDocumentSharing = async (
 
   const document = await dbModel.shareable.findShareAccessById(user, id);
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
+
+  // FabFile carries no model-level policy hook (sessions do), so the org's public-link rule is applied here.
+  if ((isGlobalRead && !document.isGlobalRead) || (isGlobalWrite && !document.isGlobalWrite)) {
+    await assertContentPublicLinkPolicy(document, db.organizations);
+  }
 
   // Targeted write: persist only the two sharing flags this endpoint owns, so the
   // stored fileUrl is left untouched. Branch per type so each concrete repo's

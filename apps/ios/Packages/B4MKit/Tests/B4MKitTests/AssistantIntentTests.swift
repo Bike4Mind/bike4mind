@@ -116,6 +116,9 @@ final class NewConversationViewModelTests: XCTestCase {
     let sessionID = await model.send()
     XCTAssertEqual(sessionID, "new-session")
     XCTAssertEqual(model.draft, "")
+    XCTAssertEqual(model.startedTurn?.id, "q1")
+    XCTAssertEqual(model.startedTurn?.prompt, "Plan my week")
+    XCTAssertEqual(model.startedTurn?.status, .pending)
     let sent = await api.sentMessages
     XCTAssertEqual(sent, [ChatSendRequest(message: "Plan my week", target: .newConversation)])
   }

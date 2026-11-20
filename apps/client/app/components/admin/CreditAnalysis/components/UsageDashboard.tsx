@@ -11,6 +11,7 @@ import { zeroFillDailySeries } from '../utils/dailySeries';
 import { DailyAreaChart } from './DailyAreaChart';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 import { usageFeatureLabel } from '../utils/usageFeatureLabels';
+import { downloadUsageCsv } from '../utils/usageCsv';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
@@ -100,15 +101,25 @@ export const UsageDashboard: React.FC<{
           isOrg ? "Spend billed to this organization's credit pool." : 'Spend billed to your personal credit pool.'
         }
         actions={
-          <Button
-            variant="plain"
-            startDecorator={<RefreshIcon />}
-            onClick={() => void refetch()}
-            disabled={!activeOwnerId || isFetching}
-            data-testid="usage-refresh-btn"
-          >
-            Refresh usage
-          </Button>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Button
+              variant="outlined"
+              onClick={() => data && downloadUsageCsv(data)}
+              disabled={!data || isFetching || !!error || data.ownerId !== activeOwnerId || data.days !== days}
+              data-testid="usage-export-btn"
+            >
+              Export CSV
+            </Button>
+            <Button
+              variant="plain"
+              startDecorator={<RefreshIcon />}
+              onClick={() => void refetch()}
+              disabled={!activeOwnerId || isFetching}
+              data-testid="usage-refresh-btn"
+            >
+              Refresh usage
+            </Button>
+          </Stack>
         }
       />
       {showOrgPicker && orgsError && (
@@ -216,6 +227,27 @@ export const UsageDashboard: React.FC<{
               {formatCredits(ledgerCredits)} credits. The chart and per-call breakdown show those records; the headline
               shows the posted ledger.
             </Typography>
+          )}
+
+          {isOrg && (
+            <Box>
+              <Typography level="body-xs" sx={{ mb: 1 }}>
+                Project attribution is recorded prospectively from explicit validated context. Historical, missing or
+                ambiguous context is Unassigned.
+              </Typography>
+              <BreakdownTable
+                title="By project"
+                testid="usage-project-table"
+                keyLabel="Project ID"
+                rows={(data.byProject ?? []).map(row => ({
+                  key: row.projectId ?? 'unassigned',
+                  label: row.projectId ?? 'Unassigned',
+                  requests: row.requests,
+                  cogsUsd: row.cogsUsd,
+                  creditsCharged: row.creditsCharged,
+                }))}
+              />
+            </Box>
           )}
 
           {isOrg && (

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import type { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 
@@ -46,59 +46,49 @@ export function describeAdminPermissionCases(
     return next;
   };
 
-  beforeEach(() => {
-    state.guard = undefined;
-    vi.resetModules();
-  });
-
   describe.each(cases)(
     '$file ($method, $permission)',
     ({ file, method, permission, allowedMethods, rejectedPermission }) => {
-      const load = async () => {
+      // The guard checks are pure, so one fresh import per case serves all seven tests.
+      beforeAll(async () => {
+        vi.resetModules();
         state.guard = undefined;
         state.options = undefined;
         await importRoute(file);
-      };
+      });
 
-      it('allows a delegate holding the declared permission without isAdmin', async () => {
-        await load();
+      it('allows a delegate holding the declared permission without isAdmin', () => {
         expect(runGuard(method, { isAdmin: false, adminPermissions: [permission] })).toHaveBeenCalledOnce();
       });
 
-      it('rejects a delegate holding a different permission', async () => {
-        await load();
+      it('rejects a delegate holding a different permission', () => {
         const other = rejectedPermission ?? (permission === 'support:read' ? 'settings:manage' : 'support:read');
         expect(() => runGuard(method, { isAdmin: false, adminPermissions: [other] })).toThrow(
           new RegExp(`^Missing permission: (.+ or )?${permission}( or .+)?$`)
         );
       });
 
-      it('rejects a non-admin with no permissions', async () => {
-        await load();
+      it('rejects a non-admin with no permissions', () => {
         expect(() => runGuard(method, { isAdmin: false })).toThrow();
       });
 
-      it('allows a full admin', async () => {
-        await load();
+      it('allows a full admin', () => {
         expect(runGuard(method, { isAdmin: true })).toHaveBeenCalledOnce();
       });
 
-      it('rejects a full admin using an API key without the admin scope', async () => {
-        await load();
+      it('rejects a full admin using an API key without the admin scope', () => {
         expect(() => runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: ['chat:read'] } })).toThrow(
           'Insufficient API key permissions'
         );
       });
 
-      it('allows a full admin using an admin-scoped API key', async () => {
-        await load();
+      it('allows a full admin using an admin-scoped API key', () => {
         expect(
           runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } })
         ).toHaveBeenCalledOnce();
       });
 
-      it('declares exactly the expected allowed methods', async () => {
-        await load();
+      it('declares exactly the expected allowed methods', () => {
         const actual = (state.options as { allowedMethods: string[] }).allowedMethods;
         expect([...actual].sort()).toEqual([...(allowedMethods ?? [method])].sort());
       });

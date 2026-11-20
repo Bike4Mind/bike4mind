@@ -1,5 +1,6 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Resource } from 'sst';
 import { adminSettingsRepository, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -97,13 +98,14 @@ async function postToSlack(
   }
   try {
     const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(config.slackTeamId);
-    if (!workspace?.slackBotToken) {
+    const token = decryptToken(workspace?.slackBotToken);
+    if (!token) {
       logger.warn('[releaseNotes] no Slack bot token for the configured workspace; skipping announcement');
       return;
     }
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${workspace.slackBotToken}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: config.slackChannelId,
         text: buildSlackText(note, releaseUrl, omittedPrs, heldForReview),

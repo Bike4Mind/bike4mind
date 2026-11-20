@@ -152,7 +152,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
 
   // HTTP loopback to the semantic-search route, which resolves dynamic lakes as well as the
   // static registry. Its scope is still a subset of the browse scope rlm-answer gates on
-  // (see server/dataLakes/index.ts), so listArticles can surface a lake this cannot search.
+  // (see packages/server-utils/src/dataLakes/index.ts), so listArticles can surface a lake this cannot search.
   const semanticSearch = async (...args: unknown[]) => {
     const a = (args[0] ?? {}) as SemanticSearchArgs;
     if (!a.query) throw new Error('semanticSearch: query is required');

@@ -24,32 +24,38 @@ export function SettingKeyRow({ settingKey, stored, index, testIdPrefix, derived
   const setting = settingsMap[settingKey];
   const current = stored ?? setting.defaultValue;
   return (
-    <div>
-      <Typography
-        level="body-xs"
-        sx={{ color: 'text.tertiary', mb: 0.5 }}
-        data-testid={`${testIdPrefix}-current-${settingKey}`}
-      >
-        Current: {formatValue(current)}
-        {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
-      </Typography>
-      {derived && (
-        <Typography
-          level="body-xs"
-          sx={{ color: 'text.tertiary', mb: 0.5 }}
-          data-testid={`${testIdPrefix}-derived-${settingKey}`}
-        >
-          {derived}
-        </Typography>
-      )}
-      <AdminSettingInputField
-        // Remount when the stored value changes so the editor never shows a stale draft.
-        key={`${settingKey}-${JSON.stringify(stored ?? null)}`}
-        index={index}
-        setting={setting}
-        defaultValue={current}
-        lockedNote={lockedNote}
-      />
-    </div>
+    <AdminSettingInputField
+      // Remount when the stored value changes so the editor never shows a stale draft.
+      key={`${settingKey}-${JSON.stringify(stored ?? null)}`}
+      index={index}
+      setting={setting}
+      defaultValue={current}
+      lockedNote={lockedNote}
+      valueHelper={
+        <>
+          <Typography
+            component="span"
+            level="body-xs"
+            display="block"
+            sx={{ color: 'admin.inkMuted' }}
+            data-testid={`${testIdPrefix}-current-${settingKey}`}
+          >
+            Current: {formatValue(current)}
+            {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
+          </Typography>
+          {derived && (
+            <Typography
+              component="span"
+              level="body-xs"
+              display="block"
+              sx={{ color: 'admin.inkMuted' }}
+              data-testid={`${testIdPrefix}-derived-${settingKey}`}
+            >
+              {derived}
+            </Typography>
+          )}
+        </>
+      }
+    />
   );
 }

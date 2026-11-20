@@ -25,7 +25,17 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const revokeUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'CLI key' }));
+const revokeUserApiKey = vi.hoisted(() =>
+  vi
+    .fn()
+    .mockResolvedValue({
+      id: 'key-1',
+      name: 'CLI key',
+      keyPrefix: 'b4m_live_x',
+      holderUserId: 'user-1',
+      didRevoke: true,
+    })
+);
 const incrementUserCounter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { revokeUserApiKey },
@@ -35,12 +45,17 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   organizationRepository: {},
+  withTransaction: (fn: () => unknown) => fn(),
   mongoose: {},
   Ability: class {},
   User: {},
   UserActivityCounter: {},
   CounterLog: {},
 }));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyOrgRevoke: vi.fn() }));
+vi.mock('@server/utils/adminApiKeyActions', () => ({ endKeyRealtimeConnections: vi.fn() }));
 
 import '@pages/api/user-api-keys/[id]/revoke';
 

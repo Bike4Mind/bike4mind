@@ -5,7 +5,7 @@ struct SettingsView: View {
   @Environment(AuthController.self) private var auth
   @Environment(AppServices.self) private var services
   @State private var isConfirmingSignOut = false
-  @State private var profile: AccountProfile?
+  private var profile: AccountProfile? { services.cachedAccountProfile }
 
   var body: some View {
     @Bindable var auth = auth
@@ -17,6 +17,8 @@ struct SettingsView: View {
       Section {
         NavigationLink("Notifications") { NotificationSettingsView() }
           .accessibilityIdentifier("settings-notifications-link")
+        NavigationLink("Assistant instructions") { AssistantInstructionsView() }
+          .accessibilityIdentifier("settings-instructions-link")
       }
       .listRowBackground(Tokens.Palette.groupedBackground)
 
@@ -63,7 +65,7 @@ struct SettingsView: View {
     }
     .brandedListChrome()
     .navigationTitle("Settings")
-    .task { profile = await services.accountProfile() }
+    .task { await services.refreshAccountProfile() }
     .confirmationDialog("Sign out of Bike4Mind?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
         Task { await services.signOutEverywhere() }

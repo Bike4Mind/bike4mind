@@ -104,7 +104,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap,
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: (...a: unknown[]) => reserve(...a),
 }));
 

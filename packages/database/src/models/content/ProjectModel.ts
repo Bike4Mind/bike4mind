@@ -1,8 +1,18 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { IProject, IProjectDocument, IProjectMethods, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IProject,
+  IProjectDocument,
+  IProjectMethods,
+  IProjectRepository,
+  IUserDocument,
+  HTTPError,
+  HttpStatus,
+  Permission,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 import {
   ShareableDocumentSchema,
   ShareableDocumentRepository,
@@ -47,6 +57,33 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
   async findByIdAndUserId(id: string, userId: string) {
     const result = await this.projectModel.findOne({ _id: id, userId });
     return result?.toJSON() ?? null;
+  }
+
+  async setOwnedGroupReadAccess(projectId: string, ownerId: string, groupId: string, enabled: boolean) {
+    if (!mongoose.isObjectIdOrHexString(projectId)) return false;
+    const scope = { _id: convertId(projectId), userId: ownerId, deletedAt: null };
+    type StoredGroup = NonNullable<IProjectDocument['groups']>[number];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const project = await this.projectModel
+        .findOne(scope)
+        .select('groups')
+        .lean<{ groups?: (StoredGroup | null)[] | null }>();
+      if (!project) return false;
+      const groups = project.groups ?? [];
+      const present = groups.some(group => group?.groupId === groupId);
+      if (Array.isArray(project.groups) && present === enabled) return true;
+      const nextGroups = enabled
+        ? [...groups, { groupId, permissions: [Permission.read] }]
+        : groups.filter(group => group?.groupId !== groupId);
+      // Literal on the left avoids Mongoose adding subdocument IDs to the snapshot comparison.
+      const snapshot =
+        project.groups === undefined
+          ? { groups: { $exists: false } }
+          : { $expr: { $eq: [{ $literal: project.groups }, '$groups'] } };
+      const result = await this.projectModel.updateOne({ ...scope, ...snapshot }, { $set: { groups: nextGroups } });
+      if (result.matchedCount === 1) return true;
+    }
+    throw new HTTPError(HttpStatus.Conflict, 'Project sharing changed. Please try again.');
   }
 
   async removeSession(sessionId: string) {
@@ -171,6 +208,7 @@ export const ProjectSchema = new Schema<IProject, IProjectModel, IProjectMethods
     // Optional: mongoose's `required` rejects '' too, and the create form no longer demands one.
     description: { type: String, default: '' },
     userId: { type: String, required: true },
+    organizationId: { type: String, immutable: true },
     sessionIds: [{ type: String, required: true }],
     fileIds: [{ type: String, required: true }],
     systemPrompts: {
@@ -197,6 +235,7 @@ export const ProjectSchema = new Schema<IProject, IProjectModel, IProjectMethods
 );
 
 ProjectSchema.plugin(softDeletePlugin);
+ProjectSchema.plugin(organizationContentPolicyPlugin);
 
 // Optimized index for searchCollections query - projects collection
 ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });

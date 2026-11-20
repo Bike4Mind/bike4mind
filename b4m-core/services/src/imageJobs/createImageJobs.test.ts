@@ -9,14 +9,24 @@ import {
   type ImageModels as ImageModelId,
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
-import { createImageProviderRegistry, type ImageProvider } from '@bike4mind/utils/imageProviders';
+import {
+  createImageProviderRegistry,
+  LocalImageProvider,
+  TestImageProvider,
+  type ImageProvider,
+} from '@bike4mind/utils/imageProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { createImageJobs } from './createImageJobs';
 import { createImageJobHandler } from './imageJobHandler';
-import { IMAGE_JOB_BATCH_MAX, IMAGE_JOB_OUTPUT_BYTES_ESTIMATE, type CreateImageJobsDeps } from './types';
+import {
+  IMAGE_JOB_BATCH_MAX,
+  IMAGE_JOB_OUTPUT_BYTES_ESTIMATE,
+  type CreateImageJobsDeps,
+  type CreateImageJobsInput,
+} from './types';
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -24,6 +34,9 @@ vi.mock('../creditService/creditHold', () => ({
   settleCreditHold: vi.fn(async (_hold: unknown, charged: number) => charged),
 }));
 import { holdCredits, releaseCreditHold } from '../creditService/creditHold';
+
+vi.mock('../creditService/newAccountSpendCap', () => ({ checkNewAccountSpendCap: vi.fn(async () => null) }));
+import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
 
 const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHold => ({
   ownerId: params.userId,
@@ -34,8 +47,13 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
   balanceAfterHold: 1000,
 });
 
-// creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+// creditHold and the spend cap are module-mocked: only the user lookup a batch's cap check makes is real.
+const capUser = { id: 'u1', createdAt: new Date('2026-10-12T00:00:00Z'), isAdmin: false };
+const testCredits = {
+  users: { findById: vi.fn(async () => capUser) },
+  newAccountSpendCap: {},
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const openAiProvider: ImageProvider = {
   mode: 'sync',
@@ -61,7 +79,7 @@ const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
     checkStorageFor: vi.fn(async () => undefined),
     saveToFiles: vi.fn(),
     saveToGeneratedBucket: vi.fn(),
-    credits: unusedCredits,
+    credits: testCredits,
     enqueue: vi.fn(async () => undefined),
     recordUsage: vi.fn(async () => undefined),
     now: () => new Date('2026-10-13T00:00:00Z'),
@@ -83,8 +101,16 @@ const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
 
 const user = { id: 'u1', organizationId: null };
 const validRequest = { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt: 'a red bicycle' };
-const run = (deps: CreateImageJobsDeps, request: unknown, extra: { count?: number; idempotencyKey?: string } = {}) =>
-  createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
+const run = (
+  deps: CreateImageJobsDeps,
+  request: unknown,
+  extra: {
+    count?: number;
+    idempotencyKey?: string;
+    delivery?: CreateImageJobsInput['delivery'];
+    questId?: string;
+  } = {}
+) => createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
 
 describe('createImageJobs', () => {
   beforeEach(() => {
@@ -137,6 +163,37 @@ describe('createImageJobs', () => {
       expect(holdCredits).not.toHaveBeenCalled();
       expect(repository.jobs.size).toBe(0);
       expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('refuses edit regions on a model that takes none, holding nothing and creating nothing', async () => {
+      const { deps, repository } = makeDeps();
+      const result = await run(deps, {
+        model: ImageModels.GPT_IMAGE_2,
+        mode: 'edit',
+        prompt: 'x',
+        inputs: [{ role: 'edit_source', fileId: SOURCE_ID }],
+        editRegions: [{ prompt: 'make it blue', bbox: [0.1, 0.1, 0.5, 0.5] }],
+      });
+      if (result.ok || result.code !== 'unsupported_by_model') throw new Error('expected unsupported_by_model');
+      expect(result.failures.map(failure => failure.code)).toContain('unsupported_edit_regions');
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+    });
+
+    it.each([
+      ['an inverted bbox', [0.5, 0.1, 0.1, 0.5]],
+      ['a bbox outside 0..1', [0, 0, 1.5, 1]],
+    ])('refuses %s with 400 invalid_request', async (_label, bbox) => {
+      const { deps } = makeDeps();
+      const result = await run(deps, {
+        model: ImageModels.GPT_IMAGE_2,
+        mode: 'edit',
+        prompt: 'x',
+        inputs: [{ role: 'edit_source', fileId: SOURCE_ID }],
+        editRegions: [{ prompt: 'make it blue', bbox }],
+      });
+      expect(result).toMatchObject({ ok: false, status: 400, code: 'invalid_request' });
+      expect(holdCredits).not.toHaveBeenCalled();
     });
 
     it('reports several failures at once', async () => {
@@ -197,6 +254,33 @@ describe('createImageJobs', () => {
       expect(repository.jobs.size).toBe(0);
     });
 
+    it('serves a runtime-discovered local checkpoint through the local provider', async () => {
+      const { deps } = makeDeps({ providers: createImageProviderRegistry([openAiProvider, new LocalImageProvider()]) });
+      const result = await run(deps, {
+        model: 'local-image/sdxl_base.safetensors',
+        mode: 'generate',
+        prompt: 'a kite',
+      });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0].payload).toMatchObject({ providerId: 'local' });
+    });
+
+    it('refuses a local checkpoint with 422 model_unavailable when the local provider is not registered', async () => {
+      const { deps } = makeDeps();
+      expect(
+        await run(deps, { model: 'local-image/sdxl_base.safetensors', mode: 'generate', prompt: 'a kite' })
+      ).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+    });
+
+    it('serves test-image only when the test provider is registered', async () => {
+      const request = { model: 'test-image', mode: 'generate', prompt: 'a kite' };
+      expect(await run(makeDeps().deps, request)).toMatchObject({ ok: false, code: 'model_unavailable' });
+      const { deps } = makeDeps({ providers: createImageProviderRegistry([openAiProvider, new TestImageProvider()]) });
+      const result = await run(deps, request);
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0].payload).toMatchObject({ providerId: 'test' });
+    });
+
     it('refuses model_unavailable when no API key is configured', async () => {
       const { deps } = makeDeps({ resolveApiKey: vi.fn(async () => null) });
       expect(await run(deps, validRequest)).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
@@ -231,6 +315,43 @@ describe('createImageJobs', () => {
       expect(holdCredits).toHaveBeenCalledTimes(3);
       expect(deps.enqueue).toHaveBeenCalledTimes(3);
       expect(repository.jobs.size).toBe(3);
+    });
+
+    it('persists the delivery target on every job of the batch', async () => {
+      const { deps } = makeDeps();
+      const delivery = { kind: 'slack' as const, workspaceId: 'w1', channelId: 'C1', threadTs: '1700000000.000100' };
+      const result = await run(deps, validRequest, { count: 3, delivery });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs).toHaveLength(3);
+      for (const job of result.jobs) expect(job.delivery).toEqual(delivery);
+    });
+
+    it('stores no delivery field when the input names none', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 2 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job).not.toHaveProperty('delivery');
+    });
+
+    it('stamps the chat turn on every job of the batch', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 2, questId: 'q-1' });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job.questId).toBe('q-1');
+    });
+
+    it('stores no questId when the batch was not started from a chat turn', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest);
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0]).not.toHaveProperty('questId');
+    });
+
+    it('records the batch size on every job so the group completes only when all members are in', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 3 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job.payload.groupSize).toBe(3);
     });
 
     it.each(['low', 'high', 'auto'] as const)('stores an explicit %s quality as asked', async quality => {
@@ -273,6 +394,38 @@ describe('createImageJobs', () => {
       expect(deps.enqueue).not.toHaveBeenCalled();
     });
 
+    it('refuses a batch whose total would take a new account over its spend cap, before any hold', async () => {
+      vi.mocked(checkNewAccountSpendCap).mockResolvedValueOnce('New accounts can spend up to 100 credits per day');
+      const { deps, repository } = makeDeps();
+      expect(await run(deps, validRequest, { count: 3 })).toEqual({
+        ok: false,
+        status: 402,
+        code: 'insufficient_credits',
+        message: 'New accounts can spend up to 100 credits per day',
+      });
+      const [params] = vi.mocked(checkNewAccountSpendCap).mock.calls[0];
+      expect(params).toMatchObject({ user: capUser, billedToOrganization: false });
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+      expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('checks the whole batch total against the spend cap and holds every job when it fits', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 3 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      const perJob = vi.mocked(holdCredits).mock.calls[0][0].requiredCredits;
+      expect(vi.mocked(checkNewAccountSpendCap).mock.calls[0][0].requestedCredits).toBe(3 * perJob);
+      expect(holdCredits).toHaveBeenCalledTimes(3);
+    });
+
+    it('leaves a single job to its hold, which checks the spend cap itself', async () => {
+      const { deps } = makeDeps();
+      await run(deps, validRequest);
+      expect(checkNewAccountSpendCap).not.toHaveBeenCalled();
+      expect(holdCredits).toHaveBeenCalledTimes(1);
+    });
+
     it('skips holds when credits are not enforced', async () => {
       const { deps } = makeDeps({ getSettings: async () => ({ enforceCredits: false }) });
       const result = await run(deps, validRequest, { count: 2 });
@@ -288,8 +441,8 @@ describe('createImageJobs', () => {
       const first = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       const second = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       if (!first.ok || !second.ok) throw new Error('expected both calls to succeed');
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(false);
+      expect(first).toMatchObject({ created: true, createdCount: 2 });
+      expect(second).toMatchObject({ created: false, createdCount: 0 });
       expect(second.groupId).toBe(first.groupId);
       expect(second.jobs.map(job => job.id)).toEqual(first.jobs.map(job => job.id));
       expect(holdCredits).toHaveBeenCalledTimes(2);

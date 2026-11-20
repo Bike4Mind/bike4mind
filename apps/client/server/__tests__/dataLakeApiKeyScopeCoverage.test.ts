@@ -122,8 +122,12 @@ describe('data-lake routes declare an API-key scope gate', () => {
       return;
     }
 
-    const gate = source.match(/baseApi\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+) \}\)/);
-    expect(gate, 'route must declare requiredScopes from @server/dataLakes/dataLakeScopes').not.toBeNull();
+    // adminApi takes the same requiredScopes; its admin:* check is per user, not a listed scope.
+    const gate = source.match(/\b(?:baseApi|adminApi)\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+)(?: \}\)|,)/);
+    expect(
+      gate,
+      'route must declare requiredScopes from @bike4mind/server-utils/dataLakes/dataLakeScopes'
+    ).not.toBeNull();
 
     // See dataLakeScopes.ts: admin:* is unstageable, and one mention would deny this
     // family its staging grace period.

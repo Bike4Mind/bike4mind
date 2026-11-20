@@ -14,6 +14,7 @@ import {
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
@@ -60,6 +61,7 @@ import LakeSourceConnectActions from '../steps/LakeSourceConnectActions';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
+import { sourceCount } from './shared';
 
 // Right pane: selected lake's details + management actions
 
@@ -73,6 +75,8 @@ export function LakeInfoPanel({
   armCounts,
   taxonomyBatch,
   onOpenSettings,
+  onOpenResearch,
+  onReviewProposals,
   onOpenAccess,
   onOpenFallbackSettings,
   onReviewTaxonomy,
@@ -86,6 +90,10 @@ export function LakeInfoPanel({
   /** This lake's attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
+  /** Opens settings on the Research tab. Manager-only, like Settings. */
+  onOpenResearch: () => void;
+  /** Opens settings on the Proposals tab. */
+  onReviewProposals: () => void;
   /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
   onOpenAccess: () => void;
   /** Opens the narrower settings editor for a fallback (built-in) lake - see canManageSettings. */
@@ -272,6 +280,32 @@ export function LakeInfoPanel({
               >
                 Settings
               </Button>
+              <Tooltip title="Set up searches that find new sources for this lake" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  startDecorator={<TravelExploreIcon sx={{ fontSize: 16 }} />}
+                  aria-label={`Research for ${lake.name}`}
+                  data-testid={`datalake-research-btn-${lake.id}`}
+                  onClick={onOpenResearch}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Research
+                </Button>
+              </Tooltip>
+              {!!lake.pendingProposalCount && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="primary"
+                  data-testid={`datalake-review-proposals-btn-${lake.id}`}
+                  onClick={onReviewProposals}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  {`${sourceCount(lake.pendingProposalCount)} to review`}
+                </Button>
+              )}
               <Tooltip title="See who can access this lake, and who has read it" size="sm">
                 <Button
                   size="sm"

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import {
@@ -130,7 +131,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const rateLimit = useOtcRateLimit();
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
-  const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
+  const { data: publicConfig, isLoading: isPublicConfigLoading, isPending: isPublicConfigPending } = usePublicConfig();
   // Non-null once sign-in is refused for an admin suspension; the stored reason category ('' if unknown).
   const [suspendedCategory, setSuspendedCategory] = useState<string | null>(null);
   const mfaChallenge = useMfaChallenge({
@@ -142,9 +143,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // code."). Restart cleanly from the email step.
       handleBackToEmail();
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }
@@ -842,49 +841,57 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   testId="login-rate-limit-alert"
                 />
 
+                {/* Which sign-up line to show depends on the public config. Until it settles, show
+                    neither: the caller's fallback reads as "registration closed" and flashed the
+                    invite/waitlist line before "Register now" on open instances. isPending, not
+                    isLoading: while the persisted cache restores, the query is pending but not yet
+                    fetching. The box keeps one line's height (14px at Joy body-md's 1.5 line height). */}
                 <Box
                   className="register-prompt-container"
-                  sx={{ display: 'flex', justifyContent: 'center', mt: '20px' }}
+                  data-testid="login-register-prompt"
+                  sx={{ display: 'flex', justifyContent: 'center', mt: '20px', minHeight: '21px' }}
                 >
-                  <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
-                    {t('auth.noAccount')}{' '}
-                    <Link
-                      component="button"
-                      type="button"
-                      className="register-link"
-                      data-testid="signup-text"
-                      color="primary"
-                      onClick={() => {
-                        const searchParams = new URLSearchParams(window.location.search);
-                        const redirectTo = searchParams.get('redirectTo');
-                        navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
-                      }}
-                      sx={{
-                        fontWeight: 500,
-                        fontSize: '14px',
-                        cursor: 'pointer',
-                        transition: 'color 0.2s ease-in-out',
-                        '&:hover': { textDecoration: 'underline' },
-                      }}
-                    >
-                      {enableRegister ? t('auth.registerNow') : 'Have an invite code?'}
-                    </Link>
-                    {!enableRegister && (
-                      <>
-                        {' / '}
-                        <Link
-                          component="button"
-                          type="button"
-                          data-testid="login-join-waitlist-link"
-                          color="primary"
-                          onClick={() => joinWaitlist('login_signup_closed', email)}
-                          sx={{ fontWeight: 500, fontSize: '14px', '&:hover': { textDecoration: 'underline' } }}
-                        >
-                          {t('auth.joinWaitlist')}
-                        </Link>
-                      </>
-                    )}
-                  </Typography>
+                  {!isPublicConfigPending && (
+                    <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
+                      {t('auth.noAccount')}{' '}
+                      <Link
+                        component="button"
+                        type="button"
+                        className="register-link"
+                        data-testid="signup-text"
+                        color="primary"
+                        onClick={() => {
+                          const searchParams = new URLSearchParams(window.location.search);
+                          const redirectTo = searchParams.get('redirectTo');
+                          navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
+                        }}
+                        sx={{
+                          fontWeight: 500,
+                          fontSize: '14px',
+                          cursor: 'pointer',
+                          transition: 'color 0.2s ease-in-out',
+                          '&:hover': { textDecoration: 'underline' },
+                        }}
+                      >
+                        {enableRegister ? t('auth.registerNow') : 'Have an invite code?'}
+                      </Link>
+                      {!enableRegister && (
+                        <>
+                          {' / '}
+                          <Link
+                            component="button"
+                            type="button"
+                            data-testid="login-join-waitlist-link"
+                            color="primary"
+                            onClick={() => joinWaitlist('login_signup_closed', email)}
+                            sx={{ fontWeight: 500, fontSize: '14px', '&:hover': { textDecoration: 'underline' } }}
+                          >
+                            {t('auth.joinWaitlist')}
+                          </Link>
+                        </>
+                      )}
+                    </Typography>
+                  )}
                 </Box>
                 <SignupHoneypot {...honeypotProps} />
               </form>

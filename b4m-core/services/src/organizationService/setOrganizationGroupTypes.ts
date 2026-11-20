@@ -23,12 +23,12 @@ export interface SetGroupTypesResult {
 }
 
 /**
- * Set an organization's allowed group types - a platform-admin action (org-groups #1172, Phase 3).
+ * Set an organization's allowed group types. Callers enforce platform or standard-type authority.
  *
  * - Validates every requested key against the code-defined catalog (a typo can't persist a dead grant).
  * - Rejects personal organizations (agreed decision 4).
  * - Provisions a `Group` instance for each newly-allowed type that has none yet (idempotent - groups
- *   are created only here, never directly).
+ *   are provisioned through this function, including standard-type self-service).
  * - For each revoked type: soft-deletes its instance(s) AND purges those group ids from every
  *   member's `user.groups`. This is the org-wide analog of the leave.ts purge - without it, a
  *   revoked type would leave members holding access to a group that no longer exists.

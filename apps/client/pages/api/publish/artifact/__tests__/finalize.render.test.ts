@@ -10,7 +10,7 @@ import { renderArtifactIndexHtml } from '@server/services/publish';
 // that signals a non-react `artifactType` uploads RAW artifact content as index.html; finalize must
 // render it into the canonical published page (byte-identical to renderArtifactIndexHtml), recompute
 // size/sha, and promote the RENDERED bytes - while a draft with NO artifactType (an already-inert
-// bundle from the current web client) must promote its uploaded bytes unchanged (backward compat).
+// bundle from a client that renders before upload) must promote its uploaded bytes unchanged.
 // Keeps the REAL renderArtifactIndexHtml + validateBundle and stubs the heavy service surface.
 
 const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload } = vi.hoisted(() => ({
@@ -43,6 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  artifactRepository: { findOne: vi.fn(async () => null) },
   PublishedArtifact: {
     findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),

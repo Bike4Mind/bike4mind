@@ -23,7 +23,7 @@ import {
   hasReportedUsage,
   reserveCompletionCredits,
   settleCompletion,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { z } from 'zod';
 
 /**

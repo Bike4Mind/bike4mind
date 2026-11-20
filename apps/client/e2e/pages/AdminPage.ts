@@ -101,10 +101,24 @@ export class AdminPage extends BasePage {
     return link;
   }
 
+  async navigateToAccessReview() {
+    await (await this.revealSidebarItem('admin-access-review-btn', 'trust')).click();
+    await expect(this.page.getByTestId('admin-access-review-table')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+  }
+
   async navigateToInviteCenter() {
     await this.expandUserOps();
-    await (await this.revealSidebarItem('admin-invite-center-tab-btn', 'people')).click();
+    await (await this.revealSidebarItem('admin-waitlist-tab-btn', 'people')).click();
+    await this.page.getByTestId('invite-center-sections-invites-btn').click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
+  async navigateToGrowthPricing() {
+    await this.expandUserOps();
+    await (await this.revealSidebarItem('admin-growth-pricing-btn', 'money')).click();
+    await expect(this.page.getByTestId('admin-growth-pricing-section-credits')).toBeVisible({
+      timeout: TIMEOUTS.NAVIGATION,
+    });
   }
 
   async switchToInviteCodesTab() {
@@ -346,12 +360,12 @@ export class AdminPage extends BasePage {
       .toBe(expected);
   }
 
-  /** Delete a specific invite code by finding its row and clicking the delete button */
+  /** Delete a specific invite code by finding its row and choosing Delete from its actions menu */
   async deleteInviteByCode(code: string) {
     const row = this.page.getByTestId('invite-code-card').filter({ hasText: code });
     await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    const deleteBtn = row.getByTestId('delete-invite-code-btn');
-    await deleteBtn.click();
+    await row.getByTestId(/^invite-row-actions-/).click();
+    await this.page.getByTestId('delete-invite-code-btn').click();
     await this.waitForResponseOrUI(
       resp => resp.url().includes('/api/reg-invites') && resp.request().method() === 'DELETE' && resp.ok(),
       () => expect(row).toBeHidden({ timeout: TIMEOUTS.ACTION })

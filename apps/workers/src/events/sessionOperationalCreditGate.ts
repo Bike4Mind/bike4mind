@@ -1,6 +1,6 @@
 import type { ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { checkSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
+import { checkSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
 
 /**
  * Balance gate for the session event handlers (auto-naming, summarization, tagging, context
@@ -10,7 +10,7 @@ import { checkSessionOperationalCredits } from '@server/utils/sessionOperational
  * leave the payer at exactly zero (the balance cap floors it there). `recordOperationalUsage`
  * floors the follow-up charge at zero, so without this gate the work would still run and its cost
  * would be written off. The request-side pre-flight
- * (`apps/client/server/utils/sessionOperationalCreditPreflight`) only guards the routes that
+ * (`packages/server-utils/src/utils/sessionOperationalCreditPreflight`) only guards the routes that
  * publish these events directly; this covers every publisher, including future ones.
  *
  * Pass `resolveModelInfo` when the call does not run on the operations model, so a free model

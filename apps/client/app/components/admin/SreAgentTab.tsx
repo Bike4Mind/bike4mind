@@ -52,6 +52,7 @@ import {
   SreRepoConfigSchema,
   SRE_SECRET_PLACEHOLDER,
   SRE_METRICS_WINDOWS,
+  SreSourceType,
   getConfiguredRepoSlugs,
   type ModelInfo,
   type SreAgentConfig,
@@ -181,20 +182,9 @@ function setRepoField<K extends keyof SreRepoConfig>(
 }
 
 /** Gate editor for per-repo gate config */
-function RepoGateEditor({
-  label,
-  gate,
-  onChange,
-}: {
-  label: string;
-  gate: { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number };
-  onChange: (g: {
-    enabled: boolean;
-    autoThreshold: number;
-    askThreshold: number;
-    approvalTimeoutHours: number;
-  }) => void;
-}) {
+function RepoGateEditor<
+  G extends { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number },
+>({ label, gate, onChange }: { label: string; gate: G; onChange: (g: G) => void }) {
   return (
     <Box sx={{ py: 1.5, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
@@ -242,6 +232,39 @@ function RepoGateEditor({
         </Stack>
       )}
     </Box>
+  );
+}
+
+const AUTO_DISPATCH_SOURCE_LABELS: Record<SreSourceType, string> = {
+  [SreSourceType.CLOUDWATCH]: 'CloudWatch errors',
+  [SreSourceType.GITHUB_ISSUE]: 'GitHub issues',
+};
+
+/** Sources whose fixes may dispatch without Slack approval; any other source always asks. */
+export function AutoDispatchSourcesField({
+  sources,
+  onChange,
+}: {
+  sources: SreSourceType[];
+  onChange: (sources: SreSourceType[]) => void;
+}) {
+  return (
+    <FormControl sx={{ pb: 1.5 }}>
+      <FormLabel>Auto-dispatch without approval</FormLabel>
+      <Stack direction="row" spacing={2}>
+        {Object.values(SreSourceType).map(source => (
+          <Checkbox
+            key={source}
+            size="sm"
+            label={AUTO_DISPATCH_SOURCE_LABELS[source]}
+            checked={sources.includes(source)}
+            onChange={e => onChange(e.target.checked ? [...sources, source] : sources.filter(s => s !== source))}
+            data-testid={`sre-auto-dispatch-source-${source}`}
+          />
+        ))}
+      </Stack>
+      <FormHelperText>Auto-band fixes from unchecked sources wait for Slack approval.</FormHelperText>
+    </FormControl>
   );
 }
 
@@ -510,8 +533,8 @@ function RepoConfigCard({
                     }}
                   />
                   <FormHelperText>
-                    Comma-separated Slack user IDs authorized to approve/reject fixes. Leave empty to allow anyone in
-                    the channel.
+                    Comma-separated Slack user IDs authorized to approve/reject fixes. With no IDs configured, nobody
+                    can approve a fix.
                   </FormHelperText>
                 </FormControl>
               </Stack>
@@ -755,6 +778,18 @@ function RepoConfigCard({
             label="Diagnostician to Surgeon"
             gate={repo.gates.diagnosticianToSurgeon}
             onChange={g => onChange({ ...repo, gates: { ...repo.gates, diagnosticianToSurgeon: g } })}
+          />
+          <AutoDispatchSourcesField
+            sources={repo.gates.diagnosticianToSurgeon.autoDispatchSources ?? []}
+            onChange={autoDispatchSources =>
+              onChange({
+                ...repo,
+                gates: {
+                  ...repo.gates,
+                  diagnosticianToSurgeon: { ...repo.gates.diagnosticianToSurgeon, autoDispatchSources },
+                },
+              })
+            }
           />
         </CollapsibleSection>
 
@@ -2458,13 +2493,13 @@ export default function SreAgentTab() {
           <Tab data-testid="sre-tab-configuration">Configuration</Tab>
         </TabList>
 
-        <TabPanel value={0} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={0} sx={panelSx}>
           <PipelineStatusPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={1} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={1} sx={panelSx}>
           <PatternLibraryPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={2} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={2} sx={panelSx}>
           <SreConfigPanel />
         </TabPanel>
       </Tabs>

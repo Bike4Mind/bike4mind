@@ -119,7 +119,7 @@ export async function markStepUp(user: StepUpUser, now = new Date()): Promise<Da
 export async function stepUpMethodsFor(user: IUserDocument): Promise<StepUpMethod[]> {
   const methods: StepUpMethod[] = [];
   if (mfaService.userHasMFAConfigured(user)) {
-    methods.push('totp');
+    if (mfaService.userHasTotpConfigured(user)) methods.push('totp');
     if ((await passkeyCredentialRepository.countByUser(user.id)) > 0) methods.push('passkey');
     return methods;
   }

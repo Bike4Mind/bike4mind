@@ -31,6 +31,7 @@ export type AdminSettingChange = {
   /** Overrides the target for a write that is not the platform row (e.g. a scoped override). */
   target?: { id: string; displayName: string };
   details?: Record<string, unknown>;
+  reason?: string;
 };
 
 /**
@@ -45,7 +46,7 @@ export const recordAdminSettingChange = (req: AuditRequest, change: AdminSetting
 /** recordAdminSettingChange for a caller that names its own actor (a job, through systemAuditWriter). */
 export const recordAdminSettingChangeWith = (
   write: AdminAuditWriter,
-  { settingName, before, after, summary, target, details }: AdminSettingChange
+  { settingName, before, after, summary, target, details, reason }: AdminSettingChange
 ): Promise<AuditEntry | null> =>
   write({
     action: 'settings.admin_settings.updated',
@@ -61,4 +62,5 @@ export const recordAdminSettingChangeWith = (
         ]
       : diffSettingChanges(settingName, before, after),
     details,
+    reason,
   });

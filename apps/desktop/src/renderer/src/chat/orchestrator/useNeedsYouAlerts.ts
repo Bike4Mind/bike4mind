@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import { useNotifyScope } from '../notifyScopeSetting';
 import { playChime } from './chime';
+import { readPresenter } from './orchestratorPrefs';
 import {
   alertableSessions,
   enteredNeedsYou,
@@ -12,9 +14,11 @@ import {
 } from '@shared/needsYou';
 
 /**
- * Tells the user when any session (an agent or a parent) starts needing them: a chime if the sound
- * setting is on, an OS notice while the window is not focused, and the dock badge kept at the number
- * of sessions waiting. One notice per needs-action entry. A clicked notice comes back on `onOpen`.
+ * Tells the user when an alertable session (an agent or a parent; any session when the notify scope
+ * is `all`) starts needing them: a chime if the sound setting is on, an OS notice while the window is
+ * not focused, and the dock badge kept at the number of sessions waiting. One notice per needs-action
+ * entry. A clicked notice comes back on `onOpen`. A plain session the user is looking at (`viewingId`)
+ * in a focused window is not announced: they can already see it asking.
  *
  * `loaded` is whether the first status snapshot has arrived. That snapshot is the baseline:
  * sessions already waiting when the window opened are not announced, only later entries are.
@@ -25,8 +29,14 @@ export function useNeedsYouAlerts(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   loaded: boolean,
-  onOpen: (event: AttentionOpenEvent) => void
+  onOpen: (event: AttentionOpenEvent) => void,
+  viewingId: string | null
 ): void {
+  const [scope] = useNotifyScope();
+  const latestScope = useRef(scope);
+  latestScope.current = scope;
+  const latestViewingId = useRef(viewingId);
+  latestViewingId.current = viewingId;
   const previous = useRef<ReadonlyMap<string, ChatSessionStatus> | null>(null);
   // Refs, so a session-list change between status pushes never re-announces anything.
   const latestSessions = useRef(sessions);
@@ -36,14 +46,25 @@ export function useNeedsYouAlerts(
 
   useEffect(() => {
     if (!loaded) return;
-    const alertable = alertableSessions(latestSessions.current);
+    const alertable = alertableSessions(latestSessions.current, latestScope.current);
+    // Agent alerts keep firing for the viewed session, as they always have; only the wider scope skips it.
+    const agentTree = alertableSessions(latestSessions.current, 'agents');
+    const inView = (id: string) => id === latestViewingId.current && !agentTree.has(id) && document.hasFocus();
     const entered = previous.current ? enteredNeedsYou(previous.current, statuses).filter(id => alertable.has(id)) : [];
     previous.current = statuses;
-    if (entered.length === 0) return;
-    void announce(entered, latestSessions.current);
+    const viewed = entered.filter(inView);
+    // Claimed without announcing, so another open window does not announce what this one shows.
+    if (viewed.length > 0) {
+      window.b4m.attention
+        .claim(viewed)
+        .catch((error: unknown) => console.warn(`Could not claim the viewed needs-you entry: ${String(error)}`));
+    }
+    const announced = entered.filter(id => !inView(id));
+    if (announced.length === 0) return;
+    void announce(announced, latestSessions.current);
   }, [statuses, loaded]);
 
-  const count = needsYouCount(statuses, sessions);
+  const count = needsYouCount(statuses, sessions, scope);
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);
@@ -93,8 +114,18 @@ async function announce(entered: readonly string[], sessions: readonly ChatSessi
   );
 }
 
+/** The whole notice while Presenter mode is on (presenter.ts): a shared screen shows OS notices too. */
+export const PRESENTER_NOTICE_TITLE = 'An agent needs you';
+
+/** Tells a user who forgot Presenter mode is on why the notice is bare. */
+export const PRESENTER_NOTICE_BODY = 'Presenter mode is on';
+
 async function notify(sessionId: string, sessions: readonly ChatSessionSummary[]): Promise<void> {
   const rootId = rootSessionOf(sessions, sessionId);
+  if (readPresenter()) {
+    await window.b4m.attention.notify({ sessionId, rootId, title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY });
+    return;
+  }
   const title = needsYouTitle(sessions, sessionId, rootId);
   // A session that cannot be read still gets its notice, just without the request spelled out.
   const session = await window.b4m.chat.getSession(sessionId).catch(() => null);

@@ -6,101 +6,66 @@ import SwiftUI
   import AppKit
 #endif
 
-/// The Bike4Mind brand palette, ported from the web app's Joy theme
-/// (apps/client/app/utils/themes/themePrimitives.ts and components/*.ts).
-/// Every color resolves per light/dark at render time, so the same token works in the
-/// app, the widget extension and the share extension. Keep the values in sync with the
-/// web theme; the source token is named next to each color.
-public enum BrandTheme {
-  // MARK: - Accent
+/// An sRGB color value written as 0xRRGGBB plus an alpha, the shape the generated
+/// `BrandTokens` (Theme/Generated, from packages/design-tokens) is written in.
+public struct BrandRGBA: Equatable, Sendable {
+  public let red: Double
+  public let green: Double
+  public let blue: Double
+  public let alpha: Double
 
-  /// Interactive blue (web `reading.accent`: #0B6BCB light, #61AFEF dark). The asset-catalog
-  /// AccentColor in each target carries the same pair so stock controls match.
-  public static let accent = brandColor(light: Self.accentLight, dark: Self.accentDark)
-
-  // MARK: - Backgrounds
-
-  /// Screen background (web `background.body`: #FBFCFE light, #0E1214 dark).
-  public static let backgroundBody = brandColor(
-    light: RGBA(0xFBFCFE), dark: RGBA(0x0E1214))
-
-  /// Raised surface for cards, list rows and input fields
-  /// (web `background.surface`/`surface2`: #F4F7F9 light, #13181C dark).
-  public static let surface = brandColor(light: RGBA(0xF4F7F9), dark: RGBA(0x13181C))
-
-  /// Hairline borders and dividers (web `divider`: #D3DFE8 light, #2C3135 dark).
-  public static let divider = brandColor(light: RGBA(0xD3DFE8), dark: RGBA(0x2C3135))
-
-  // MARK: - Text
-
-  /// Primary ink (web `text.primary`: #335F70 light, #D1E4F4 dark).
-  public static let textPrimary = brandColor(light: RGBA(0x335F70), dark: RGBA(0xD1E4F4))
-
-  /// Secondary ink. The web's secondary tier is nearly opaque, so this uses the tertiary
-  /// alphas (0.9 light, 0.7 dark over the primary ink) to keep a visible hierarchy on iOS.
-  public static let textSecondary = brandColor(
-    light: RGBA(0x335F70, alpha: 0.9), dark: RGBA(0xD1E4F4, alpha: 0.7))
-
-  // MARK: - Chat bubbles
-
-  /// The user's bubble: a tint of the accent with primary text on top; stays legible where
-  /// the dark-mode accent is too light for white text. Dark mode needs a much stronger
-  /// tint, because 16% of the accent over near-black reads as black.
-  public static let userBubble = brandColor(
-    light: Self.accentLight.withAlpha(0.16), dark: Self.accentDark.withAlpha(0.42))
-
-  /// The assistant's bubble (web `chatbox.replyBg`: #E2ECF4 light, #2A4159 dark).
-  public static let assistantBubble = brandColor(light: RGBA(0xE2ECF4), dark: RGBA(0x2A4159))
-
-  // MARK: - Status
-
-  /// Destructive red (web `danger.solidBg` #DA3131 light; `danger.mainChannel` #EF4444 dark,
-  /// which reads better than the solid on near-black).
-  public static let destructive = brandColor(light: RGBA(0xDA3131), dark: RGBA(0xEF4444))
-
-  /// Warning orange (web `warning.solidBg`: #FFA500 in both modes).
-  public static let warning = brandColor(light: RGBA(0xFFA500), dark: RGBA(0xFFA500))
-
-  /// Success green (web `success.solidBg` #1FB84B light; `success.softColor` #34D399 dark).
-  public static let success = brandColor(light: RGBA(0x1FB84B), dark: RGBA(0x34D399))
-
-  // MARK: - Values
-
-  static let accentLight = RGBA(0x0B6BCB)
-  static let accentDark = RGBA(0x61AFEF)
-
-  /// An sRGB color value, written as 0xRRGGBB plus an alpha, so the palette above reads
-  /// like the web theme it mirrors.
-  struct RGBA: Equatable {
-    let red: Double
-    let green: Double
-    let blue: Double
-    let alpha: Double
-
-    init(_ rgb: UInt32, alpha: Double = 1.0) {
-      self.red = Double((rgb >> 16) & 0xFF) / 255.0
-      self.green = Double((rgb >> 8) & 0xFF) / 255.0
-      self.blue = Double(rgb & 0xFF) / 255.0
-      self.alpha = alpha
-    }
-
-    func withAlpha(_ alpha: Double) -> RGBA {
-      RGBA(red: red, green: green, blue: blue, alpha: alpha)
-    }
-
-    private init(red: Double, green: Double, blue: Double, alpha: Double) {
-      self.red = red
-      self.green = green
-      self.blue = blue
-      self.alpha = alpha
-    }
+  public init(_ rgb: UInt32, alpha: Double = 1.0) {
+    self.red = Double((rgb >> 16) & 0xFF) / 255.0
+    self.green = Double((rgb >> 8) & 0xFF) / 255.0
+    self.blue = Double(rgb & 0xFF) / 255.0
+    self.alpha = alpha
   }
+}
 
-  private static func brandColor(light: RGBA, dark: RGBA) -> Color {
+/// One color role: the value for each appearance.
+public struct BrandColorPair: Equatable, Sendable {
+  public let light: BrandRGBA
+  public let dark: BrandRGBA
+
+  public init(light: BrandRGBA, dark: BrandRGBA) {
+    self.light = light
+    self.dark = dark
+  }
+}
+
+/// The Bike4Mind brand palette as SwiftUI colors. The values are generated from the web theme's
+/// tokens (`BrandTokens.Colors`, see apps/ios/DESIGN_PARITY.md); never hand-copy a hex here.
+/// Every color resolves per light/dark at render time, so the same token works in the app, the
+/// widget extension and the share extension.
+public enum BrandTheme {
+  public static let accent = color(BrandTokens.Colors.accent)
+  public static let backgroundBody = color(BrandTokens.Colors.backgroundBody)
+  public static let surface = color(BrandTokens.Colors.surface)
+  public static let panel = color(BrandTokens.Colors.panel)
+  public static let promptBubble = color(BrandTokens.Colors.promptBubble)
+  public static let borderSoft = color(BrandTokens.Colors.borderSoft)
+  public static let borderSolid = color(BrandTokens.Colors.borderSolid)
+  public static let divider = color(BrandTokens.Colors.divider)
+  public static let textPrimary = color(BrandTokens.Colors.textPrimary)
+  public static let textSecondary = color(BrandTokens.Colors.textSecondary)
+  public static let readingInk = color(BrandTokens.Colors.readingInk)
+  public static let composerPlaceholder = color(BrandTokens.Colors.composerPlaceholder)
+  public static let sendButton = color(BrandTokens.Colors.sendButton)
+  public static let codeSurface = color(BrandTokens.Colors.codeSurface)
+  public static let codeFrame = color(BrandTokens.Colors.codeFrame)
+  public static let sidebar = color(BrandTokens.Colors.sidebar)
+  public static let sidebarText = color(BrandTokens.Colors.sidebarText)
+  public static let sidebarSelected = color(BrandTokens.Colors.sidebarSelected)
+  public static let destructive = color(BrandTokens.Colors.destructive)
+  public static let warning = color(BrandTokens.Colors.warning)
+  public static let success = color(BrandTokens.Colors.success)
+
+  /// A SwiftUI color that resolves the pair against the current appearance.
+  public static func color(_ pair: BrandColorPair) -> Color {
     #if canImport(UIKit)
       return Color(
         uiColor: UIColor { traits in
-          let value = traits.userInterfaceStyle == .dark ? dark : light
+          let value = traits.userInterfaceStyle == .dark ? pair.dark : pair.light
           return UIColor(
             red: value.red, green: value.green, blue: value.blue, alpha: value.alpha)
         })
@@ -110,13 +75,52 @@ public enum BrandTheme {
           name: nil,
           dynamicProvider: { appearance in
             let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let value = isDark ? dark : light
+            let value = isDark ? pair.dark : pair.light
             return NSColor(
               srgbRed: value.red, green: value.green, blue: value.blue, alpha: value.alpha)
           }))
     #else
       return Color(
-        red: light.red, green: light.green, blue: light.blue, opacity: light.alpha)
+        red: pair.light.red, green: pair.light.green, blue: pair.light.blue,
+        opacity: pair.light.alpha)
     #endif
+  }
+}
+
+/// The web type face, Libre Franklin, at token sizes and CSS weights, scaled with Dynamic Type
+/// relative to a text style.
+///
+/// The app target bundles the variable font (Resources/Fonts, registered through UIAppFonts);
+/// SwiftUI's weight on the family drives its `wght` axis, so every weight is a real cut. Where the
+/// font is not registered (widgets, the share extension) SwiftUI falls back to the system face.
+public enum BrandFont {
+  public static func font(
+    size: CGFloat, weight: Int = 400, relativeTo textStyle: Font.TextStyle = .body
+  ) -> Font {
+    Font.custom(BrandTokens.Typography.familyName, size: size, relativeTo: textStyle)
+      .weight(fontWeight(weight))
+  }
+
+  /// Extra line spacing that turns the font's natural leading into a web line height (a multiple
+  /// of the font size), the way CSS `line-height` does.
+  public static func lineSpacing(size: CGFloat, lineHeight: CGFloat) -> CGFloat {
+    max(0, size * lineHeight - size * naturalLineHeightMultiple)
+  }
+
+  /// Libre Franklin's (ascender + descender + line gap) / em, from the font's hhea table.
+  static let naturalLineHeightMultiple: CGFloat = 1.212
+
+  static func fontWeight(_ cssWeight: Int) -> Font.Weight {
+    switch cssWeight {
+    case ..<150: .ultraLight
+    case ..<250: .thin
+    case ..<350: .light
+    case ..<450: .regular
+    case ..<550: .medium
+    case ..<650: .semibold
+    case ..<750: .bold
+    case ..<850: .heavy
+    default: .black
+    }
   }
 }

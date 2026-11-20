@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Alert,
   Box,
@@ -22,7 +22,8 @@ import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import { useQuery } from '@tanstack/react-query';
-import { adminUserProfilePath, FeedbackStatus } from '@bike4mind/common';
+import { adminUserProfilePath, FeedbackStatus, FEEDBACK_RESOLUTION_LABELS } from '@bike4mind/common';
+import FeedbackHistory from './FeedbackHistory';
 import { getFeedbackByIdFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { openHelpPanel, useHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -37,6 +38,9 @@ import HelpContextChip from './HelpContextChip';
 import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
+import FeedbackAiPanel from './FeedbackAiPanel';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
+import FeedbackSimilarReports from './FeedbackSimilarReports';
 
 const STATUS_TONES: Record<FeedbackStatus, AdminStatusTone> = {
   [FeedbackStatus.New]: 'info',
@@ -95,6 +99,24 @@ const FeedbackDetailDrawer = ({
 
   const record = recordQuery.data ?? undefined;
   const missing = recordQuery.isError || (recordQuery.isSuccess && !recordQuery.data);
+  const keyboardRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: keyboardRef,
+    enabled: Boolean(feedbackId) && !helpPanelOpen,
+    drawer: true,
+    onPrevious,
+    onNext,
+    onAction: key => {
+      if (!record || missing) return;
+      if (key === 'e') {
+        keyboardRef.current
+          ?.querySelector<HTMLAnchorElement>('[data-testid="feedback-detail-email-reporter-btn"]')
+          ?.click();
+      } else {
+        void onStatusChange(record, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
 
   return (
     <Drawer
@@ -121,7 +143,7 @@ const FeedbackDetailDrawer = ({
       }}
       data-testid="feedback-detail-drawer"
     >
-      <Stack sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
+      <Stack ref={keyboardRef} sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
         <Stack
           direction="row"
           alignItems="center"
@@ -182,6 +204,7 @@ const FeedbackDetailDrawer = ({
           )}
           <Tooltip title="Close">
             <IconButton
+              autoFocus
               size="sm"
               variant="plain"
               aria-label="Close"
@@ -315,6 +338,9 @@ const FeedbackDetailBody = ({
         </Stack>
       )}
 
+      <FeedbackAiPanel key={record._id} feedbackId={record._id} />
+      <FeedbackSimilarReports key={`similar-${record._id}`} feedbackId={record._id} />
+
       <SectionCard
         title="Reporter"
         data-testid="feedback-detail-reporter"
@@ -372,6 +398,22 @@ const FeedbackDetailBody = ({
       )}
 
       <SectionCard title="Status" data-testid="feedback-detail-status">
+        {record.resolution && (
+          <Fact label="Resolution">
+            {FEEDBACK_RESOLUTION_LABELS[record.resolution]}
+            {record.resolutionDuplicateId && (
+              <Button
+                component="a"
+                href={`/admin?tab=feedback&feedbackId=${record.resolutionDuplicateId}`}
+                variant="plain"
+                size="sm"
+                data-testid="feedback-detail-duplicate-link"
+              >
+                Open original report
+              </Button>
+            )}
+          </Fact>
+        )}
         <Fact label="Status">
           <Select
             size="sm"
@@ -399,6 +441,7 @@ const FeedbackDetailBody = ({
           {record.updatedAt ? formatDateTime(record.updatedAt) : undefined}
         </Fact>
       </SectionCard>
+      <FeedbackHistory key={record._id} id={record._id} />
     </Stack>
   );
 };

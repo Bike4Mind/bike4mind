@@ -61,6 +61,10 @@ with the code endpoint. These seeded accounts exist **only on preview stages** (
 to run anywhere else). Once #9762 (edge-gated open signup) lands, you'll self-register on previews
 with your own inbox instead.
 
+## Rate-limit target runtime
+
+The zero-rate-limit scenario requires a production-mode API server. Local loopback targets default to development, where the server intentionally bypasses rate limits. Set `E2E_API_RUNTIME=production` when testing a production-mode local server, or `E2E_API_RUNTIME=development` for a remote development server. Preview targets default to production. Shared staging/production mutation restrictions still apply.
+
 ## Available Scripts
 
 Run from `apps/client/`:

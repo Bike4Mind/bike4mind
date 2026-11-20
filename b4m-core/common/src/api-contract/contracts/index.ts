@@ -6,13 +6,29 @@ import { sessionGetContract } from './sessionGet.contract';
 import { sessionDeleteContract } from './sessionDelete.contract';
 import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
+import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './webTools.contract';
 import { createCompletionContract } from './completions.contract';
+import { createCompletionRunContract, getCompletionRunUsageContract } from './completionRuns.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
-import { getClientConfigContract } from './clientConfig.contract';
+import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
+import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
+import {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  replyToBriefDecisionContract,
+} from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
+import {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './assistantInstructions.contract';
+import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
@@ -26,6 +42,7 @@ import {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
@@ -44,10 +61,14 @@ import {
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { getSessionByIdContract } from './sessionGetById.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
 import { listSessionFilesContract } from './sessionFiles.contract';
 import { searchSessionsContract } from './sessionSemanticSearch.contract';
@@ -66,6 +87,7 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import { listImageModelsContract } from './imageModels.contract';
 import {
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -80,6 +102,12 @@ import {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './musicGeneration.contract';
+import {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './sceneComposition.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 import {
   listProjectsContract,
@@ -114,6 +142,8 @@ import {
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './agents.contract';
 import {
   getClaudeBundleZipContract,
@@ -148,14 +178,31 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionDeleteContract,
   sessionCloneContract,
   executeToolContract,
+  searchWebContract,
+  fetchWebPageContract,
+  getCurrentWeatherContract,
   createCompletionContract,
+  createCompletionRunContract,
+  getCompletionRunUsageContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
   getClientConfigContract,
+  getPublicClientConfigContract,
+  approvePendingActionContract,
+  denyPendingActionContract,
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+  replyToBriefDecisionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
+  listHandoffDevicesContract,
+  sendSessionHandoffContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,
@@ -168,6 +215,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
   listEmbeddingModelsContract,
@@ -178,6 +226,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
+  getSessionByIdContract,
   listSessionQuestsContract,
   listSessionFilesContract,
   searchSessionsContract,
@@ -191,6 +240,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
   getVideoGenerationContract,
@@ -201,6 +251,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMusicGenerationContract,
   listMusicGenerationsContract,
   listMusicModelsContract,
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,
@@ -219,6 +273,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,
@@ -244,6 +301,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
   getClaudeBundleZipContract,
@@ -262,4 +321,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,
+  mintPersonaContract,
+  deletePersonaContract,
 ];

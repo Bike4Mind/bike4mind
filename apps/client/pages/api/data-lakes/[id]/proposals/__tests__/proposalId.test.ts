@@ -50,7 +50,9 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: h.admitProposedSource }));
+vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({
+  admitProposedSource: h.admitProposedSource,
+}));
 
 import handler from '../[proposalId]';
 

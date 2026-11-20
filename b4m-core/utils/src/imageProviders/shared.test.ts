@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
 import {
   classifyImageProviderError,
   dataUrlToOutput,
   decodeInlineOutput,
+  downloadImageOutput,
+  MAX_IMAGE_OUTPUT_BYTES,
   inputsWithRole,
   raceAbort,
   toDataUrl,
 } from './shared';
+import { ProviderOutputTooLargeError, ProviderOutputUnavailableError } from '../generationProviders/types';
 import type { ImageInputs } from './types';
 
 const withCause = (message: string, cause: unknown) => new Error(message, { cause });
@@ -103,7 +106,7 @@ describe('image data helpers', () => {
 
   it('refuses to decode output that is not inline', () => {
     expect(() => decodeInlineOutput({ kind: 'url', url: 'https://example.com/a.png' } as never)).toThrow(
-      'only produce inline output'
+      'expected inline image output'
     );
   });
 
@@ -142,5 +145,86 @@ describe('classifyImageProviderError input rejection', () => {
       message: 'mask must be PNG',
       raw: { reason: 'unsupported_mask', mimeType: 'image/gif' },
     });
+  });
+});
+
+describe('downloadImageOutput', () => {
+  const fetchMock = vi.fn();
+  const signal = new AbortController().signal;
+  const output = (url: string) => ({ kind: 'url' as const, url, requiresAuth: false });
+  const download = (url = 'https://cdn.example/a.png') => downloadImageOutput(output(url), signal);
+  const redirect = (location?: string, status = 302) =>
+    new Response(null, { status, headers: location ? { location } : {} });
+
+  const stubFetch = () => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('downloads the bytes', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(new Response(Buffer.from([1, 2, 3]), { status: 200 }));
+    expect((await download()).equals(Buffer.from([1, 2, 3]))).toBe(true);
+  });
+
+  it('refuses a non-https url without fetching', async () => {
+    stubFetch();
+    await expect(download('http://cdn.example/a.png')).rejects.toThrow(/https/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses inline output', async () => {
+    await expect(
+      downloadImageOutput({ kind: 'inline', base64: 'AA==', contentType: 'image/png' }, signal)
+    ).rejects.toThrow(/url image output/);
+  });
+
+  it('follows one https redirect and refuses a further one', async () => {
+    stubFetch();
+    fetchMock
+      .mockResolvedValueOnce(redirect('https://other.example/b.png'))
+      .mockResolvedValueOnce(new Response(Buffer.from([9]), { status: 200 }));
+    expect((await download()).equals(Buffer.from([9]))).toBe(true);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ redirect: 'error' });
+  });
+
+  it('refuses a redirect to http, without following it', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(redirect('http://other.example/b.png'));
+    await expect(download()).rejects.toThrow(/https/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a redirect without a location', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(redirect());
+    await expect(download()).rejects.toThrow(/location/);
+  });
+
+  it.each([403, 404, 410])('reports HTTP %s as an unavailable output', async status => {
+    stubFetch();
+    fetchMock.mockResolvedValue(new Response('gone', { status }));
+    await expect(download()).rejects.toBeInstanceOf(ProviderOutputUnavailableError);
+  });
+
+  it('treats a 503 as a plain failure the engine retries', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(new Response('busy', { status: 503 }));
+    const error = await download().catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(ProviderOutputUnavailableError);
+    expect((error as Error).message).toMatch(/503/);
+  });
+
+  it('refuses a body over the cap while streaming, with no content-length', async () => {
+    stubFetch();
+    const chunk = new Uint8Array(MAX_IMAGE_OUTPUT_BYTES / 2 + 1);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+    });
+    fetchMock.mockResolvedValue(new Response(body, { status: 200 }));
+    await expect(download()).rejects.toBeInstanceOf(ProviderOutputTooLargeError);
   });
 });

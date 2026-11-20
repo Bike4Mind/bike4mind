@@ -124,11 +124,11 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
   assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
 }));
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/imageGenerations/imageGeneration', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 

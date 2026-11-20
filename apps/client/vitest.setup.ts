@@ -56,6 +56,7 @@ if (typeof window !== 'undefined') {
 // Mock SST Resources to avoid deployment state dependency
 vi.mock('sst', () => ({
   Resource: {
+    historyImportBucket: { name: 'test-historyImportBucket' },
     MONGODB_URI: { value: 'mongodb://localhost:27017/test' },
     SESSION_SECRET: { value: 'test-session-secret' },
     JWT_SECRET: { value: 'test-jwt-secret' },
@@ -80,6 +81,7 @@ vi.mock('sst', () => ({
     APNS_TEAM_ID: { value: 'not-configured' },
     APNS_KEY: { value: 'not-configured' },
     APNS_TOPIC: { value: 'not-configured' },
+    FCM_SERVICE_ACCOUNT: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
     generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' },

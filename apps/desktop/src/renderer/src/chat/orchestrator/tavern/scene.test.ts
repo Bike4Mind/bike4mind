@@ -8,11 +8,16 @@ import {
   LABEL_SPAN,
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
+  OVERFLOW_POINTS,
+  QUEST_BOARD,
   TAVERN_SLOTS,
   assignCharacters,
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
+  needsYouGroups,
+  noteCapacity,
+  pinNotes,
   placeAgents,
   poseFor,
   zoneFor,
@@ -21,6 +26,8 @@ import {
   type SlotPoint,
 } from './scene';
 import { CHARACTER_COUNT, characterSprite } from './tavernArt';
+import { TAVERN_LAYOUT, tavernLayoutSchema } from './tavernLayout';
+import layoutJson from '../../../assets/orchestrator/tavern/layout.json';
 
 // testUtils needs a DOM; placement only reads id and state.
 const agentFixture = (id: string, state: AgentState): AgentView => ({
@@ -46,6 +53,119 @@ describe('zoneFor / poseFor', () => {
   ] as const)('%s -> %s, %s', (state: AgentState, zone, pose) => {
     expect(zoneFor(state)).toBe(zone);
     expect(poseFor(state)).toBe(pose);
+  });
+});
+
+describe('tavern layout data', () => {
+  const inScene = (point: SlotPoint) => point.x >= 0 && point.x <= 100 && point.y >= 0 && point.y <= 100;
+
+  it('gives every zone at least one slot and an overflow point, all inside the scene', () => {
+    for (const zone of ['workbench', 'bar', 'hearth', 'benches'] as const) {
+      expect(TAVERN_LAYOUT.slots[zone].length).toBeGreaterThan(0);
+      expect(TAVERN_LAYOUT.slots[zone].every(inScene)).toBe(true);
+      expect(inScene(TAVERN_LAYOUT.overflow[zone])).toBe(true);
+    }
+    for (const point of [TAVERN_LAYOUT.door, TAVERN_LAYOUT.innkeeper, TAVERN_LAYOUT.window, TAVERN_LAYOUT.hearthGlow]) {
+      expect(inScene(point)).toBe(true);
+    }
+    expect(TAVERN_LAYOUT.lights.every(inScene)).toBe(true);
+  });
+
+  it('rejects a layout with a slot off the scene or a zone with no slots', () => {
+    const offScene = structuredClone(layoutJson);
+    offScene.slots.bar[0].x = 101;
+    expect(tavernLayoutSchema.safeParse(offScene).success).toBe(false);
+    const empty = structuredClone(layoutJson);
+    empty.slots.hearth = [];
+    expect(tavernLayoutSchema.safeParse(empty).success).toBe(false);
+    expect(tavernLayoutSchema.safeParse(layoutJson).success).toBe(true);
+  });
+
+  it('hangs the quest board inside the scene, above every seat and clear of the Innkeeper', () => {
+    const { left, top, width, height } = QUEST_BOARD;
+    expect(left + width).toBeLessThanOrEqual(100);
+    expect(top + height).toBeLessThanOrEqual(100);
+    // A sprite's box is 15% of the scene tall above its feet; none may reach up over the board.
+    const spriteTop = (point: SlotPoint) => point.y - 15;
+    const seats = [...Object.values(TAVERN_SLOTS).flat(), ...Object.values(OVERFLOW_POINTS), DOOR_POINT];
+    expect(seats.every(point => spriteTop(point) >= top + height)).toBe(true);
+    const innkeeperClear = INNKEEPER_POINT.x - 7.5 >= left + width || INNKEEPER_POINT.x + 7.5 <= left;
+    expect(innkeeperClear).toBe(true);
+  });
+
+  it('rejects a quest board that holds fewer than two notes', () => {
+    const tiny = structuredClone(layoutJson);
+    tiny.questBoard.notes = 1;
+    expect(tavernLayoutSchema.safeParse(tiny).success).toBe(false);
+  });
+});
+
+describe('pinNotes', () => {
+  it('pins everything when it fits', () => {
+    expect(pinNotes([1, 2, 3], 3)).toEqual({ pinned: [1, 2, 3], hidden: [] });
+  });
+
+  it('gives the last place to the "+N" note once the board is over full', () => {
+    expect(pinNotes([1, 2, 3, 4, 5], 3)).toEqual({ pinned: [1, 2], hidden: [3, 4, 5] });
+  });
+});
+
+describe('noteCapacity', () => {
+  // Board heights (px) as measured live in the desktop app, from a large scene down to a tiny one.
+  it.each([
+    [145, 3],
+    [109, 2],
+    [77, 2],
+    [70, 2],
+    [55, 2],
+    [39, 1],
+    [28, 1],
+  ])('fits three quests on a %ipx board as %i places', (height, places) => {
+    expect(noteCapacity(height, 3)).toBe(places);
+  });
+
+  it.each([
+    [145, 3],
+    [109, 3],
+    [77, 2],
+    [39, 1],
+  ])('puts the last place of a %ipx board to the "+N" note for six quests (%i places)', (height, places) => {
+    expect(noteCapacity(height, 6)).toBe(places);
+    const { pinned, hidden } = pinNotes([1, 2, 3, 4, 5, 6], noteCapacity(height, 6));
+    expect(pinned).toHaveLength(places - 1);
+    expect(pinned.length + hidden.length).toBe(6);
+  });
+
+  it('never reports a capacity of every quest unless the full stack fits, so a clipped last note gets a "+N"', () => {
+    const { pinned, hidden } = pinNotes([1, 2, 3], noteCapacity(109, 3));
+    expect(pinned).toHaveLength(1);
+    expect(hidden).toHaveLength(2);
+  });
+
+  it('gives no place at all once not even the "+N" note fits, so the board is not drawn', () => {
+    expect(noteCapacity(16, 3)).toBe(0);
+    expect(noteCapacity(7, 6)).toBe(0);
+    expect(noteCapacity(0, 6)).toBe(0);
+  });
+
+  it('never exceeds the layout count and never shrinks as the board grows', () => {
+    let last = 0;
+    for (let height = 0; height <= 400; height += 1) {
+      const places = noteCapacity(height, 10);
+      expect(places).toBeLessThanOrEqual(QUEST_BOARD.notes);
+      expect(places).toBeGreaterThanOrEqual(last);
+      last = places;
+    }
+  });
+
+  it('keeps every quest reachable: pinned notes plus the hidden ones are all of them', () => {
+    for (const height of [0, 20, 40, 60, 80, 100, 150]) {
+      for (const total of [1, 2, 3, 4, 9]) {
+        const items = Array.from({ length: total }, (_, index) => index);
+        const { pinned, hidden } = pinNotes(items, noteCapacity(height, total));
+        expect([...pinned, ...hidden]).toEqual(items);
+      }
+    }
   });
 });
 
@@ -128,16 +248,19 @@ describe('assignCharacters', () => {
 
 describe('placeAgents', () => {
   const noHistory = new Map<string, Placement>();
+  const slotOf = (placement: Placement | undefined) => (placement?.kind === 'seat' ? placement.slot : undefined);
 
-  it('queues working agents past the 6 workbenches at the door with distinct indices', () => {
+  it('stacks working agents past the 6 workbenches in place, in roster order', () => {
     const agents = Array.from({ length: 12 }, (_, index) => agentFixture(`w${index}`, 'working'));
     const placements = placeAgents(agents, noHistory);
-    const atBench = [...placements.values()].filter(placement => placement.zone === 'workbench');
-    const atDoor = agents.slice(6).map(agent => placements.get(agent.id));
+    const atBench = [...placements.values()].filter(placement => placement.kind === 'seat');
+    const stacked = agents.slice(6).map(agent => placements.get(agent.id));
     expect(atBench).toHaveLength(6);
-    expect(atDoor.every(placement => placement?.zone === 'door')).toBe(true);
-    expect(atDoor.map(placement => placement?.slot)).toEqual([0, 1, 2, 3, 4, 5]);
-    expect(atDoor.every(placement => placement?.point === DOOR_POINT)).toBe(true);
+    expect(stacked.every(placement => placement?.kind === 'overflow' && placement.zone === 'workbench')).toBe(true);
+    expect(stacked.map(placement => (placement?.kind === 'overflow' ? placement.index : -1))).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    expect(stacked.every(placement => placement?.point === OVERFLOW_POINTS.workbench)).toBe(true);
   });
 
   it('keeps an unchanged agent in its slot when another agent leaves the zone', () => {
@@ -145,40 +268,93 @@ describe('placeAgents', () => {
       [agentFixture('a', 'working'), agentFixture('b', 'working'), agentFixture('c', 'working')],
       noHistory
     );
-    const cSlot = first.get('c')?.slot;
+    const cSlot = slotOf(first.get('c'));
     const second = placeAgents(
       [agentFixture('a', 'done'), agentFixture('b', 'working'), agentFixture('c', 'working')],
       first
     );
     expect(second.get('c')).toEqual(first.get('c'));
     expect(second.get('b')).toEqual(first.get('b'));
-    expect(second.get('c')?.slot).toBe(cSlot);
+    expect(slotOf(second.get('c'))).toBe(cSlot);
     expect(second.get('a')?.zone).toBe('hearth');
   });
 
   it('gives a newcomer the lowest free slot without disturbing kept agents', () => {
     const first = placeAgents([agentFixture('a', 'working'), agentFixture('b', 'working')], noHistory);
     const second = placeAgents([agentFixture('new', 'working'), agentFixture('b', 'working')], first);
-    expect(second.get('b')?.slot).toBe(first.get('b')?.slot);
-    expect(second.get('new')?.slot).toBe(first.get('a')?.slot);
+    expect(slotOf(second.get('b'))).toBe(slotOf(first.get('b')));
+    expect(slotOf(second.get('new'))).toBe(slotOf(first.get('a')));
   });
 
-  it('keeps door queue indices across an unrelated roster change', () => {
-    const agents = Array.from({ length: 8 }, (_, index) => agentFixture(`w${index}`, 'working'));
-    const first = placeAgents(agents, noHistory);
-    expect(first.get('w6')).toMatchObject({ zone: 'door', slot: 0 });
-    expect(first.get('w7')).toMatchObject({ zone: 'door', slot: 1 });
-    const reordered = [agents[7], ...agents.slice(0, 7), agentFixture('x', 'done')];
-    const second = placeAgents(reordered, first);
-    expect(second.get('w6')).toEqual(first.get('w6'));
-    expect(second.get('w7')).toEqual(first.get('w7'));
-  });
-
-  it('lets a queued agent take a seat once one frees up', () => {
+  it('lets a stacked agent take a seat once one frees up', () => {
     const agents = Array.from({ length: 7 }, (_, index) => agentFixture(`w${index}`, 'working'));
     const first = placeAgents(agents, noHistory);
+    expect(first.get('w6')).toMatchObject({ kind: 'overflow', zone: 'workbench' });
     const second = placeAgents([agentFixture('w0', 'done'), ...agents.slice(1)], first);
-    expect(second.get('w6')).toMatchObject({ zone: 'workbench', slot: first.get('w0')?.slot });
+    const freed = first.get('w0');
+    expect(second.get('w6')).toMatchObject({ kind: 'seat', zone: 'workbench', slot: slotOf(freed) });
+  });
+
+  it('seats a needs-you agent on a free bench once the bar is full, and keeps it there', () => {
+    const agents = Array.from({ length: 5 }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const first = placeAgents(agents, noHistory);
+    expect(first.get('n4')).toMatchObject({ kind: 'seat', zone: 'benches', slot: 0, borrowed: true });
+    const second = placeAgents([...agents, agentFixture('f', 'failed')], first);
+    expect(second.get('n4')).toEqual(first.get('n4'));
+    expect(second.get('f')).toMatchObject({ kind: 'seat', zone: 'benches', slot: 1, borrowed: false });
+  });
+
+  it('moves a borrowed needs-you agent back when the bar frees while borrowed', () => {
+    const needing = Array.from({ length: 5 }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const first = placeAgents(needing, noHistory);
+    expect(first.get('n4')).toMatchObject({ kind: 'seat', zone: 'benches', borrowed: true });
+    const failed = Array.from({ length: 6 }, (_, index) => agentFixture(`f${index}`, 'failed'));
+    const second = placeAgents([agentFixture('n0', 'working'), ...needing.slice(1), ...failed], first);
+    expect(second.get('n4')).toMatchObject({
+      kind: 'seat',
+      zone: 'bar',
+      slot: slotOf(first.get('n0')),
+      borrowed: false,
+    });
+    for (const agent of failed) expect(second.get(agent.id)).toMatchObject({ kind: 'seat', zone: 'benches' });
+  });
+
+  it("gives a needs-you agent the last calm agent's seat once every other seat is taken", () => {
+    const calm = [
+      ...Array.from({ length: 6 }, (_, index) => agentFixture(`w${index}`, 'working')),
+      ...Array.from({ length: 4 }, (_, index) => agentFixture(`d${index}`, 'done')),
+      ...Array.from({ length: 6 }, (_, index) => agentFixture(`f${index}`, 'failed')),
+    ];
+    const needing = Array.from({ length: 6 }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const placements = placeAgents([...calm, ...needing], noHistory);
+    for (const agent of needing) expect(placements.get(agent.id)?.kind).toBe('seat');
+    expect(placements.get('f5')).toMatchObject({ kind: 'overflow', zone: 'benches', index: 1 });
+    expect(placements.get('f4')).toMatchObject({ kind: 'overflow', zone: 'benches', index: 0 });
+    expect(placements.get('f3')?.kind).toBe('seat');
+  });
+
+  it('stacks a needs-you agent only once every seat in the room holds one', () => {
+    const agents = Array.from({ length: 21 }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const placements = placeAgents(agents, noHistory);
+    expect([...placements.values()].filter(placement => placement.kind === 'seat')).toHaveLength(20);
+    expect(placements.get('n20')).toMatchObject({ kind: 'overflow', zone: 'bar', index: 0 });
+  });
+
+  it('places everyone in a busy room of 16 with 7 done, the extra done agents by the hearth', () => {
+    const agents = [
+      ...Array.from({ length: 7 }, (_, index) => agentFixture(`d${index}`, 'done')),
+      ...Array.from({ length: 6 }, (_, index) => agentFixture(`w${index}`, 'working')),
+      agentFixture('n0', 'needs-you'),
+      agentFixture('f0', 'failed'),
+      agentFixture('i0', 'idle'),
+    ];
+    const placements = placeAgents(agents, noHistory);
+    expect(placements.size).toBe(agents.length);
+    const hearthStack = [...placements.values()].filter(
+      placement => placement.kind === 'overflow' && placement.zone === 'hearth'
+    );
+    expect(hearthStack).toHaveLength(3);
+    expect([...placements.values()].filter(placement => placement.kind === 'overflow')).toHaveLength(3);
   });
 
   it('never puts two agents in the same zone and slot', () => {
@@ -188,11 +364,16 @@ describe('placeAgents', () => {
     for (let round = 0; round < 3; round++) {
       const shuffled = agents.map((agent, index) => ({ ...agent, state: states[(index + round) % states.length] }));
       const placements = placeAgents(shuffled, previous);
-      const keys = [...placements.values()].map(placement => `${placement.zone}:${placement.slot}`);
+      const keys = [...placements.values()].map(placement =>
+        placement.kind === 'seat'
+          ? `${placement.zone}:${placement.slot}`
+          : `${placement.zone}:overflow:${placement.index}`
+      );
       expect(new Set(keys).size).toBe(keys.length);
       expect(placements.size).toBe(agents.length);
-      for (const placement of placements.values()) {
-        if (placement.zone !== 'door') expect(placement.point).toBe(TAVERN_SLOTS[placement.zone][placement.slot]);
+      for (const [id, placement] of placements) {
+        if (placement.kind === 'seat') expect(placement.point).toBe(TAVERN_SLOTS[placement.zone][placement.slot]);
+        else expect(shuffled.find(agent => agent.id === id)?.state).not.toBe('needs-you');
       }
       previous = placements;
     }
@@ -282,6 +463,17 @@ describe('nameLabelLayout', () => {
     expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.front - 0.1 }, 2)).toBe(100);
   });
 
+  it('keeps every label inside the scene, so a seat by the wall never has its name cut off', () => {
+    const points = allSeats();
+    const layout = nameLabelLayout(points);
+    for (const [id, label] of layout) {
+      const { x } = points.get(id)!;
+      expect(x - label.maxWidth / 2).toBeGreaterThanOrEqual(0);
+      expect(x + label.maxWidth / 2).toBeLessThanOrEqual(100);
+    }
+    expect(nameLabelLayout(new Map([['wall', { x: 95, y: 50 }]])).get('wall')?.maxWidth).toBeCloseTo(9);
+  });
+
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {
     const points = new Map<string, SlotPoint>([
       ['left', { x: 50, y: 50 }],
@@ -294,5 +486,44 @@ describe('nameLabelLayout', () => {
     expect(layout.get('right')?.shown).toBe(false);
     expect(layout.get('left')?.maxWidth).toBeLessThan(NAME_LABEL_MIN_WIDTH);
     expect(overlapping(points, layout)).toEqual([]);
+  });
+});
+
+const needsYouBubbles = (seats: Parameters<typeof needsYouGroups>[0]) =>
+  new Map([...needsYouGroups(seats)].map(([id, group]) => [id, group.length]));
+
+describe('needsYouGroups', () => {
+  it('lists the agents a bubble speaks for left to right', () => {
+    expect(needsYouGroups([atBar('c', 2), atBar('a', 0), atBar('b', 1)])).toEqual(new Map([['b', ['a', 'b', 'c']]]));
+  });
+
+  const bar = TAVERN_SLOTS.bar;
+  const atBar = (id: string, slot: number) => ({ id, zone: 'bar' as const, point: bar[slot] });
+
+  it('gives a lone waiting agent its own bubble', () => {
+    expect(needsYouBubbles([atBar('a', 2)])).toEqual(new Map([['a', 1]]));
+  });
+
+  it('puts one bubble over the middle of a zone, speaking for everyone waiting there', () => {
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2)])).toEqual(new Map([['b', 3]]));
+  });
+
+  it('takes the leftmost of the two middle agents of an even group', () => {
+    expect(needsYouBubbles([atBar('b', 1), atBar('a', 0)])).toEqual(new Map([['a', 2]]));
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2), atBar('d', 3)])).toEqual(new Map([['b', 4]]));
+  });
+
+  it('keeps one bubble per zone', () => {
+    const bench = { id: 'e', zone: 'benches' as const, point: TAVERN_SLOTS.benches[0] };
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), bench])).toEqual(
+      new Map([
+        ['a', 2],
+        ['e', 1],
+      ])
+    );
+  });
+
+  it('draws no bubble when nobody is waiting', () => {
+    expect(needsYouBubbles([])).toEqual(new Map());
   });
 });

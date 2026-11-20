@@ -95,7 +95,10 @@ export const CreditBalanceChipView: FC<{
         onClick={onClick}
         data-testid="credit-balance-chip"
         aria-label={ariaLabel}
-        startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
+        startDecorator={
+          // Grey state: the same icon colour as the context ring and the cache chip's decorator.
+          <CreditIcon sx={{ fontSize: 14, ...(color === 'neutral' && { color: 'var(--joy-palette-text-icon)' }) }} />
+        }
         endDecorator={
           payerNote ? (
             <InfoRoundedIcon data-testid="credit-payer-mark" sx={{ fontSize: 14, color: 'inherit' }} />

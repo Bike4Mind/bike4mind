@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
@@ -22,6 +22,15 @@ vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
 }));
 vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
   useGetFabFile: (id: string) => ({ data: h.files[id] }),
+  isFabFileScanInFlight: () => false,
+}));
+
+vi.mock('@client/app/hooks/data/fileLineage', () => ({
+  useFileLineage: (fileId: string) => ({
+    isPending: false,
+    isError: false,
+    data: { fileId, ancestors: [], children: [], edges: [], truncated: false },
+  }),
 }));
 
 import ImageGallery from './ImageGallery';
@@ -81,6 +90,32 @@ describe('ImageGallery', () => {
     expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
   });
 
+  it('fits a cutout whole and crops a regular render to fill', () => {
+    const cutoutId = 'c'.repeat(24);
+    const renderId = 'd'.repeat(24);
+    h.jobs = [
+      job({
+        id: 'cutout',
+        purpose: 'cutout',
+        state: 'succeeded',
+        output: { fileId: cutoutId, contentType: 'image/png', bytes: 1 },
+      }),
+      job({ id: 'render', state: 'succeeded', output: { fileId: renderId, contentType: 'image/png', bytes: 1 } }),
+    ];
+    h.files = {
+      [cutoutId]: { fileUrl: 'https://files.example/cut.png' },
+      [renderId]: { fileUrl: 'https://files.example/r.png' },
+    };
+    render(<ImageGallery />, { wrapper: TestWrapper });
+
+    const [cutout, regular] = screen.getAllByTestId('image-job-image');
+    expect(cutout).toHaveAttribute('src', 'https://files.example/cut.png');
+    // AspectRatio sizes and fits only an img directly inside the element holding its data-first-child prop.
+    expect(cutout.parentElement).toHaveAttribute('data-first-child');
+    expect(getComputedStyle(cutout).objectFit).toBe('contain');
+    expect(getComputedStyle(regular).objectFit).toBe('cover');
+  });
+
   it('keeps a row the socket marked finished on Saving until its output arrives', () => {
     h.jobs = [job({ id: 'done', state: 'succeeded', output: null })];
     render(<ImageGallery />, { wrapper: TestWrapper });
@@ -93,5 +128,19 @@ describe('ImageGallery', () => {
     render(<ImageGallery />, { wrapper: TestWrapper });
     expect(screen.getByTestId('image-job-unviewable')).toHaveTextContent('could not be added to your Files');
     expect(screen.queryByTestId('image-job-image-loading')).not.toBeInTheDocument();
+  });
+
+  it('opens the trail from a saved take and offers none without a file', () => {
+    h.jobs = [
+      job({ id: 'done', state: 'succeeded', output: { fileId: 'c'.repeat(24), contentType: 'image/png', bytes: 1 } }),
+      job({ id: 'kept-out', state: 'succeeded', output: { fileId: null, contentType: 'image/png', bytes: 1 } }),
+    ];
+    render(<ImageGallery />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('image-job-trail-btn-kept-out')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-trail-dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('image-job-trail-btn-done'));
+    expect(screen.getByTestId('studio-trail-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('studio-trail')).toBeInTheDocument();
   });
 });

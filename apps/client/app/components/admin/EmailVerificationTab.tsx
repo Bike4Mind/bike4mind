@@ -1,8 +1,7 @@
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
+import { Button, MenuItem, Stack, Typography } from '@mui/joy';
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
@@ -24,6 +23,7 @@ import {
 } from './shared';
 import { ADMIN_PAGE_SIZES, ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 import UserIdChip from './Users/UserIdChip';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface User {
   _id: string;
@@ -258,37 +258,24 @@ const RowMenu = ({
   return (
     <AdminPermissionAction requirement="users:moderate">
       {missing => (
-        <Dropdown>
-          <MenuButton
-            disabled={missing}
-            slots={{ root: IconButton }}
-            slotProps={{
-              root: {
-                size: 'sm',
-                variant: 'plain',
-                'aria-label': `Actions for ${user.username || user.email}`,
-                sx: { ...adminFocus, color: 'admin.inkMuted' },
-              },
-            }}
-            data-testid={`email-verification-row-actions-${user._id}`}
-          >
-            <MoreHorizIcon sx={{ fontSize: 18 }} />
-          </MenuButton>
-          <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-            {/* While an address change is pending, its link is the only action offered. */}
-            {user.pendingEmail &&
-              item(
-                'resend-email-change',
-                resending ? 'Sending email change link' : 'Resend email change link',
-                resending
-              )}
-            {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
-            {!user.pendingEmail &&
-              !user.emailVerified &&
-              item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
-            {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
-          </Menu>
-        </Dropdown>
+        <RowActionsMenu
+          testId={`email-verification-row-actions-${user._id}`}
+          ariaLabel={`Actions for ${user.username || user.email}`}
+          disabled={missing}
+        >
+          {/* While an address change is pending, its link is the only action offered. */}
+          {user.pendingEmail &&
+            item(
+              'resend-email-change',
+              resending ? 'Sending email change link' : 'Resend email change link',
+              resending
+            )}
+          {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
+          {!user.pendingEmail &&
+            !user.emailVerified &&
+            item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
+          {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
+        </RowActionsMenu>
       )}
     </AdminPermissionAction>
   );

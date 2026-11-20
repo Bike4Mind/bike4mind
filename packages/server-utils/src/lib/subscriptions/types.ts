@@ -195,6 +195,8 @@ export interface ISubscription {
    * date (which leaves `cancelAtPeriodEnd` false), so this is the "will end" signal.
    */
   cancelAt?: Date | null;
+  /** Actual Stripe termination time, distinct from the cancellation request. */
+  endedAt?: Date | null;
   trialEndsAt?: Date | null;
   stripeCustomerId?: string;
   /**
@@ -257,6 +259,8 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
     ownerType: SubscriptionOwnerType,
     ownerIds: readonly string[]
   ): Promise<ISubscription[]>;
+
+  hasLapsedSubscriptionsByOwners(ownerType: SubscriptionOwnerType, ownerIds: readonly string[]): Promise<boolean>;
 
   /**
    * Every non-terminal subscription an owner has - deliberately a deny-list, because a

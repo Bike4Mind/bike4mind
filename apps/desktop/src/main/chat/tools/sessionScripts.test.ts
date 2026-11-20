@@ -549,11 +549,21 @@ describe('gitRunsConfiguredProgram', () => {
     ['git -c core.fsmonitor=./x status', 'core.fsmonitor'],
     ["git -c 'core.hooksPath=h' commit", 'core.hookspath'],
     ['sudo git -c core.sshCommand=ssh push', 'core.sshcommand'],
+    ['git -c core.fsmonitor status', 'core.fsmonitor'],
+    ['git --config-env core.hooksPath=H commit', 'core.hookspath'],
+    ['git -c core.hooksPath=/dev/null -c core.fsmonitor=./x status', 'core.fsmonitor'],
+    ['git -c core.fsmonitor=$X status', 'core.fsmonitor'],
   ])('flags %s', (command, key) => {
     expect(gitRunsConfiguredProgram([{ words: command }])?.toLowerCase()).toBe(key);
   });
 
-  it.each(['git status', 'git -c color.ui=never log', 'echo -c core.fsmonitor=x'])('ignores %s', command => {
+  it.each([
+    'git status',
+    'git -c color.ui=never log',
+    'echo -c core.fsmonitor=x',
+    'git -c core.hooksPath=/dev/null commit -m x',
+    "git -c 'core.fsmonitor=false' status",
+  ])('ignores %s', command => {
     expect(gitRunsConfiguredProgram([{ words: command }])).toBeNull();
   });
 });

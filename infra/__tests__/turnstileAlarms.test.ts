@@ -120,6 +120,24 @@ describe('turnstile policy alarm wiring', () => {
     );
   });
 
+  it('counts browser-reported client failures without an alarm', async () => {
+    await loadAlarms();
+    expect(resources.filter).toHaveBeenCalledWith('turnstileClientFailureFilter', {
+      name: 'test-app-production-turnstile-client-failure',
+      logGroupName: expect.objectContaining({ value: 'server-logs' }),
+      pattern: '{ $.message = "turnstile-client-failure" }',
+      metricTransformation: {
+        name: 'TurnstileClientFailures',
+        namespace: 'test-app/production/Turnstile',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    const alarmNames = resources.alarm.mock.calls.map(call => call[0]);
+    expect(alarmNames).toEqual(['turnstilePolicyInactive', 'turnstileMisconfigured']);
+    expect(resources.alarm.mock.calls.every(call => call[1].metricName !== 'TurnstileClientFailures')).toBe(true);
+  });
+
   it('creates no resources on an unmonitored stage', async () => {
     await loadAlarms('preview');
     expect(resources.filter).not.toHaveBeenCalled();

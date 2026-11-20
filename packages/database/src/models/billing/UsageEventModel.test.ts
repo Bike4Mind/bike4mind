@@ -48,6 +48,19 @@ const record = (overrides: Partial<IUsageEventInput> = {}) =>
 
 describe('UsageEventRepository', () => {
   describe('record', () => {
+    it('persists run lineage as sent, leaving an absent purpose absent', async () => {
+      const run = { runId: 'run-1', role: 'worker' as const, taskId: 'task-1', parentSessionId: 'root-session' };
+      const doc = await record({ feature: 'completion_api', run });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored?.run).toEqual(run);
+      expect(stored?.run).not.toHaveProperty('purpose');
+    });
+
+    it('rejects a run role outside the vocabulary', async () => {
+      await expect(record({ run: { runId: 'run-1', role: 'boss' as unknown as 'root' } })).rejects.toThrow(/role/);
+    });
+
     it('persists an event with all quantities and money fields', async () => {
       const doc = await record({
         providerInputTokens: 900,
@@ -72,6 +85,13 @@ describe('UsageEventRepository', () => {
       const doc = await record();
       expect(doc!.source).toBeUndefined();
       expect(doc!.apiKeyId).toBeUndefined();
+    });
+
+    it('persists prospective project attribution without populating historical rows', async () => {
+      const attributed = await record({ projectId: 'project-1' });
+      const unassigned = await record();
+      expect((await UsageEvent.findById(attributed!.id).lean())!.projectId).toBe('project-1');
+      expect((await UsageEvent.findById(unassigned!.id).lean())!.projectId).toBeUndefined();
     });
 
     it('round-trips the price stamp: source, string row id, rates and per-turn usage', async () => {
@@ -538,6 +558,25 @@ describe('UsageEventRepository', () => {
     const orgEvent = (overrides: Partial<IUsageEventInput> = {}) =>
       record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, ...overrides });
 
+    it('reconciles persisted projects and Unassigned within the selected owner and period', async () => {
+      await orgEvent({ projectId: 'p1', creditsCharged: 70 });
+      await orgEvent({ creditsCharged: 30 });
+      await orgEvent({ projectId: 'p2', creditsCharged: 5 });
+      await orgEvent({ ownerId: 'other-org', projectId: 'p1', creditsCharged: 999 });
+      const old = await orgEvent({ projectId: 'old', creditsCharged: 999 });
+      await UsageEvent.collection.updateOne({ _id: old!._id }, { $set: { createdAt: new Date('2020-01-01') } });
+
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization, 7);
+      expect(summary.byProject).toMatchObject([
+        { projectId: 'p1', creditsCharged: 70, requests: 1 },
+        { projectId: null, creditsCharged: 30, requests: 1 },
+        { projectId: 'p2', creditsCharged: 5, requests: 1 },
+      ]);
+      for (const rows of [summary.byProject, summary.byMember, summary.byModel, summary.overTime]) {
+        expect(rows.reduce((sum, row) => sum + row.creditsCharged, 0)).toBe(summary.totals.creditsCharged);
+      }
+    });
+
     it('never exposes executed model fields', async () => {
       await orgEvent();
       await orgEvent({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
@@ -609,6 +648,7 @@ describe('UsageEventRepository', () => {
       expect(summary).toEqual({
         overTime: [],
         byMember: [],
+        byProject: [],
         byModel: [],
         byFeature: [],
         totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },

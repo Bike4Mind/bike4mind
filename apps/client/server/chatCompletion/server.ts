@@ -4,12 +4,15 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
+import { requireConfiguredSecret } from '@bike4mind/common';
+import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
-import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
 import { requireOriginVerify } from './originVerify';
+import { registerSecretsAtRest } from './secretsAtRestBoot';
 import { createTaskProtection } from './taskProtection';
 
 /**
@@ -38,6 +41,10 @@ import { createTaskProtection } from './taskProtection';
 // Desktop). The cloud container pins PORT=8080 via the Dockerfile ENV, and the ALB
 // forwards 80->8080, so production is unaffected by this default.
 const PORT = Number(process.env.PORT) || 8788;
+
+// Chat settles org credits here, and this server loads neither baseApi nor queueHandlers/utils.
+registerOrgAlertObserver();
+
 const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
 // How long SIGTERM lets in-flight work finish before the process exits: ~10s under the ECS task
@@ -122,7 +129,7 @@ export function createApp() {
   // Lambda via NAT); keep any other direct-only route above this line too.
   app.use(requireOriginVerify);
 
-  // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
+  // Every user-facing route below (completions, embed chat) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
   app.use(checkBlockedIP({ surface: 'app' }));
 
@@ -130,11 +137,6 @@ export function createApp() {
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
   registerExternalRoutes(app, track);
-
-  // CLI HTTP->WebSocket completions (POST payload here, chunks stream over the CLI's
-  // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
-  // join the same drain set.
-  registerWsCompletionRoutes(app, track);
 
   // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
   // Same always-on rationale + drain set as the completions route.
@@ -157,13 +159,22 @@ export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
   return false;
 }
 
+/** Throws, naming the secret, when one this service verifies with is still a placeholder. */
+export function assertBootSecretsConfigured(): void {
+  requireConfiguredSecret('CHAT_COMPLETION_INTERNAL_SECRET', Resource.CHAT_COMPLETION_INTERNAL_SECRET.value);
+  requireConfiguredSecret('JWT_SECRET', Config.JWT_SECRET);
+}
+
 async function main() {
   installConsoleRedaction();
+  assertBootSecretsConfigured();
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the
   // network-error class without exiting. Must run before any request is served.
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
+
+  registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
 
   const app = createApp();
 

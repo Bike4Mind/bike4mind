@@ -112,6 +112,34 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "Attached menu.jpg", files: ["file-1"]))
   }
 
+  func testAScannedPDFQueuesOfflineAndResumesAsOneSessionAttachmentAfterRelaunch() async throws {
+    let api = FakeCaptureAPI()
+    await api.setCreateUploadError(APIError.offline)
+    let first = rig(api: api)
+    let source = temp.url.appending(path: "Scan.pdf")
+    let bytes = Data("%PDF-1.7 scan payload".utf8)
+    try bytes.write(to: source)
+    let item = ShareItem.pdf(
+      SharedFile(fileURL: source, fileName: "Scan.pdf", mimeType: "application/pdf", byteCount: bytes.count))
+    let jobs = try await first.engine.submit([item], to: session, note: "Summarize this scan")
+    XCTAssertEqual(jobs.count, 1)
+    let job = try XCTUnwrap(jobs.first)
+    XCTAssertEqual(job.stage, .queued)
+    try FileManager.default.removeItem(at: source)
+
+    await api.setCreateUploadError(nil)
+    let relaunched = rig(api: api, store: FileUploadJobStore(directory: temp.url))
+    await relaunched.engine.resume()
+    let started = try XCTUnwrap(relaunched.uploader.started.first)
+    XCTAssertEqual(relaunched.uploader.started.count, 1)
+    XCTAssertEqual(started.contentType, "application/pdf")
+    XCTAssertEqual(try Data(contentsOf: started.file), bytes)
+    relaunched.uploader.finish(job.id)
+    try await eventually { stage(relaunched, job.id) == .done }
+    let calls = await api.calls
+    XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "Summarize this scan", files: ["file-1"]))
+  }
+
   func testSharedTextToASessionIsAMessageWithNoUpload() async throws {
     let rig = rig()
     let link = URL(string: "https://example.com/a")!
@@ -559,25 +587,24 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertFalse(requeue(queued))
   }
 
-  func testObserversSeeEveryTransition() async throws {
+  func testObserversSeeInitialQueuedUploadingAndLatestCompletion() async throws {
     let rig = rig()
     let stream = await rig.engine.updates()
-    let collector = Task { () -> [[UploadStage]] in
-      var seen: [[UploadStage]] = []
-      for await jobs in stream {
-        seen.append(jobs.map(\.stage))
-        if jobs.first?.stage == .done { break }
-      }
-      return seen
-    }
-    let job = try only(await rig.engine.submit([photo()], to: lake, note: nil))
+    var iterator = stream.makeAsyncIterator()
+    let initial = await iterator.next()
+    XCTAssertEqual(initial?.map(\.stage), [])
+    let job = try only(await rig.engine.enqueue([photo()], to: lake, note: nil))
+    let queued = await iterator.next()
+    XCTAssertEqual(queued?.map(\.stage), [.queued])
+    await rig.engine.resume()
+    let uploading = await iterator.next()
+    XCTAssertEqual(uploading?.map(\.stage), [.uploading])
     rig.uploader.finish(job.id)
-    let seen = await collector.value
-    XCTAssertEqual(seen.first, [])
-    XCTAssertTrue(seen.contains([.queued]))
-    XCTAssertTrue(seen.contains([.uploading]))
-    XCTAssertTrue(seen.contains([.registering]))
-    XCTAssertEqual(seen.last, [.done])
+    while let jobs = await iterator.next() {
+      if jobs.first?.stage == .done { return }
+      XCTAssertEqual(jobs.map(\.stage), [.registering])
+    }
+    XCTFail("Updates ended before completion")
   }
 }
 

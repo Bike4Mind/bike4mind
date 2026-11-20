@@ -68,6 +68,9 @@ export type GetEffectiveLLMApiKeysAdapters = GetEffectiveApiKeyAdapters & {
 export const envKey = (name: string): string | null =>
   (process.env.B4M_SELF_HOST === 'true' && process.env[name]?.trim()) || null;
 
+/** What getEffectiveLLMApiKeys returns in place of a user's own key once it has expired. */
+export const EXPIRED_API_KEY = 'expired';
+
 export const getSerperKey = async (adapters: GetEffectiveApiKeyAdapters) => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('SerperKey');
@@ -172,6 +175,21 @@ const sharedAdminKeySources = new WeakMap<object, SharedAdminKeyProviders>();
 export const sharedAdminKeyProviders = (keys: object): SharedAdminKeyProviders | undefined =>
   sharedAdminKeySources.get(keys);
 
+/** Providers getEffectiveLLMApiKeys can resolve from a user's own saved key. */
+export type UserKeyProvider =
+  'openai' | 'anthropic' | 'gemini' | 'bfl' | 'xai' | 'kimi' | 'deepseek' | 'voyageai' | 'typesafe';
+
+// Side channel like sharedAdminKeySources, so the returned key object keeps its shape.
+const userKeySources = new WeakMap<object, ReadonlySet<UserKeyProvider>>();
+
+/**
+ * For a result of getEffectiveLLMApiKeys: which providers resolved to the user's own saved key
+ * (including an expired one), as opposed to a platform admin-setting or self-host env key. Lets a
+ * caller tell a provider rejecting the user's key (user-side) from one rejecting ours (outage).
+ * Empty for any other object.
+ */
+export const userKeyProviders = (keys: object): ReadonlySet<UserKeyProvider> => userKeySources.get(keys) ?? new Set();
+
 export const getEffectiveLLMApiKeys = async (
   userId: string | null,
   adapters: GetEffectiveLLMApiKeysAdapters,
@@ -266,7 +284,7 @@ export const getEffectiveLLMApiKeys = async (
   const ollamaEnabled = enableOllama === 'true' || (enableOllama as unknown) === true;
   const keyOrExpired = (apiKey: IApiKeyDocument | null) => {
     if (!apiKey) return null;
-    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return 'expired';
+    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return EXPIRED_API_KEY;
     return apiKey.apiKey;
   };
 
@@ -298,5 +316,22 @@ export const getEffectiveLLMApiKeys = async (
     openai: !openaiUserKey && !!openaiDemoKey,
     anthropic: !anthropicUserKey && !!anthropicDemoKey,
   });
+  const userKeyByProvider: Record<UserKeyProvider, IApiKeyDocument | null> = {
+    openai: openaiUserKey,
+    anthropic: anthropicUserKey,
+    gemini: geminiUserKey,
+    bfl: bflUserKey,
+    xai: xaiUserKey,
+    kimi: kimiUserKey,
+    deepseek: deepseekUserKey,
+    voyageai: voyageaiUserKey,
+    typesafe: typesafeUserKey,
+  };
+  userKeySources.set(
+    keys,
+    new Set(
+      (Object.keys(userKeyByProvider) as UserKeyProvider[]).filter(provider => userKeyByProvider[provider] !== null)
+    )
+  );
   return keys;
 };

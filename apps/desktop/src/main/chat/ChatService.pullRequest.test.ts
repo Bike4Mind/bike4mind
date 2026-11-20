@@ -110,7 +110,7 @@ describe('ChatService set_session_pull_request', () => {
     expect(events.some(event => event.type === 'tool-start' && event.call.approvalId)).toBe(false);
   });
 
-  it('is withheld from, and refused in, a turn the user did not type', async () => {
+  it('is declared in, but refused by, a turn the user did not type', async () => {
     const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
     if (!created.ok) throw new Error(created.error);
     const { id } = created.session;
@@ -121,7 +121,7 @@ describe('ChatService set_session_pull_request', () => {
     });
     expect(started).toEqual({ ok: true });
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
-    expect(declared(0)).not.toContain('set_session_pull_request');
+    expect(declared(0)).toContain('set_session_pull_request');
 
     streams[0].write(
       frame({
@@ -134,7 +134,7 @@ describe('ChatService set_session_pull_request', () => {
       () => events.find(event => event.type === 'tool-end' && event.call.name === 'set_session_pull_request'),
       { timeout: 5000, interval: 5 }
     );
-    expect(JSON.stringify(end)).toContain('The PR bar can only be changed in a conversation the user is in.');
+    expect(JSON.stringify(end)).toContain('The PR bar can only be changed in a turn the user typed.');
     expect(dismiss).not.toHaveBeenCalled();
     expect(bindForAgent).not.toHaveBeenCalled();
   });

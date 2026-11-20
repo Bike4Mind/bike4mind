@@ -14,6 +14,22 @@ import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
+/**
+ * How long a pending action stays answerable (ms). Shared by the web and public-API resolver, the brief
+ * composer and the brief serializer so the three agree on when an approval has lapsed.
+ */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+export const PENDING_ACTION_OUTCOMES = ['approved', 'denied', 'lapsed'] as const;
+export type PendingActionResolutionOutcome = (typeof PENDING_ACTION_OUTCOMES)[number];
+
+/** The last pending action taken off a quest, kept so a brief can report what became of it. */
+export interface IPendingActionResolution {
+  ts: number;
+  outcome: PendingActionResolutionOutcome;
+  at: Date;
+}
+
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
   tool: string;
@@ -97,20 +113,35 @@ export type SessionProps = {
 /**
  * Machine-readable error classifiers for `type: 'error'` quests. Set server-side
  * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
- * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
- * derives its values from this tuple, so the two can never drift.
+ * These are the billing classifiers a thrown error resolves to; the published
+ * quest schemas derive from QUEST_OUTCOME_ERROR_CODES below, which adds the one
+ * non-billing code.
  *
  * SSE-frame scoped, and a NARROWING of the platform-wide `API_ERROR_CODES`: a
- * quest fails for billing reasons, never for the provider-configuration reasons
- * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
+ * thrown quest error is classified for billing reasons, never for the
+ * provider-configuration reasons the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
  * fails the build.
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'spend_frozen',
+  'free_quest_limit_reached',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
+
+/**
+ * Every classifier a stored quest's `errorCode` can hold: the billing codes above plus
+ * `content_blocked`, set when prompt moderation refuses the turn. A separate tuple because
+ * getQuestErrorCode and resolveQuestErrorCode read QUEST_ERROR_CODES off thrown errors to pick
+ * the billing branches, which a moderation refusal must never take.
+ */
+export const QUEST_OUTCOME_ERROR_CODES = [
+  ...QUEST_ERROR_CODES,
+  'content_blocked',
+] as const satisfies readonly ApiErrorCode[];
+export type QuestOutcomeErrorCode = (typeof QUEST_OUTCOME_ERROR_CODES)[number];
 
 /**
  * Single source of truth for `IChatHistoryItem.type` / quest `type`. Restated by hand in
@@ -266,7 +297,7 @@ export interface IChatHistoryItem {
   /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
 
-  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  /** Generation jobs (video, music, image) this quest started, one live card each. Read through questGenerationJobs. */
   generationJobs?: GenerationJobRef[];
 
   /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
@@ -274,6 +305,15 @@ export interface IChatHistoryItem {
 
   /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentMusicTracksClaimed?: number;
+
+  /** Agent-mode images this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentImagesClaimed?: number;
+
+  /** Agent-mode speech clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSpeechClipsClaimed?: number;
+
+  /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSoundEffectsClaimed?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
@@ -286,16 +326,21 @@ export interface IChatHistoryItem {
   /**
    * Machine-readable classifier for an `type: 'error'` quest, set server-side so
    * the client can render a targeted error state instead of the raw `reply` text.
-   * Currently only `insufficient_credits` (drives the inline "Add Credits" CTA in
-   * the reply bubble); extend the union as other errors gain bespoke UI.
+   * `insufficient_credits` drives the inline "Add Credits" CTA in the reply bubble;
+   * `content_blocked` marks a turn prompt moderation refused.
    */
-  errorCode?: QuestErrorCode;
+  errorCode?: QuestOutcomeErrorCode;
 
   /**
    * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
    * part of any client or poll payload: it names the caller's endpoint and signing key.
    */
   callback?: IQuestCallback;
+
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item
@@ -450,6 +495,9 @@ export interface IChatHistoryItem {
    *   - other: MCP tool confirmation (params contain tool arguments)
    */
   pendingAction?: IPendingAction;
+
+  /** Written by the claim that takes `pendingAction` off the quest (pendingActionExecutor.claimPendingAction). */
+  pendingActionResolution?: IPendingActionResolution;
 
   /**
    * Slack notification info for async message editing
@@ -717,6 +765,9 @@ export interface ISession {
   id: string;
   name: string;
   userId: string;
+  /** Immutable ownership at creation; absent means personal or legacy, never inferred for deletion. */
+  retentionOrganizationId?: string;
+  organizationId?: string;
   lastUpdated: Date;
   firstCreated: Date;
   language?: string;

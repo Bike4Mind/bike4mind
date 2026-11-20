@@ -1,0 +1,36 @@
+export function readTeamPreference(key: string): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeTeamPreference(key: string, value: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be unavailable in private browsing; navigation must still work.
+  }
+}
+
+export const recentTeamsKey = (userId: string) => `team-recents:${userId}`;
+
+export function rememberTeam(userId: string, teamId: string): void {
+  const key = recentTeamsKey(userId);
+  writeTeamPreference(key, [teamId, ...readTeamPreference(key).filter(id => id !== teamId)].slice(0, 10));
+}
+
+/** Personal account first, then teams most-recently-used first; ties keep their input order. */
+export function orderAccountsByRecentTeams<T extends { id: string; personal: boolean }>(
+  accounts: readonly T[],
+  recentTeamIds: readonly string[]
+): T[] {
+  const rank = (account: T) => {
+    if (account.personal) return -1;
+    const index = recentTeamIds.indexOf(account.id);
+    return index === -1 ? recentTeamIds.length : index;
+  };
+  return [...accounts].sort((a, b) => rank(a) - rank(b));
+}

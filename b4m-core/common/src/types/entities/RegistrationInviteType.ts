@@ -42,6 +42,7 @@ export interface IRegistrationInviteRepository extends IBaseRepository<IRegInvit
   findByCode: (code: string) => Promise<IRegistrationInvite | null>;
   createMany: (invites: Omit<IRegInviteDocument, 'id'>[]) => Promise<IRegInviteDocument[]>;
   deleteByIds: (ids: string[]) => Promise<void>;
+  reopenUnlessClosed: (inviteId: string) => Promise<void>;
   findAll: () => Promise<IRegInviteDocument[]>;
   formatRegInvites: (invites: Partial<IRegistrationInvite>, ids: string[]) => Promise<IRegInviteDocument[]>;
 }

@@ -47,6 +47,11 @@ export function hasDeveloperUserTag(tags: readonly string[] | null | undefined):
   return (tags ?? []).some(tag => developerTags.includes(tag));
 }
 
+/** Admins and developer-tagged users are never held to the free-tier gates (model allowlist, paid-only Studio surfaces). */
+export function isFreeTierExempt(user: { isAdmin?: boolean | null; tags?: readonly string[] | null }): boolean {
+  return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);
+}
+
 /**
  * True if any of the user's tags grants Tavern access. Matched case-insensitively
  * against 'tavern' to mirror the sidebar nav gate (`SidenavNav`) exactly.
@@ -56,8 +61,8 @@ export function hasTavernUserTag(tags: readonly string[] | null | undefined): bo
 }
 
 /**
- * True if the user may access the Tavern HUD surface: admins, or holders of the
- * 'tavern' tag. The single source of truth for "can this user reach the Tavern",
+ * True if the user may access the Tavern HUD surface: admins, developers, or
+ * holders of the 'tavern' tag. The single source of truth for "can this user reach the Tavern",
  * consumed by BOTH the client route/tab guard AND the server-side API guards
  * (`ensureTavernAccess`), so the UI grant and the API grant can never drift -
  * the same fail-open class that motivated `hasDeveloperUserTag`.
@@ -66,7 +71,7 @@ export function canAccessTavern(
   user: { isAdmin?: boolean | null; tags?: readonly string[] | null } | null | undefined
 ): boolean {
   if (!user) return false;
-  return !!user.isAdmin || hasTavernUserTag(user.tags);
+  return !!user.isAdmin || hasDeveloperUserTag(user.tags) || hasTavernUserTag(user.tags);
 }
 
 export enum AuthStrategy {
@@ -162,6 +167,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   groups: true,
   isAdmin: true,
   adminPermissions: true,
+  adminRoleIds: true,
+  roleAdminPermissions: true,
   storageLimit: true,
   storageLimitOverride: true,
   planStorageLimit: true,
@@ -177,6 +184,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   moderation: true,
   disputePending: true,
   isSystem: true,
+  serviceAccountOrganizationId: true,
+  serviceAccountRetiredAt: true,
   subscribedUntil: true,
   photoUrl: true,
   systemFiles: true,
@@ -223,6 +232,12 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   acquisition: true,
   isSynthetic: true,
   isInternal: true,
+  accountSegment: true,
+  isPersona: true,
+  personaExpiresAt: true,
+  mfaEnforcement: true,
+  personaName: true,
+  personaOwnerId: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,
@@ -281,7 +296,7 @@ export const selfUserResponseSchema = z.object({
     .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
   _id: passthroughField,
-  mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),
+  mfa: redactedSubdocument(['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt']),
   googleDrive: redactedSubdocument(['expiresAt']),
   atlassianConnect: redactedSubdocument([
     'siteName',

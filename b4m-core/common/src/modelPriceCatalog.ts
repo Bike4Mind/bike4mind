@@ -25,6 +25,12 @@ export function resolveModelPriceRow(
 }
 
 /**
+ * Model types a per_token price row bills: text through applyModelPriceCatalog, realtime voice through
+ * pickRealtimeVoiceTier (apps/client/server/voice). Every other type bills from this build's model tables.
+ */
+export const PRICE_ROW_BILLED_MODEL_TYPES: ReadonlySet<string> = new Set(['text', 'realtime-voice']);
+
+/**
  * Overlay catalog prices onto assembled ModelInfo. Only per_token rows apply
  * here (they feed getTextModelCost via ModelInfo.pricing); per_minute and
  * per_image rows are consumed by their own settlement paths. A model with no

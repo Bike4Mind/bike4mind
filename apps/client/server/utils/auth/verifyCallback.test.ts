@@ -46,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
     update: (...args: unknown[]) => mockUpdateInvite(...args),
     claimUnused: (...args: unknown[]) => mockClaimInvite(...args),
     releaseClaim: (...args: unknown[]) => mockReleaseInviteClaim(...args),
+    reopenUnlessClosed: async () => undefined,
   },
   creditTransactionRepository: {},
   creditLotRepository: {},
@@ -1770,10 +1771,10 @@ describe('OAuth signup with an invite code carried through state', () => {
     );
   });
 
-  it('enrolls the default signup grant for a referral, ignoring the invite total and ReferralCreditsAmount', async () => {
+  it.each([0, 28])('enrolls the same OAuth grant with or without a referral under drip cap %s', async dripCap => {
     const settings: Record<string, string> = {
       signupGrantInitialCredits: '12',
-      signupGrantDripCap: '28',
+      signupGrantDripCap: String(dripCap),
       ReferralCreditsAmount: '5000',
     };
     mockFindSetting.mockImplementation(async (name: string) =>
@@ -1784,7 +1785,16 @@ describe('OAuth signup with an invite code carried through state', () => {
     const { err } = await runSelfServe();
 
     expect(err).toBeNull();
-    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 12, unlockCredits: 28 });
+    const referredGrant = mockCreate.mock.calls[0][0].signupGrant;
+    expect(referredGrant).toMatchObject({ signupCredits: 12, unlockCredits: dripCap });
+    mockCreate.mockClear();
+    mockInviteCodeFor.mockReturnValue(null);
+
+    const open = await runSelfServe();
+
+    expect(open.err).toBeNull();
+    expect(mockCreate.mock.calls[0][0].signupGrant).toEqual(referredGrant);
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
     expect(mockFindSetting).not.toHaveBeenCalledWith('ReferralCreditsAmount');
   });
 

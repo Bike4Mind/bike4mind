@@ -1,8 +1,10 @@
 import type { APIRequestContext, Browser, Page } from '@playwright/test';
 import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { apiCreateThrowawayUser } from './helpers/api';
-import { isProductionEnv } from './helpers/env';
+import { apiCreateThrowawayUser, apiGetAdminSettings, apiUpdateAdminSetting } from './helpers/api';
+import { isProductionEnv, isSharedRealEnv } from './helpers/env';
+import { getTestUsers } from './helpers/test-users';
+import { AdminPage } from './pages/AdminPage';
 import { BasePage } from './pages/BasePage';
 import { ModelSelectorPage } from './pages/ModelSelectorPage';
 import { NavigationPage } from './pages/NavigationPage';
@@ -165,5 +167,51 @@ test.describe('Balance explainer', () => {
     } finally {
       await close();
     }
+  });
+});
+
+// Hosted deployments meter credits unconditionally (isEnforceCreditsLocked in b4m-core/common/src/schemas/settings.ts):
+// settings/fetch reports it on, the admin switch is disabled, and settings/update refuses to turn it off.
+test.describe('Credit enforcement lock', () => {
+  test('enforceCredits reads as on and its admin switch is locked', async ({ request, browser, baseURL }) => {
+    const admin = getTestUsers().admin;
+    const settings = await apiGetAdminSettings(request, admin.accessToken);
+    // A missing row resolves to the hosted default, which is also on.
+    expect(settings.get('enforceCredits') ?? true).toBe(true);
+
+    const { page, close } = await openPageAs(browser, baseURL, admin);
+    try {
+      const adminPage = new AdminPage(page);
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToGrowthPricing();
+      const toggle = page.getByTestId('admin-setting-enforceCredits-switch');
+      await expect(toggle).toBeChecked({ timeout: TIMEOUTS.ACTION });
+      await expect(toggle).toBeDisabled();
+      await expect(page.getByTestId('admin-setting-enforceCredits-helper')).toHaveText(
+        'Always on for hosted deployments'
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test('an admin cannot turn enforceCredits off', async ({ request }) => {
+    // A regression here would switch metering off for every real user, so the write never runs on staging or prod.
+    test.skip(isSharedRealEnv(), 'Attempts a global setting write; runs only on previews and localhost.');
+    const admin = getTestUsers().admin;
+    const baseURL = process.env.API_URL || 'http://localhost:3000';
+
+    const response = await request.put(`${baseURL}/api/settings/update`, {
+      headers: { Authorization: `Bearer ${admin.accessToken}` },
+      data: { key: 'enforceCredits', value: false },
+    });
+    try {
+      expect(response.status()).toBe(400);
+      expect((await response.json()).error).toBe('enforceCredits is always on for hosted deployments.');
+    } finally {
+      // Only reached if the lock regressed and the write landed.
+      if (response.ok()) await apiUpdateAdminSetting(request, admin.accessToken, 'enforceCredits', true);
+    }
+    expect((await apiGetAdminSettings(request, admin.accessToken)).get('enforceCredits') ?? true).toBe(true);
   });
 });

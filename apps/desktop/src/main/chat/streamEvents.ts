@@ -21,6 +21,7 @@ const usageSchema = z
     outputTokens: z.number().optional(),
     cacheReadInputTokens: z.number().optional(),
     cacheCreationInputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
   })
   .partial();
 
@@ -66,11 +67,19 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     type: z.literal('error'),
     message: z.string().optional(),
   }),
-  // Opens the stream and carries the server's request id; nothing downstream needs it yet,
-  // but parsing it keeps it out of the "unrecognized event" path.
+  // Opens the stream and carries the server's request id: the X-Request-ID this client sent,
+  // echoed back. A round stores it to match the `settled` charge that follows.
   z.object({
     type: z.literal('meta'),
     requestId: z.string().optional(),
+  }),
+  // Sent once the request's charge is committed to the ledger, before [DONE].
+  z.object({
+    type: z.literal('settled'),
+    requestId: z.string(),
+    creditsCharged: z.number(),
+    usdCost: z.number().optional(),
+    runId: z.string().optional(),
   }),
 ]);
 
@@ -136,6 +145,8 @@ const USAGE_FIELDS = [
   'outputTokens',
   'cacheReadInputTokens',
   'cacheCreationInputTokens',
+  'reasoningTokens',
+  'cachedPromptTokens',
   'creditsUsed',
   'usdCost',
 ] as const satisfies readonly (keyof ChatUsage)[];

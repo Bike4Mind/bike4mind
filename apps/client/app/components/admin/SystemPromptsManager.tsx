@@ -4,16 +4,12 @@ import {
   Box,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormLabel,
-  IconButton,
   Input,
   List,
   ListDivider,
   ListItem,
-  Menu,
-  MenuButton,
   MenuItem,
   Stack,
   Typography,
@@ -24,7 +20,6 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
 import AddIcon from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import SearchIcon from '@mui/icons-material/Search';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
@@ -41,6 +36,7 @@ import {
 } from './shared';
 import { adminFocus } from './shared/adminStyles';
 import { Dash, TruncatedText } from './promptAndToolParts';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface SystemFile {
   id: string;
@@ -69,35 +65,22 @@ function FileRowMenu({
   onRemove: (item: SystemFileWithStatus) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${item.file?.fileName ?? item.id}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`system-files-row-actions-${item.id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        {item.status === 'loaded' && (
-          <>
-            <MenuItem onClick={() => onView(item.id)} data-testid={`system-files-row-view-${item.id}`}>
-              View file
-            </MenuItem>
-            <ListDivider />
-          </>
-        )}
-        <MenuItem onClick={() => onRemove(item)} data-testid={`system-files-row-remove-${item.id}`}>
-          Remove from list
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu
+      testId={`system-files-row-actions-${item.id}`}
+      ariaLabel={`Actions for ${item.file?.fileName ?? item.id}`}
+    >
+      {item.status === 'loaded' && (
+        <>
+          <MenuItem onClick={() => onView(item.id)} data-testid={`system-files-row-view-${item.id}`}>
+            View file
+          </MenuItem>
+          <ListDivider />
+        </>
+      )}
+      <MenuItem onClick={() => onRemove(item)} data-testid={`system-files-row-remove-${item.id}`}>
+        Remove from list
+      </MenuItem>
+    </RowActionsMenu>
   );
 }
 

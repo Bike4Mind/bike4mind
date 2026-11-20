@@ -122,9 +122,9 @@ Review your usage breakdown under **Profile → Settings → Billing**. If you b
 
 This typically has one of three causes:
 
-1. **Provider outage** — OpenAI, Anthropic, and Google occasionally have incidents. Check the relevant provider's status page.
-2. **Model not enabled for your organization** — Some models require an admin to enable them under **Admin → AI & Agents → LLM Dashboard**. Contact your admin if you think a model should be available to you.
-3. **Rate limit hit** — High-traffic periods can trigger per-minute rate limits. Wait 60 seconds and retry.
+1. **Provider outage**: OpenAI, Anthropic, and Google occasionally have incidents. Check the relevant provider's status page.
+2. **Model not enabled for your organization**: Some models require an admin to turn them on or grant access under **Admin > Models**. Contact your admin if you think a model should be available to you.
+3. **Rate limit hit**: High-traffic periods can trigger per-minute rate limits. Wait 60 seconds and retry.
 
 **Workaround**: Switch to a different model from the selector in the chat toolbar while the issue resolves.
 

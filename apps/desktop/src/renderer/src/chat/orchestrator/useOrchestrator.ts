@@ -5,10 +5,14 @@ import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './act
 import {
   readAmbient,
   readDockOpen,
+  readFocus,
+  readPresenter,
   readSurface,
   readView,
   writeAmbient,
   writeDockOpen,
+  writeFocus,
+  writePresenter,
   writeSurface,
   writeView,
   type OrchestratorViewId,
@@ -121,28 +125,41 @@ interface OrchestratorPrefs {
   setDockOpen(open: boolean): void;
   ambient: boolean;
   setAmbient(on: boolean): void;
+  focus: boolean;
+  setFocus(on: boolean): void;
+  presenter: boolean;
+  setPresenter(on: boolean): void;
 }
 
 interface SessionPrefs {
   sessionId: string | null;
+  projectDirectory: string | undefined;
   surface: SessionSurface;
   view: OrchestratorViewId;
 }
 
-function readSessionPrefs(sessionId: string | null): SessionPrefs {
+function readSessionPrefs(sessionId: string | null, projectDirectory: string | undefined): SessionPrefs {
   return sessionId === null
-    ? { sessionId, surface: 'chat', view: 'tavern' }
-    : { sessionId, surface: readSurface(sessionId), view: readView(sessionId) };
+    ? { sessionId, projectDirectory, surface: 'chat', view: 'tavern' }
+    : { sessionId, projectDirectory, surface: readSurface(sessionId), view: readView(sessionId, projectDirectory) };
 }
 
-/** Per-session surface and view, plus the global dock and ambient flags. Setters update state and storage together. */
-export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPrefs {
-  const [prefs, setPrefs] = useState(() => readSessionPrefs(sessionId));
+/**
+ * Per-session surface and view, plus the global dock, ambient, focus and presenter flags.
+ * Setters update state and storage together.
+ */
+export function useOrchestratorPrefs(sessionId: string | null, projectDirectory?: string): OrchestratorPrefs {
+  const [prefs, setPrefs] = useState(() => readSessionPrefs(sessionId, projectDirectory));
   const [dockOpen, setDockOpenState] = useState(readDockOpen);
   const [ambient, setAmbientState] = useState(readAmbient);
+  const [focus, setFocusState] = useState(readFocus);
+  const [presenter, setPresenterState] = useState(readPresenter);
 
   // Re-read during render rather than in an effect, so a session switch never paints the old session's mode.
-  const current = prefs.sessionId === sessionId ? prefs : readSessionPrefs(sessionId);
+  const current =
+    prefs.sessionId === sessionId && prefs.projectDirectory === projectDirectory
+      ? prefs
+      : readSessionPrefs(sessionId, projectDirectory);
   if (current !== prefs) setPrefs(current);
 
   const setSurface = useCallback(
@@ -157,10 +174,10 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
   const setView = useCallback(
     (view: OrchestratorViewId) => {
       if (sessionId === null) return;
-      writeView(sessionId, view);
-      setPrefs(previous => ({ ...previous, sessionId, view }));
+      writeView(sessionId, view, projectDirectory);
+      setPrefs(previous => ({ ...previous, sessionId, projectDirectory, view }));
     },
-    [sessionId]
+    [sessionId, projectDirectory]
   );
 
   const setDockOpen = useCallback((open: boolean) => {
@@ -173,6 +190,16 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
     setAmbientState(on);
   }, []);
 
+  const setFocus = useCallback((on: boolean) => {
+    writeFocus(on);
+    setFocusState(on);
+  }, []);
+
+  const setPresenter = useCallback((on: boolean) => {
+    writePresenter(on);
+    setPresenterState(on);
+  }, []);
+
   return {
     surface: current.surface,
     setSurface,
@@ -182,5 +209,9 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
     setDockOpen,
     ambient,
     setAmbient,
+    focus,
+    setFocus,
+    presenter,
+    setPresenter,
   };
 }

@@ -55,6 +55,12 @@ export function getLlmByModel(
      * user. See `toProviderEndUserId`.
      */
     endUserId?: string | null;
+    /**
+     * An already-opaque identifier sent to the provider in place of the hash of `endUserId`: a
+     * platform key's end user (toPlatformEndUserProviderId). `endUserId` stays the key owner, and
+     * still decides the Anthropic semaphore's fairness bucket.
+     */
+    providerEndUserId?: string;
   }
 ): ICompletionBackend | null {
   const { modelInfo } = options;
@@ -62,7 +68,8 @@ export function getLlmByModel(
   const logger = options.logger ?? new Logger();
 
   // Hash once here so both direct-provider backends receive the same opaque id.
-  const providerEndUserId = toProviderEndUserId(options.endUserId);
+  const ownerEndUserId = toProviderEndUserId(options.endUserId);
+  const providerEndUserId = options.providerEndUserId ?? ownerEndUserId;
 
   if (!modelInfo) {
     return null;
@@ -98,6 +105,7 @@ export function getLlmByModel(
       modelId: String(modelInfo.id),
       logger,
       providerEndUserId,
+      tenantKey: ownerEndUserId,
     });
     backend?.setDispatchModel?.(modelInfo);
     return backend;
@@ -178,7 +186,8 @@ export function getLlmByModel(
               ANTHROPIC_FEDERATED_KEY
             ),
             logger,
-            providerEndUserId
+            providerEndUserId,
+            ownerEndUserId
           )
         : null;
       break;
@@ -730,17 +739,25 @@ export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKey
   return false;
 }
 
+let cachedStaticModels: Promise<readonly ModelInfo[]> | undefined;
 let cachedSeededIds: Promise<ReadonlySet<string>> | undefined;
 
 /**
- * Every id a static-table backend of getAvailableModels lists, whatever its catalog status says: the price
- * backends plus BFL, which publishes image models only. The runtime-listed backends (RUNTIME_DISCOVERED_BACKENDS)
- * are absent because their listing is a live call. Must cover every static backend getAvailableModels builds.
+ * Every model a static-table backend of getAvailableModels lists, read from the tables alone (no key, no network),
+ * whatever its catalog status says: the price backends plus BFL, which publishes image models only. The
+ * runtime-listed backends (RUNTIME_DISCOVERED_BACKENDS) are absent because their listing is a live call. Must cover
+ * every static backend getAvailableModels builds.
  */
-export function seededModelIds(): Promise<ReadonlySet<string>> {
-  cachedSeededIds ??= Promise.all(
+export function staticAdapterModels(): Promise<readonly ModelInfo[]> {
+  cachedStaticModels ??= Promise.all(
     [...staticPriceBackends(), new BFLBackend('static-listing')].map(backend => backend.getModelInfo())
-  ).then(tables => new Set(tables.flat().map(model => String(model.id))));
+  ).then(tables => tables.flat());
+  return cachedStaticModels;
+}
+
+/** The ids of staticAdapterModels. */
+export function seededModelIds(): Promise<ReadonlySet<string>> {
+  cachedSeededIds ??= staticAdapterModels().then(models => new Set(models.map(model => String(model.id))));
   return cachedSeededIds;
 }
 

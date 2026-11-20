@@ -14,7 +14,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const staged = process.argv.includes('--staged');
-const git = args => execFileSync('git', args, { encoding: 'utf8' });
+const git = args => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 // Core secrets infra/ no longer declares that the committed file still lists until it is
 // next regenerated. Remove an entry once the file drops it.
@@ -41,7 +41,11 @@ for (const file of coreFiles) {
   }
 }
 
-const files = git(staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM'] : ['ls-files'])
+// Limit Git's output to the inventory we inspect; a large monorepo can exceed execFileSync's buffer.
+const envPaths = ['--', 'sst-env.d.ts', '**/sst-env.d.ts'];
+const files = git(
+  staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM', ...envPaths] : ['ls-files', ...envPaths]
+)
   .split('\n')
   .filter(f => f === 'sst-env.d.ts' || f.endsWith('/sst-env.d.ts'));
 

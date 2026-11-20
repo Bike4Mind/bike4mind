@@ -20,13 +20,16 @@ import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/mod
 import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
 
 /**
  * Deprecation queue and lifecycle report (spec sec 5.10 / 7).
  *
  * GET  -> the horizon (expiring), the catalog's EXPIRED view, the operator
  *         queue of unresolved discovery suggestions, and the stale-reference
- *         report over the hardcoded model-id surfaces.
+ *         report over the hardcoded model-id surfaces. `?view=queue` answers
+ *         only the queue and the rates that price it, read from the database
+ *         alone: no provider is asked.
  * POST -> settle one queue item: 'dismiss' records the verdict, 'accept'
  *         appends an operator lifecycle row and then records it. An accept
  *         whose successor fails the auto-remap constraints answers 409 with the
@@ -54,6 +57,42 @@ function perMTokRatesInForce(priceRows: readonly IModelPrice[]): Record<string, 
   return rates;
 }
 
+/**
+ * The serving backend for a queue model: the live list first, then the
+ * catalog's own identity group. Most queued models are already hidden from the
+ * live list, so the catalog is the usual answer; a curated-only model has
+ * neither, and the client falls back to its id.
+ */
+function queueBackendResolver(
+  liveModels: readonly { id: string; backend?: string }[],
+  rows: Parameters<typeof resolveCatalogRecords>[0]
+): (modelId: string) => string | undefined {
+  const live = new Map(liveModels.map(model => [model.id, model.backend]));
+  const resolved = resolveCatalogRecords(rows);
+  return modelId => {
+    const fromLive = live.get(modelId);
+    if (fromLive) return fromLive;
+    const fromCatalog = resolved.get(modelId)?.record.backend;
+    return typeof fromCatalog === 'string' ? fromCatalog : undefined;
+  };
+}
+
+/**
+ * One queue item. backend and missCount feed the accept reason's evidence line: which vendor page
+ * confirms the change, and how long an absence-raised model has been missing.
+ */
+function queueItem(
+  state: Awaited<ReturnType<typeof modelDiscoveryStateRepository.pendingSuggestions>>[number],
+  backend: string | undefined
+) {
+  return {
+    modelId: state.modelId,
+    suggestion: state.suggestion,
+    ...(backend ? { backend } : {}),
+    ...(state.suggestion?.source === 'absence' ? { missCount: state.missCount } : {}),
+  };
+}
+
 const ResolveBody = z.object({
   modelId: z.string().min(1),
   action: z.enum(['accept', 'dismiss']),
@@ -74,6 +113,18 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
+    if (req.query.view === 'queue') {
+      const [pending, priceRows] = await Promise.all([
+        modelDiscoveryStateRepository.pendingSuggestions(),
+        modelPriceRepository.rowsInForce(),
+      ]);
+      return res.json({
+        // No backend: resolving it reads the catalog, and the client takes it from the admin model list.
+        queue: pending.map(state => queueItem(state, undefined)),
+        perMTokRates: perMTokRatesInForce(priceRows),
+      });
+    }
+
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
     // Read here rather than through the process memo: the tab reloads this the moment a run it watched finishes.
     const catalogRevision = (await readModelListRevision()) ?? undefined;
@@ -96,6 +147,7 @@ const handler = adminApi({
     ]);
 
     const lifecycles = catalogLifecycles(rows);
+    const backendOf = queueBackendResolver(liveModels, rows);
 
     res.json({
       daysAhead,
@@ -112,7 +164,7 @@ const handler = adminApi({
         .filter(([, lifecycle]) => lifecycle.status === 'active' && lifecycle.deprecationDate !== undefined)
         .map(([modelId, lifecycle]) => ({ modelId, deprecationDate: lifecycle.deprecationDate }))
         .sort((left, right) => (left.deprecationDate ?? '').localeCompare(right.deprecationDate ?? '')),
-      queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),
+      queue: pending.map(state => queueItem(state, backendOf(state.modelId))),
       // The shared watchdog report uses deployment credentials and catalog lifecycle,
       // so hidden pins remain classifiable even when they have no successor.
       staleReferences: staleReport.references,
@@ -120,6 +172,7 @@ const handler = adminApi({
     });
   })
   .post(async (req, res) => {
+    requireFullAdmin(req);
     const parsed = ResolveBody.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'invalid request');
     const { modelId, action } = parsed.data;
@@ -141,7 +194,9 @@ const handler = adminApi({
 
     if (action === 'dismiss') {
       const dismissed = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'dismissed');
-      await recordResolution({});
+      // Optional on a dismiss, but kept when given: a bulk dismiss states its reason once for every row.
+      const dismissNote = parsed.data.note?.trim();
+      await recordResolution(dismissNote ? { note: dismissNote } : {});
       return res.json({ state: dismissed });
     }
 

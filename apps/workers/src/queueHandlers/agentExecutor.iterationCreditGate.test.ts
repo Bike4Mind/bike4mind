@@ -5,11 +5,15 @@ import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import { nextIterationCredits } from './agentExecutor.billing';
 import {
+  ACCOUNT_CHECK_FAILED_MESSAGE,
+  createSubagentAccountCheck,
+  latchedAccountDenial,
   aggregationWakeStartIteration,
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  stopSpendFrozenIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 
@@ -184,6 +188,58 @@ describe('stopBlockedAccountIteration', () => {
   });
 });
 
+describe('stopSpendFrozenIteration', () => {
+  const denial = 'Spending is paused for this account. Contact support.';
+  const gateArgs = (readFreezeDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readFreezeDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run frozen since it was admitted, terminally and with the spend_frozen reason', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'spend_frozen',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an unfrozen run continue, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopSpendFrozenIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed freeze read to the caller instead of stopping the run itself', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => {
+          throw new Error('connection reset');
+        }),
+        deps
+      )
+    ).rejects.toThrow('connection reset');
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
 describe('aggregationWakeStartIteration', () => {
   it('exempts the resuming iteration of an aggregation wake and nothing else', () => {
     expect(aggregationWakeStartIteration(true, 4)).toBe(4);
@@ -256,8 +312,26 @@ describe('processExecution iteration-gate wiring', () => {
     const accountGate = loopSource.indexOf('const blocked = await stopBlockedAccountIteration(');
     expect(accountGate).toBeGreaterThanOrEqual(0);
     expect(accountGate).toBeLessThan(loopSource.indexOf('const gateThisIteration = shouldGateIteration({'));
-    expect(loopSource).toContain('readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),');
+    expect(loopSource).toMatch(
+      /readAccessDenial: latchedAccountDenial\(\s*\(\) => inProcessAccountDenial,\s*\(\) => readUserAccessDenial\(\(user as IUserDocument\)\.id\)\s*\),/
+    );
     expect(loopSource).toMatch(/if \(blocked\) return;/);
+  });
+
+  it('refuses a frozen run at start, ahead of the credit pre-flight, with the spend_frozen reason', () => {
+    const start = source.indexOf('const spendFreezeDenial = await readSpendFreezeDenial();');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(start).toBeLessThan(source.indexOf('// Pre-flight credit check.'));
+    expect(source.slice(start, start + 450)).toMatch(
+      /markFailed\(executionId, \{ message: spendFreezeDenial \}\);\s+await sendWs\('failed', \{ executionId, reason: SPEND_FROZEN_STOP_REASON \}\);\s+return;/
+    );
+  });
+
+  it('re-reads the spend freeze before every iteration, ahead of the account and credit gates', () => {
+    const freezeGate = loopSource.indexOf('const frozen = await stopSpendFrozenIteration(');
+    expect(freezeGate).toBeGreaterThanOrEqual(0);
+    expect(freezeGate).toBeLessThan(loopSource.indexOf('const blocked = await stopBlockedAccountIteration('));
+    expect(loopSource).toMatch(/if \(frozen\) return;/);
   });
 
   it('grows the next estimate from the iteration that just ran', () => {
@@ -294,6 +368,15 @@ describe('processExecution billing wiring', () => {
     expect(call).not.toBeNull();
     expect(call![1]).toContain('modelInfo: resolvedModelInfo,');
     expect(call![1]).toContain('chargedModelInfo: shadowModelInfo ? modelInfo : undefined,');
+  });
+});
+
+describe('processExecution thinking wiring', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('gates thinking on the model the run actually uses, not the requested one', () => {
+    expect(source).toContain('runReasoningShortfall(execution, runModelInfo, isNewExecution)');
+    expect(source).toContain('...buildReActAgentRuntimeConfig(execution, runModelInfo),');
   });
 });
 
@@ -335,5 +418,98 @@ describe('aggregation model configuration failures', () => {
         modelAccessOk: false,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('createSubagentAccountCheck', () => {
+  const makeCheck = (readAccessDenial: () => Promise<string | null>) => {
+    const onDenied = vi.fn();
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const read = vi.fn(readAccessDenial);
+    return { check: createSubagentAccountCheck({ readAccessDenial: read, onDenied, logger }), read, onDenied, logger };
+  };
+
+  it('reads once per child and iteration and never denies an active account', async () => {
+    const { check, read, onDenied } = makeCheck(async () => null);
+    await check('child-a', 0);
+    await check('child-a', 0);
+    await check('child-b', 0);
+    await check('child-a', 1);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(onDenied).not.toHaveBeenCalled();
+  });
+
+  it('reports the refusal once, then stops reading', async () => {
+    const { check, read, onDenied } = makeCheck(async () => 'Your account is suspended.');
+    await check('child-a', 0);
+    await check('child-a', 1);
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith('Your account is suspended.');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed with a stated reason when the account read throws', async () => {
+    const { check, onDenied, logger } = makeCheck(async () => {
+      throw new Error('connection reset');
+    });
+    await check('child-a', 0);
+    expect(onDenied).toHaveBeenCalledWith(ACCOUNT_CHECK_FAILED_MESSAGE);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('account check failed'),
+      expect.objectContaining({ error: 'connection reset' })
+    );
+  });
+});
+
+describe('latchedAccountDenial', () => {
+  const gateDeps = () => ({
+    markFailed: vi.fn(async () => undefined),
+    sendWs: vi.fn(async () => undefined),
+    persistRunAsQuest: vi.fn(async () => undefined),
+    logger: { warn: vi.fn() },
+  });
+  const accountGateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: () => ({ steps: [], partialAnswer: '' }),
+  });
+
+  it('fails the parent run with a latched in-process refusal even when a fresh read is clear', async () => {
+    const read = vi.fn(async () => null);
+    let latched: string | null = null;
+    const check = createSubagentAccountCheck({
+      readAccessDenial: async () => {
+        throw new Error('connection reset');
+      },
+      onDenied: reason => {
+        latched = reason;
+      },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    await check('child-a', 0);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => latched, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: ACCOUNT_CHECK_FAILED_MESSAGE });
+  });
+
+  it('falls back to a fresh read while nothing is latched', async () => {
+    const read = vi.fn(async () => null);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => null, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import type { ReactNode, Ref, RefObject } from 'react';
+import { useId, type ReactNode, type Ref, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -9,9 +9,9 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { CheckIcon, CubeIcon, GlobeIcon, PanesIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { CheckIcon, CubeIcon, GlobeIcon, PanesIcon, PhoneIcon, SearchIcon, SparkIcon, TerminalIcon } from './icons';
 
-export type PaneId = 'terminal' | 'browser' | 'simulator' | 'model';
+export type PaneId = 'terminal' | 'browser' | 'simulator' | 'model' | 'studio';
 
 /** One pane the header can open, as ChatShell knows it right now. */
 export interface PaneControl {
@@ -64,9 +64,16 @@ const PANES: Record<PaneId, PaneInfo> = {
     showLabel: 'Show the 3D model',
     hideLabel: 'Hide the 3D model',
   },
+  studio: {
+    name: 'Studio',
+    icon: <SparkIcon />,
+    buttonTestId: 'chat-toggle-studio-btn',
+    showLabel: 'Show Studio',
+    hideLabel: 'Hide Studio',
+  },
 };
 
-const PANE_ORDER: readonly PaneId[] = ['terminal', 'browser', 'simulator', 'model'];
+const PANE_ORDER: readonly PaneId[] = ['terminal', 'browser', 'simulator', 'model', 'studio'];
 
 /** The panes in the header's fixed order, whatever order they were opened or listed in. */
 export function inPaneOrder<T extends { id: PaneId }>(panes: readonly T[]): T[] {
@@ -138,6 +145,7 @@ export function PanesMenu({
   historyOn: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
+  const reasonPrefix = useId();
   return (
     <Dropdown>
       <Tooltip size="sm" variant="soft" placement="bottom-end" title="Panes">
@@ -159,6 +167,8 @@ export function PanesMenu({
               key={pane.id}
               role="menuitemcheckbox"
               aria-checked={pane.open}
+              aria-label={withShortcut(info.name, info.shortcut)}
+              aria-describedby={disabled ? `${reasonPrefix}-${pane.id}-reason` : undefined}
               selected={pane.open}
               disabled={disabled}
               onClick={pane.onToggle}
@@ -170,7 +180,7 @@ export function PanesMenu({
                   {info.name}
                 </Typography>
                 {disabled && (
-                  <Typography level="body-xs" textColor="text.tertiary">
+                  <Typography id={`${reasonPrefix}-${pane.id}-reason`} level="body-xs" textColor="text.tertiary">
                     {pane.unavailableReason}
                   </Typography>
                 )}

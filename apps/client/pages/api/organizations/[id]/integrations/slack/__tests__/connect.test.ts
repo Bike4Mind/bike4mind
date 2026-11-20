@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // The module calls initializeSlackPackage() at import time, which wires the real server
 // dependency graph (sst Resource, ability, storage, ...). Nothing here needs it.
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
 // Deliberately NOT mocking verifyOrgOwner, matching the sibling index.test.ts: the behaviour the
 // gate swap changes lives INSIDE the helper, so mocking it would assert the mock. Stubbing the

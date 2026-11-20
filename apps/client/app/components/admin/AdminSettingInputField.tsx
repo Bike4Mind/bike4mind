@@ -3,9 +3,9 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
+// admin-toolkit-allow 2026-11-12 -- Existing price and embedding confirmations retain their save behavior during the field-row cleanup.
 import {
   Button,
-  Card,
   Divider,
   FormControl,
   FormHelperText,
@@ -26,7 +26,8 @@ import {
   Stack,
   Box,
 } from '@mui/joy';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import { StatusChip } from './shared/StatusChip';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
@@ -110,18 +111,19 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
 
 const AdminSettingInputField = ({
   setting,
-  index,
   defaultValue,
   subSettings,
   lockedNote,
+  valueHelper,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
   // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
   defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
-  /** Locks a boolean setting: the switch and Save are disabled and this replaces the description. */
+  /** Locks the setting: its control and Save are disabled and this replaces the description. */
   lockedNote?: string;
+  valueHelper?: ReactNode;
 }) => {
   const saveRef = useRef<HTMLDivElement>(null);
   useAdminSaveShortcut(saveRef);
@@ -264,13 +266,12 @@ const AdminSettingInputField = ({
 
   return (
     <>
-      <Card
+      <SettingFieldRow
         ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
+        data-testid={`admin-setting-${setting.key}-row`}
         tabIndex={0}
         aria-label={`${setting.name} settings editor`}
-        variant="outlined"
-        sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
       >
         <Grid container spacing={2}>
           <Grid xs={12} md={6}>
@@ -319,11 +320,15 @@ const AdminSettingInputField = ({
                   // Locked during the save round-trip: onSuccess resyncs this field from the
                   // server's resolved value, so an edit typed mid-flight would be silently
                   // overwritten by the response for the previous submission.
-                  disabled={updateSettings.isPending || draft.pending}
+                  disabled={Boolean(lockedNote) || updateSettings.isPending || draft.pending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
-                  <Select disabled={draft.pending} value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
+                  <Select
+                    disabled={Boolean(lockedNote) || draft.pending}
+                    value={(value as string) || ''}
+                    onChange={(e, v) => setValue(v)}
+                  >
                     {Array.from(new Set(setting.options)).map((option, i) => (
                       <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
                         {option}
@@ -339,7 +344,7 @@ const AdminSettingInputField = ({
                     // server mask stays plain text so its last-4 tail is readable.
                     type={setting.isSensitive && secretEdited ? 'password' : 'text'}
                     value={draft.staged && secretFocused && showsStoredSecretMask ? '' : (value as string) || ''}
-                    disabled={draft.pending}
+                    disabled={Boolean(lockedNote) || draft.pending}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => {
                       setValue(e.target.value);
@@ -369,6 +374,9 @@ const AdminSettingInputField = ({
                     before that save, not one hidden behind a previous failure's message. */}
                 {rangeError ?? floorWarning ?? saveError ?? lockedNote ?? setting.description}
               </FormHelperText>
+              {valueHelper && (
+                <FormHelperText sx={{ display: 'block', color: 'admin.inkMuted' }}>{valueHelper}</FormHelperText>
+              )}
             </FormControl>
           </Grid>
 
@@ -428,7 +436,7 @@ const AdminSettingInputField = ({
             <ScopedSettingOverrides setting={setting} />
           </>
         )}
-      </Card>
+      </SettingFieldRow>
 
       <Modal open={showMoneyWarning} onClose={() => setShowMoneyWarning(false)}>
         <ModalDialog variant="outlined" role="alertdialog" data-testid="admin-setting-money-dialog">

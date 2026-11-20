@@ -221,7 +221,7 @@ describe('SessionPanel sections', () => {
     await show({
       context: { contextTokens: 1_000, contextLimit: 200_000 },
       changes: { workspace: CHANGES },
-      plan: { todos: [{ content: 'Do it', status: 'pending' }], turnOpen: true },
+      plan: { todos: [{ id: '1', content: 'Do it', status: 'pending' }], turnOpen: true },
       background: { processes: [process('dev', 'running')] },
     });
     expect(sectionIds()).toEqual(['environment', 'context', 'changes', 'plan', 'background']);
@@ -335,10 +335,19 @@ describe('the Context section', () => {
 
 describe('the Plan section', () => {
   const todos = [
-    { content: 'Read the code', status: 'completed' as const },
-    { content: 'Write the fix', status: 'in_progress' as const },
-    { content: 'Run the tests', status: 'pending' as const },
+    { id: '1', content: 'Read the code', status: 'completed' as const },
+    { id: '2', content: 'Write the fix', status: 'in_progress' as const },
+    { id: '3', content: 'Run the tests', status: 'pending' as const },
   ];
+
+  it('leaves cancelled items out of the summary count', async () => {
+    await show({
+      plan: { todos: [...todos, { id: '4', content: 'Old idea', status: 'cancelled' as const }], turnOpen: true },
+    });
+    expect(find('chat-todo-item-cancelled')).not.toBeNull();
+    await act(async () => get('session-panel-plan-toggle-btn').click());
+    expect(get('session-panel-plan-toggle-btn').textContent).toContain('1/3');
+  });
 
   it('lists the items, and folds to the progress count', async () => {
     await show({ plan: { todos, turnOpen: true } });
@@ -401,6 +410,7 @@ describe('the Background tasks section', () => {
 
     expect(get('session-panel-task-running').textContent).toContain('pnpm run dev');
     expect(get('session-panel-task-running').textContent).toMatch(/1m [56]s/);
+    expect(getComputedStyle(get('session-panel-spawned-open-btn')).fontSize).toBe('var(--joy-fontSize-xs)');
     const stops = host.querySelectorAll<HTMLElement>('[data-testid="session-panel-task-stop-btn"]');
     expect(stops).toHaveLength(2);
     await act(async () => stops[0].click());

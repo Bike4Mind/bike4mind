@@ -53,7 +53,8 @@ const SUBSCRIBER = {
 
 const openInviteDialog = async () => {
   render(<WaitlistTab />, { wrapper: Wrapper });
-  fireEvent.click(await screen.findByRole('button', { name: /generate invite/i }));
+  fireEvent.click(await screen.findByTestId('waitlist-row-actions-sub-1'));
+  fireEvent.click(await screen.findByTestId('waitlist-generate-invite-sub-1'));
   return screen.getByTestId('waitlist-invite-dialog-confirm-btn');
 };
 

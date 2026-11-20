@@ -6,6 +6,9 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
+  USER_ACCOUNT_SEGMENTS,
+  type UserAccountSegment,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -107,10 +110,12 @@ const MFASchema = new Schema(
     // TOTP secret (encrypted at rest, see encryptTotpSecretInUpdate) + hashed backup codes -
     // never serialize to a client. select:false keeps them out of every default
     // query/response; the MFA subsystem loads them explicitly via findByIdWithMfaSecrets
-    // (+select), which decrypts the secret. `totpEnabled` (not select:false) is the flag
-    // callers use to detect that MFA is configured.
-    totpSecret: { type: String, required: true, select: false },
+    // (+select), which decrypts the secret. `totpEnabled` and `passkeyEnabled` (not select:false)
+    // are the flags callers use to detect that MFA is configured (see userHasMFAConfigured).
+    // A passkey-only user has no totpSecret.
+    totpSecret: { type: String, select: false },
     totpEnabled: { type: Boolean, default: false },
+    passkeyEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
     // Encrypted like totpSecret; only present between setup and enable.
     pendingBackupCodes: { type: String, select: false },
@@ -197,6 +202,8 @@ const UserPreferencesSchema = new Schema(
           chat_completed: { type: Boolean },
           generation_ready: { type: Boolean },
           agent_message: { type: Boolean },
+          session_handoff: { type: Boolean },
+          brief_ready: { type: Boolean },
         },
         { _id: false }
       ),
@@ -316,6 +323,8 @@ const UserDeletionSchema = new Schema(
     requestedAt: { type: Date, required: true },
     scheduledFor: { type: Date, required: true },
     source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    requestedBy: { type: String, required: false },
+    erasureScope: { type: Schema.Types.Mixed, required: false },
     purgeStartedAt: { type: Date, required: false },
     purgeLeaseId: { type: String, required: false },
     purgeLeaseExpiresAt: { type: Date, required: false },
@@ -359,10 +368,13 @@ export type UserAccountRiskProfile = {
   signupIp: string | null;
   signupJa4: string | null;
   signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
-  totpEnabled: boolean;
-  /** When TOTP setup began; enabling follows within the same setup flow. */
+  /** Either factor (authenticator app or passkey) is on. */
+  mfaEnabled: boolean;
+  /** When the first factor's setup began; enabling follows within the same setup flow. */
   mfaSetupAt: Date | null;
 };
 
@@ -390,9 +402,28 @@ const heldReviewTrancheFilter = {
   $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
+/** `$type` repeats the partial index's filter, without which the planner cannot use it. */
+export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
+  'deletion.scheduledFor': { $type: 'date' as const },
+  'deletion.requestedAt': { $lte: requestedBefore },
+});
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
+  }
+
+  async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
+      { $set: { freeQuestStartId: startId } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /** Clears the free start only while it still holds `startId`, so a later claim is never undone. */
+  async releaseFreeQuestStart(userId: string, startId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId, freeQuestStartId: startId }, { $unset: { freeQuestStartId: 1 } });
   }
 
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
@@ -401,9 +432,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
 
+  /** Sets the partner mark, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(userId: string, accountSegment: UserAccountSegment | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
+    );
+  }
+
   /** Null the active-org pointer of every user on the org (org delete). */
   async clearOrganizationPointer(organizationId: string): Promise<void> {
     await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
+  }
+
+  async retireOrgServiceAccount(userId: string, organizationId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, isSystem: true, serviceAccountOrganizationId: organizationId },
+      { $set: { serviceAccountRetiredAt: new Date() } }
+    );
   }
 
   /** Add one group id to one user (idempotent via $addToSet). */
@@ -755,7 +801,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * filter. Decrypt-compare first, then condition the write on the exact stored value: a concurrent
    * re-setup writes fresh ciphertext, so the compare-and-set still refuses.
    */
-  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+  async atomicEnableMfa(
+    userId: string,
+    totpSecret: string,
+    hashedBackupCodes?: string[]
+  ): Promise<IUserDocument | null> {
     const current = await this.model
       .findOne({ _id: userId })
       .select('+mfa.totpSecret')
@@ -770,10 +820,47 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.totpEnabled': true,
           'mfa.failedAttempts': 0,
           'mfa.lastUsedAt': new Date(),
+          // Passed when the setup kept an existing factor's codes live (see setupMFA).
+          ...(hashedBackupCodes ? { 'mfa.backupCodes': hashedBackupCodes } : {}),
           updatedAt: new Date(),
         },
         $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
+      { new: true }
+    );
+    return result ? result.toJSON() : null;
+  }
+
+  async atomicEnablePasskeyMfa(userId: string, hashedBackupCodes: string[]): Promise<IUserDocument | null> {
+    const now = new Date();
+    // A pipeline update, because `mfa` is usually null here: a dotted $set cannot create a field
+    // inside null, and a whole-`mfa` $set has no totpSecret, so stripSecretlessMfaFromUpdate would
+    // drop it. $literal keeps the stored values from being read as expressions.
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpEnabled': { $ne: true }, 'mfa.passkeyEnabled': { $ne: true } },
+      [
+        {
+          $set: {
+            mfa: {
+              $mergeObjects: [
+                { $ifNull: ['$mfa', {}] },
+                {
+                  $literal: {
+                    passkeyEnabled: true,
+                    totpEnabled: false,
+                    backupCodes: hashedBackupCodes,
+                    setupAt: now,
+                    lastUsedAt: now,
+                    failedAttempts: 0,
+                  },
+                },
+              ],
+            },
+            updatedAt: now,
+          },
+        },
+        { $unset: ['mfa.totpSecret', 'mfa.pendingBackupCodes', 'mfa.lastFailedAttempt', 'mfa.lockedUntil'] },
+      ],
       { new: true }
     );
     return result ? result.toJSON() : null;
@@ -832,7 +919,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('email username isAdmin adminPermissions')
+      .select('email username isAdmin adminPermissions adminRoleIds')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -840,6 +927,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       username: d.username ?? undefined,
       isAdmin: d.isAdmin ?? undefined,
       adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+      adminRoleIds: d.adminRoleIds?.map(String),
     }));
   }
 
@@ -867,6 +955,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .limit(limit)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
+  async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
+    return this.model.countDocuments(overdueDeletionRequestFilter(requestedBefore));
   }
 
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */
@@ -898,10 +991,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
-  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
-  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+  /**
+   * Accounts that signed up from this exact IP, newest first, leaving out excludeId when given;
+   * served by user_signupMeta_ip.
+   */
+  async findIdsBySignupIp(ip: string, excludeId: string | undefined, limit: number): Promise<string[]> {
     const docs = await this.model
-      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .find({ 'signupMeta.ip': ip, ...(excludeId ? { _id: { $ne: convertIds([excludeId])[0] } } : {}) })
       .select('_id')
       .sort({ _id: -1 })
       .limit(limit)
@@ -918,7 +1014,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .find({ _id: { $in: convertIds(validIds) } })
       .select(
         'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
-          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.passkeyEnabled mfa.setupAt'
       )
       .lean();
     return docs.map(doc => ({
@@ -929,9 +1025,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupIp: doc.signupMeta?.ip ?? null,
       signupJa4: doc.signupMeta?.ja4 ?? null,
       signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
-      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaEnabled: doc.mfa?.totpEnabled === true || doc.mfa?.passkeyEnabled === true,
       mfaSetupAt: doc.mfa?.setupAt ?? null,
     }));
   }
@@ -1112,6 +1209,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
@@ -1613,6 +1743,7 @@ const RiskEvidenceSchema = new Schema(
 
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
+    freeQuestStartId: { type: String },
     username: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     email: { type: String }, // uniqueness enforced via the partial index below (allows multiple emailless accounts)
@@ -1632,6 +1763,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
+    // Assigned through the admin permissions endpoint. Resolved into the `roleAdminPermissions` virtual per request.
+    adminRoleIds: { type: [Schema.Types.ObjectId], ref: 'AdminRole', default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -1712,9 +1845,30 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountFilePurge: {
+      type: new Schema(
+        {
+          startedAt: Date,
+          leaseId: String,
+          leaseExpiresAt: Date,
+          initialized: Boolean,
+          throughAuditId: String,
+          afterAuditId: String,
+          complete: Boolean,
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
@@ -1724,6 +1878,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
+    serviceAccountRetiredAt: { type: Date },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -2013,6 +2170,17 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...USER_ACCOUNT_SEGMENTS] },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    // See IUser.mfaEnforcement. Written only by the e2e create-user route.
+    mfaEnforcement: { type: String, enum: ['force'], required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -2025,6 +2193,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
   }
 );
+
+// The permissions the user's admin roles carry, resolved per request into $locals by
+// packages/server-utils/src/auth/adminRoles.ts. A virtual so toJSON() carries it to the self view
+// while save() never persists it; undefined when roles were not resolved for this read.
+UserSchema.virtual('roleAdminPermissions').get(function () {
+  return this.$locals.roleAdminPermissions;
+});
 
 // Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
 // byte no legitimate strategy or id contains - nothing schema-level enforces this (the
@@ -2141,6 +2316,9 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Members of a role: the member count refused on delete and reported on edit, and access review.
+// Explicit name so migration 20261114140117 and autoIndex agree.
+UserSchema.index({ adminRoleIds: 1 }, { name: 'user_adminRoleIds' });
 // Serves the per-organization lookup of accounts an org invite unlocked.
 // Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.
@@ -2162,7 +2340,7 @@ UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
 // Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
-// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// (packages/server-utils/src/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
 // adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
 // serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
 // by the ensure-user-admin-list-indexes migration.
@@ -2170,6 +2348,16 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.
@@ -2285,6 +2473,8 @@ function mfaAttemptPipeline(now: Date): PipelineStage.Set[] {
  * every write path, present and future. Deliberate MFA writes load the secrets first
  * (`findByIdWithMfaSecrets`) and therefore carry `totpSecret`, so they pass through unchanged;
  * deliberate teardowns pass `mfa: null` (falsy, not an object), which also passes through.
+ * A passkey-only user has no secret at all, so every write for them must be field-level (dotted)
+ * or a pipeline (see atomicEnablePasskeyMfa), never a whole `mfa` object.
  */
 function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;

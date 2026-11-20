@@ -7,6 +7,7 @@ import {
   EmailVerificationDialog,
   FileEmbeddingWindowResetDialog,
   InternalAccountDialog,
+  PartnerAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
   RestrictDialog,
@@ -540,6 +541,51 @@ describe('account dialogs', () => {
     });
   });
 
+  describe('PartnerAccountDialog', () => {
+    it('marks a customer account partner with accountSegment: partner, and undoes it', async () => {
+      renderDialog((user, close) => <PartnerAccountDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId('partner-account-dialog-preview-before')).toHaveTextContent('Customer');
+      expect(screen.getByTestId('partner-account-dialog-preview-after')).toHaveTextContent('Partner');
+      expect(confirmButton('partner-account-dialog')).toBeDisabled();
+      pickReason('partner-account-dialog');
+      fireEvent.click(confirmButton('partner-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'partner',
+          reason: 'Partner or reseller',
+        })
+      );
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'customer',
+          reason: 'Undo: Partner or reseller',
+        })
+      );
+    });
+
+    it('stops marking a partner account with accountSegment: customer', async () => {
+      renderDialog(
+        (user, close) => <PartnerAccountDialog user={user} onClose={close} />,
+        buildProfile({ accountSegment: 'partner' })
+      );
+
+      expect(screen.getByTestId('partner-account-dialog-preview-before')).toHaveTextContent('Partner');
+      expect(screen.getByTestId('partner-account-dialog-preview-after')).toHaveTextContent('Customer');
+      pickReason('partner-account-dialog');
+      fireEvent.click(confirmButton('partner-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'customer',
+          reason: 'Partner or reseller',
+        })
+      );
+    });
+  });
+
   describe('FileEmbeddingWindowResetDialog', () => {
     it('posts the reason, toasts and closes without an undo', async () => {
       const { onClose } = renderDialog((user, close) => <FileEmbeddingWindowResetDialog user={user} onClose={close} />);
@@ -616,6 +662,8 @@ describe('account dialogs', () => {
     it('needs the reason and the email typed exactly before it unlocks', async () => {
       const { onClose, onDeleted } = renderDelete();
 
+      expect(screen.getByText(/permanently erases the account and its deletable data/)).toBeInTheDocument();
+      expect(screen.getByText(/records covered by retention rules remain/)).toBeInTheDocument();
       expect(screen.getByTestId('delete-user-dialog-typed-expected')).toHaveTextContent('ada@example.com');
       pickReason('delete-user-dialog');
       expect(confirmButton('delete-user-dialog')).toBeDisabled();
@@ -727,7 +775,7 @@ describe('account dialogs', () => {
 
       expect(screen.queryByTestId('login-as-dialog-mfa-input')).not.toBeInTheDocument();
       expect(confirmButton('login-as-dialog')).toBeDisabled();
-      expect(hint('login-as-dialog')).toHaveTextContent('Set up two-factor on your own account first.');
+      expect(hint('login-as-dialog')).toHaveTextContent('Set up an authenticator app on your own account first.');
 
       fireEvent.click(screen.getByTestId('login-as-dialog-setup-mfa-btn'));
 

@@ -10,8 +10,10 @@ import type { DiscoveryAutoEnablePolicy, DiscoveryCredentials, PromotionBlocker 
 export const AWAITING_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price`;
 /** An aggregator quoted a price but it is not corroborated: a lone quote, or quotes that disagree. */
 export const UNCORROBORATED_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price (aggregator quote not corroborated)`;
-/** This build ships a price for the model, but a per-image or per-minute one, which is not a trusted per-token price. */
-export const PRICED_IN_BUILD_REASON = `${DISCOVERY_VERDICT_PREFIX}priced in this build per image or minute, no trusted per-token price`;
+/** A non-text model whose only trusted price, a literal in this build's static adapter tables, is missing. */
+export const PRICED_IN_BUILD_REASON = `${DISCOVERY_VERDICT_PREFIX}no price in this build's model tables`;
+/** What PRICED_IN_BUILD_REASON read before non-text build literals became trusted; rows written then still carry it. */
+export const LEGACY_PRICED_IN_BUILD_REASON = `${DISCOVERY_VERDICT_PREFIX}priced in this build per image or minute, no trusted per-token price`;
 export const AWAITING_APPROVAL_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting admin approval`;
 export const NOT_INVOCABLE_REASON = `${DISCOVERY_VERDICT_PREFIX}not invocable by this build`;
 
@@ -44,21 +46,21 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
 };
 
 /**
- * What stands behind a missing trusted price. 'build-literal' is reachable only for the per-image and per-minute
- * literals, since every text literal already arrives as a trusted price.
+ * What stands behind a missing trusted price. 'no-build-literal' is a non-text model, whose only trusted price is a
+ * literal in this build's adapter tables.
  */
-export type AwaitingPriceKind = 'none' | 'aggregator-quote' | 'build-literal';
+export type AwaitingPriceKind = 'none' | 'aggregator-quote' | 'no-build-literal';
 
 export interface PromotionInput {
   record: Pick<ModelRecord, 'type' | 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
   policy: DiscoveryAutoEnablePolicy;
   credentials: DiscoveryCredentials;
-  /** A price from a trusted tier: a provider API, two aggregators that agree, or a price row in force or adapter literal. */
-  hasTrustedPrice: boolean;
   /**
-   * Why the price is missing, for the admin-queue wording of a no-trusted-price denial only; never the verdict.
-   * 'build-literal' wins over 'aggregator-quote': the build's own price is the stronger fact.
+   * A price from a trusted tier. Text: a provider API, two aggregators that agree, or a price row in force or adapter
+   * literal. Any other type: only a literal in this build's adapter tables.
    */
+  hasTrustedPrice: boolean;
+  /** Why the price is missing, for the admin-queue wording of a no-trusted-price denial only; never the verdict. */
   awaitingPrice?: AwaitingPriceKind;
   /**
    * The reason a source gave for disabling this model THIS run, if it did. Blocks promotion: the
@@ -153,7 +155,7 @@ function reasonFor(blockedBy: readonly PromotionBlocker[], awaitingPrice: Awaiti
   if (isDispatchBlocked(blockedBy)) return NOT_INVOCABLE_REASON;
   if (blockedBy.includes('manual-approval-required')) return AWAITING_APPROVAL_REASON;
   if (blockedBy.includes('no-trusted-price')) {
-    if (awaitingPrice === 'build-literal') return PRICED_IN_BUILD_REASON;
+    if (awaitingPrice === 'no-build-literal') return PRICED_IN_BUILD_REASON;
     return awaitingPrice === 'aggregator-quote' ? UNCORROBORATED_PRICE_REASON : AWAITING_PRICE_REASON;
   }
   return `${DISCOVERY_VERDICT_PREFIX}${blockedBy.join(', ')}`;

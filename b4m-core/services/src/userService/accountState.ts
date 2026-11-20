@@ -13,6 +13,9 @@ export interface AccountStateFields {
   suspensionReasonCategory?: string | null;
   disputePending?: boolean | null;
   moderation?: { status?: UserModerationStatus | null } | null;
+  /** Read only by isPersonaExpired, never by accountBlockReasons (an expired persona owes no billing action). */
+  isPersona?: boolean | null;
+  personaExpiresAt?: Date | string | null;
 }
 
 /**
@@ -21,7 +24,7 @@ export interface AccountStateFields {
  * `suspend_pending` and `throttled` are deliberately NOT reasons: the former awaits a human's
  * confirmation and the latter is a rate limit, so neither is refused at key-use time. Both the
  * admin update and the Stripe dispute webhook derive their deactivation decision from this list,
- * and the use-time gate in `apps/client/server/cli/auth.ts` must switch on it in the same order.
+ * and the use-time gate in `packages/server-utils/src/cli/auth.ts` must switch on it in the same order.
  */
 export function accountBlockReasons(user: AccountStateFields): AccountBlockReason[] {
   const reasons: AccountBlockReason[] = [];
@@ -29,6 +32,20 @@ export function accountBlockReasons(user: AccountStateFields): AccountBlockReaso
   if (user.disputePending) reasons.push('disputePending');
   if (user.moderation?.status === 'suspended') reasons.push('suspended');
   return reasons;
+}
+
+export const PERSONA_EXPIRED_MESSAGE = 'This test persona has expired.';
+
+/**
+ * A test persona past its personaExpiresAt. Checked at use time (assertAccountStateUsable) and at
+ * sign-in (issueSessionForRequest), so expiry holds even when the persona sweep has not run yet.
+ * A persona with no expiry counts as expired: the mint route always sets one.
+ */
+export function isPersonaExpired(user: AccountStateFields, now: Date = new Date()): boolean {
+  if (user.isPersona !== true) return false;
+  if (!user.personaExpiresAt) return true;
+  const expiresMs = new Date(user.personaExpiresAt).getTime();
+  return !Number.isFinite(expiresMs) || expiresMs <= now.getTime();
 }
 
 /**

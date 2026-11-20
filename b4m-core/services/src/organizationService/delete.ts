@@ -2,6 +2,7 @@ import {
   IGroupRepository,
   IOrganizationDocument,
   IOrganizationRepository,
+  IUserApiKeyRepository,
   IUserDocument,
   IUserRepository,
   WithId,
@@ -13,6 +14,7 @@ import {
   type LakeAccessLapseTrigger,
   type LapseDepartedMemberLakeAccessAdapters,
 } from '../dataLakeService';
+import { findOrgServiceAccount } from '../userApiKeyService/orgServiceAccount';
 import { get } from './get';
 
 export const deleteSchema = z.object({
@@ -23,6 +25,11 @@ export const deleteSchema = z.object({
 });
 
 export type DeleteParameters = z.infer<typeof deleteSchema>;
+
+export type DeleteOrganizationResult = {
+  /** Org-owned keys this delete disabled; the caller ends their realtime connections after commit. */
+  revokedApiKeyIds: string[];
+};
 
 export type DeleteValidationFn = (
   organization: WithId<IOrganizationDocument>
@@ -35,7 +42,11 @@ interface DeleteAdapters extends LapseDepartedMemberLakeAccessAdapters {
   db: LapseDepartedMemberLakeAccessAdapters['db'] & {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
-    users: Pick<IUserRepository, 'removeGroupsFromAllUsers' | 'clearOrganizationPointer'>;
+    users: Pick<
+      IUserRepository,
+      'removeGroupsFromAllUsers' | 'clearOrganizationPointer' | 'findOne' | 'retireOrgServiceAccount'
+    >;
+    userApiKeys: Pick<IUserApiKeyRepository, 'revokeLiveByUserId'>;
   };
   /** API-key principal for the lake audit rows; see `PurgeOrgMembershipAdapters.auditPrincipal`. */
   auditPrincipal?: LakeAccessLapseTrigger['auditPrincipal'];
@@ -63,13 +74,12 @@ export async function deleteOrganization(
   user: IUserDocument,
   params: DeleteParameters,
   adapters: DeleteAdapters
-): Promise<void> {
+): Promise<DeleteOrganizationResult> {
   // Validate parameters
   const validatedParams = secureParameters(params, deleteSchema);
-  const { id } = validatedParams;
-
-  // Get organization first to validate
-  const organization = await get(user, { id }, adapters);
+  // Resolve the authorized record first; persisted references use its canonical ID, not path spelling.
+  const organization = await get(user, { id: validatedParams.id }, adapters);
+  const id = organization.id;
 
   // Deleting an organization is owner-scoped. `get` admits readers and appointed managers, so it is
   // not by itself a sufficient gate on an org-wide destructive operation. This is narrower than
@@ -125,7 +135,23 @@ export async function deleteOrganization(
   // Members would otherwise keep an active-org pointer to a deleted org and stay org-scoped.
   await adapters.db.users.clearOrganizationPointer(id);
 
+  // Org-owned keys belong to the service account, so without this they keep authenticating after the
+  // org is gone. Retiring the account stops getOrCreateOrgServiceAccount from minting into it again.
+  let revokedApiKeyIds: string[] = [];
+  const serviceAccount = await findOrgServiceAccount(id, { db: { users: adapters.db.users } });
+  if (serviceAccount) {
+    const revoked = await adapters.db.userApiKeys.revokeLiveByUserId(serviceAccount.id, {
+      revokedBy: user.id,
+      revokedReason: 'organization_deleted',
+      batchId: `org-delete-${id}`,
+    });
+    revokedApiKeyIds = revoked.map(key => key.id);
+    await adapters.db.users.retireOrgServiceAccount(serviceAccount.id, id);
+  }
+
   // The inherited `delete` (softDeletePlugin) now joins the caller's transaction via ALS (#1228),
   // so this soft-delete rolls back with the surrounding writes instead of committing immediately.
   await adapters.db.organizations.delete(id);
+
+  return { revokedApiKeyIds };
 }

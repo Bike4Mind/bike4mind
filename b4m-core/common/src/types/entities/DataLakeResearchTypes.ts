@@ -64,7 +64,7 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'time_budget',
   /**
    * The judge failed several times in a row before scoring anything, so the run stopped instead of
-   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or `totals.filteredBySource` if a source rule blocks them.
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or in a source-rule bucket (`totals.filteredBySource`, `totals.unlistedDropped`) if a rule drops them.
    */
   'judge_unavailable',
 ] as const;
@@ -79,6 +79,24 @@ export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 
 export const RESEARCH_CONFIG_NAME_MAX_CHARS = 120;
 export const RESEARCH_CONFIG_QUERY_MAX_CHARS = 500;
+
+export const RESEARCH_SOURCES = ['search', 'feed'] as const;
+export type ResearchSource = (typeof RESEARCH_SOURCES)[number];
+
+export const RESEARCH_FEED_URL_MAX_CHARS = 2048;
+export const RESEARCH_FEED_MAX_BYTES = 10 * 1024 * 1024;
+/** Parse cap: items past this in a feed are never read. */
+export const RESEARCH_FEED_MAX_ITEMS = 500;
+/** Keys a feed cursor remembers. Matches the parse cap, so a full feed always fits. */
+export const RESEARCH_FEED_SEEN_KEYS_MAX = 500;
+/** Once keys are trimmed, a dated item this much older than the cursor's newest date is treated as seen. */
+export const RESEARCH_FEED_DATE_GRACE_DAYS = 7;
+/** How far past `now` a feed item's date may sit before it is clamped back to it. */
+export const RESEARCH_FEED_FUTURE_SKEW_MS = 10 * 60 * 1000;
+/** Transient failures (judge or fetch) after which a feed item is given up on. */
+export const RESEARCH_FEED_MAX_RETRIES = 3;
+/** Longest plain-text snippet taken from a feed item's description. */
+export const RESEARCH_FEED_SNIPPET_MAX_CHARS = 600;
 
 /**
  * The relevance judge used when a config names no model, or names one this deployment no longer
@@ -105,8 +123,30 @@ export const RESEARCH_MAX_PROPOSALS_LIMIT = 25;
  */
 export const RESEARCH_RECENCY_DAYS_LIMIT = 366;
 
+/**
+ * How many trusted-site results one run may add to the lake without a reviewer. Its own cap, below
+ * the proposal cap by default: the lower of the two wins at run time.
+ */
+export const RESEARCH_MAX_AUTO_ADMITS_DEFAULT = 3;
+export const RESEARCH_MAX_AUTO_ADMITS_LIMIT = 25;
+
 /** How many domains an allow or deny list may hold. Bounded so one config cannot become a corpus. */
 export const RESEARCH_DOMAIN_LIST_MAX = 50;
+
+/** Item rules a config may hold. Every rule is answered in one model call, so accuracy falls as this grows. */
+export const RESEARCH_ITEM_RULES_MAX = 10;
+export const RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS = 300;
+/** Fetched page text the rule check reads; the rest is cut before prompting. */
+export const RESEARCH_ITEM_RULE_TEXT_MAX_CHARS = 24_000;
+
+export const RESEARCH_ITEM_RULE_ACTIONS = ['block', 'review'] as const;
+export type ResearchItemRuleAction = (typeof RESEARCH_ITEM_RULE_ACTIONS)[number];
+
+/** A plain-language condition judged by a model against each item. A rule can only block or send to review. */
+export interface ResearchItemRule {
+  condition: string;
+  action: ResearchItemRuleAction;
+}
 
 /** What a run does with a hit that matches no listed site: queue it for review, or drop it. */
 export const RESEARCH_UNLISTED_SOURCES = ['review', 'drop'] as const;
@@ -207,6 +247,10 @@ export const RESEARCH_PRESETS: Record<ResearchPresetId, ResearchPreset> = {
  * field is a lever, and every lever is read in `executeResearchRun`.
  */
 export interface ResearchRunLevers {
+  /** Where candidates come from. A feed config keeps its `query` as the topic items are judged against. */
+  source: ResearchSource;
+  /** The RSS or Atom feed to read when `source` is `feed`; null for a search config. */
+  feedUrl: string | null;
   /** The question the run answers. Sent to the search provider and to the relevance judge. */
   query: string;
   /**
@@ -219,20 +263,28 @@ export interface ResearchRunLevers {
   /** How many proposals this run may create before it stops. */
   maxProposals: number;
   /**
-   * Only consider pages the search provider dates within this many days. Passed to the provider
-   * (SerpAPI `tbs=qdr:`, SearXNG `time_range`), not applied after the fact - a client-side filter
-   * would need a publication date the hit does not carry. Absent = no recency constraint.
+   * Only consider pages dated within this many days. A search run passes it to the provider
+   * (SerpAPI `tbs=qdr:`, SearXNG `time_range`); a feed run applies it after the fact to items that
+   * carry a date, and undated items pass. Absent = no recency constraint.
    */
   recencyDays?: number;
   /**
-   * Sites whose hits are queued for review tagged as trusted. Not settable through the API yet;
-   * matched on a label-boundary suffix (`docs.example.com` matches an `example.com` entry).
+   * Sites whose hits are queued for review tagged as trusted, or admitted directly while
+   * `autoAdmitTrusted` is on. Matched on a label-boundary suffix (`docs.example.com` matches an
+   * `example.com` entry).
    */
   trustedDomains: string[];
   /** Sites whose hits are queued for review. Same matching as `trustedDomains`. */
   reviewDomains: string[];
   /** What happens to a hit that matches neither list. `drop` makes the lists an allow list. */
   unlistedSources: ResearchUnlistedSources;
+  /**
+   * When on, a first-time hit from a trusted site is admitted without a reviewer. The authority is
+   * the trusted-site entry a lake manager set, never a score. Off by default.
+   */
+  autoAdmitTrusted: boolean;
+  /** How many trusted hits one run may admit. The proposal cap still applies on top. */
+  maxAutoAdmits: number;
   /**
    * Derived on every write: the trusted plus review lists when `unlistedSources` is `drop`, else
    * empty. Read by no new code path except the legacy-mismatch rule; kept for readers that predate
@@ -247,6 +299,8 @@ export interface ResearchRunLevers {
   costCeilingMicroUsd: number;
   /** Advisory tags the run suggests for anything it proposes. The queue sanitizes them. */
   proposedTags: string[];
+  /** Conditions checked against each item that would be proposed or auto-admitted. Empty = no check. */
+  itemRules: ResearchItemRule[];
 }
 
 /**
@@ -255,9 +309,54 @@ export interface ResearchRunLevers {
  */
 export type LegacyResearchRunLevers = Omit<
   ResearchRunLevers,
-  'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'
+  | 'trustedDomains'
+  | 'reviewDomains'
+  | 'unlistedSources'
+  | 'allowedDomains'
+  | 'autoAdmitTrusted'
+  | 'maxAutoAdmits'
+  | 'source'
+  | 'feedUrl'
+  | 'itemRules'
 > &
-  Partial<Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'>>;
+  Partial<
+    Pick<
+      ResearchRunLevers,
+      | 'trustedDomains'
+      | 'reviewDomains'
+      | 'unlistedSources'
+      | 'allowedDomains'
+      | 'autoAdmitTrusted'
+      | 'maxAutoAdmits'
+      | 'source'
+      | 'feedUrl'
+      | 'itemRules'
+    >
+  >;
+
+/**
+ * Per-config memory of which feed items earlier runs dealt with. Run output written back after a
+ * run settles, never a lever and never edited through the API.
+ */
+export interface ResearchFeedCursor {
+  /** `researchFeedFingerprint` of the levers the cursor was written under; a mismatch re-checks the newest items. */
+  fingerprint: string;
+  /** `researchFeedUrlKey` of the feed address. Absent on older cursors, which then start fresh on a mismatch. */
+  feedUrlKey?: string;
+  /** Floor for the date backstop. Never passes an item that still needs a run. */
+  newestPublishedAt: Date | null;
+  /** Canonical source keys already dealt with, in processing order (oldest first). */
+  seenKeys: string[];
+  /** Items that failed transiently, with how many runs have tried them. */
+  retries: { key: string; attempts: number }[];
+}
+
+/** What a config response exposes of its cursor: no keys, no retries. */
+export interface ResearchFeedStatus {
+  newestPublishedAt: Date | null;
+  /** The stored cursor was written under the config's current levers. */
+  current: boolean;
+}
 
 // -- Schedule ----------------------------------------------------------------------------------
 //
@@ -287,6 +386,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'insufficient_credits',
   /** The lake is not active (archived, deleted or missing). */
   'lake_inactive',
+  /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
+  'spend_frozen',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 
@@ -329,16 +430,38 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   lastUpdatedByUserId?: string | null;
   /** When a run last STARTED from this config. The list's "when did I last use this" column. */
   lastRunAt?: Date | null;
+  /** Server-written memory of a feed config's runs. Null or absent until a feed run completes. */
+  feedCursor?: ResearchFeedCursor | null;
 }
 
 export type IDataLakeResearchConfigDocument = IDataLakeResearchConfig & IMongoDocument;
 
-/** What the run loop counted. Every candidate lands in exactly one of the outcome buckets. */
+/** A config as the research config routes return it: the cursor is replaced by its status. */
+export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocument, 'feedCursor'> & {
+  feedStatus?: ResearchFeedStatus | null;
+};
+
+/**
+ * What the run loop counted. Each candidate the run reaches lands in exactly one outcome bucket, so the buckets sum
+ * to `searchHits` only for a run that stopped `exhausted` or `judge_unavailable`; `cost_ceiling`, `time_budget` and
+ * `proposal_limit` leave the unreached candidates uncounted.
+ * `autoAdmitted`, `autoAdmitSkipped` and `reviewedByRule` are not buckets: they are sub-counts of `proposed`.
+ */
 export interface ResearchRunTotals {
   /** Hits the search provider returned. */
   searchHits: number;
-  /** Hits dropped by the allow/deny lists, before any model or network cost. */
+  /**
+   * Hits on the Never list, or whose address is not a web address, dropped before any model or network cost.
+   * On a run stored before `unlistedDropped` existed, this is the combined count of both drops.
+   */
   filteredBySource: number;
+  /**
+   * Hits from sites on none of the lists while "Other sites" is set to ignore, dropped before any model or network cost.
+   * Absent on a run stored before the split, which is how a reader tells `filteredBySource` is then the combined count.
+   */
+  unlistedDropped?: number;
+  /** Hits still on a search provider's redirect link, so their real site is unknown. Skipped, never judged or fetched, under every site-list setting, and counted apart from `filteredBySource`: no source rule saw the real host. */
+  unresolvedRedirect: number;
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
@@ -351,6 +474,10 @@ export interface ResearchRunTotals {
   /** Candidates whose page could not be fetched or parsed. */
   fetchFailed: number;
   proposed: number;
+  /** Of `proposed`, the trusted results the run added to the lake without a reviewer. */
+  autoAdmitted: number;
+  /** Of `proposed`, the trusted results the rule attempted but did not admit. */
+  autoAdmitSkipped: number;
   /** Already awaiting a human for this source. */
   duplicatePending: number;
   /** The lake already holds this, by prior approval or by text. */
@@ -361,25 +488,36 @@ export interface ResearchRunTotals {
   unusableSource: number;
   /**
    * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
-   * buckets summing to `searchHits`. Unreached candidates a source rule blocks are still counted in
-   * `filteredBySource`, since source rules are free and are checked for them. Only that stop fills it: `cost_ceiling`, `time_budget` and
-   * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
+   * buckets summing to `searchHits`. Unreached candidates a source rule drops are still counted in
+   * `filteredBySource` or `unlistedDropped`, and unresolved links in `unresolvedRedirect`, since those checks are free.
+   * Only that stop fills it: `cost_ceiling`, `time_budget` and `proposal_limit` leave it 0, so their buckets can fall short.
+   * Older stored runs read it as 0.
    */
   notJudged: number;
+  /** Candidates an item rule with action `block` removed before they were proposed. */
+  blockedByRule: number;
+  /** Of `proposed`, the trusted results a review rule took out of auto-admit. */
+  reviewedByRule: number;
 }
 
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   searchHits: 0,
   filteredBySource: 0,
+  unlistedDropped: 0,
+  unresolvedRedirect: 0,
   belowRelevance: 0,
   judgeFailed: 0,
   fetchFailed: 0,
   proposed: 0,
+  autoAdmitted: 0,
+  autoAdmitSkipped: 0,
   duplicatePending: 0,
   alreadyInLake: 0,
   suppressedByTombstone: 0,
   unusableSource: 0,
   notJudged: 0,
+  blockedByRule: 0,
+  reviewedByRule: 0,
 });
 
 export interface IDataLakeResearchRun {
@@ -406,6 +544,11 @@ export interface IDataLakeResearchRun {
   /** What the run actually spent on relevance judgments, micro-USD. Reported next to the ceiling. */
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  /**
+   * Feed runs only: eligible items the run left for later. Not a totals bucket, since a waiting
+   * item is not an outcome. Null or absent for search runs and older rows.
+   */
+  feedBacklog?: number | null;
   /**
    * The judge model the run actually resolved, which is not always `levers.model`: that lever is
    * absent on "Default" and falls back when the configured model is gone. Recorded so spend and
@@ -455,6 +598,7 @@ export interface SettleResearchRunInput {
   stopReason?: ResearchRunStopReason;
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  feedBacklog?: number;
   judgeModel?: string;
   error?: string;
 }
@@ -475,6 +619,11 @@ export interface IDataLakeResearchConfigRepository extends IBaseRepository<IData
   ): Promise<IDataLakeResearchConfigDocument | null>;
   /** Stamp the start of a run. Separate from updateConfig so it needs no actor and no levers. */
   recordRunStarted(id: string, at: Date): Promise<void>;
+  /**
+   * Write a feed run's cursor back. The filter carries `feedUrl` so a cursor from a run of a feed the
+   * config has since left is dropped. Returns whether a config matched.
+   */
+  recordFeedCursor(id: string, feedUrl: string, cursor: ResearchFeedCursor): Promise<boolean>;
   /**
    * Atomically claim up to `limit` configs whose `nextRunAt <= now`, pushing each one's `nextRunAt`
    * out to `leaseUntil` so an overlapping scheduler tick cannot claim it again. Returns the configs

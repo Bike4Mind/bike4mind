@@ -1,17 +1,19 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import { useTheme } from '@mui/joy/styles';
 import Tooltip from '@mui/joy/Tooltip';
 import { keyframes } from '@mui/system';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { AgentStageIcon, ConversationIcon } from '../icons';
 import { isMac } from '../platform';
 import type { SessionSurface } from './orchestratorPrefs';
-import { AGENT_STATE_LABEL, AGENT_STATE_PRIORITY, type AgentState } from './roster';
+import { describeAgentStates, type AgentState } from './roster';
 
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
+  enabled?: boolean;
+  /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
+  parentNeedsYou?: boolean;
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
 }
@@ -29,23 +31,8 @@ export function isSurfaceToggleKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlK
   return mod && event.shiftKey && !event.altKey && event.code === 'KeyO';
 }
 
-/** "4 agents: 1 needs you, 2 working, 1 done", most urgent first; idle and stopped count as done. */
-export function describeAgentStates(states: readonly AgentState[]): string {
-  if (states.length === 0) return 'No agents yet';
-  const counts = new Map<AgentState, number>();
-  for (const state of states) {
-    const bucket = state === 'idle' || state === 'stopped' ? 'done' : state;
-    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
-  }
-  const parts = AGENT_STATE_PRIORITY.filter(state => counts.has(state)).map(
-    state => `${counts.get(state)} ${AGENT_STATE_LABEL[state].toLowerCase()}`
-  );
-  return `${states.length} ${states.length === 1 ? 'agent' : 'agents'}: ${parts.join(', ')}`;
-}
-
 function Segment({
   selected,
-  raisedBg,
   label,
   hint,
   icon,
@@ -54,8 +41,6 @@ function Segment({
   children,
 }: {
   selected: boolean;
-  /** The selected segment's fill: one step lighter than the track in either scheme. */
-  raisedBg: string;
   label: string;
   hint: string;
   icon: ReactNode;
@@ -67,19 +52,19 @@ function Segment({
     <Tooltip title={hint} size="sm" variant="soft" placement="bottom">
       <Button
         size="sm"
-        variant="plain"
-        color="neutral"
+        variant={selected ? 'soft' : 'plain'}
+        color={selected ? 'primary' : 'neutral'}
         aria-label={label}
         aria-pressed={selected}
         onClick={onClick}
         data-testid={testId}
         sx={{
           minHeight: 26,
-          px: 0.75,
+          px: 1,
           gap: 0.5,
-          color: selected ? 'text.primary' : 'text.tertiary',
+          fontWeight: selected ? 600 : 400,
+          ...(!selected && { color: 'text.secondary' }),
           '& svg': { width: 14, height: 14 },
-          ...(selected && { bgcolor: raisedBg, boxShadow: 'xs', '&:hover': { bgcolor: raisedBg } }),
         }}
       >
         {icon}
@@ -92,13 +77,17 @@ function Segment({
 /**
  * Header switch between the conversation and its agents' stage, sized like the sidebar's ModeSwitcher.
  * View only: the Orchestrate behaviour is the composer's OrchestratePill, which is why this one draws
- * AgentStageIcon rather than its AgentsIcon. Absent until the session has an agent: an empty stage is
- * nothing to navigate to. The conversation segment stays icon-only, since "Chat" already names the
- * sidebar's Chat/Code mode and would misread in a Code session.
+ * AgentStageIcon rather than its AgentsIcon. The conversation segment stays icon-only: "Chat" already
+ * names the sidebar's Chat/Code mode and would misread in a Code session.
  */
-export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
-  const dark = useTheme().palette.mode === 'dark';
-  const available = states.length > 0;
+export function OrchestrateToggle({
+  states,
+  enabled = false,
+  parentNeedsYou = false,
+  surface,
+  onSurfaceChange,
+}: OrchestrateToggleProps) {
+  const available = enabled || states.length > 0;
 
   const select = (next: SessionSurface) => {
     if (next !== surface) onSurfaceChange(next);
@@ -118,31 +107,28 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange }: Orchestr
 
   if (!available) return null;
 
-  const needsYou = states.includes('needs-you');
+  const needsYou = parentNeedsYou || states.includes('needs-you');
   const failed = !needsYou && states.includes('failed');
   const working = !needsYou && !failed && states.includes('working');
-  const raisedBg = dark ? 'background.level2' : 'background.surface';
   const badgeColor = needsYou ? 'warning' : failed ? 'danger' : 'neutral';
-  const description = describeAgentStates(states);
+  const description = describeAgentStates(states, parentNeedsYou ? 1 : 0);
 
   return (
     <Box
       role="group"
       aria-label="Conversation or agents view"
       data-testid="chat-surface-toggle"
-      // Dark inverts Joy's ramp (surface is darker than level1), so the track and the raised fill swap.
       sx={{
         display: 'inline-flex',
         flexShrink: 0,
         gap: 0.25,
         p: '2px',
         borderRadius: 'sm',
-        bgcolor: dark ? 'background.level1' : 'background.level2',
+        bgcolor: 'background.level2',
       }}
     >
       <Segment
         selected={surface === 'chat'}
-        raisedBg={raisedBg}
         label="Show conversation"
         hint={`Show conversation \u00B7 ${SHORTCUT_HINT}`}
         icon={<ConversationIcon />}
@@ -151,7 +137,6 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange }: Orchestr
       />
       <Segment
         selected={surface === 'orchestrate'}
-        raisedBg={raisedBg}
         label={`Show agents, ${description}`}
         hint={`Show agents (${description}) \u00B7 ${SHORTCUT_HINT}`}
         icon={<AgentStageIcon />}

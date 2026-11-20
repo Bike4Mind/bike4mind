@@ -8,6 +8,7 @@ import { TurnStatus } from './TurnStatus';
 import { MessageThread } from './MessageThread';
 import { Composer } from './Composer';
 import { useCostDisplayPreference } from './costDisplay';
+import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
 
 vi.mock('./PermissionsSettings', () => ({
   PermissionsSettings: () => null,
@@ -18,6 +19,11 @@ vi.mock('./LocalContextSettings', () => ({
   LocalContextSettings: () => null,
   localContextSummary: () => 'Auto',
   useLocalContextSetting: () => [null, () => undefined, null],
+}));
+vi.mock('./AutoFixAttemptsSettings', () => ({
+  AutoFixAttemptsSettings: () => null,
+  autoFixAttemptsSummary: () => 'Up to 5 attempts per pull request',
+  useAutoFixAttempts: () => [null, () => undefined, null],
 }));
 vi.mock('./ModelServersSettings', () => ({
   ModelServersSettings: () => null,
@@ -59,6 +65,7 @@ function CostSurfaces() {
           dismissRejected: () => undefined,
           add: async () => undefined,
           attachImage: async () => undefined,
+          attachFilePath: async () => undefined,
           pick: async () => undefined,
           remove: () => undefined,
           clear: () => undefined,
@@ -89,6 +96,19 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
+    // SettingsScreen's menu-bar switch and notify scope read their preferences from main.
+    vi.stubGlobal('b4m', {
+      watch: {
+        getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        onPreferences: () => () => undefined,
+      },
+      attention: {
+        getNotifyScope: async () => 'agents',
+        setNotifyScope: async () => 'agents',
+        onNotifyScope: () => () => undefined,
+      },
+    });
     window.localStorage.clear();
     useCostDisplayPreference.setState({ showDollarCosts: false });
     Element.prototype.scrollIntoView = () => undefined;

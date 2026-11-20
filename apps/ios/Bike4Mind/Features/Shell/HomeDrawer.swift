@@ -30,9 +30,10 @@ struct HomeDrawer: View {
           DrawerContent(api: services.api, cache: services.sessionListCache)
             .frame(width: width)
             .frame(maxHeight: .infinity)
-            .background(Tokens.Palette.background.ignoresSafeArea())
+            .background(Tokens.Palette.sidebar.ignoresSafeArea())
             .offset(x: -width * (1 - progress))
             .gesture(dragGesture(width: width))
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
             .accessibilityIdentifier("home-drawer")
         }
@@ -85,7 +86,7 @@ struct HomeDrawer: View {
 private struct DrawerContent: View {
   @Environment(AppServices.self) private var services
   @State private var recents: SessionsViewModel
-  @State private var profile: AccountProfile?
+  private var profile: AccountProfile? { services.cachedAccountProfile }
 
   init(api: any B4MAPI, cache: any SessionListCache) {
     _recents = State(initialValue: SessionsViewModel(api: api, cache: cache))
@@ -98,17 +99,21 @@ private struct DrawerContent: View {
           row("New chat", symbol: "square.and.pencil", id: "drawer-newchat-btn") {
             services.navigator.apply(.compose(ComposeRequest(target: .newConversation)))
           }
+          row("Voice chat", symbol: "waveform", id: "drawer-voice-btn") {
+            services.navigator.startVoiceConversation(.newConversation)
+          }
           row("Studio", symbol: "wand.and.stars", id: "drawer-studio-btn") { services.navigator.apply(.media) }
+          row("Brief", symbol: "text.badge.checkmark", id: "drawer-brief-btn") { services.navigator.openLatestBrief() }
           notebooks
         }
-        .padding(.horizontal, Tokens.Spacing.s)
+        .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs / 2)
         .padding(.top, Tokens.Spacing.m)
       }
-      Divider()
+      Rectangle().fill(Tokens.Palette.divider).frame(height: 1)
       accountRow
     }
     .task { await recents.load() }
-    .task { profile = await services.accountProfile() }
+    .task { await services.refreshAccountProfile() }
   }
 
   private var notebooks: some View {
@@ -116,7 +121,7 @@ private struct DrawerContent: View {
       Text("Notebooks")
         .font(Tokens.Typography.caption.weight(.semibold))
         .foregroundStyle(Tokens.Palette.secondaryText)
-        .padding(.horizontal, Tokens.Spacing.s)
+        .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs)
         .padding(.top, Tokens.Spacing.m)
         .accessibilityAddTraits(.isHeader)
       ForEach(recents.drawerRecents) { session in
@@ -124,14 +129,9 @@ private struct DrawerContent: View {
           services.navigator.openSession(session)
         } label: {
           Text(session.title)
-            .font(.body)
-            .foregroundStyle(Tokens.Palette.primaryText)
             .lineLimit(1)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, Tokens.Spacing.s)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DrawerRowStyle())
         .accessibilityIdentifier("drawer-notebook-row")
       }
       row("All notebooks", symbol: "clock.arrow.circlepath", id: "drawer-all-notebooks-btn") {
@@ -143,13 +143,8 @@ private struct DrawerContent: View {
   private func row(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Label(title, systemImage: symbol)
-        .font(.body)
-        .foregroundStyle(Tokens.Palette.primaryText)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.horizontal, Tokens.Spacing.s)
-        .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(DrawerRowStyle())
     .accessibilityIdentifier(id)
   }
 
@@ -161,7 +156,7 @@ private struct DrawerContent: View {
         AccountAvatar(initial: profile?.initial, diameter: 36)
         VStack(alignment: .leading, spacing: 0) {
           Text(profile?.displayName ?? "Your account")
-            .font(.body.weight(.semibold))
+            .font(Tokens.Typography.row.weight(.semibold))
             .foregroundStyle(Tokens.Palette.primaryText)
             .lineLimit(1)
           if let email = profile?.email {
@@ -181,5 +176,23 @@ private struct DrawerContent: View {
     .buttonStyle(.plain)
     .accessibilityElement(children: .combine)
     .accessibilityIdentifier("drawer-account-btn")
+  }
+}
+
+/// A drawer row styled like the web sidenav row (SidenavItem, Notebook/Sidenav/kit): body-sm ink,
+/// 12pt side padding, radius md, the web's focused background while pressed. The row keeps the
+/// 44pt iOS touch target where the web uses 36px.
+private struct DrawerRowStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(Tokens.Typography.row)
+      .foregroundStyle(Tokens.Palette.sidebarText)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs)
+      .background(
+        configuration.isPressed ? Tokens.Palette.sidebarSelected : .clear,
+        in: RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
+      )
+      .contentShape(Rectangle())
   }
 }

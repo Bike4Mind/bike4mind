@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import type { Request, Response } from 'express';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 
 const mockLogUsage = vi.hoisted(() => vi.fn());
 const mockBeginUsage = vi.hoisted(() => vi.fn());
@@ -10,7 +10,10 @@ vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: mockLogUsage, beginCompletionUsage: mockBeginUsage },
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '1.2.3.4' }));
-vi.mock('@server/utils/resolveApiKeyOwnerType', () => ({ resolveApiKeyOwnerType: () => 'User' }));
+vi.mock('@server/utils/resolveApiKeyOwnerType', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/resolveApiKeyOwnerType')>()),
+  resolveApiKeyOwnerType: () => 'User',
+}));
 
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
@@ -30,12 +33,16 @@ const makeRes = (overrides: Partial<FakeRes> = {}): FakeRes =>
     ...overrides,
   });
 
-const register = (res: FakeRes, completion?: Parameters<typeof logApiKeyUsageOnResponse>[0]['completion']) => {
+const register = (
+  res: FakeRes,
+  completion?: Parameters<typeof logApiKeyUsageOnResponse>[0]['completion'],
+  apiKey: ApiKeyInfo = { keyId: 'k1', userId: 'u1' } as ApiKeyInfo
+) => {
   const track = vi.fn<(p: Promise<void>) => void>();
   const ready = logApiKeyUsageOnResponse({
     req: { method: 'POST' } as Request,
     res: res as unknown as Response,
-    apiKey: { keyId: 'k1', userId: 'u1' } as ApiKeyInfo,
+    apiKey,
     endpoint: '/api/ai/v1/completions',
     source: 'api',
     startTime: Date.now(),
@@ -188,5 +195,35 @@ describe('logApiKeyUsageOnResponse', () => {
     res.emit('close');
     await Promise.resolve();
     expect(mockLogUsage).toHaveBeenCalledTimes(1);
+  });
+
+  describe('exchange key attribution', () => {
+    const exchange = {
+      keyId: 'k1',
+      userId: 'u1',
+      oauthExchangeClientId: 'app-1',
+      payerStanding: 'paid',
+    } as ApiKeyInfo;
+    const completion = { requestId: 'r1', requestedModel: 'model-alpha', outcome: () => 'completed' as const };
+
+    it('stamps the app and standing on the start row and the terminal row', async () => {
+      const res = makeRes({ headersSent: true });
+      const { ready, track } = register(res, completion, exchange);
+      await ready;
+      res.emit('finish');
+      await track.mock.calls[1][0];
+      const expected = expect.objectContaining({ oauthClientId: 'app-1', payerStanding: 'paid' });
+      expect(mockBeginUsage).toHaveBeenCalledWith(expected);
+      expect(mockLogUsage).toHaveBeenCalledWith(expected);
+    });
+
+    it('stamps nothing for a personal key', async () => {
+      const res = makeRes({ headersSent: true });
+      register(res);
+      res.emit('finish');
+      await Promise.resolve();
+      expect(mockLogUsage.mock.calls[0][0]).not.toHaveProperty('oauthClientId');
+      expect(mockLogUsage.mock.calls[0][0]).not.toHaveProperty('payerStanding');
+    });
   });
 });

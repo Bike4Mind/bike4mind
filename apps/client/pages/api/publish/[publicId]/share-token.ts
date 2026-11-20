@@ -1,5 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  assertPublicationPublicLink,
+  type PublicationPolicyContext,
+} from '@server/services/publish/organizationPolicy';
+import {
   PublishedArtifact,
   liveShareTokenMatch,
   liveShareTokens,
@@ -66,7 +70,7 @@ export const MAX_LIVE_SHARE_LINKS = 20;
  *  or below it, a mint would prune every revoked entry. */
 export const MAX_SHARE_TOKEN_ENTRIES = 50;
 
-interface ShareTokenArtifactLean {
+interface ShareTokenArtifactLean extends PublicationPolicyContext {
   publicId: string;
   ownerId: string;
   shareTokens?: PublishedArtifactShareToken[];
@@ -247,6 +251,7 @@ const handler = baseApi()
   .post(outboundActionGate(), async (req: Request, res: Response) => {
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
+    await assertPublicationPublicLink(artifact);
 
     const parsed = shareTokenBodySchema.parse(req.body ?? {});
     const regenerate = parsed.regenerate === true;

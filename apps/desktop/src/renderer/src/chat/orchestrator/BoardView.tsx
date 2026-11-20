@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useElementWidth } from '../sessionPanelState';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { SKIN_CARD_VARIABLE } from './statePalette';
 import { prefersReducedMotion } from './motion';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, spawnerName, type AgentState, type AgentView } from './roster';
@@ -189,7 +190,7 @@ function BoardCard({
         borderRadius: 'sm',
         border: '1px solid',
         borderColor: selected ? 'primary.outlinedBorder' : 'divider',
-        bgcolor: 'background.surface',
+        bgcolor: `var(${SKIN_CARD_VARIABLE}, var(--joy-palette-background-surface))`,
         cursor: 'pointer',
         display: 'flex',
         flexDirection: 'column',
@@ -211,7 +212,11 @@ function BoardCard({
         </Typography>
       )}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
-        {(agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />}
+        {agent.decision ? (
+          <AgentStateChip state={agent.state} deciding />
+        ) : (
+          (agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />
+        )}
         {costKnown && (
           <Typography level="body-xs" textColor="text.tertiary">
             {formatAgentCost(agent.usdCost, agent.credits)}

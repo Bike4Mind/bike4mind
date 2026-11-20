@@ -3,9 +3,17 @@ import { toast } from 'sonner';
 import type { IUserDocument } from '@bike4mind/common';
 import type MFAModal from '@client/app/components/common/MFAModal';
 import { useSetupMFA, useVerifyMFA, useVerifyMFASetup, type MFASetupResponse } from '@client/app/hooks/data/mfa';
-import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
+import {
+  describePasskeyError,
+  describePasskeyMfaError,
+  passkeysSupported,
+  useEnrollPasskeyFactor,
+  useVerifyPasskeyMFA,
+} from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
+import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
+import { MFA_SETUP_DESCRIPTION, MFA_SETUP_TITLE } from '@client/app/utils/mfaSetupCopy';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 
 export type MfaChallengeMode = 'verify' | 'setup';
@@ -35,8 +43,8 @@ type MfaModalProps = ComponentProps<typeof MFAModal>;
 
 type ChallengeState = { userId: string; mode: MfaChallengeMode; passkeyAvailable: boolean };
 
-const MFA_SETUP_DESCRIPTION =
-  'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.';
+/** A passkey enrolled as the first factor: the session is already minted, codes not yet acknowledged. */
+type EnrolledPasskey = MfaLoginResult & { backupCodes: string[] };
 
 function toMfaLoginResult(data: unknown): MfaLoginResult {
   const result = data as Partial<MfaLoginResult> | null;
@@ -61,17 +69,20 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [setupData, setSetupData] = useState<MFASetupResponse | null>(null);
+  const [enrolledPasskey, setEnrolledPasskey] = useState<EnrolledPasskey | null>(null);
 
   const setupMFA = useSetupMFA();
   const verifyMFA = useVerifyMFA();
   const verifyMFASetup = useVerifyMFASetup();
   const verifyPasskeyMFA = useVerifyPasskeyMFA();
+  const enrollPasskey = useEnrollPasskeyFactor();
 
   const reset = () => {
     setOpen(false);
     setChallenge(null);
     setError(null);
     setSetupData(null);
+    setEnrolledPasskey(null);
   };
 
   // A handoff can arrive while this browser already holds a verified session. begin() overwrites
@@ -170,7 +181,39 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     }
   };
 
-  const handleCancel = () => endWithoutSession(challenge?.mode ?? 'verify');
+  const handlePasskeyEnroll = async () => {
+    if (!challenge) return;
+    setError(null);
+    try {
+      const registration = await enrollPasskey.mutateAsync();
+      if (!registration.backupCodes) {
+        // Only a first factor answers with a session; anything else means MFA was already on.
+        setError('MFA is already set up for this account. Please sign in again.');
+        return;
+      }
+      const { accessToken, user, backupCodes } = registration;
+      setEnrolledPasskey({ accessToken, user, backupCodes });
+    } catch (enrollError: unknown) {
+      if ((enrollError as { response?: { status?: number } })?.response?.status === 401) {
+        toast.error('Your sign-in expired. Please sign in again.');
+        endWithoutSession(challenge.mode);
+        return;
+      }
+      setError(describePasskeyError(enrollError, 'Could not set up the passkey'));
+    }
+  };
+
+  const handleCancel = () => {
+    // The passkey already turned MFA on and minted the session, so leaving the codes view completes
+    // the sign-in rather than abandoning it.
+    if (enrolledPasskey) {
+      finish(enrolledPasskey);
+      return;
+    }
+    // Read before endWithoutSession drops the pending token the report must carry.
+    if (challenge?.mode === 'setup') reportMfaEnrollmentAbandoned(useAccessToken.getState().accessToken);
+    endWithoutSession(challenge?.mode ?? 'verify');
+  };
 
   const mode = challenge?.mode ?? 'verify';
   const passkeyAvailable = !!challenge?.passkeyAvailable;
@@ -183,7 +226,7 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     loading: verifyMFA.isPending || verifyMFASetup.isPending,
     error,
     mode,
-    title: mode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required',
+    title: mode === 'setup' ? MFA_SETUP_TITLE : 'Multi-Factor Authentication Required',
     description:
       mode === 'setup'
         ? MFA_SETUP_DESCRIPTION
@@ -196,7 +239,12 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     showVerify: true,
     allowRememberDevice,
     onPasskeyVerify: passkeyAvailable ? handlePasskeyVerify : undefined,
-    passkeyLoading: verifyPasskeyMFA.isPending,
+    passkeyLoading: verifyPasskeyMFA.isPending || enrollPasskey.isPending,
+    onPasskeyEnroll: mode === 'setup' ? handlePasskeyEnroll : undefined,
+    passkeyBackupCodes: enrolledPasskey?.backupCodes,
+    onPasskeyEnrollDone: enrolledPasskey ? () => finish(enrolledPasskey) : undefined,
+    // Leaving forced enrollment ends this sign-in, so it is offered as a labelled sign-out.
+    onSignOut: mode === 'setup' ? handleCancel : undefined,
   };
 
   return { begin, modalProps };

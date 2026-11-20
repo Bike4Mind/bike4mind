@@ -3,12 +3,12 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { rollupDay } from './analyticsRollup';
+import { rollupDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 
 const liveFailure = vi.hoisted(() => ({ error: null as Error | null }));
-vi.mock('./analyticsRollup', async importOriginal => {
-  const actual = await importOriginal<typeof import('./analyticsRollup')>();
+vi.mock('@bike4mind/server-utils/analytics/analyticsRollup', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/analytics/analyticsRollup')>();
   return {
     ...actual,
     collectDayUsage: (...args: Parameters<typeof actual.collectDayUsage>) =>

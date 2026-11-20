@@ -5,14 +5,14 @@ import isNull from 'lodash/isNull';
 import isUndefined from 'lodash/isUndefined';
 import pickBy from 'lodash/pickBy';
 
-export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired'> => {
+export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired' | 'revoked'> => {
   try {
     const { data } = await api.get(`/api/invites/${id}`);
     return data;
   } catch (error) {
     if (isAxiosError(error)) {
       if (error.response?.status === 404) return null;
-      if (error.response?.status === 410) return 'expired';
+      if (error.response?.status === 410) return error.response.data?.revoked === true ? 'revoked' : 'expired';
     }
     throw error;
   }
@@ -74,9 +74,12 @@ export interface IGetInvitesRequest {
 /**
  * An invite as the sharer-facing routes return it (server/managers/inviteManager.toSharerInviteViews):
  * a `recipients` entry the viewer did not type is a user id, named in `recipientUsers`, or a masked
- * address.
+ * address. `inviterName` is set on Organization invites only.
  */
-export type ISharerInviteView = IInviteDocumentWithDetails & { recipientUsers?: { userId: string; name: string }[] };
+export type ISharerInviteView = IInviteDocumentWithDetails & {
+  recipientUsers?: { userId: string; name: string }[];
+  inviterName?: string;
+};
 
 export interface IGetInvitesResponse {
   data: ISharerInviteView[];
@@ -100,6 +103,7 @@ const INVITE_TYPE_TO_API_PATH = {
   [InviteType.Group]: 'groups',
   [InviteType.Organization]: 'organizations',
   [InviteType.Tool]: 'tools',
+  [InviteType.Space]: 'spaces',
 };
 
 export const shareDocument = async (data: {
@@ -122,8 +126,11 @@ export const shareDocument = async (data: {
   }
 };
 
+// Mirrors AcceptInviteOutcome in b4m-core/services/src/sharingService/accept.ts.
+export type AcceptedInvite = IInviteDocument & { acceptOutcome?: 'accepted' | 'already-member' };
+
 export const acceptDocument = async (id: string, isPublic: boolean = false) => {
-  const response = await api.post<IInviteDocument>(`/api/invites/${id}/accept`, { public: isPublic });
+  const response = await api.post<AcceptedInvite>(`/api/invites/${id}/accept`, { public: isPublic });
   if (response.status === 200) {
     return response.data;
   }

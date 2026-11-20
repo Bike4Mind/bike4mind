@@ -33,9 +33,17 @@ export const CANONICAL_ORIGIN = process.env.NEXT_PUBLIC_CANONICAL_ORIGIN || '';
  * On the client, process.env.APP_NAME and SEED_APP_NAME are undefined (non-public vars are not
  * inlined into the client bundle), so the fallback naturally degrades to 'the app' there.
  */
-export const getBrandName = (): string => {
-  const raw = process.env.NEXT_PUBLIC_APP_NAME || process.env.APP_NAME || process.env.SEED_APP_NAME || '';
+export const getBrandName = (): string =>
+  formatBrandName(process.env.NEXT_PUBLIC_APP_NAME || process.env.APP_NAME || process.env.SEED_APP_NAME || '');
+
+/**
+ * The brand name exactly as the browser bundle resolves it (only NEXT_PUBLIC_APP_NAME is inlined
+ * there), so server-rendered artifact pages keep the bytes the web client used to bake.
+ */
+export const getPublicBrandName = (): string => formatBrandName(process.env.NEXT_PUBLIC_APP_NAME || '');
+
+function formatBrandName(raw: string): string {
   if (!raw) return 'the app';
   // Capitalize first letter and any letter following a digit (e.g. "bike4mind" -> "Bike4Mind").
   return (raw.charAt(0).toUpperCase() + raw.slice(1)).replace(/(\d)([a-z])/g, (_, d, l) => d + l.toUpperCase());
-};
+}

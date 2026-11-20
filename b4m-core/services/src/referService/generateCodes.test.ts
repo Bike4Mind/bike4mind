@@ -52,6 +52,19 @@ describe('generateReferralCodes - grant package', () => {
     expect(createMany).not.toHaveBeenCalled();
   });
 
+  it('rejects an expired package', async () => {
+    const { db, createMany } = setup({
+      id: 'pkg-1',
+      credits: 300,
+      active: true,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    await expect(generateReferralCodes(admin, { grantPackageId: 'pkg-1' }, { db })).rejects.toThrow(
+      'Grant package has expired'
+    );
+    expect(createMany).not.toHaveBeenCalled();
+  });
+
   it('rejects an empty package id', async () => {
     const { db, createMany } = setup(null);
     await expect(generateReferralCodes(admin, { grantPackageId: '' }, { db })).rejects.toThrow();

@@ -234,7 +234,8 @@ export function compareVersions(left: string, right: string): number | null {
  * Whether `candidate` is a release the running build should be told about.
  *
  * A locally packaged build is versioned `<newest desktop tag>-local.<sha>` by
- * scripts/package-local.cjs, which is code at or after that tag. Plain SemVer ranks it BELOW the
+ * scripts/package-local.cjs, and a source run `<newest desktop tag>-dev.<sha>` by scripts/dev-version.cjs;
+ * both are code at or after that tag. Plain SemVer ranks them BELOW the
  * tag it was cut from, so the same release would be offered back to it forever; comparing only
  * the core version keeps it quiet until a strictly newer release ships. Anything unparsable is
  * not newer: a notice we cannot justify is worse than none.
@@ -243,21 +244,22 @@ export function isNewerRelease(candidate: string, current: string): boolean {
   const next = parseVersion(candidate);
   const running = parseVersion(current);
   if (!next || !running) return false;
-  if (running.prerelease[0] === 'local') return compareCores(next, running) > 0;
+  if (running.prerelease[0] === 'local' || running.prerelease[0] === 'dev') return compareCores(next, running) > 0;
   return (compareVersions(candidate, current) ?? 0) > 0;
 }
 
 /**
- * The version the floating "update available" notice should announce, or null for no notice.
+ * The version the "update available" notice should announce, or null for no notice.
  *
- * Shown while anything newer is on offer - found, downloading or staged - and hidden for the one
- * version the user dismissed. A later version is a different string, so it shows again.
+ * Shown while anything newer is on offer - found, downloading or staged. Dismissing declines the
+ * offer for that one version; a download, once started, stays on screen until the restart so the
+ * user is never left guessing whether it ran. A later version is a different string, so it shows.
  */
 export function updateNoticeVersion(state: UpdateState): string | null {
   if (state.status !== 'available' && state.status !== 'downloading' && state.status !== 'ready') return null;
   const version = state.version;
   if (!version || !isNewerRelease(version, state.currentVersion)) return null;
-  if (state.dismissedVersion === version) return null;
+  if (state.status === 'available' && state.dismissedVersion === version) return null;
   return version;
 }
 

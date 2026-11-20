@@ -31,6 +31,7 @@ import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
+import { withPhase } from './replyStats';
 import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
@@ -108,17 +109,24 @@ export function useSessions(): SessionsController {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
+  const latestListing = useRef<Promise<void>>(Promise.resolve());
   const localEdits = useRef(0);
   // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
   // would put back the rows it read before them. Import syncs re-list often enough to hit this.
-  const reload = useCallback(async (): Promise<void> => {
+  // An overtaken reload still resolves only once the newer listing is applied: a caller that
+  // selects a session it just created (useSessionDraft) relies on the list holding it by then.
+  const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
-    const next = await window.b4m.chat.listSessions();
-    if (ticket !== latestReload.current) return;
-    if (editsBefore !== localEdits.current) return reload();
-    setSessions(next);
-    setLoading(false);
+    const listing = (async (): Promise<void> => {
+      const next = await window.b4m.chat.listSessions();
+      if (ticket !== latestReload.current) return latestListing.current;
+      if (editsBefore !== localEdits.current) return reload();
+      setSessions(next);
+      setLoading(false);
+    })();
+    latestListing.current = listing;
+    return listing;
   }, []);
   const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
     localEdits.current++;
@@ -521,7 +529,8 @@ export interface ConversationController {
   notice: string | null;
   dismissNotice: () => void;
   /** False when main refused the turn; the text is already back in the composer. */
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** `notes` reach the model with this turn and are never drawn; see SendMessageRequest.notes. */
+  send: (text: string, attachments?: readonly ChatAttachment[], notes?: readonly string[]) => Promise<boolean>;
   /** Device-local: move a conversation whose model is not installed to the one a send would use. */
   settleLocalModel: () => Promise<void>;
   stop: () => void;
@@ -720,7 +729,9 @@ export function useConversation(
           // to say so, the 'workspace' one went out before this window was looking.
           setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
           setStreaming(!!live);
-          setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+          setTurn(
+            live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null
+          );
         })
         .catch(failed);
     };
@@ -883,7 +894,11 @@ export function useConversation(
           });
         }
         // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
-        if (event.type === 'tool-start') setPhase(null);
+        if (event.type === 'tool-start') {
+          setPhase(null);
+          const at = Date.now();
+          setTurn(current => (current ? withPhase(current, { kind: 'waiting' }, at) : current));
+        }
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
         // rAF is paused in a hidden or occluded window; without this the reply stalls until the
@@ -914,7 +929,8 @@ export function useConversation(
       if (event.type === 'phase') {
         setPhase(event.phase);
         // A sign of life like any other frame: a thinking marker carries no text to stamp it.
-        setTurn(current => (current ? { ...current, lastEventAt: Date.now() } : current));
+        const at = Date.now();
+        setTurn(current => (current ? { ...withPhase(current, event.phase, at), lastEventAt: at } : current));
         return;
       }
 
@@ -925,7 +941,13 @@ export function useConversation(
         setStreaming(true);
         reasoning = '';
         const startedAt = Date.now();
-        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
+        setTurn({
+          startedAt,
+          tokens: null,
+          lastEventAt: startedAt,
+          messageId: event.messageId,
+          ...(event.baseUsage ? { continued: true } : {}),
+        });
         setMessages(current => startReply(current, event.messageId));
         return;
       }
@@ -1016,6 +1038,7 @@ export function useConversation(
             error: event.message,
             contextSnapshot: event.contextSnapshot,
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+            ...(event.stats ? { stats: event.stats } : {}),
           };
         });
       });
@@ -1030,7 +1053,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+    async (
+      text: string,
+      attachments: readonly ChatAttachment[] = [],
+      notes: readonly string[] = []
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
@@ -1059,6 +1086,7 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+            ...(notes.length > 0 ? { notes: [...notes] } : {}),
           }
         : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
@@ -1073,6 +1101,7 @@ export function useConversation(
           sessionId,
           text: prompt,
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          ...(notes.length > 0 ? { notes: [...notes] } : {}),
         })
         .finally(() => {
           if (!goingOut) return;

@@ -6,8 +6,9 @@ import {
   type SecurityDashboardStatus,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import {
   computeDeterministicStatus,
   computeWebsiteScore,
@@ -89,7 +90,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     // Prefer SST Resource binding in deployed environments
     Resource.SECOPS_ZAP_INGEST_TOKEN?.value || process.env.SECOPS_ZAP_INGEST_TOKEN;
-  if (!ingestToken) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Security ingest token is not configured.' });
   }
 
@@ -138,6 +139,11 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     checkedAt,
   } as unknown as ISecurityDashboardSnapshotDocument);
 
+  // Auto-close in the triage worker is only safe when the alert list matches the reported counts.
+  const findingsComplete =
+    Array.isArray(alerts) &&
+    alerts.length === safeCounts.critical + safeCounts.high + safeCounts.medium + safeCounts.low;
+
   // Always fan out full payload (with instances) to SecOps Triage queue.
   // The triage Lambda reads secopsTriageConfig from AdminSettings and decides whether to act.
   try {
@@ -149,6 +155,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
           scanSource: 'web-owasp' as const,
           snapshotId: snapshot.id,
           targetUrl,
+          findingsComplete,
           findings: (alerts || []).map(alert => ({
             id: alert.id,
             title: alert.title,

@@ -12,6 +12,7 @@ import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
+import { MorningBriefCard } from './MorningBriefCard';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -67,6 +68,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
       </Box>
 
       <AiAdvisoryStrip />
+      <MorningBriefCard />
       <CampaignWatchesPanel compact />
 
       {additionalDashboards.length > 0 && (

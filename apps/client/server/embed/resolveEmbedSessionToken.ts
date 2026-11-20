@@ -1,4 +1,4 @@
-import { verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
+import { verifyEmbedKeyById, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { verifyEmbedSessionToken, type EmbedSessionContext } from './embedSessionToken';
 
 /**

@@ -7,10 +7,20 @@ const mocks = vi.hoisted(() => ({
   findDueForReminder: vi.fn(),
   findPendingReview: vi.fn(),
   markAlerted: vi.fn(async () => undefined),
+  markAlertQueued: vi.fn(async () => undefined),
   markReminded: vi.fn(async () => undefined),
+  findDueForEscalation: vi.fn(),
+  escalate: vi.fn(),
+  findEscalationUnalerted: vi.fn(),
+  markEscalationAlerted: vi.fn(async () => undefined),
+  markEscalationAlertQueued: vi.fn(async () => undefined),
+  findDueForEscalationReminder: vi.fn(),
+  countPendingReview: vi.fn(async () => 1),
+  markEscalationReminded: vi.fn(async () => undefined),
   createReviewerAlertDelivery: vi.fn(),
   sendEmail: vi.fn(),
   getRecipients: vi.fn(),
+  getEscalationRecipients: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -20,7 +30,16 @@ vi.mock('@bike4mind/database', () => ({
     findDueForReminder: mocks.findDueForReminder,
     findPendingReview: mocks.findPendingReview,
     markAlerted: mocks.markAlerted,
+    markAlertQueued: mocks.markAlertQueued,
     markReminded: mocks.markReminded,
+    findDueForEscalation: mocks.findDueForEscalation,
+    escalate: mocks.escalate,
+    findEscalationUnalerted: mocks.findEscalationUnalerted,
+    markEscalationAlerted: mocks.markEscalationAlerted,
+    markEscalationAlertQueued: mocks.markEscalationAlertQueued,
+    findDueForEscalationReminder: mocks.findDueForEscalationReminder,
+    countPendingReview: mocks.countPendingReview,
+    markEscalationReminded: mocks.markEscalationReminded,
   },
 }));
 vi.mock('@bike4mind/observability', () => ({
@@ -55,10 +74,16 @@ describe('imageModerationReviewSweep handler', () => {
     mocks.findUnalerted.mockResolvedValue([]);
     mocks.findDueForReminder.mockResolvedValue([]);
     mocks.findPendingReview.mockResolvedValue([]);
+    mocks.findDueForEscalation.mockResolvedValue([]);
+    mocks.escalate.mockResolvedValue(null);
+    mocks.findEscalationUnalerted.mockResolvedValue([]);
+    mocks.findDueForEscalationReminder.mockResolvedValue([]);
     mocks.getRecipients.mockResolvedValue(['reviewer-one@example.com']);
+    mocks.getEscalationRecipients.mockResolvedValue(['second-one@example.com']);
     mocks.sendEmail.mockResolvedValue({ messageId: 'm-1' });
     mocks.createReviewerAlertDelivery.mockReturnValue({
       getRecipients: mocks.getRecipients,
+      getEscalationRecipients: mocks.getEscalationRecipients,
       sendEmail: mocks.sendEmail,
       appUrl: () => 'https://app.example',
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -89,6 +114,40 @@ describe('imageModerationReviewSweep handler', () => {
       OldestPendingAgeMinutes: 40,
       PendingWithoutReviewers: 0,
     });
+  });
+
+  it('escalates an overdue incident on timeout, with no admin, and emails the escalation list', async () => {
+    const overdue = row('inc-3', 25 * 60);
+    const escalatedAt = new Date();
+    mocks.findDueForEscalation.mockResolvedValue([overdue]);
+    mocks.escalate.mockResolvedValue({ ...overdue, escalatedAt, escalationTrigger: 'timeout' });
+    mocks.findEscalationUnalerted.mockResolvedValue([{ ...overdue, escalatedAt }]);
+
+    const result = await handler();
+
+    expect(mocks.escalate).toHaveBeenCalledExactlyOnceWith('inc-3', { trigger: 'timeout' }, expect.any(Date));
+    expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
+      'second-one@example.com',
+      expect.objectContaining({ subject: 'Moderation review escalated' }),
+      { kind: 'incidentAlert', incidentId: 'inc-3', alert: 'escalation' }
+    );
+    expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('inc-3', expect.any(Date));
+    expect(result).toMatchObject({ escalated: 1, escalationAlerted: 1 });
+  });
+
+  it('reminds the escalation list about a waiting escalated incident and stamps its own reminder time', async () => {
+    const waiting = { ...row('inc-4', 50 * 60), escalatedAt: new Date() };
+    mocks.findDueForEscalationReminder.mockResolvedValue([waiting]);
+
+    const result = await handler();
+
+    expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
+      'second-one@example.com',
+      expect.objectContaining({ subject: 'Moderation reviews still pending' })
+    );
+    expect(mocks.markEscalationReminded).toHaveBeenCalledExactlyOnceWith(['inc-4'], expect.any(Date));
+    expect(mocks.markReminded).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ escalationReminded: 1, reminded: 0 });
   });
 
   it('publishes every series dimensioned by Stage only', async () => {

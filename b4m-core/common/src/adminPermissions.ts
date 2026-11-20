@@ -8,6 +8,7 @@ export const ADMIN_PERMISSIONS = [
   'users:impersonate',
   'keys:revoke',
   'users:delete',
+  'users:export',
   'settings:manage',
   'models:curate',
 ] as const;
@@ -19,10 +20,35 @@ export const AdminPermissionsSchema = z
   .refine(ids => new Set(ids).size === ids.length, 'Admin permissions must not repeat');
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
 
-/** `before` is the set the editor loaded, so a concurrent change is a conflict rather than a silent overwrite. */
+/** Bounds how many admin roles (adminRoles.ts) one user can hold, so per-request resolution stays one small query. */
+export const MAX_ADMIN_ROLES_PER_USER = 20;
+export const AdminRoleIdSchema = z.string().regex(/^[0-9a-f]{24}$/i, 'Expected an id');
+export const AdminRoleIdsSchema = z
+  .array(AdminRoleIdSchema)
+  .max(MAX_ADMIN_ROLES_PER_USER)
+  .refine(ids => new Set(ids.map(id => id.toLowerCase())).size === ids.length, 'Admin roles must not repeat');
+/** Lowercased, de-duplicated and sorted, so stored arrays and audit diffs are stable. */
+export const sortAdminRoleIds = (ids: readonly string[]): string[] =>
+  [...new Set(ids.map(id => id.toLowerCase()))].sort();
+
+/**
+ * `before` is the set the editor loaded, so a concurrent change is a conflict rather than a silent
+ * overwrite. Role membership is optional and travels as a pair the same way: `beforeAdminRoleIds`
+ * with `adminRoleIds`, or neither to leave roles untouched.
+ */
 export const AdminUserPermissionsChangeSchema = z
-  .object({ before: AdminPermissionsSchema, adminPermissions: AdminPermissionsSchema, reason: z.string() })
-  .strict();
+  .object({
+    before: AdminPermissionsSchema,
+    adminPermissions: AdminPermissionsSchema,
+    beforeAdminRoleIds: AdminRoleIdsSchema.optional(),
+    adminRoleIds: AdminRoleIdsSchema.optional(),
+    reason: z.string(),
+  })
+  .strict()
+  .refine(
+    change => (change.beforeAdminRoleIds === undefined) === (change.adminRoleIds === undefined),
+    'Send beforeAdminRoleIds and adminRoleIds together'
+  );
 export type AdminUserPermissionsChange = z.infer<typeof AdminUserPermissionsChangeSchema>;
 
 /**
@@ -47,13 +73,42 @@ export const MODERATION_PAGE_READ = ['support:read', 'users:moderate'] as const 
 /** The same for credits: the credit, grant and subscription reads a `credits:adjust` delegate needs beside its writes. */
 export const CREDITS_PAGE_READ = ['support:read', 'credits:adjust'] as const satisfies readonly AdminPermissionId[];
 
+/**
+ * Settings that constrain delegated admins themselves, so `settings:manage` alone must not loosen them:
+ * only a full admin may change them. Enforced by `pages/api/settings/update.ts`; the admin settings page
+ * locks the same fields for delegates.
+ */
+export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'AdminApprovalsEnabled',
+  'AdminApprovalBulkUserThreshold',
+  'AdminApprovalCreditThreshold',
+  'AdminApprovalExpiryHours',
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
+  'SlackSecurityAlertsWebhookUrl',
+  'enforceMFA',
+  'allowTrustedDevices',
+  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
+  'signupGrantUnprotectedMaxCredits',
+]);
+
 type AdminIdentity = {
   isAdmin?: boolean | null;
+  /** Direct grants, stored on the user. */
   adminPermissions?: readonly string[] | null;
+  /** Permissions from the user's admin roles, resolved per request and never stored (adminRoles.ts). */
+  roleAdminPermissions?: readonly string[] | null;
+  /** Role membership. Counts as admin access for target protection even before roles are resolved. */
+  adminRoleIds?: readonly unknown[] | null;
 };
 
+/** Effective = direct grants UNION role permissions; a user whose roles were not resolved has only the former. */
 export function hasAdminPermission(user: AdminIdentity | null | undefined, permission: AdminPermissionId): boolean {
-  return user?.isAdmin === true || user?.adminPermissions?.includes(permission) === true;
+  return (
+    user?.isAdmin === true ||
+    user?.adminPermissions?.includes(permission) === true ||
+    user?.roleAdminPermissions?.includes(permission) === true
+  );
 }
 
 export function meetsAdminPermissionRequirement(
@@ -64,8 +119,14 @@ export function meetsAdminPermissionRequirement(
   return anyOf.some(permission => hasAdminPermission(user, permission));
 }
 
+/**
+ * Whether the user holds any admin access. Role membership alone counts, so a target loaded
+ * without resolving its roles is still protected by assertCanActOnAdminTarget.
+ */
 export function canAccessAdmin(user: AdminIdentity | null | undefined): boolean {
-  return ADMIN_PERMISSIONS.some(permission => hasAdminPermission(user, permission));
+  return (
+    ADMIN_PERMISSIONS.some(permission => hasAdminPermission(user, permission)) || (user?.adminRoleIds?.length ?? 0) > 0
+  );
 }
 
 /** Full admin is exactly the legacy `isAdmin` flag; holding every explicit permission is still delegated access. */

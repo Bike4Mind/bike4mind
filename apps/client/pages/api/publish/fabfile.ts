@@ -1,4 +1,5 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile } from '@bike4mind/database';
 import {
@@ -150,6 +151,8 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public')
+    await assertPublicationPublicLink({ tier, scopeId, source: { fabFileId: body.fabFileId } });
 
   // Sourcing runs before the quota check (inside settlePublication) because quota needs the
   // sourced byte length. The whole object is read into memory here; acceptable since the caller

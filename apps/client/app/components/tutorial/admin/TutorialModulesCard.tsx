@@ -25,12 +25,14 @@ const DISCARD_PROMPT = 'Discard your unsaved edits to this tutorial?';
 
 interface Props {
   apiBase: string;
+  /** Written into every export, so the apply script can refuse it in the wrong repo. */
+  owner: string;
   /** The host's own step renderers, so the editor can flag a step type nothing renders. */
   steps?: TutorialStepRegistry;
 }
 
 /** Admin card for switching a tutorial module off, or editing its words, without a deploy. */
-const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
+const TutorialModulesCard: FC<Props> = ({ apiBase, owner, steps }) => {
   const modules = useTutorialModules(apiBase);
   const choices = useTutorialAnchorChoices(apiBase);
   const save = useSetTutorialModule(apiBase);
@@ -138,6 +140,7 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
                 <TutorialOverrideEditor
                   key={row.moduleId}
                   apiBase={apiBase}
+                  owner={owner}
                   row={row}
                   choices={choices.data}
                   steps={steps}

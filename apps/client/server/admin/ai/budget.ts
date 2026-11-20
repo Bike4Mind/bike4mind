@@ -3,16 +3,16 @@ import { cacheRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { hasReportedUsage, type CompletionMeter } from '@bike4mind/services/billing/completionMeter';
 import { resolvePlatformDecisionProviderKey } from '@bike4mind/server-utils/decisions/providers';
-import { completionCeilingUsd, completionUsd } from '@server/billing/meterPlatformCompletion';
-import type { DecisionAccounting } from '@server/decisions/executeDecision';
-import { toMicroUsd } from '@server/decisions/platformDecision';
+import { completionCeilingUsd, completionUsd } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import type { DecisionAccounting } from '@bike4mind/server-utils/decisions/executeDecision';
+import { toMicroUsd } from '@bike4mind/server-utils/decisions/platformDecision';
 import { AdminAiSkip } from './adminAiSkip';
 
 /**
  * Platform spend for admin AI: a global cap per UTC calendar month shared by every feature, plus a
  * per-feature call cap and USD budget per fixed 24h window. Each call reserves its worst-case cost
  * first and settles to the actual cost after. A zero cap or budget refuses every call, free models
- * included (same rule as platformDecisionAccounting in server/decisions/platformDecision.ts).
+ * included (same rule as platformDecisionAccounting in packages/server-utils/src/decisions/platformDecision.ts).
  *
  * Never run inside withTransaction: Mongoose queries there join the transaction, so a refused claim
  * would abort it. Every cache write below opts out of an ambient session explicitly.
@@ -68,8 +68,13 @@ export async function reserveAdminAiSpend({
 }): Promise<AdminAiReservation> {
   if (!(limits.monthlyCapUsd > 0) || !(limits.dailyBudgetUsd > 0)) throw new AdminAiSkip('budget');
   if (!(limits.maxCallsPerDay > 0)) throw new AdminAiSkip('call_cap');
+  const spent = await readAdminAiSpend(feature, now);
+  if (spent.spentThisMonthUsd >= limits.monthlyCapUsd || spent.spentTodayUsd >= limits.dailyBudgetUsd) {
+    throw new AdminAiSkip('budget');
+  }
 
-  const hold = Math.max(0, toMicroUsd(maxCostUsd));
+  // A free request still needs an atomic claim below the spend cap; settlement releases this unit.
+  const hold = Math.max(1, toMicroUsd(maxCostUsd));
   const granted: Grant[] = [];
   try {
     const calls = await cacheRepository.tryAddWithinLimitFixedWindow(
@@ -154,19 +159,28 @@ type AdapterParams = {
   limits: AdminAiSpendLimits;
   /** Receives each settled call's cost so the caller can record the total. */
   onCost?: (usd: number) => void;
+  onCall?: (delta: number) => void;
+  onUnknownCost?: () => void;
 };
 
 /** DecisionAccounting for executeDecision: platform keys only, admin AI budget, no user credits. */
 export const adminAiDecisionAccounting = (
-  { feature, limits, onCost }: AdapterParams,
+  { feature, limits, onCost, onCall, onUnknownCost }: AdapterParams,
   logger: Logger
 ): DecisionAccounting => ({
   resolveProviderKey: provider => resolvePlatformDecisionProviderKey(provider, logger),
   reserve: async ({ maxCostUsd }) => {
     const reservation = await reserveAdminAiSpend({ feature, maxCostUsd, limits });
+    onCall?.(1);
     return {
-      refund: () => reservation.refund(),
-      fail: () => reservation.fail(),
+      refund: () => {
+        onCall?.(-1);
+        return reservation.refund();
+      },
+      fail: () => {
+        onUnknownCost?.();
+        return reservation.fail();
+      },
       settle: async usage => {
         await reservation.settle(usage.costUsd);
         onCost?.(usage.costUsd);
@@ -178,18 +192,23 @@ export const adminAiDecisionAccounting = (
 
 /** CompletionMeter for meterCompletionBackend: holds the call's ceiling, settles to reported usage. */
 export const adminAiCompletionMeter =
-  ({ feature, limits, onCost }: AdapterParams): CompletionMeter =>
+  ({ feature, limits, onCost, onCall, onUnknownCost }: AdapterParams): CompletionMeter =>
   async (modelInfo, messages, maxTokens, _models, turns = 1, tools = []) => {
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveAdminAiSpend({ feature, maxCostUsd: ceilingUsd * turns, limits });
+    onCall?.(1);
     return {
       // A throw before usage can follow a billed request; retain the hold while its cost is unknown.
-      refund: () => reservation.fail(),
+      refund: () => {
+        onUnknownCost?.();
+        return reservation.fail();
+      },
       settle: async usage => {
         // No reported usage: charge one turn's ceiling, as createRequestCompletionMeter does.
         const usd = hasReportedUsage(usage) ? completionUsd(modelInfo, usage) : ceilingUsd;
         await reservation.settle(usd);
-        onCost?.(usd);
+        if (hasReportedUsage(usage)) onCost?.(usd);
+        else onUnknownCost?.();
         return 0;
       },
     };

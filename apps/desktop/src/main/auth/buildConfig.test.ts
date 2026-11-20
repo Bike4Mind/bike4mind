@@ -10,6 +10,7 @@ vi.mock('electron-vite', async importOriginal => {
 
 const API_VARIABLE = 'B4M_DEFAULT_API_URL';
 const FEED_VARIABLE = 'B4M_UPDATE_FEED_URL';
+const KEYS_VARIABLE = 'B4M_UPDATE_PUBLIC_KEYS';
 const CURATED_VARIABLE = 'B4M_CURATED_MANIFEST_URL';
 const PRODUCTION = 'https://app.bike4mind.com';
 
@@ -21,7 +22,8 @@ describe('desktop build environment', () => {
   beforeEach(() => {
     vi.stubEnv(API_VARIABLE, undefined);
     vi.stubEnv(FEED_VARIABLE, undefined);
-    // Explicitly empty so the curated lookup never reaches loadEnv and only the backend and feed do.
+    // Explicitly empty so these lookups never reach loadEnv and only the backend and feed do.
+    vi.stubEnv(KEYS_VARIABLE, '');
     vi.stubEnv(CURATED_VARIABLE, '');
     vi.mocked(loadEnv).mockReset();
     vi.mocked(loadEnv).mockReturnValue({});
@@ -78,6 +80,15 @@ describe('desktop build environment', () => {
     const define = config({ command: 'serve', mode: 'development' }).main?.define;
 
     expect(define?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify(''));
+  });
+
+  it('bakes update keys from the shell, and an explicitly empty value as no keys', () => {
+    vi.stubEnv(KEYS_VARIABLE, 'first-key,second-key');
+    expect(bakedDefinitions()?.[`process.env.${KEYS_VARIABLE}`]).toBe(JSON.stringify('first-key,second-key'));
+
+    vi.stubEnv(KEYS_VARIABLE, '');
+    vi.mocked(loadEnv).mockReturnValue({ [KEYS_VARIABLE]: 'local-key' });
+    expect(bakedDefinitions()?.[`process.env.${KEYS_VARIABLE}`]).toBe(JSON.stringify(''));
   });
 
   it('keeps an explicitly empty feed disabled even when local files provide a feed', () => {

@@ -30,8 +30,8 @@ export interface WebSearchToolConfig {
   /**
    * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
    * actual search result before fetching it server-side, rather than trusting the model's copy of
-   * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
-   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset (or an
+   * it unconditionally. The apps supply `signingKey('search-image-url')` from
+   * server-utils/src/security/signingKeys.ts. A caller that leaves this unset (or an
    * empty/placeholder value) degrades to plain prose: no image search, no cards prompt, rather
    * than paying for images that would only fail verification and render as "Image unavailable".
    */
@@ -440,6 +440,7 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
+        ...(result.displayHost ? { displayHost: result.displayHost } : {}),
         // Only ever set when images were actually requested/found - keeps the "byte-identical
         // output when include_images is unset" contract honest for the stored citable too, not
         // just the text output below.
@@ -469,7 +470,7 @@ export async function performWebSearch(
         return (
           `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
-          `Source: [${safeHostname(result.url)}](${result.url})\n`
+          `Source: [${stripNewlines(result.displayHost ?? safeHostname(result.url))}](${result.url})\n`
         );
       })
       .join('\n');

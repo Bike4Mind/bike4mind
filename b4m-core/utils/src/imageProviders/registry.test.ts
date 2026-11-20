@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_MODEL_CATALOG, ImageModels } from '@bike4mind/common';
+import { ALL_IMAGE_MODELS, IMAGE_MODEL_CATALOG, ImageModels, getImageModelCatalogEntry } from '@bike4mind/common';
 import { createImageProviderRegistry } from './registry';
+import { BflImageProvider } from './bfl/BflImageProvider';
 import { OpenAIImageProvider } from './openai/OpenAIImageProvider';
+import { XaiImageProvider } from './xai/XaiImageProvider';
+import { TestImageProvider } from './test/TestImageProvider';
+import { LocalImageProvider } from './local/LocalImageProvider';
 import type { ImageProvider } from './types';
 
 const stubProvider = (overrides: Partial<ImageProvider> & Pick<ImageProvider, 'id' | 'models'>): ImageProvider => ({
@@ -20,6 +24,28 @@ describe('createImageProviderRegistry', () => {
     expect(registry.get('openai')).toBe(openai);
     expect(registry.get('bfl')).toBeUndefined();
     expect(registry.ids()).toEqual(['openai']);
+  });
+
+  it.each(['bfl', 'xai'] as const)('resolves every %s catalog model to its provider', providerId => {
+    const registry = createImageProviderRegistry([new BflImageProvider(), new XaiImageProvider()]);
+    const models = ALL_IMAGE_MODELS.filter(model => IMAGE_MODEL_CATALOG[model].provider === providerId);
+    expect(models.length).toBeGreaterThan(0);
+    const provider = registry.get(providerId);
+    expect(provider?.id).toBe(providerId);
+    expect([...(provider?.models ?? [])].sort()).toEqual([...models].sort());
+  });
+
+  it('registers the test provider against its job-only model', () => {
+    const test = new TestImageProvider();
+    const registry = createImageProviderRegistry([test]);
+    expect(registry.get('test')).toBe(test);
+  });
+
+  it('registers the local provider and resolves any local-image/ model to it', () => {
+    const local = new LocalImageProvider();
+    const registry = createImageProviderRegistry([local]);
+    expect(registry.get('local')).toBe(local);
+    expect(registry.get(getImageModelCatalogEntry('local-image/sdxl').provider)).toBe(local);
   });
 
   it('rejects a duplicate provider id', () => {

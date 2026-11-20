@@ -13,18 +13,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
-import { parseAdminSearch } from '../adminTabParams';
+import { adminSearchForTab, parseAdminSearch } from '../adminTabParams';
+import { acquisitionTouchSchema } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
+import { acquisitionKeyOf, attributedTouch } from '@bike4mind/server-utils/app/utils/acquisitionTouch';
+import { AdminUsersFilterSchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 
 const mocks = vi.hoisted(() => {
   const overview = vi.fn();
   const topAccounts = vi.fn();
   const funnel = vi.fn();
+  const acquisition = vi.fn((_url: string, _config?: unknown) =>
+    Promise.resolve({ data: { status: 'rangeTooLong', maxDays: 93 } })
+  );
   const get = vi.fn((url: string, config?: unknown) => {
+    if (url.endsWith('/acquisition')) return acquisition(url, config);
     if (url.endsWith('/top-accounts')) return topAccounts(url, config);
     if (url.endsWith('/activation')) return funnel(url, config);
     return overview(url, config);
   });
-  return { get, overview, topAccounts, funnel, download: vi.fn(), toastError: vi.fn() };
+  return { get, overview, topAccounts, funnel, acquisition, download: vi.fn(), toastError: vi.fn() };
 });
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -46,7 +53,12 @@ vi.mock('recharts', async importOriginal => {
 
 import AnalyticsTab from './index';
 import { ActiveUsersTooltip } from './ActiveUsersSection';
-import { readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
+import {
+  readAcquisitionControls,
+  readAnalyticsFilters,
+  writeAcquisitionControls,
+  writeAnalyticsFilters,
+} from './analyticsTabSearch';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -271,6 +283,19 @@ describe('analytics URL state', () => {
 });
 
 describe('AnalyticsTab', () => {
+  it('leaves padding to the shell and opens with the page header at the shared region gap', async () => {
+    await renderPage('/admin?tab=analytics');
+    const page = await screen.findByTestId('analytics-page');
+    const style = getComputedStyle(page);
+    for (const padding of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(padding).toBe('0');
+    }
+    expect(page).toHaveStyle({ gap: '24px', minWidth: 0 });
+    expect(page.firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(within(page).getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(page).getByRole('heading', { level: 1 })).toHaveTextContent('Analytics');
+  });
+
   it('requests the view a deep link describes', async () => {
     await renderPage('/admin?tab=analytics&range=90d&compare=off&signups=all');
     await screen.findByText('Active users (MAU)');
@@ -709,7 +734,7 @@ describe('AnalyticsTab', () => {
       resolveTop({ data: topAccounts() });
       await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
       fireEvent.click(screen.getByTestId('analytics-export-btn'));
-      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts()));
+      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts(), expect.anything()));
     });
 
     it('disables Export while a new range loads, so the zip never mixes two ranges', async () => {
@@ -853,5 +878,124 @@ describe('ActiveUsersTooltip', () => {
     daysById.set('2026-06-01', { ...overview().activeUsers.days[0], day: '2026-06-01', internal: null });
     renderTooltip('2026-06-01');
     expect(screen.getByTestId('analytics-tooltip-internal')).toHaveTextContent('Internal: not recorded');
+  });
+});
+
+describe('acquisition controls', () => {
+  it('reads defaults, drops unknown values and leaves defaults out of the URL', () => {
+    expect(readAcquisitionControls({ touch: 'middle', window: '14', followUp: '365' })).toEqual({
+      touch: 'first',
+      window: '30',
+      followUp: '90',
+    });
+    expect(writeAcquisitionControls({ touch: 'first', window: '30', followUp: '90' })).toEqual({
+      touch: '',
+      window: '',
+      followUp: '',
+    });
+    const controls = { touch: 'last', window: '7', followUp: '60' } as const;
+    expect(readAcquisitionControls(writeAcquisitionControls(controls))).toEqual(controls);
+  });
+
+  it('writes the touch toggle to the URL and keeps it when the range changes', async () => {
+    const router = await renderPage('/admin?tab=analytics&range=90d');
+    fireEvent.click(await screen.findByTestId('acquisition-touch-toggle-last'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' }));
+    await waitFor(() =>
+      expect(mocks.acquisition.mock.calls.at(-1)?.[1]).toEqual({
+        params: { range: '90d', signups: 'legit', touch: 'last', window: '30', followUp: '90' },
+      })
+    );
+    fireEvent.click(screen.getByTestId('analytics-range-28d'));
+    await waitFor(() => expect(router.state.location.search.range).toBeUndefined());
+    expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' });
+  });
+
+  it.each([null, 'source', 'medium', 'campaign'] as const)(
+    'round-trips a converted row from stored touch to Users, including Unicode expansion in %s',
+    async expandedPart => {
+      const metrics = {
+        signups: 3,
+        matureSignups: 3,
+        converted: 1,
+        provisionalConverted: 0,
+        provisional: false,
+        activationSignups: 3,
+        firstAction: 2,
+        cameBack: 1,
+      };
+      const stored = acquisitionTouchSchema.parse({
+        source: 'ads',
+        campaign: 'spring',
+        ...(expandedPart ? { [expandedPart]: 'İ'.repeat(128) } : {}),
+      });
+      const touch = attributedTouch({ firstTouch: stored }, 'first');
+      if (!touch) throw new Error('Expected a normalized campaign touch');
+      if (expandedPart) {
+        expect(stored[expandedPart]).toHaveLength(128);
+        expect(touch[expandedPart]).toHaveLength(256);
+      }
+      const row = { ...metrics, kind: 'touch', ...touch };
+      mocks.acquisition.mockResolvedValueOnce({
+        data: {
+          status: 'ok',
+          signups: 'legit',
+          touch: 'last',
+          window: { createdFrom: '2026-05-19T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
+          coverage: { signups: 3, attributed: 3, pct: 100 },
+          conversionWindowDays: 7,
+          followUpDays: 90,
+          renewalBasis: 'subscription-state',
+          totals: row,
+          rows: [row],
+          truncated: false,
+        },
+      } as never);
+      const router = await renderPage('/admin?tab=analytics');
+      fireEvent.click(await screen.findByTestId('acquisition-row-' + row.key + '-drill-converted-btn'));
+      await waitFor(() =>
+        expect(router.state.location.search).toMatchObject({
+          tab: 'users',
+          createdFrom: '2026-05-19T00:00:00.000Z',
+          createdTo: '2026-06-16T00:00:00.000Z',
+          acqTouch: 'last',
+          acqSource: row.source,
+          acqCampaign: row.campaign,
+          acqConverted: 'true',
+          acqWindow: '7',
+          verdict: 'legit',
+        })
+      );
+      expect(router.state.location.search.acqMedium).toBe(row.medium === '(none)' ? undefined : row.medium);
+      const filter = AdminUsersFilterSchema.parse(router.state.location.search);
+      expect(
+        acquisitionKeyOf({ source: filter.acqSource ?? '', medium: filter.acqMedium, campaign: filter.acqCampaign })
+      ).toBe(row.key);
+    }
+  );
+
+  it.each(['acqSource', 'acqMedium', 'acqCampaign'] as const)(
+    'refuses an overlong %s in both the route and server filter',
+    key => {
+      const search = {
+        tab: 'users',
+        createdFrom: '2026-05-01T00:00:00Z',
+        createdTo: '2026-06-01T00:00:00Z',
+        acqSource: 'ads',
+        [key]: 'i̇'.repeat(128) + 'x',
+      };
+      expect(parseAdminSearch(search)[key]).toBeUndefined();
+      expect(AdminUsersFilterSchema.safeParse(search).success).toBe(false);
+    }
+  );
+
+  it('drops the acquisition controls on a switch to another tab', () => {
+    const switched = adminSearchForTab(
+      { tab: 'analytics', acquisitionTouch: 'last', conversionWindow: '7', followUp: '60' },
+      'users'
+    );
+    expect(switched.acquisitionTouch).toBeUndefined();
+    expect(switched.conversionWindow).toBeUndefined();
+    expect(switched.followUp).toBeUndefined();
   });
 });

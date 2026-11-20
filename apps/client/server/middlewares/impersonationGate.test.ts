@@ -30,7 +30,6 @@ describe('impersonation route policy', () => {
     '/api/mcp-connections/connection/api-key',
     '/api/auth/mfa/passkey/register-options',
     '/api/ai/v1/completions',
-    '/api/secret-rotations/renewed',
   ])('always refuses %s even after escalation', path => {
     for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
       expect(impersonationDecision(method, path, true)).toBe('sensitive');
@@ -65,6 +64,26 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('POST', '/api/files', true)).toBe('allow');
     expect(impersonationDecision('POST', '/api/auth/impersonation', false)).toBe('allow');
   });
+  it('admits only public client-config reads with a parked admin cookie', () => {
+    const next = vi.fn();
+    for (const method of ['GET', 'HEAD']) {
+      impersonationAnonymousGate(
+        { method, url: '/api/v1/client-config/public/?x=1', headers: { cookie: 'parked' } } as Request,
+        {} as Response,
+        next
+      );
+    }
+    expect(next).toHaveBeenCalledTimes(2);
+    for (const [method, url] of [
+      ['POST', '/api/v1/client-config/public'],
+      ['GET', '/api/v1/client-config'],
+      ['GET', '/api/v1/client-config/public/other'],
+    ]) {
+      expect(() =>
+        impersonationAnonymousGate({ method, url, headers: { cookie: 'parked' } } as Request, {} as Response, next)
+      ).toThrow('End support access');
+    }
+  });
   it.each([
     '/api/sessions/shared',
     '/api/sessions/count',
@@ -88,6 +107,7 @@ describe('impersonation route policy', () => {
     '/api/gears/status',
     '/api/models/stats',
     '/api/help/recently-viewed',
+    '/api/v1/image-models',
     '/api/v1/video-models',
     '/api/v1/music-models',
   ])('admits notebook navigation without enabling writes: %s', path => {

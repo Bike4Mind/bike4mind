@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
+import { isUnconfiguredSecret } from '../types/entities/SystemSecretsTypes';
 
 /**
  * Signs the image URLs `web_search` writes into its tool output, so `/api/search-image` (the
@@ -38,10 +39,6 @@ const SIGNATURE_PARAM = 'b4mSig';
 // data past it.
 const TRAILING_SIGNATURE_RE = new RegExp(`[?&]${SIGNATURE_PARAM}=([0-9a-f]{32})$`);
 
-// The SST secret's own declared default (infra/secrets.ts) - public in this repo, so a deploy
-// that never overrode it must be treated the same as "no secret configured", not as a working key.
-const KNOWN_PLACEHOLDER_SECRETS = new Set(['', 'my-secret-placeholder-value', 'not-configured']);
-
 /**
  * True for an empty or known-placeholder signing secret. Shared so any caller that would
  * otherwise sign-and-fail (e.g. web_search deciding whether to pay for image results at all)
@@ -49,7 +46,7 @@ const KNOWN_PLACEHOLDER_SECRETS = new Set(['', 'my-secret-placeholder-value', 'n
  * that could drift out of sync.
  */
 export function isPlaceholderImageSigningSecret(secret: string | undefined): boolean {
-  return KNOWN_PLACEHOLDER_SECRETS.has(secret ?? '');
+  return isUnconfiguredSecret(secret);
 }
 
 function computeSignature(canonical: string, secret: string): string {

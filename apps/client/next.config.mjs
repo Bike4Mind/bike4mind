@@ -29,7 +29,7 @@ const HELP_CONTENT_ROOTS = ['./public/help-content/**/*', './app/generated/help-
  * only /api/help/chat retrieves against the vectors. See the comment at the include site.
  */
 const HELP_INDEX = './app/generated/help-index.json';
-const HELP_EMBEDDINGS = './app/generated/help-embeddings.json';
+const HELP_EMBEDDINGS = ['./app/generated/help-embeddings.json', './app/generated/help-embeddings.bin'];
 
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
@@ -133,7 +133,7 @@ const nextConfig = {
   // Turbopack's own rather than nft, whose collect-build-traces is gated off - and since that
   // module is also the only JS-side reader of this key, the includes here are live only because
   // Turbopack applies them natively. The excludes below are dormant either way; see the note on
-  // them. help-embeddings.json exists only when an embedding key was present at build time (see
+  // them. help-embeddings.json/.bin exist only when an embedding key was present at build time (see
   // .gitignore), and an include matching no file is a silent no-op, so declaring it costs a
   // keyless build nothing.
   outputFileTracingIncludes: {
@@ -142,7 +142,7 @@ const nextConfig = {
     '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
     '/api/help': [HELP_INDEX],
     '/api/help/content': HELP_CONTENT_ROOTS,
-    '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, HELP_EMBEDDINGS],
+    '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, ...HELP_EMBEDDINGS],
   },
 
   // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in
@@ -152,7 +152,8 @@ const nextConfig = {
   // apps/client/scripts/check-standalone-tree.mjs. Globs resolve against this package.
   // Deliberately NOT public/**: server/help/retrieval.ts reads public/help-content per request.
   outputFileTracingExcludes: {
-    '**/*': ['e2e/**', '**/*.test.ts?(x)'],
+    // The ffmpeg binary belongs to the generation-job worker only; never ship it in the Next server.
+    '**/*': ['e2e/**', '**/*.test.ts?(x)', '**/ffmpeg-static/**', '**/node_modules/.pnpm/ffmpeg-static*/**'],
   },
 
   transpilePackages: [
@@ -280,6 +281,16 @@ const nextConfig = {
         source: '/.well-known/jwks.json',
         destination: '/api/oauth/jwks',
       },
+      // Digital Asset Links: verifies the Android app's https sign-in redirect as an App Link
+      {
+        source: '/.well-known/assetlinks.json',
+        destination: '/api/well-known/assetlinks',
+      },
+      // Apple app site association: lets the iOS app use its https sign-in callback and universal links
+      {
+        source: '/.well-known/apple-app-site-association',
+        destination: '/api/well-known/apple-app-site-association',
+      },
       // Client ID Metadata Document for custom MCP connector sign-in
       {
         source: '/.well-known/oauth-client/mcp-client.json',
@@ -334,6 +345,11 @@ const nextConfig = {
     // Skip server source map generation to reduce build memory pressure on CI.
     // Recommended in the Next.js memory-usage guide for large projects.
     serverSourceMaps: false,
+    // Next 16.4 defaults this on. The self-host image build starts from an empty .next and
+    // discards it, so the cache is never read back, and persisting it at shutdown, which
+    // `next build` awaits after printing the route table, intermittently never finished
+    // there (the Self-host image workflow timed out with the route table as its last output).
+    ...(process.env.B4M_SELF_HOST === 'true' ? { turbopackFileSystemCacheForBuild: false } : {}),
   },
 };
 

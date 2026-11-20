@@ -9,6 +9,7 @@ import type {
   ISkillSnapshot,
   SkillListingReportReason,
   SkillListingVisibility,
+  SkillReviewStatus,
   SkillRiskTier,
 } from '@bike4mind/common';
 
@@ -28,6 +29,7 @@ export type MarketVersionView = {
   riskTier?: SkillRiskTier;
   /** The listing's author approved it themselves; no second reviewer. */
   selfApproved?: boolean;
+  reviewStatus?: SkillReviewStatus;
   createdAt: string;
 };
 
@@ -63,7 +65,12 @@ export type MarketFilters = {
 
 export type MyListing = MarketListing & { versions: ISkillListingVersion[] };
 
-export type MarketMe = { organizations: Array<{ id: string; name: string }>; isReviewer: boolean; isAdmin: boolean };
+export type MarketMe = {
+  organizations: Array<{ id: string; name: string }>;
+  spaces?: Array<{ id: string; name: string }>;
+  isReviewer: boolean;
+  isAdmin: boolean;
+};
 
 export type SubmitResult = { listing: MarketListing; version: ISkillListingVersion };
 
@@ -134,6 +141,8 @@ export type ReviewQueueVersionItem = {
 export type ReviewQueueReportItem = {
   listing: MarketListing;
   count: number;
+  /** Reports that count toward auto-hide. */
+  countingCount: number;
   reports: Array<{ reason: SkillListingReportReason; details?: string; createdAt: string }>;
 };
 export type LegacyGlobalSkill = {

@@ -8,6 +8,9 @@ import type { VideoValidationErrorCode } from './validate';
  */
 export type VideoFailureDetail = { model: string } & (
   | { code: 'unsupported_mode'; mode: VideoMode }
+  | { code: 'unsupported_keyframes' }
+  | { code: 'invalid_keyframes' }
+  | { code: 'unsupported_draft' }
   | { code: 'missing_input_image' }
   | { code: 'unexpected_input_image'; cause: 'conflicting_image_fields' }
   | { code: 'unexpected_input_image'; cause: 'frame_without_image_mode'; role: VideoInputRole }
@@ -47,6 +50,9 @@ function inputRoleReason(model: string, role: VideoInputRole, max: number, reque
 }
 
 const VIDEO_REASONS: ReasonTable<VideoValidationErrorCode, VideoFailureDetail> = {
+  unsupported_keyframes: ({ model }) => `${model} does not support keyframes`,
+  invalid_keyframes: () => 'Check keyframes, their timestamps, and other image fields',
+  unsupported_draft: ({ model }) => `${model} does not support draft at this resolution`,
   unsupported_mode: ({ model, mode }) => `${model} cannot ${MODE_PHRASE[mode]}`,
   missing_input_image: () => 'Image to video needs a first-frame image',
   unexpected_input_image: detail =>

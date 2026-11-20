@@ -7,7 +7,7 @@ import {
   LIVE_ACTIVITY_STAGE_LABEL_MAX,
   publishLiveActivityUpdate,
   type LiveActivityThrottle,
-} from '@server/utils/liveActivityPush';
+} from '@bike4mind/server-utils/utils/liveActivityPush';
 import {
   isPushDeliveryConfigured,
   publishPushNotification,

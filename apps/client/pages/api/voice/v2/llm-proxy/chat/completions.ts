@@ -31,16 +31,21 @@ import {
   type CapturedToolCall,
   type OpenAIChatRequest,
 } from '@bike4mind/voice';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -145,6 +150,8 @@ async function runFullPipeline(
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // As chat.ts: audio_generation runs its job inline in this turn, so it stays in-process.
+    audioToolJobs: buildAudioToolJobs(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,
@@ -163,6 +170,7 @@ async function runFullPipeline(
         sessionId: sessionCtx.sessionId,
         organizationId,
         apiKeyId: sessionCtx.apiKeyId,
+        apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
@@ -222,6 +230,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -238,6 +247,7 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,

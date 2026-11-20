@@ -92,6 +92,7 @@ export default defineConfig({
     'src/commands/modelsCommand.ts',
     'src/commands/updateCommand.ts',
     'src/commands/doctorCommand.ts',
+    'src/commands/mirrorCommand.ts',
     'src/commands/headlessCommand.ts',
     'src/commands/acpCommand.ts',
     'src/commands/apiCommand.ts',

@@ -26,10 +26,32 @@ import {
   type UsersListParams,
 } from '../usersTabSearch';
 import { PLAN_LABELS, SIGNUP_METHOD_LABELS } from './usersColumns';
+import { useAdminRoleList } from '../useAdminRoleList';
+
+const CLEARED_ACQUISITION = {
+  acqTouch: undefined,
+  acqSource: undefined,
+  acqMedium: undefined,
+  acqCampaign: undefined,
+  acqUnattributed: undefined,
+  acqConverted: undefined,
+  acqWindow: undefined,
+} satisfies Partial<UsersListParams>;
+
+// The Analytics acquisition row the list is narrowed to.
+function acquisitionLabel(params: UsersListParams): string {
+  const touch = params.acqTouch === 'last' ? 'last touch' : 'first touch';
+  const row = params.acqUnattributed
+    ? 'Unattributed'
+    : [params.acqSource, params.acqMedium, params.acqCampaign].filter(Boolean).join(' / ');
+  return `${row} (${touch}${params.acqConverted ? `, paid within ${params.acqWindow ?? '30'}d` : ''})`;
+}
 
 const capitalize = (value: string) => value[0].toUpperCase() + value.slice(1);
 
-const SINGLE_FILTERS: { key: Exclude<UsersFilterKey, 'emailDomain'>; label: string; options: FilterChipOption[] }[] = [
+type SingleFilter = { key: Exclude<UsersFilterKey, 'emailDomain'>; label: string; options: FilterChipOption[] };
+
+const SINGLE_FILTERS: SingleFilter[] = [
   { key: 'status', label: 'Status', options: USER_STATUS_FILTERS.map(value => ({ value, label: capitalize(value) })) },
   { key: 'plan', label: 'Plan', options: USER_PLAN_FILTERS.map(value => ({ value, label: PLAN_LABELS[value] })) },
   { key: 'risk', label: 'Risk', options: USER_RISK_FILTERS.map(value => ({ value, label: capitalize(value) })) },
@@ -104,6 +126,25 @@ export function UsersToolbar({
   const [revealed, setRevealed] = useState<ReadonlySet<ExtraFilter>>(new Set());
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
   const userTags = useGetUserTags();
+  const adminRoles = useAdminRoleList();
+
+  // Offered once roles exist; a role id from a link stays removable even when it no longer resolves.
+  const singleFilters = useMemo<SingleFilter[]>(() => {
+    const roles = adminRoles.data ?? [];
+    if (roles.length === 0 && !params.adminRole) return SINGLE_FILTERS;
+    const options = roles.map(role => ({ value: role.id, label: role.name }));
+    if (params.adminRole && !options.some(option => option.value === params.adminRole)) {
+      options.push({
+        value: params.adminRole,
+        label: adminRoles.isLoading
+          ? '...'
+          : adminRoles.isError || !adminRoles.data
+            ? 'Role unavailable'
+            : 'Deleted role',
+      });
+    }
+    return [...SINGLE_FILTERS, { key: 'adminRole', label: 'Admin role', options }];
+  }, [adminRoles.data, adminRoles.isLoading, adminRoles.isError, params.adminRole]);
 
   const organizationOptions = useMemo<FilterChipOption[]>(
     () => [
@@ -130,7 +171,7 @@ export function UsersToolbar({
         ? params.tags.length > 0
         : params[key] !== undefined;
   const hidden: { key: ExtraFilter; label: string }[] = [
-    ...SINGLE_FILTERS.filter(filter => !isShown(filter.key) && !isSet(filter.key)),
+    ...singleFilters.filter(filter => !isShown(filter.key) && !isSet(filter.key)),
     ...(isShown('organization') || isSet('organization')
       ? []
       : [{ key: 'organization' as const, label: 'Organization' }]),
@@ -148,7 +189,7 @@ export function UsersToolbar({
           label="Search name, email, user ID or provider ID"
           data-testid="admin-users-search-input"
         />
-        <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>
+        <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1} sx={{ ml: { md: 'auto' } }}>
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
             Group by
           </Typography>
@@ -165,17 +206,19 @@ export function UsersToolbar({
         </Stack>
       </Stack>
       <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.75} data-testid="admin-users-filters">
-        {SINGLE_FILTERS.filter(filter => isShown(filter.key) || isSet(filter.key)).map(filter => (
-          <FilterChip
-            key={filter.key}
-            id={filter.key}
-            label={filter.label}
-            options={filter.options}
-            value={params[filter.key]}
-            // The chip's options are this filter's own values, so the key and value stay paired.
-            onChange={value => update({ [filter.key]: value } as Partial<UsersListParams>)}
-          />
-        ))}
+        {singleFilters
+          .filter(filter => isShown(filter.key) || isSet(filter.key))
+          .map(filter => (
+            <FilterChip
+              key={filter.key}
+              id={filter.key}
+              label={filter.label}
+              options={filter.options}
+              value={params[filter.key]}
+              // The chip's options are this filter's own values, so the key and value stay paired.
+              onChange={value => update({ [filter.key]: value } as Partial<UsersListParams>)}
+            />
+          ))}
         {(isShown('organization') || isSet('organization')) && (
           <FilterChip
             multiple
@@ -214,7 +257,13 @@ export function UsersToolbar({
             onChange={value => {
               // Verdict and funnel step classify the created window, so they go with it.
               if (value === undefined) {
-                update({ createdFrom: undefined, createdTo: undefined, verdict: undefined, funnelStep: undefined });
+                update({
+                  createdFrom: undefined,
+                  createdTo: undefined,
+                  verdict: undefined,
+                  funnelStep: undefined,
+                  ...CLEARED_ACQUISITION,
+                });
               }
             }}
           />
@@ -246,6 +295,17 @@ export function UsersToolbar({
             options={FUNNEL_STEP_OPTIONS}
             value={params.funnelStep}
             onChange={value => update({ funnelStep: USERS_SEARCH_PARSERS.funnelStep(value) })}
+          />
+        )}
+        {(params.acqSource || params.acqUnattributed) && (
+          <FilterChip
+            id="acquisition"
+            label="Acquisition"
+            options={[{ value: 'row', label: acquisitionLabel(params) }]}
+            value="row"
+            onChange={value => {
+              if (value === undefined) update(CLEARED_ACQUISITION);
+            }}
           />
         )}
         {params.aiVerdict && (

@@ -12,6 +12,7 @@ import {
   dataLakeRepository,
   groupRepository,
   organizationRepository,
+  userApiKeyRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -25,6 +26,7 @@ import {
   userAuditTarget,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
 
 const RoleSchema = z.object({ role: z.enum(['manager', 'member']) });
@@ -62,7 +64,7 @@ const handler = adminApi({
           'Cannot remove the organization owner; transfer organization ownership first, then remove them.'
         );
       }
-      const updated = await organizationService.revokeAccess(
+      const { organization: updated, revokedOrgBilledApiKeyIds } = await organizationService.revokeAccess(
         req.user,
         { id: organizationId, userId },
         {
@@ -72,6 +74,7 @@ const handler = adminApi({
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,
@@ -83,16 +86,17 @@ const handler = adminApi({
         organizationId,
         summary: `removed from organization ${organization.name}`,
         reason,
-        details: { organizationName: organization.name, role },
+        details: { organizationName: organization.name, role, revokedOrgBilledKeys: revokedOrgBilledApiKeyIds.length },
       });
       return updated;
     });
 
     // After the commit, as on the org's own removal route, so a retried transaction cannot mail twice.
+    await refreshSeatEntitlements(userId);
     const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(userId, organization, req.logger);
     await logEventSafe(
       { userId: req.user.id, type: OrganizationEvents.REMOVE_ORG_MEMBER, metadata: { organizationId, userId } },
-      { ability: req.ability },
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id },
       req.logger,
       organizationId
     );

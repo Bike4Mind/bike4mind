@@ -25,6 +25,20 @@ actor FakeTokens: AccessTokenProviding {
 
 /// In-memory `B4MAPI` that serves scripted pages and records the cursors it was asked for.
 actor FakeAPI: B4MAPI {
+  private(set) var sessionLookups: [String] = []
+  var sessionsByID: [String: SessionSummary] = [:]
+
+  func setSessions(_ sessions: [SessionSummary]) {
+    sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+  }
+
+  func session(id: String) async throws -> SessionSummary {
+    sessionLookups.append(id)
+    if let failure { throw failure }
+    guard let session = sessionsByID[id] else { throw APIError.notFound }
+    return session
+  }
+
   var sessionPages: [String?: Page<SessionSummary>] = [:]
   var questPages: [String?: Page<QuestTurn>] = [:]
   var balance = CreditBalance(credits: 0)
@@ -78,6 +92,8 @@ actor FakeAPI: B4MAPI {
   func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
     sentMessages.append(request)
     if holdingSends { await withCheckedContinuation { heldSends.append($0) } }
+    // A real request fails when its task is cancelled; the fake does too, so a cancelled send is visible.
+    if Task.isCancelled { throw APIError.offline }
     return try sendResult.get()
   }
 

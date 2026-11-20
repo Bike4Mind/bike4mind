@@ -15,7 +15,7 @@ vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: (...a: unknown[]) => mockVerifyEmbedApiKey(...a),
 }));
 

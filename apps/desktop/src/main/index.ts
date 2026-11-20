@@ -7,6 +7,7 @@ import { describeBusy, isBusy, type UpdateBusyReport } from '@shared/update';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
+import { currentVersion, currentVersionBasis } from './appVersion';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
@@ -20,12 +21,16 @@ import { registerModelScheme } from './chat/model3d/engineProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
+import { registerSkinScheme } from './mods/skinProtocol';
+import { registerSkins } from './mods';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
-import { registerUsage } from './usage';
+import { registerLocalUsage, registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
+import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
+import { registerSessionHandoff } from './handoff';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -35,20 +40,25 @@ const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
 registerMediaScheme();
 registerArtifactScheme();
 registerModelScheme();
+registerSkinScheme();
 
 function buildAppInfo(): AppInfo {
+  const versionBasis = currentVersionBasis();
   return {
-    appVersion: app.getVersion(),
+    appVersion: currentVersion(),
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     chromeVersion: process.versions.chrome,
     homeDirectory: app.getPath('home'),
+    ...(versionBasis ? { versionBasis } : {}),
   };
 }
 
 /** Set once chat is registered; closes the agent's hidden browsers. */
 let closeAgentBrowsers = (): void => undefined;
 let canCloseLastWindow = (): boolean => true;
+/** Set once the watch is registered; closes the mini Tavern. */
+let closeMiniTavern = (): void => undefined;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -81,6 +91,9 @@ function createWindow(): void {
     if (appWindows().length > 0) return;
     closeAgentBrowsers();
     closeDevLogWindow();
+    // macOS keeps running with no window, and the mini Tavern is how a watcher keeps an eye on it.
+    // Elsewhere the last window closing quits, which needs the mini window gone too.
+    if (process.platform !== 'darwin') closeMiniTavern();
   });
 
   attachDevLogShortcut(window.webContents);
@@ -140,7 +153,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const attention = registerAttention({ openWindow: createWindow });
+  registerSessionHandoff(auth);
+  const attention = registerAttention({
+    openWindow: createWindow,
+    notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
+  });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -160,11 +177,19 @@ void app.whenReady().then(async () => {
     localContext,
     modelSettings,
     capabilityLedger,
+    respondToApproval,
+    store: sessions,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
-    observeStream: event => fleet.observe(event),
-    observeSessionStatus: event => needsYou.observe(event),
+    observeStream: event => {
+      fleet.observe(event);
+      watch.observeStream(event);
+    },
+    observeSessionStatus: event => {
+      needsYou.observe(event);
+      watch.observeStatus(event);
+    },
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
@@ -179,6 +204,29 @@ void app.whenReady().then(async () => {
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
   });
+  // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
+  const watch = registerWatch({
+    sources: {
+      listSessions: () => chat.listSessions(),
+      sessionStatuses: () => chat.sessionStatuses(),
+      sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+      resolveApproval: respondToApproval,
+    },
+    openSession: open => attention.openSession(open),
+    showApp: () => {
+      const window = appWindows()[0];
+      if (!window) return createWindow();
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+    appIcon,
+    // quitState is declared below; this only runs on later window and quit events.
+    isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
+    ...(rendererDevUrl ? { rendererDevUrl } : {}),
+  });
+  closeMiniTavern = () => watch.closeMini();
+  void watch.start();
   const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
     const scope = sessionScopeForChat(state);
     return scope ? sessionScopeKey(scope) : null;
@@ -190,7 +238,9 @@ void app.whenReady().then(async () => {
     if (next === needsYouScope) return;
     needsYouScope = next;
     needsYou.scopeChanged();
+    watch.scopeChanged();
   });
+  registerLocalUsage(auth, sessions, modelServers);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -233,6 +283,8 @@ void app.whenReady().then(async () => {
     }
     quitState = 'ready';
   };
+
+  registerSkins();
 
   // Everything a quit would throw away, counted fresh each time it is asked for. The updater
   // puts this to the user rather than acting on it: a streaming reply and a dev server are both

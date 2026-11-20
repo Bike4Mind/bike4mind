@@ -25,12 +25,15 @@ import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
+import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
+import { captureEmailLinkToken } from './utils/emailLinkToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
 import { AdminLayoutRoute } from './components/admin/AdminLayout';
+import { adminPageFrame } from './components/admin/shared/adminStyles';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -43,9 +46,11 @@ import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
+import { parseModelDetailSearch } from './components/admin/Models/modelDetailSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
+  PERSONA_LOGIN_PAGE_PATH,
   SUBSCRIBER_SOURCES,
   type IntegrationsPageSource,
   type SubscriberSource,
@@ -95,7 +100,9 @@ const AccountDataExportPage = lazy(() => import('./routes/account-data-export/$j
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
-const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+const ArtifactsPage = lazy(() => import('./routes/artifacts/index'));
+const ArtifactPage = lazy(() => import('./routes/artifacts/$id'));
+const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
@@ -103,6 +110,8 @@ const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscriptions/$subscriptionId'));
+const AdminModelDetailPage = lazy(() => import('./routes/admin/models/$'));
+const AdminModelDiscoveryRunPage = lazy(() => import('./routes/admin/models/runs/$runId'));
 const AdminSubscriptionByStripeIdPage = lazy(
   () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
 );
@@ -116,11 +125,14 @@ const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const OAuthLogoutPage = lazy(() => import('./routes/oauth/logout'));
 const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
+const PersonaRedeemPage = lazy(() => import('./routes/personas/redeem'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const StudioProductionsPage = lazy(() => import('./routes/studio/productions'));
+const StudioProductionEditorPage = lazy(() => import('./routes/studio/productions.$compositionId'));
 const StudioLibraryPage = lazy(() => import('./routes/studio/library'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -190,9 +202,10 @@ function buildPremiumGatedElement(descriptor: (typeof premiumRoutes)[number]) {
 // own ProviderBundle; app-shell premium routes hang off layoutRoute (rendered
 // inside the notebook layout) and inherit ProviderBundle + chrome from its
 // Outlet, so wrapping again would double the context providers and their API
-// fetches. getParentRoute is a thunk (lazy), so referencing rootRoute/layoutRoute
-// (declared below) is safe. In the open-core fork `premiumRoutes` is empty -> both
-// arrays are empty.
+// fetches. Admin premium routes hang off adminLayoutRoute the same way: its guard,
+// providers and Suspense boundary already wrap them. getParentRoute is a thunk
+// (lazy), so referencing rootRoute/layoutRoute/adminLayoutRoute (declared below)
+// is safe. In the open-core fork `premiumRoutes` is empty -> every array is empty.
 const premiumPartition = partitionPremiumRoutes(premiumRoutes);
 
 // Public premium routes render bare under the root route: the URL is the authorization,
@@ -227,6 +240,20 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
     getParentRoute: () => layoutRoute,
     path: descriptor.path,
     component: () => gated,
+  });
+});
+// The frame is what a core admin detail route spreads on its own root, so a contributed page sets
+// no outer padding of its own. Access (full admins only) is the layout's, not the route's.
+const builtAdminPremiumRoutes = premiumPartition.admin.map(descriptor => {
+  const LazyComponent = lazy(descriptor.lazyImport);
+  return createRoute({
+    getParentRoute: () => adminLayoutRoute,
+    path: descriptor.path,
+    component: () => (
+      <Box data-testid="admin-contributed-page" sx={adminPageFrame}>
+        <LazyComponent />
+      </Box>
+    ),
   });
 });
 
@@ -605,6 +632,20 @@ export const studioProductionsRoute = createRoute({
   ),
 });
 
+// One production open in the timeline editor. Static prefix, so it never collides with /studio/$modality.
+export const studioProductionEditorRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/productions/$compositionId',
+  component: function StudioProductionEditorRouteComponent() {
+    const { compositionId } = studioProductionEditorRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioProductionEditorPage compositionId={compositionId} />
+      </Suspense>
+    );
+  },
+});
+
 export const studioLibraryRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/studio/library',
@@ -876,13 +917,14 @@ const organizationDetailRoute = createRoute({
       <OrganizationDetailPage />
     </Suspense>
   ),
-  // Declares `tab` as this route's search contract, mirroring profileRoute. The page reads it via
-  // useSearch({ strict: false }), so this types the param rather than being what makes it work.
-  // Deliberately not exhaustive: the Slack org-connect callback returns to this route carrying
-  // slack_connected/slack_error, which OrgSlackIntegration reads loosely. Keep those reads loose,
-  // or declare the params here too - a strict schema listing only `tab` would hide them.
-  validateSearch: (search: Record<string, unknown>): { tab?: string } => {
-    return { tab: optionalStringParam(search, 'tab') };
+  // Declares `tab` and the Integrations tab's `section` as this route's search contract, mirroring
+  // profileRoute. The page reads them via useSearch({ strict: false }), so this types the params
+  // rather than being what makes them work. Deliberately not exhaustive: the Slack org-connect
+  // callback returns to this route carrying slack_connected/slack_error, which OrgSlackIntegration
+  // reads loosely. Keep those reads loose, or declare the params here too - a strict schema listing
+  // only `tab` and `section` would hide them.
+  validateSearch: (search: Record<string, unknown>): { tab?: string; section?: string } => {
+    return { tab: optionalStringParam(search, 'tab'), section: optionalStringParam(search, 'section') };
   },
 });
 
@@ -995,6 +1037,8 @@ const accountDataExportRoute = createRoute({
 });
 
 // Verify email route (replaces /verify-email.tsx)
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-email',
@@ -1003,14 +1047,11 @@ const verifyEmailRoute = createRoute({
       <VerifyEmailPage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Verify email change route (replaces /verify-change.tsx)
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const verifyEmailChangeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-change',
@@ -1019,11 +1060,6 @@ const verifyEmailChangeRoute = createRoute({
       <VerifyEmailChangePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Admin emergency route (replaces /admin-emergency.tsx)
@@ -1098,13 +1134,43 @@ const subscribeRoute = createRoute({
   }),
 });
 
-// Artifacts demo route (replaces /artifacts-demo.tsx)
+// The signed-in user's artifacts library, and one artifact by id.
+const artifactsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactsPage />
+    </Suspense>
+  ),
+});
+
+const artifactRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactPage />
+    </Suspense>
+  ),
+});
+
+// The old demo gallery's URL, kept so bookmarks land on the library.
 const artifactsDemoRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/artifacts-demo',
+  beforeLoad: () => {
+    throw redirect({ to: '/artifacts', replace: true });
+  },
+});
+
+// Composer status-line states with mock data, for design work (routes/composer-lab.tsx).
+const composerLabRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/composer-lab',
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
-      <ArtifactsDemoPage />
+      <ComposerLabPage />
     </Suspense>
   ),
 });
@@ -1241,7 +1307,7 @@ const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'admin-layout',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} adminPages={premiumPartition.admin} />,
 });
 
 // The tabbed admin console (replaces /admin/index.tsx)
@@ -1284,7 +1350,25 @@ export const adminSubscriptionByStripeIdRoute = createRoute({
   component: AdminSubscriptionByStripeIdPage,
 });
 
+// Admin model detail. A splat, so model ids keep their `/`, `:` and spaces in the path (local-image/<checkpoint>,
+// Bedrock `...:0`); the Models tab's list rows open it.
+export const adminModelDetailRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/$',
+  component: AdminModelDetailPage,
+  validateSearch: parseModelDetailSearch,
+});
+
+// One model discovery run. The static `runs` segment outranks the detail splat in TanStack's ranking.
+export const adminModelDiscoveryRunRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/runs/$runId',
+  component: AdminModelDiscoveryRunPage,
+});
+
 // Email unsubscribe route - public page for managing email preferences
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/email/unsubscribe',
@@ -1293,11 +1377,6 @@ const emailUnsubscribeRoute = createRoute({
       <EmailUnsubscribePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Desktop app download page - no layout, public, so it can be linked from anywhere.
@@ -1330,6 +1409,19 @@ const bedrockNewsClaimRoute = createRoute({
   }),
 });
 
+// Test-persona sign-in (the mint response's login_path) - no layout, public. The code arrives in the
+// fragment and is moved out of the address before render; the page POSTs it to the redeem API.
+const personaRedeemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: PERSONA_LOGIN_PAGE_PATH,
+  beforeLoad: () => captureCodeFromFragment(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <PersonaRedeemPage />
+    </Suspense>
+  ),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1360,6 +1452,32 @@ const oauthAuthorizeRoute = createRoute({
     code_challenge: optionalStringParam(search, 'code_challenge'),
     code_challenge_method: optionalStringParam(search, 'code_challenge_method'),
     nonce: optionalStringParam(search, 'nonce'),
+  }),
+});
+
+// OIDC RP-Initiated Logout (end_session_endpoint) - no layout, public. No consent redirect: signing
+// out must not wait on accepting the policies.
+export const oauthLogoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/oauth/logout',
+  beforeLoad: () => bootstrapSession(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <OAuthLogoutPage />
+    </Suspense>
+  ),
+  validateSearch: (
+    search: Record<string, unknown>
+  ): {
+    client_id?: string;
+    post_logout_redirect_uri?: string;
+    state?: string;
+    id_token_hint?: string;
+  } => ({
+    client_id: optionalStringParam(search, 'client_id'),
+    post_logout_redirect_uri: optionalStringParam(search, 'post_logout_redirect_uri'),
+    state: optionalStringParam(search, 'state'),
+    id_token_hint: optionalStringParam(search, 'id_token_hint'),
   }),
 });
 
@@ -1401,12 +1519,16 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
+    artifactsRoute,
+    artifactRoute,
     artifactsDemoRoute,
+    composerLabRoute,
     dataLakesRoute,
     hudRoute,
     hearthRoute,
     studioRoute,
     studioProductionsRoute,
+    studioProductionEditorRoute,
     studioLibraryRoute,
     ...builtAppShellPremiumRoutes,
   ]),
@@ -1432,6 +1554,9 @@ const routeTree = rootRoute.addChildren([
     adminUserProfileRoute,
     adminSubscriptionDetailRoute,
     adminSubscriptionByStripeIdRoute,
+    adminModelDetailRoute,
+    adminModelDiscoveryRunRoute,
+    ...builtAdminPremiumRoutes,
   ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
@@ -1445,7 +1570,9 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  oauthLogoutRoute,
   bedrockNewsClaimRoute,
+  personaRedeemRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect
@@ -1470,6 +1597,10 @@ if (captureUtmParams()) holdDiscoveryForCampaign(Date.now());
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
 captureMcpOAuthCallbackSearch();
+
+// An email link's token (verification or unsubscribe) leaves the address before anything sends a request (the visit
+// beacon below carries the page URL as its Referer) and before the router builds its first location.
+captureEmailLinkToken();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above. It also takes a

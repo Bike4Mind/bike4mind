@@ -10,6 +10,7 @@ import { getUsageSignalsTool } from './tools/getUsageSignals';
 import { getUserActivityTool } from './tools/getUserActivity';
 import { getUserCreditsTool } from './tools/getUserCredits';
 import { getUserFeedbackTool } from './tools/getUserFeedback';
+import { searchGuideTool } from './tools/searchGuide';
 
 export { defineAdminTool } from './defineAdminTool';
 export type { AdminToolResult } from './defineAdminTool';
@@ -29,6 +30,7 @@ const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
   admin_get_user_activity: getUserActivityTool,
   admin_get_user_credits: getUserCreditsTool,
   admin_get_user_feedback: getUserFeedbackTool,
+  admin_search_guide: searchGuideTool,
 };
 
 /** Definitions to merge into a turn's externalTools; empty unless the loaded user is an admin. */

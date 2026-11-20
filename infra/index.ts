@@ -18,6 +18,7 @@ export * from './subscriberFanout';
 export * from './vpc';
 export * from './websocket';
 export * from './searxng';
+export * from './renderWorker';
 export * from './chatCompletion';
 export * from './web';
 export * from './llm';
@@ -31,20 +32,25 @@ export * from './dlqAlarms';
 export * from './mailAlarms';
 export * from './vectorizeAlarms';
 export * from './signupAlarms';
+export * from './sideAppMintAlarms';
 export * from './turnstileAlarms';
 export * from './imageModerationReviewAlarms';
 export * from './accountCreationAlarms';
 export * from './analyticsRollup';
 export * from './llmSpend';
 export * from './youngAccountSpendAlert';
+export * from './providerAdminKeys';
 export * from './providerSpend';
 export * from './authAbuseAlarms';
+export * from './refusedRequestAlarms';
 export * from './apiProbeDetector';
 // serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
 export * from './serviceHealthAlarms';
 export * from './emailMarketing';
 export * from './wafPolicy';
 export * from './waf';
+
+export * from './webDlqFunctionLogs';
 
 // logMonitor must be last
 export * from './logMonitor';

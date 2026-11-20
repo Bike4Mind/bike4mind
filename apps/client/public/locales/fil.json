@@ -102,7 +102,9 @@
     "no_subscription": "Walang Subskripsyon",
     "x_members": "{{count}} mga miyembro",
     "x_credits": "{{count}} mga kredito",
-    "owner": "May-ari"
+    "roles": {
+      "owner": "May-ari"
+    }
   },
   "session": {
     "typeYourMessage": "I-type ang iyong mensahe dito",

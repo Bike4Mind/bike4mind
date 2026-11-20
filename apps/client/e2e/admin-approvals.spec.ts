@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
 import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { apiCreateTestUser, apiCreateThrowawayUser, apiUpdateAdminSetting } from './helpers/api';
+import { apiCreateTestUser, apiCreateThrowawayUser, apiGetMfaCode, apiUpdateAdminSetting } from './helpers/api';
 import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
 import { AdminPage } from './pages/AdminPage';
 
@@ -18,12 +18,13 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const SUSPEND = { type: 'suspend' } as const;
 const PASSWORD = 'E2eApproverPass123!';
 
-type Admin = { userId: string; accessToken: string; refreshToken: string; password: string };
+type Admin = { userId: string; accessToken: string; refreshToken: string; email: string };
 
+// Test admins are enrolled in MFA, and an account with MFA must step up with its factor.
 async function stepUp(request: APIRequestContext, admin: Admin) {
   const res = await request.post(`${baseURL}/api/auth/step-up`, {
     headers: auth(admin.accessToken),
-    data: { method: 'password', password: admin.password },
+    data: { method: 'totp', code: await apiGetMfaCode(request, admin.email) },
   });
   expect(res.ok(), `step-up failed: ${res.status()}`).toBe(true);
 }
@@ -103,9 +104,10 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     // or email, which would otherwise kill every retry of this group in beforeAll.
     const { retry, repeatEachIndex } = test.info();
     const slug = `setup-approver${retry}r${repeatEachIndex}`;
+    const email = `${slug}-${suffix}-e2e@test.com`;
     const created = await apiCreateTestUser(request, {
       username: `${slug}-${suffix}`,
-      email: `${slug}-${suffix}-e2e@test.com`,
+      email,
       name: `Setup approver ${suffix}`,
       password: PASSWORD,
       isAdmin: true,
@@ -114,7 +116,7 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
       userId: (created.user.id || created.user._id) as string,
       accessToken: created.accessToken,
       refreshToken: created.refreshToken,
-      password: PASSWORD,
+      email,
     };
     targets = [];
     for (const label of ['apra', 'aprb', 'aprc', 'aprd', 'apre']) {
@@ -151,12 +153,14 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     await openApprovals(page);
     const ownRow = page.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(ownRow).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await expect(ownRow.getByTestId('admin-approve-btn')).toBeDisabled();
+    await ownRow.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await expect(page.getByTestId('admin-approve-btn')).toHaveAttribute('aria-disabled', 'true');
 
     await openApprovals(pageB);
     const row = pageB.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(row).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await row.getByTestId('admin-approve-btn').click();
+    await row.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await pageB.getByTestId('admin-approve-btn').click();
     await expect(row).toHaveCount(0, { timeout: TIMEOUTS.ACTION });
 
     await expect
@@ -186,7 +190,8 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     await openApprovals(pageB);
     const row = pageB.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(row).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await row.getByTestId('admin-reject-btn').click();
+    await row.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await pageB.getByTestId('admin-reject-btn').click();
     await pageB.getByTestId('admin-approval-reject-dialog-reason-input').fill('Not needed after review');
     await pageB.getByTestId('admin-approval-reject-dialog-confirm-btn').click();
     await expect(row).toHaveCount(0, { timeout: TIMEOUTS.ACTION });

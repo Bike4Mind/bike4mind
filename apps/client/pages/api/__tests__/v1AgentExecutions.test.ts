@@ -50,11 +50,11 @@ vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: mockS
 vi.mock('@server/utils/loadAgentExecutionTrace', () => ({ loadAgentExecutionTrace: mockLoadTrace }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 // The quota itself is covered by v1/agent-executions/__tests__/index.quota.test.ts.
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: async () => ({ release: async () => {} }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),
   isChatModelUsable: () => true,
 }));
@@ -152,7 +152,9 @@ describe('POST /api/v1/agent-executions', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (startHandler as any)(req, res);
 
-    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger);
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger, {
+      organizationId: null,
+    });
     expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ model: 'allowlisted-model' }), logger);
     expect(res._getJSONData().model).toBe('allowlisted-model');
   });

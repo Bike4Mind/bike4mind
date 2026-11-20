@@ -94,10 +94,9 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
 
       await resetApiKeyRateLimit(keyId);
 
-      // findByKey yields undefined (not null) for a missing doc, so assert falsy/truthy.
       const target = buildRateLimitKeys(keyId);
-      expect(await cacheRepository.findByKey(target.minuteKey)).toBeFalsy();
-      expect(await cacheRepository.findByKey(target.dayKey)).toBeFalsy();
+      expect(await cacheRepository.findByKey(target.minuteKey)).toBeNull();
+      expect(await cacheRepository.findByKey(target.dayKey)).toBeNull();
 
       const other = buildRateLimitKeys(otherKeyId);
       expect(await cacheRepository.findByKey(other.minuteKey)).toBeTruthy();

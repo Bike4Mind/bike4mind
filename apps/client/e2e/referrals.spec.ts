@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures';
 import type { APIRequestContext } from '@playwright/test';
 import { apiCreateTestUser, apiDeleteInviteCode, apiGetOtcCode } from './helpers/api';
+import { watchMfaSetup } from './helpers/mfa';
 import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
 
 // Referral invites: quota reservation, invite redemption during email-code signup, and the saved inviter.
@@ -124,25 +125,32 @@ test.describe('Referrals & invites', () => {
       const verified = page.waitForResponse(
         r => r.url().includes('/api/otc/verify') && r.request().method() === 'POST'
       );
+      const mfaSetup = watchMfaSetup(page);
       await signupPage.verify();
       const verifyRes = await verified;
       expect(verifyRes.request().postDataJSON()).toMatchObject({ email: inviteeEmail, inviteCode: invite.code });
       expect(verifyRes.ok()).toBe(true);
-      const { user: invitee, accessToken: inviteeToken } = (await verifyRes.json()) as {
-        user: { id: string; referredByUserId?: string | null };
+      const verifyBody = (await verifyRes.json()) as {
+        user?: { id: string; referredByUserId?: string | null };
+        userId?: string;
         accessToken: string;
+        mfaSetupRequired?: boolean;
       };
+      // A stage that enforces MFA sends the new account to setup first; its session comes from setup.
+      const enrolled = await mfaSetup.enrollIfAsked(verifyBody);
+      const inviteeId = verifyBody.user?.id ?? verifyBody.userId;
+      const inviteeToken = enrolled?.accessToken ?? verifyBody.accessToken;
       await basePage.dismissModals();
       await expect(page).not.toHaveURL(/.*(login|register).*/);
 
       const [redeemed] = await findReferralInvites(request, inviterId, inviteeEmail);
       expect(redeemed.status).toBe('used');
       expect(redeemed.used).toBeTruthy();
-      expect(String(redeemed.usedbyId)).toBe(invitee.id);
+      expect(String(redeemed.usedbyId)).toBe(inviteeId);
 
       // --- Inviter saved at signup ---
-      expect(invitee.referredByUserId).toBe(inviterId);
-      expect((await readReferralState(request, inviteeToken, invitee.id)).referredByUserId).toBe(inviterId);
+      if (verifyBody.user) expect(verifyBody.user.referredByUserId).toBe(inviterId);
+      expect((await readReferralState(request, inviteeToken, String(inviteeId))).referredByUserId).toBe(inviterId);
     } finally {
       // The cleanup sweep removes the -e2e accounts but not the invite rows they point at.
       for (const id of inviteIds) {

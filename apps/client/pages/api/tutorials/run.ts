@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { CORE_TUTORIAL_SETTING, coreServiceFor } from '@server/tutorials/core';
-import { runRoute } from '@server/tutorials/routes';
+import { CORE_TUTORIAL_SETTING, coreServiceFor } from '@bike4mind/server-utils/tutorials/core';
+import { runRoute } from '@bike4mind/server-utils/tutorials/routes/index';
 
 // jwtOnly: core tutorials are for signed-in browser sessions, never an API key.
 const handler = runRoute({

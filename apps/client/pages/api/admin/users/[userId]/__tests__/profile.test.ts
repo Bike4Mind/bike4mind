@@ -344,6 +344,40 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
     expect(h.requestEmailChange).not.toHaveBeenCalled();
   });
 
+  it('refuses a users:moderate delegate an email change without users:impersonate', async () => {
+    const error = await rejection(
+      { name: 'Ada King', email: 'new@example.com', reason: REASON },
+      { user: moderator() }
+    );
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe(missingAdminPermissionMessage('users:impersonate'));
+    expect(h.requireStepUp).not.toHaveBeenCalled();
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate holding users:moderate and users:impersonate start an email change', async () => {
+    const { req } = await run(
+      { email: 'new@example.com', reason: REASON },
+      { user: moderator(['users:moderate', 'users:impersonate']) }
+    );
+
+    expect(h.requireStepUp).toHaveBeenCalledWith(req);
+    expect(h.requestEmailChange).toHaveBeenCalledWith(
+      { userId: 'user-1', newEmail: 'new@example.com' },
+      expect.anything()
+    );
+  });
+
+  it('does not ask a users:moderate delegate for users:impersonate when the email is unchanged', async () => {
+    await run({ name: 'Ada King', email: ' ADA@example.com ', reason: REASON }, { user: moderator() });
+
+    expect(h.writeUserUpdate).toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+  });
+
   it('makes no changes or audit entry when step-up fails', async () => {
     const failure = new Error('step-up required');
     h.requireStepUp.mockRejectedValue(failure);

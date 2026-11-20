@@ -1,4 +1,10 @@
-import { ApiKeyScope, ApiKeyScopeValue, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyScopeValue,
+  IApiKeyScopePreflight,
+  IApiKeyScopePreflightRow,
+  isExchangeKeyMetadata,
+} from '@bike4mind/common';
 import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database/auth';
 import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
@@ -21,7 +27,7 @@ const MAX_ROWS = 500;
  *
  * The collection has exactly one writer: `baseApi` -> `apiKeyAuth`'s `res.finish`
  * hook (apps/client/server/middlewares/apiKeyAuth.ts). Everything authenticated
- * through `verifyApiKey` (apps/client/server/cli/auth.ts) - public contract routes
+ * through `verifyApiKey` (packages/server-utils/src/cli/auth.ts) - public contract routes
  * via `resolveContractAuth`, and the embed surfaces - logs nothing. A preflight
  * over those paths returns zero rows however busy they are, which would make this
  * tool assert the one thing it must never assert: a false "nobody calls these".
@@ -167,12 +173,16 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
     // to fail. Ids dropped here resolve to no scopes below and are still reported
     // as would-403, which is the safe direction.
     const lookupIds = traffic.map(t => t.keyId).filter(id => mongoose.Types.ObjectId.isValid(id));
-    // Project to `scopes`: this handler reads one field, and an unprojected find
-    // hydrates the whole UserApiKey document - `keyHash` included, since that
+    // Project only what the verdict reads (`scopes`, and `metadata` for the exchange-key flag): an
+    // unprojected find hydrates the whole UserApiKey document - `keyHash` included, since that
     // schema's `toObject` has no strip transform (only `toJSON` deletes it).
-    // Nothing leaks, but a credential hash has no business in this request.
-    const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1 }) : [];
+    const keyDocs = lookupIds.length
+      ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1, metadata: 1 })
+      : [];
     const scopesByKeyId = new Map<string, ApiKeyScopeValue[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
+    const exchangeKeyIds = new Set<string>(
+      keyDocs.filter(doc => isExchangeKeyMetadata(doc.metadata)).map(doc => String(doc.id))
+    );
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
 
@@ -182,7 +192,10 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         // Treat it as holding nothing: it cannot be re-minted, and reporting it
         // as `allow` would hide a row the operator should still see.
         const heldScopes = scopesByKeyId.get(entry.keyId) ?? [];
-        const { outcome } = decideScopeGate(requiredScopes, heldScopes, staged);
+        // No grandfathering here: the preflight lists who breaks once the legacy key window ends.
+        const { outcome } = decideScopeGate(requiredScopes, heldScopes, staged, undefined, {
+          exchangeKey: exchangeKeyIds.has(entry.keyId),
+        });
         return { ...entry, heldScopes, outcome };
       })
       .sort((a, b) => OUTCOME_RANK[a.outcome] - OUTCOME_RANK[b.outcome] || b.requests - a.requests);

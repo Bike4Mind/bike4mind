@@ -6,6 +6,7 @@ import {
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
+  type ApiKeyBillingOwnerType,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
@@ -13,6 +14,7 @@ import {
 import { releaseCreditHold, type CreditHold } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
+  checkBatchSpendCap,
   findIdempotentReplay,
   holdJobCredits,
   persistAndEnqueueJob,
@@ -95,9 +97,10 @@ export async function createImageJobs(
   const caps = getImageModelCatalogEntry(parsed.data.model);
   const provider = deps.providers.get(caps.provider);
   // A retired id is refused rather than rendered as its successor: the job records the model it renders.
+  // Local checkpoints are discovered at runtime, so the local provider lists no models and serves every local id.
   const served =
     provider !== undefined &&
-    (provider.models as readonly string[]).includes(parsed.data.model) &&
+    (caps.provider === 'local' || (provider.models as readonly string[]).includes(parsed.data.model)) &&
     resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
   if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);
@@ -122,10 +125,21 @@ export async function createImageJobs(
   if (reused) return reused;
   const replayed = replays.flatMap(replay => (replay?.ok ? [replay.job] : []));
   if (replayed.length === input.count) {
-    return { ok: true, groupId: replayed[0].payload.groupId ?? replayed[0].id, jobs: replayed, created: false };
+    return {
+      ok: true,
+      groupId: replayed[0].payload.groupId ?? replayed[0].id,
+      jobs: replayed,
+      created: false,
+      createdCount: 0,
+    };
   }
 
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return refuse(422, 'model_unavailable', `Image model ${request.model} has no API key configured`);
   }
@@ -149,7 +163,17 @@ export async function createImageJobs(
 
   const { enforceCredits } = await deps.getSettings();
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
-  const holds = await holdBatch(missingIndexes.length, { enforceCredits, user: input.user, requiredCredits }, deps);
+  const holds = await holdBatch(
+    missingIndexes.length,
+    {
+      enforceCredits,
+      user: input.user,
+      requiredCredits,
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+    },
+    deps
+  );
   if (!holds.ok) return holds;
 
   const groupId = replayed[0]?.payload.groupId ?? new Types.ObjectId().toHexString();
@@ -164,16 +188,35 @@ export async function createImageJobs(
     const job = replay?.ok ? replay.job : fresh.next().value;
     return job ? [job] : [];
   });
-  return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
+  return {
+    ok: true,
+    groupId: jobs[0]?.payload.groupId ?? groupId,
+    jobs,
+    created: true,
+    createdCount: created.jobs.length,
+  };
 }
 
-type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };
+type HoldParams = {
+  enforceCredits: boolean;
+  user: CreateImageJobsInput['user'];
+  requiredCredits: number;
+  apiKeyId?: string;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+};
 
 async function holdBatch(
   count: number,
   params: HoldParams,
   deps: CreateImageJobsDeps
 ): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
+  if (count > 1) {
+    const capped = await checkBatchSpendCap(
+      { enforceCredits: params.enforceCredits, user: params.user, totalCredits: count * params.requiredCredits },
+      deps
+    );
+    if (capped) return capped;
+  }
   const holds: (CreditHold | null)[] = [];
   for (let index = 0; index < count; index++) {
     let held: Awaited<ReturnType<typeof holdJobCredits>>;
@@ -236,9 +279,17 @@ async function persistBatch(
           ...owner,
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
+          ...(input.questId !== undefined && { questId: input.questId }),
           source: input.source,
+          ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
-          payload: { request, providerId, groupId },
+          payload: {
+            request,
+            providerId,
+            groupId,
+            groupSize: input.count,
+            ...(input.purpose !== undefined && { purpose: input.purpose }),
+          },
           pollCount: 0,
           attempts: 0,
           cancelRequested: false,

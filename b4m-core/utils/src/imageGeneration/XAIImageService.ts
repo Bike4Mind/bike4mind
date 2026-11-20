@@ -1,6 +1,7 @@
 import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { ImageModels } from '@bike4mind/common';
 import { ImageModerationBlockedError } from './imageGenerationErrors';
 
@@ -20,12 +21,25 @@ function buildXAIModerationBlockedError(error: unknown): ImageModerationBlockedE
   );
 }
 
+/** OpenAI SDK client settings for the xAI endpoint; unset fields keep the SDK defaults. */
+export type XaiClientOptions = { maxRetries?: number; timeout?: number };
+
 export class XAIImageService extends AIImageService {
+  constructor(
+    apiKey: string,
+    logger: Logger,
+    imageProcessorLambdaName?: string,
+    private readonly clientOptions: XaiClientOptions = {}
+  ) {
+    super(apiKey, logger, imageProcessorLambdaName);
+  }
+
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
     // XAI uses the same OpenAI SDK but with different base URL and endpoint
     const xai = new OpenAI({
       apiKey: this.apiKey,
       baseURL: 'https://api.x.ai/v1',
+      ...this.clientOptions,
     });
 
     Logger.log('Generating image with XAI/Grok... with these params: ', options);
@@ -36,9 +50,9 @@ export class XAIImageService extends AIImageService {
       // XAI does not support size, quality, or other OpenAI-specific parameters
       const response = await xai.images.generate({
         prompt,
-        model: ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+        model: options.model ?? ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
         n: options.n || 1,
-        user: options.user,
+        user: toProviderEndUserId(options.user),
       });
 
       if (!response.data || response.data.length === 0) {
@@ -62,8 +76,9 @@ export class XAIImageService extends AIImageService {
 
       Logger.error('XAI image generation failed:', error);
 
+      // `cause` keeps the SDK error (and its HTTP status) for callers that classify the failure.
       if (error instanceof Error) {
-        throw new Error(`XAI image generation failed: ${error.message}`);
+        throw new Error(`XAI image generation failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('XAI image generation failed with unknown error');

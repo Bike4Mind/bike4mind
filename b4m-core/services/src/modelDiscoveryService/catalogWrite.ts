@@ -179,7 +179,10 @@ export interface CatalogWriteInput {
    * a price row that is in force or that this run's price plan will write.
    */
   consensusPricedModelIds?: ReadonlySet<string>;
-  /** Models the build's adapter tables price in any unit; changes the denial wording only, never a verdict. */
+  /**
+   * Models the build's static adapter tables price in any unit (adapterBuildPricedModelIds). For a non-text model this
+   * is the only trusted price; a text model's literal already arrives in knownPricedModelIds.
+   */
   buildPricedModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
   runId?: string;
@@ -700,12 +703,13 @@ function planOne(
       record,
       policy: input.policy,
       credentials: input.credentials,
-      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds, input.consensusPricedModelIds),
-      awaitingPrice: input.buildPricedModelIds?.has(candidate.modelId)
-        ? 'build-literal'
-        : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
-          ? 'aggregator-quote'
-          : 'none',
+      hasTrustedPrice: hasTrustedPrice(candidate, record.type, input),
+      awaitingPrice:
+        record.type !== 'text'
+          ? 'no-build-literal'
+          : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
+            ? 'aggregator-quote'
+            : 'none',
       sourceDisabledReason,
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
@@ -1191,12 +1195,21 @@ export function claimedGroups(
  * aggregator is a flag, not a price; promotion words that denial separately.
  * With `consensusPricedModelIds` the source-quote clauses defer to pricePlan's
  * consensus, which also refuses a provider quote no mirror corroborates.
+ *
+ * A non-text model is billed from code catalogs, never from price rows, so its only
+ * trusted price is a literal in this build's static adapter tables. BFL and video ids
+ * are never in them, so those stay unpromoted under the `priced` policy.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
-  knownPricedModelIds?: ReadonlySet<string>,
-  consensusPricedModelIds?: ReadonlySet<string>
+  type: string,
+  {
+    knownPricedModelIds,
+    consensusPricedModelIds,
+    buildPricedModelIds,
+  }: Pick<CatalogWriteInput, 'knownPricedModelIds' | 'consensusPricedModelIds' | 'buildPricedModelIds'>
 ): boolean {
+  if (type !== 'text') return buildPricedModelIds?.has(candidate.modelId) === true;
   if (knownPricedModelIds?.has(candidate.modelId)) return true;
   if (consensusPricedModelIds) return consensusPricedModelIds.has(candidate.modelId);
   if (candidate.pricesByKind.some(entry => entry.kind === 'provider')) return true;

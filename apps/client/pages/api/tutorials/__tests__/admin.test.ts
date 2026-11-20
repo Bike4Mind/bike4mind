@@ -6,23 +6,23 @@ import { ForbiddenError } from '@bike4mind/common';
 const state = vi.hoisted(() => ({ switchOn: false }));
 
 vi.mock('@server/middlewares/adminApi', async () => {
-  const { makeChain } = await import('./chain');
+  const { makeChain } = await import('@bike4mind/server-utils/tutorials/__tests__/chain');
   return { adminApi: (config?: unknown) => makeChain(config) };
 });
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async () => state.switchOn,
 }));
-vi.mock('@server/tutorials/registry', async () => {
-  const { FIXTURE_REGISTRY } = await import('@server/tutorials/__tests__/fixture');
+vi.mock('@bike4mind/server-utils/tutorials/registry', async () => {
+  const { FIXTURE_REGISTRY } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');
   const CORE_TUTORIALS = [FIXTURE_REGISTRY];
   return { CORE_TUTORIALS, resolveCoreTutorial: (id: string) => CORE_TUTORIALS.find(t => t.id === id) ?? null };
 });
-vi.mock('@server/tutorials/content', async () => {
-  const { FIXTURE_CONTENT } = await import('@server/tutorials/__tests__/fixture');
+vi.mock('@bike4mind/server-utils/tutorials/content', async () => {
+  const { FIXTURE_CONTENT } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');
   return { CORE_TUTORIAL_CONTENT: [FIXTURE_CONTENT] };
 });
-vi.mock('@server/tutorials/models', async importOriginal => ({
+vi.mock('@bike4mind/server-utils/tutorials/models', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   tutorialModels: () => ({
     Progress: {},
@@ -31,7 +31,7 @@ vi.mock('@server/tutorials/models', async importOriginal => ({
     Draft: {},
   }),
 }));
-vi.mock('@server/tutorials/coreDeps', () => ({ coreTutorialDepsFor: () => ({}) }));
+vi.mock('@bike4mind/server-utils/tutorials/coreDeps', () => ({ coreTutorialDepsFor: () => ({}) }));
 
 import overrides from '../overrides';
 import settings from '../settings';

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createOAuthClientSchema,
   oauthRedirectUriSchema,
+  postLogoutRedirectUrisSchema,
   resolveOAuthFederatedIdp,
   updateOAuthClientSchema,
 } from './oauthClient';
@@ -32,6 +33,38 @@ describe('oauthRedirectUriSchema', () => {
 });
 
 describe('createOAuthClientSchema', () => {
+  const federatedIdp = { issuer: 'https://idp.example.test', audience: 'app', providerName: 'B4M' };
+  const base = { name: 'App', redirectUris: ['https://app.example.test/cb'], federatedIdp };
+
+  it('accepts an optional federated quota profile without changing defaults', () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    expect(createOAuthClientSchema.parse({ ...base, rateLimit }).rateLimit).toEqual(rateLimit);
+    expect(createOAuthClientSchema.parse(base).rateLimit).toBeUndefined();
+    expect(updateOAuthClientSchema.parse({ rateLimit }).rateLimit).toEqual(rateLimit);
+    expect(updateOAuthClientSchema.parse({ rateLimit: null }).rateLimit).toBeNull();
+    expect(createOAuthClientSchema.safeParse({ ...base, federatedIdp: undefined, rateLimit }).success).toBe(false);
+  });
+
+  it.each([
+    { requestsPerMinute: 0, requestsPerDay: 20_000 },
+    { requestsPerMinute: 1.5, requestsPerDay: 20_000 },
+    { requestsPerMinute: 10_001, requestsPerDay: 20_000 },
+    { requestsPerMinute: 300, requestsPerDay: 1_000_001 },
+    { requestsPerMinute: 300 },
+  ])('rejects an invalid profile %j', rateLimit => {
+    expect(createOAuthClientSchema.safeParse({ ...base, rateLimit }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ rateLimit }).success).toBe(false);
+  });
+
+  it('accepts unpaidAccountsAllowed on any client and rejects non-booleans', () => {
+    const plain = { name: 'App', redirectUris: ['https://app.example.test/cb'] };
+    expect(createOAuthClientSchema.parse({ ...plain, unpaidAccountsAllowed: false }).unpaidAccountsAllowed).toBe(false);
+    expect(createOAuthClientSchema.parse(plain).unpaidAccountsAllowed).toBeUndefined();
+    expect(updateOAuthClientSchema.parse({ unpaidAccountsAllowed: true }).unpaidAccountsAllowed).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ unpaidAccountsAllowed: 'no' }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ unpaidAccountsAllowed: null }).success).toBe(false);
+  });
+
   it('trims the name and defaults clientType to relying-party', () => {
     const parsed = createOAuthClientSchema.parse({ name: '  App ', redirectUris: ['https://a.example.test/cb'] });
     expect(parsed).toMatchObject({ name: 'App', clientType: 'relying-party' });
@@ -162,5 +195,34 @@ describe('updateOAuthClientSchema', () => {
     expect(OAUTH_CLIENT_SCOPES).toEqual(
       expect.arrayContaining(['openid', 'ai:generate', 'me:read', FEDERATED_ADMIN_STATUS_SCOPE])
     );
+  });
+});
+
+describe('postLogoutRedirectUris', () => {
+  const base = { name: 'App', redirectUris: ['https://app.example.test/cb'] };
+
+  it('is optional on create and update, and accepts an empty list', () => {
+    expect(createOAuthClientSchema.parse(base).postLogoutRedirectUris).toBeUndefined();
+    expect(createOAuthClientSchema.parse({ ...base, postLogoutRedirectUris: [] }).postLogoutRedirectUris).toEqual([]);
+    expect(updateOAuthClientSchema.parse({ postLogoutRedirectUris: [] }).postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('accepts https and loopback http URIs', () => {
+    const uris = ['https://rp.example.test/signed-out', 'http://localhost:3000/signed-out'];
+    expect(postLogoutRedirectUrisSchema.parse(uris)).toEqual(uris);
+    expect(updateOAuthClientSchema.parse({ postLogoutRedirectUris: uris }).postLogoutRedirectUris).toEqual(uris);
+  });
+
+  it.each([
+    ['plain http', ['http://rp.example.test/out']],
+    ['a fragment', ['https://rp.example.test/out#x']],
+    ['userinfo', ['https://u:p@rp.example.test/out']],
+    ['a javascript: URI', ['javascript:alert(1)']],
+    ['duplicates', ['https://rp.example.test/out', 'https://rp.example.test/out']],
+    ['too many', Array.from({ length: 21 }, (_, i) => `https://rp.example.test/out${i}`)],
+  ])('rejects %s', (_n, uris) => {
+    expect(postLogoutRedirectUrisSchema.safeParse(uris).success).toBe(false);
+    expect(createOAuthClientSchema.safeParse({ ...base, postLogoutRedirectUris: uris }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ postLogoutRedirectUris: uris }).success).toBe(false);
   });
 });

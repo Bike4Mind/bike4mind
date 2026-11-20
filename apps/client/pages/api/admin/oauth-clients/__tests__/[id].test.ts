@@ -45,6 +45,7 @@ const view = (over: Record<string, unknown> = {}) => ({
   clientType: 'relying-party',
   tokenEndpointAuthMethod: 'client_secret_post',
   redirectUris: ['https://app.example.test/cb'],
+  postLogoutRedirectUris: [],
   allowedScopes: ['openid'],
   isActive: true,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -78,6 +79,20 @@ describe('route registration', () => {
 });
 
 describe('PATCH /api/admin/oauth-clients/[id]', () => {
+  it('audits postLogoutRedirectUris before/after', async () => {
+    const uris = ['https://app.example.test/signed-out'];
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ postLogoutRedirectUris: uris }) });
+    const { req, res } = makeReqRes('PATCH', { body: { postLogoutRedirectUris: uris } });
+    await handlers.update.patch(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'postLogoutRedirectUris', before: [], after: uris }]),
+      })
+    );
+  });
+
   it('rejects a non-admin with 403', async () => {
     const { req, res } = makeReqRes('PATCH', { user: { isAdmin: false, id: 'u1' }, body: { isActive: false } });
     await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 403 });
@@ -99,9 +114,13 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
         target: expect.objectContaining({ kind: 'oauthClient', id: 'c1' }),
         changes: [
           { field: 'redirectUris', before: ['https://app.example.test/cb'], after: uris },
+          { field: 'postLogoutRedirectUris', before: [], after: [] },
           { field: 'isActive', before: true, after: true },
           { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
           { field: 'federatedIdp', before: null, after: null },
+          { field: 'rateLimit', before: null, after: null },
+          { field: 'unpaidAccountLimits', before: null, after: null },
+          { field: 'unpaidAccountsAllowed', before: null, after: null },
         ],
       })
     );
@@ -133,6 +152,54 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
           { field: 'allowedScopes', before: ['openid'], after: ['openid', 'ai:generate'] },
           { field: 'federatedIdp', before: null, after: idp },
         ]),
+      })
+    );
+  });
+
+  it.each([null, { requestsPerMinute: 300, requestsPerDay: 20_000 }])(
+    'audits a profile update to %j',
+    async rateLimit => {
+      const previous = { requestsPerMinute: 60, requestsPerDay: 1000 };
+      db.updateOAuthClient.mockResolvedValue({ before: view({ rateLimit: previous }), after: view({ rateLimit }) });
+      const { req, res } = makeReqRes('PATCH', { body: { rateLimit } });
+      await handlers.update.patch(req, res);
+      expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { rateLimit });
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        req,
+        expect.objectContaining({
+          changes: expect.arrayContaining([{ field: 'rateLimit', before: previous, after: rateLimit }]),
+        })
+      );
+    }
+  );
+
+  it('audits an unpaidAccountLimits update before/after', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 10_000, maxConcurrent: 1 };
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ unpaidAccountLimits }) });
+    const { req, res } = makeReqRes('PATCH', { body: { unpaidAccountLimits } });
+    await handlers.update.patch(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { unpaidAccountLimits });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'unpaidAccountLimits', before: null, after: unpaidAccountLimits }]),
+      })
+    );
+  });
+
+  it('audits an unpaidAccountsAllowed opt-out', async () => {
+    db.updateOAuthClient.mockResolvedValue({
+      before: view(),
+      after: view({ unpaidAccountsAllowed: false }),
+    });
+    const { req, res } = makeReqRes('PATCH', { body: { unpaidAccountsAllowed: false } });
+    await handlers.update.patch(req, res);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { unpaidAccountsAllowed: false });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'unpaidAccountsAllowed', before: null, after: false }]),
       })
     );
   });

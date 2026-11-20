@@ -10,17 +10,17 @@ import {
   type DecisionResponse,
   type ModelInfo,
 } from '@bike4mind/common';
-import { AdminAiSuggestionModel, Cache, adminAiSuggestionRepository } from '@bike4mind/database';
+import { AdminAiAttemptModel, AdminAiSuggestionModel, Cache, adminAiSuggestionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
-import { DecisionRequestError } from '@server/decisions/decisionErrors';
-import type { ExecuteDecisionParams, ExecutedDecision } from '@server/decisions/executeDecision';
+import { DecisionRequestError } from '@bike4mind/server-utils/decisions/decisionErrors';
+import type { ExecuteDecisionParams, ExecutedDecision } from '@bike4mind/server-utils/decisions/executeDecision';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { completionCeilingUsd, completionUsd } from '@server/billing/meterPlatformCompletion';
-import { toMicroUsd } from '@server/decisions/platformDecision';
+import { completionCeilingUsd, completionUsd } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { toMicroUsd } from '@bike4mind/server-utils/decisions/platformDecision';
 import { readAdminAiSpend } from './budget';
 import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 
@@ -54,6 +54,7 @@ const config = (overrides: { feature?: Record<string, unknown>; root?: Record<st
     features: {
       abuseAssessment: { mode: 'shadow', dailyBudgetUsd: 1, maxCallsPerDay: 10, ...overrides.feature },
       feedbackTriage: { mode: 'shadow', dailyBudgetUsd: 1, maxCallsPerDay: 10, ...overrides.feature },
+      dlqTriage: { mode: 'shadow', dailyBudgetUsd: 1, maxCallsPerDay: 10, ...overrides.feature },
     },
   } as unknown as AdminAiConfig);
 
@@ -247,6 +248,13 @@ describe('runAdminAi decision path', () => {
     });
     const result = await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide));
     expect(result).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await AdminAiAttemptModel.findOne().lean()).toMatchObject({
+      outcome: 'skip',
+      skipReason: 'provider_down',
+      calls: 1,
+      knownCostUsd: 0,
+      costUnknown: true,
+    });
   });
 
   it.each([
@@ -377,12 +385,12 @@ describe('runAdminAi decision path', () => {
 describe('runAdminAi text path', () => {
   it('stores a valid reply from one call', async () => {
     const { complete, deps } = textDeps([GOOD]);
-    const result = await runAdminAi('feedbackTriage', textInput(), deps);
+    const result = await runAdminAi('dlqTriage', textInput(), deps);
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0][2]).toMatchObject({ maxTokens: 800 });
     expect(result.ok && result.suggestion).toMatchObject({ verdict: 'bug', model: 'text-model' });
     expect(result.ok && result.suggestion.costUsd).toBeCloseTo(0.00105);
-    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+    expect(await readAdminAiSpend('dlqTriage')).toEqual({
       callsToday: 1,
       spentTodayUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
       spentThisMonthUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
@@ -391,7 +399,7 @@ describe('runAdminAi text path', () => {
 
   it('repairs a bad reply once, carrying the validation error', async () => {
     const { complete, deps } = textDeps(['not json', GOOD]);
-    const result = await runAdminAi('feedbackTriage', textInput(), deps);
+    const result = await runAdminAi('dlqTriage', textInput(), deps);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(complete.mock.calls[1][1])).toContain('rejected');
     expect(result.ok).toBe(true);
@@ -402,20 +410,20 @@ describe('runAdminAi text path', () => {
     ['empty output twice', ['', '']],
   ])('gives up as invalid_output after %s, with two calls not three', async (_label, replies) => {
     const { complete, deps } = textDeps([...replies, GOOD]);
-    const result = await runAdminAi('feedbackTriage', textInput(), deps);
+    const result = await runAdminAi('dlqTriage', textInput(), deps);
     expect(result).toEqual({ ok: false, skip: 'invalid_output' });
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it('maps a thrown completion to provider_down without throwing', async () => {
     const { deps } = textDeps([new Error('upstream 500')]);
-    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await runAdminAi('dlqTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
   });
 
   it('counts a failed provider call against the daily call cap', async () => {
     const { complete, deps } = textDeps([new Error('upstream 500'), GOOD], config({ feature: { maxCallsPerDay: 1 } }));
-    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
-    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'call_cap' });
+    expect(await runAdminAi('dlqTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await runAdminAi('dlqTriage', textInput(), deps)).toEqual({ ok: false, skip: 'call_cap' });
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
@@ -431,13 +439,13 @@ describe('runAdminAi text path', () => {
       root: { monthlyCapUsd: window === 'monthly' ? ceilingUsd : 10 },
     });
     const { complete, deps } = textDeps([new Error('provider failed after accepting the request'), GOOD], cfg);
-    expect(await runAdminAi('feedbackTriage', input, deps)).toEqual({ ok: false, skip: 'provider_down' });
-    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+    expect(await runAdminAi('dlqTriage', input, deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await readAdminAiSpend('dlqTriage')).toEqual({
       callsToday: 1,
       spentTodayUsd: ceilingUsd,
       spentThisMonthUsd: ceilingUsd,
     });
-    expect(await runAdminAi('feedbackTriage', { ...input, entityId: 'fb-2' }, deps)).toEqual({
+    expect(await runAdminAi('dlqTriage', { ...input, entityId: 'fb-2' }, deps)).toEqual({
       ok: false,
       skip: 'budget',
     });
@@ -450,8 +458,10 @@ describe('runAdminAi text path', () => {
       await callback([], { inputTokens: 100, outputTokens: 50 });
       throw new Error('response interrupted');
     });
-    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
-    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+    expect(await runAdminAi('dlqTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await AdminAiAttemptModel.findOne().lean()).toMatchObject({ outcome: 'skip', calls: 1, costUnknown: false });
+    expect((await AdminAiAttemptModel.findOne().lean())?.knownCostUsd).toBeCloseTo(0.00105);
+    expect(await readAdminAiSpend('dlqTriage')).toEqual({
       callsToday: 1,
       spentTodayUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
       spentThisMonthUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
@@ -460,7 +470,7 @@ describe('runAdminAi text path', () => {
 
   it('refuses before the provider on a zero budget', async () => {
     const { complete, deps } = textDeps([GOOD], config({ feature: { dailyBudgetUsd: 0 } }));
-    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'budget' });
+    expect(await runAdminAi('dlqTriage', textInput(), deps)).toEqual({ ok: false, skip: 'budget' });
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -468,7 +478,7 @@ describe('runAdminAi text path', () => {
     const schema = adminAiTextOutputSchema.extend({ area: z.string() });
     const { deps } = textDeps([JSON.stringify({ ...JSON.parse(GOOD), area: 'export' })]);
     const result = await runAdminAi(
-      'feedbackTriage',
+      'dlqTriage',
       { ...textInput(), prompt: { system: 's', outputSchema: schema } },
       deps
     );

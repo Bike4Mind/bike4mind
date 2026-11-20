@@ -2,7 +2,7 @@ import { type APIRequestContext, type Page, type Request } from '@playwright/tes
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiCreateTestUser, apiCreateThrowawayUser, apiGetOtcCode } from './helpers/api';
-import { enrollMfa, generateTotp, stubEnforcedMfaSetting, trustedDeviceCookieName } from './helpers/mfa';
+import { enrollMfa, generateTotp, signInWithTotp, trustedDeviceCookieName } from './helpers/mfa';
 import { seedAuthOnPage } from './helpers/auth-seed';
 import type { LoginPage } from './pages/LoginPage';
 
@@ -22,26 +22,7 @@ const MFA_SETUP_PATH = '/api/auth/mfa/setup';
 const isMfaSetupCall = (req: Request): boolean =>
   req.method() === 'POST' && new URL(req.url()).pathname === MFA_SETUP_PATH;
 
-/** Sign in through the UI with an emailed code and a TOTP code, optionally ticking "remember this device". */
-async function signInWithTotp(
-  loginPage: LoginPage,
-  request: APIRequestContext,
-  email: string,
-  totp: string,
-  { rememberDevice = false }: { rememberDevice?: boolean } = {}
-): Promise<void> {
-  await loginPage.goto();
-  await loginPage.fillOtc(await sendOtcAndReadCode(loginPage, request, email));
-  await loginPage.submitOtcExpectingMfa();
-  await loginPage.expectMfaChallenge();
-  await loginPage.fillMfaCode(totp);
-  if (rememberDevice) {
-    await loginPage.checkMuiCheckbox(
-      loginPage.page.getByTestId('mfa-modal-remember-device-checkbox').getByRole('checkbox')
-    );
-  }
-  await loginPage.submitMfa();
-}
+const UNENROLLED = { mfa: 'unenrolled' } as const;
 
 async function cookieNames(page: Page): Promise<string[]> {
   return (await page.context().cookies()).map(c => c.name);
@@ -56,6 +37,7 @@ test.describe('MFA', () => {
       email,
       name: `MFA Signin ${timestamp} e2e`,
       password: 'E2eMfaSigninPass123!',
+      mfa: 'unenrolled',
     });
     const { secret, enrolledStep } = await enrollMfa(request, created.accessToken);
 
@@ -81,6 +63,7 @@ test.describe('MFA', () => {
       email,
       name: `MFA Backup ${timestamp} e2e`,
       password: 'E2eMfaBackupPass123!',
+      mfa: 'unenrolled',
     });
     const { backupCodes } = await enrollMfa(request, created.accessToken);
 
@@ -114,6 +97,7 @@ test.describe('MFA', () => {
       name: `MFA Admin ${timestamp} e2e`,
       password: 'E2eMfaAdminPass123!',
       isAdmin: true,
+      mfa: 'unenrolled',
     });
     const {
       secret: adminSecret,
@@ -155,17 +139,57 @@ test.describe('MFA', () => {
   });
 });
 
-// Enforcement is a stage-wide admin setting with no per-user switch, so these tests turn it on in
-// the page only (see stubEnforcedMfaSetting) and leave the stage's setting alone.
-test.describe('MFA enforcement screen', () => {
+// Each account is held to MFA enforcement on its own (mfaEnforcement: 'force'), so these tests
+// reach the server's real gate on any stage while the stage-wide enforceMFA setting stays as it is.
+const FORCED = { mfaEnforcement: 'force', mfa: 'unenrolled' } as const;
+
+test.describe('MFA enforcement', () => {
+  test('refuses a gated route until the account enrolls', async ({ request }) => {
+    const baseURL = process.env.API_URL || 'http://localhost:3000';
+    const user = await apiCreateThrowawayUser(request, 'mfagate', FORCED);
+    const listAgents = (token: string) =>
+      request.get(`${baseURL}/api/agents`, { headers: { Authorization: `Bearer ${token}` } });
+
+    const refused = await listAgents(user.accessToken);
+    expect(refused.status()).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'MFA enrollment required.', mfaEnrollmentRequired: true });
+
+    const status = await request.get(`${baseURL}/api/auth/mfa/status`, {
+      headers: { Authorization: `Bearer ${user.accessToken}` },
+    });
+    expect(await status.json()).toMatchObject({ enabled: false, required: true, canDisable: false });
+
+    const { tokens } = await enrollMfa(request, user.accessToken);
+    expect((await listAgents(tokens.accessToken)).status()).toBe(200);
+  });
+
+  test('shows the setup screen, enrolls from it and then reaches the app', async ({ basePage, page, request }) => {
+    const user = await apiCreateThrowawayUser(request, 'mfaenroll', FORCED);
+    const setupResponse = page.waitForResponse(res => isMfaSetupCall(res.request()), { timeout: TIMEOUTS.ACTION });
+
+    await basePage.clearAllStorage();
+    await seedAuthOnPage(page, user);
+    const { secret } = (await (await setupResponse).json()) as { secret: string };
+    await expect(page.getByTestId('mfa-enforcement-required-screen')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+
+    const dialog = page.getByTestId('mfa-modal-content');
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await basePage.fillMuiInput(page.getByTestId('mfa-modal-code-input').locator('input'), generateTotp(secret));
+    await page.getByTestId('mfa-modal-verify-btn').click();
+
+    await expect(dialog).toBeHidden({ timeout: TIMEOUTS.ACTION });
+    await expect(page.getByTestId('mfa-enforcement-required-screen')).toBeHidden({ timeout: TIMEOUTS.ACTION });
+    await basePage.dismissModals();
+    await expect(page.getByTestId('profile-menu-card')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+  });
+
   test('a user stuck on the enforced setup screen can sign out and sign in again', async ({
     basePage,
     loginPage,
     page,
     request,
   }) => {
-    const user = await apiCreateThrowawayUser(request, 'mfastuck');
-    await stubEnforcedMfaSetting(page);
+    const user = await apiCreateThrowawayUser(request, 'mfastuck', FORCED);
     // Setup that cannot start is what leaves a user stuck on the enforcement screen.
     await page.route(`**${MFA_SETUP_PATH}`, route =>
       route.fulfill({ status: 503, json: { error: 'MFA setup is unavailable' } })
@@ -180,16 +204,15 @@ test.describe('MFA enforcement screen', () => {
     await expect(page).toHaveURL(/\/login/, { timeout: TIMEOUTS.ACTION });
     await expect(page.getByTestId('login-email-input')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
 
-    // A fresh sign-in may start setup without a step-up check, so this time setup opens.
+    // Sign-in itself demands enrollment from a forced account, so setup opens on /login.
     await page.unroute(`**${MFA_SETUP_PATH}`);
     const setupResponse = page.waitForResponse(res => isMfaSetupCall(res.request()), { timeout: TIMEOUTS.ACTION });
     await loginPage.fillOtc(await sendOtcAndReadCode(loginPage, request, user.email));
     await loginPage.submitOtcExpectingMfa();
 
     expect((await setupResponse).status()).toBe(200);
-    await expect(page).not.toHaveURL(/\/login/);
-    await expect(page.getByTestId('mfa-enforcement-required-screen')).toBeVisible();
     await expect(page.getByTestId('mfa-modal-content')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(page).toHaveURL(/\/login/);
   });
 
   test('an enrolled user is not asked to set up MFA again after a reload', async ({
@@ -198,9 +221,8 @@ test.describe('MFA enforcement screen', () => {
     page,
     request,
   }) => {
-    const user = await apiCreateThrowawayUser(request, 'mfareload');
+    const user = await apiCreateThrowawayUser(request, 'mfareload', FORCED);
     const { secret, enrolledStep } = await enrollMfa(request, user.accessToken);
-    await stubEnforcedMfaSetting(page);
     const setupCalls: string[] = [];
     page.on('request', req => {
       if (isMfaSetupCall(req)) setupCalls.push(req.url());
@@ -236,8 +258,7 @@ test.describe('MFA enforcement screen', () => {
       page,
       request,
     }) => {
-      const user = await apiCreateThrowawayUser(request, 'mfashort');
-      await stubEnforcedMfaSetting(page);
+      const user = await apiCreateThrowawayUser(request, 'mfashort', FORCED);
       const setupResponse = page.waitForResponse(res => isMfaSetupCall(res.request()), { timeout: TIMEOUTS.ACTION });
 
       await basePage.clearAllStorage();
@@ -286,8 +307,8 @@ test.describe('MFA remembered device', () => {
     page,
     request,
   }) => {
-    const userA = await apiCreateThrowawayUser(request, 'mfaremembera');
-    const userB = await apiCreateThrowawayUser(request, 'mfarememberb');
+    const userA = await apiCreateThrowawayUser(request, 'mfaremembera', UNENROLLED);
+    const userB = await apiCreateThrowawayUser(request, 'mfarememberb', UNENROLLED);
     const mfaA = await enrollMfa(request, userA.accessToken);
     const mfaB = await enrollMfa(request, userB.accessToken);
     const cookieA = trustedDeviceCookieName(userA.userId);

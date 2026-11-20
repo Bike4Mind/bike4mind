@@ -1,3 +1,4 @@
+import type { AdminErasureCollection } from './adminDataErasure';
 import { IBaseRepository, IMongoDocument } from '.';
 import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
@@ -15,6 +16,7 @@ import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } fro
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
+import type { UserAccountSegment } from './SpendExplorerTypes';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -139,8 +141,20 @@ export interface IKeywordRoutingRule {
  * that will not be present on the client side.
  */
 export interface IMFAConfig {
-  totpSecret: string;
+  /** Absent for a passkey-only user, who never set up an authenticator app. */
+  totpSecret?: string;
   totpEnabled: boolean;
+  /**
+   * True once a passkey was enrolled as a factor. Denormalized from the passkey collection so the
+   * per-request "has MFA" check stays synchronous; set and cleared only through dotted writes
+   * (see the user model's secret-less `mfa` guard).
+   *
+   * Authoritative only for a user without an authenticator app. An app user who registered
+   * passkeys before this flag existed has it unset until their next registration (totpEnabled
+   * carries their MFA meanwhile), so an absent flag alongside totpEnabled does not mean "no
+   * passkeys": ask the passkey collection when that matters.
+   */
+  passkeyEnabled?: boolean;
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
@@ -156,7 +170,7 @@ export interface IMFAConfig {
 }
 
 /**
- * A WebAuthn credential (passkey) enrolled as an additional MFA method. Lives in its own
+ * A WebAuthn credential (passkey) enrolled as an MFA factor. Lives in its own
  * collection rather than on `IMFAConfig`: the user model's guard strips any `mfa` write that
  * lacks the select:false `totpSecret`, which a credential write would routinely trip.
  * Binary fields are base64url-encoded.
@@ -187,7 +201,8 @@ export interface IPasskeyCredentialRepository {
   recordUse(id: string, counter: number): Promise<void>;
   /** Returns true when a credential was actually removed (false = unknown id or not this user's). */
   remove(id: string, userId: string): Promise<boolean>;
-  removeAllForUser(userId: string): Promise<number>;
+  /** `createdBefore` limits the purge to credentials older than that instant. */
+  removeAllForUser(userId: string, options?: { createdBefore?: Date }): Promise<number>;
 }
 
 /**
@@ -335,11 +350,21 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+/**
+ * `self`: the person's own request. `support`: an admin scheduling it on the person's request. Both wait out
+ * the grace period. `admin`: a data subject erasure an admin started, due at once.
+ */
 export const ACCOUNT_DELETION_SOURCES = ['self', 'support', 'admin'] as const;
 export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 
 /** Days between a deletion request and the purge; the user can cancel until then. */
 export const ACCOUNT_DELETION_GRACE_DAYS = 14;
+
+/**
+ * Days after a deletion request at which one still not completed raises the deadline alarm, leaving
+ * five days of margin inside the one-month erasure window.
+ */
+export const ACCOUNT_DELETION_DEADLINE_ALERT_DAYS = 25;
 
 export interface AccountDeletionRetainedRecord {
   category: string;
@@ -390,6 +415,13 @@ export interface IUserDeletion {
   requestedAt: Date;
   scheduledFor: Date;
   source: AccountDeletionSource;
+  /** The admin who requested an `admin` erasure. */
+  requestedBy?: string;
+  /**
+   * What the data holder registry counted before the first purge attempt of an `admin` erasure, kept
+   * so the deletion record describes the whole erasure even when a retry finds less left. Counts only.
+   */
+  erasureScope?: AdminErasureCollection[];
   /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
   purgeStartedAt?: Date;
   purgeLeaseId?: string;
@@ -405,6 +437,8 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
+  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  freeQuestStartId?: string;
   username: string;
   name: string;
   email: string | null;
@@ -422,6 +456,13 @@ export interface IUser extends ICreditHolder {
   groups: Array<string> | null;
   isAdmin: boolean;
   adminPermissions?: AdminPermissionId[];
+  /** Admin roles held (b4m-core/common adminRoles.ts). Assigned through the admin permissions endpoint. */
+  adminRoleIds?: string[];
+  /**
+   * The permissions those roles carry, resolved per request by the auth step. A virtual, never
+   * stored: absent when roles were not resolved for this read.
+   */
+  roleAdminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
@@ -483,14 +524,33 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Private erasure retry state, including restored accounts with no deletion schedule. */
+  accountFilePurge?: {
+    startedAt?: Date;
+    leaseId?: string;
+    leaseExpiresAt?: Date;
+    initialized?: boolean;
+    throughAuditId?: string;
+    afterAuditId?: string;
+    complete?: boolean;
+  };
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
-  accountDataExportLease?: { id: string; expiresAt: Date };
+  /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
+  accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
+  /**
+   * Set only on an organization's service account (an `isSystem` user that owns the org's API keys,
+   * see constants/orgServiceAccount.ts). Binds the account to that one org; it never sits on the
+   * org's `users[]` roster, so it takes no seat and is not listed as a member.
+   */
+  serviceAccountOrganizationId?: string;
+  /** Set on a service account when its organization is deleted; getOrCreateOrgServiceAccount refuses a retired account. */
+  serviceAccountRetiredAt?: Date;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -914,6 +974,42 @@ export interface IUser extends ICreditHolder {
    */
   isInternal?: boolean;
 
+  /**
+   * Set by an admin through the user's partner toggle. Only `partner` is ever stored from the user
+   * route; absent reads as `customer`. Internal stays `isInternal`, the only source of that for a user.
+   * Spend explorer splits cost by it. Never an authorization source.
+   */
+  accountSegment?: UserAccountSegment;
+
+  /**
+   * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted
+   * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
+   */
+  isPersona?: boolean;
+
+  /**
+   * `'force'` makes this one account owe MFA enrollment as if the admin enforced MFA, with the
+   * stage-wide `enforceMFA` setting untouched, so e2e can drive the real enforcement path. Set only
+   * by POST /api/test/create-user; no signup, profile or admin update path writes it. Every reader
+   * goes through isMfaForcedForUser (common mfaEnforcement.ts).
+   */
+  mfaEnforcement?: 'force' | null;
+
+  /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
+  personaExpiresAt?: Date | null;
+
+  /** The name the persona was minted under; a re-mint of a live name returns this account. */
+  personaName?: string | null;
+
+  /** The user who minted this persona; only they (or an admin) may re-mint or delete it. */
+  personaOwnerId?: string | null;
+
+  /** SHA-256 of the persona's single-use login code. Secret: never serialized. */
+  personaLoginCodeHash?: string | null;
+
+  /** When the persona's login code stops being redeemable. */
+  personaLoginCodeExpiresAt?: Date | null;
+
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
 }
@@ -1013,6 +1109,8 @@ export interface IUserRepository
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
   /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
   clearOrganizationPointer: (organizationId: string) => Promise<void>;
+  /** Stamp `serviceAccountRetiredAt` on the org's service account (used when the org is deleted). */
+  retireOrgServiceAccount: (userId: string, organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
@@ -1071,7 +1169,13 @@ export interface IUserRepository
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
    * superseded secret never enables a secret the user's authenticator does not hold.
    */
-  atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
+  atomicEnableMfa: (userId: string, totpSecret: string, hashedBackupCodes?: string[]) => Promise<IUserDocument | null>;
+  /**
+   * Make a passkey the user's first factor: set `mfa.passkeyEnabled` and store `hashedBackupCodes`,
+   * discarding any unconfirmed app setup. Only while the user has no factor yet; returns null when
+   * a concurrent enrollment got there first, so backup codes are never issued twice.
+   */
+  atomicEnablePasskeyMfa: (userId: string, hashedBackupCodes: string[]) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the
@@ -1084,10 +1188,15 @@ export interface IUserRepository
    * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
    * to a client: it carries admin permissions.
    */
-  findAdminTargetsByIds?: (
-    ids: string[]
-  ) => Promise<
-    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  findAdminTargetsByIds?: (ids: string[]) => Promise<
+    Array<{
+      id: string;
+      email?: string;
+      username?: string;
+      isAdmin?: boolean;
+      adminPermissions?: string[];
+      adminRoleIds?: string[];
+    }>
   >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
@@ -1115,6 +1224,12 @@ export interface IUserRepository
    * it, so a recalculated absolute value never overwrites an adjustment it did not see.
    */
   setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /**
+   * Sets `planStorageLimit` and re-derives the enforced `storageLimit` in one write, so a manual
+   * `storageLimitOverride` keeps winning (same precedence as resolveUserStorageLimit). A row without the
+   * override field first gets its legacy-derived override written. False when the user does not exist.
+   */
+  setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

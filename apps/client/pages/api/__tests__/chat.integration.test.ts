@@ -23,9 +23,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/common';
 
 const {
   mockCheckFreeTierDailySpendCap,
+  mockFindActiveFreeze,
   mockValidate,
   mockFindById,
   mockRateLimit,
@@ -38,6 +40,7 @@ const {
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
   mockOrgFindAccessibleById,
+  mockOrgFindById,
   mockSystemPromptText,
   mockTerminalError,
   mockCreateSession,
@@ -52,6 +55,7 @@ const {
   fakeCustomMcpHost,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
+  mockFindActiveFreeze: vi.fn(),
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
@@ -64,6 +68,7 @@ const {
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  mockOrgFindById: vi.fn(),
   // Fresh-session creation for API-key / newConversation callers (see resolveChatSessionId).
   mockCreateSession: vi.fn(),
   // The lastNotebookId write on the JWT most-recent fallback: asserted NOT to run for
@@ -89,7 +94,7 @@ const {
   fakeCustomMcpHost: { listConnections: () => [] },
 }));
 
-vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -146,7 +151,7 @@ const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
   mockOptionsFindUser: vi.fn(),
   mockProcessOptions: vi.fn(),
 }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
@@ -178,8 +183,8 @@ vi.mock('@bike4mind/services', async orig => {
 
 const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
 
-vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
-  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
   createCompletionMeter: vi.fn(),
 }));
 
@@ -191,6 +196,8 @@ vi.mock('@bike4mind/services/llm', async orig => {
     }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
+    questMasterStartId = 'server-admitted-start';
+    questAdmittedAs = 'free';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -250,6 +257,8 @@ vi.mock('@bike4mind/database', async orig => {
     // memberships via this gate. Non-admin callers in these tests hit findAccessibleById.
     organizationRepository: {
       ...(actual.organizationRepository as object),
+      // apiKeyBillingOrg reads the key's billing org to check it still exists and holds the holder.
+      findById: (...a: unknown[]) => mockOrgFindById(...a),
       shareable: {
         ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
         findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
@@ -261,6 +270,7 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.sessionRepository as object),
       delete: (...a: unknown[]) => mockDeleteSession(...a),
     },
+    spendFreezeRepository: { findActiveForSubject: (...a: unknown[]) => mockFindActiveFreeze(...a) },
     questRepository: {
       ...(actual.questRepository as object),
       findById: (...a: unknown[]) => mockQuestFindById(...a),
@@ -290,13 +300,13 @@ const { mockAdmitApiKeyCompletion, mockQuotaRelease } = vi.hoisted(() => ({
   mockAdmitApiKeyCompletion: vi.fn(async () => ({ release: async () => {} })),
   mockQuotaRelease: vi.fn(),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   admitApiKeyCompletion: (...a: unknown[]) => mockAdmitApiKeyCompletion(...a),
 }));
 
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError, TooManyRequestsError } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -342,6 +352,7 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
 describe('POST /api/chat (integration — scope enforcement via real middleware chain)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindActiveFreeze.mockResolvedValue(null);
     mockGetSettingsMap.mockResolvedValue({});
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued' });
     mockFindById.mockReturnValue(
@@ -368,6 +379,16 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     mockIsChatModelUsable.mockReturnValue(true);
   });
 
+  it('gives a user without AI access their access error, not spend_frozen', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey: null });
+    req.user = { ...JWT_USER, isModerated: true };
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().errorCode).not.toBe('spend_frozen');
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['API key', VALID_KEY, { message: 'hello' }],
     ['new conversation', null, { message: 'hello', newConversation: true }],
@@ -390,6 +411,28 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
     expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['API key', VALID_KEY, { message: 'hello' }],
+    ['new conversation', null, { message: 'hello', newConversation: true }],
+    ['inline completion', VALID_KEY, { message: 'hello', wait: true }],
+  ] as const)('refuses a frozen %s with 403 spend_frozen ahead of the daily cap', async (_label, apiKey, body) => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey, body });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'user' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({
+      userId: req.user.id,
+      organizationId: null,
+      apiKeyId: apiKey ? 'k1' : null,
+    });
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
     expect(mockProcess).not.toHaveBeenCalled();
   });
@@ -448,7 +491,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     };
     createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
 
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     expect(createCompletionMeter).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -703,7 +746,9 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith(
       'admin-default',
       expect.objectContaining({ id: 'user-1' }),
-      expect.anything()
+      expect.anything(),
+      // The billing org (none here) whose model policy the default must respect.
+      { organizationId: undefined }
     );
     expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
       'allowlisted-model'
@@ -860,6 +905,96 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    // An org-billed key bills the key's org whether or not the body names one (resolveRequestBillingOrgId).
+    // An org-owned key's holder is the org's service account, which is on no roster, so the
+    // session-caller membership check (resolveActiveOrg) must not be what decides it.
+    describe('with an org-billed API key', () => {
+      const orgId = new Types.ObjectId().toHexString();
+
+      beforeEach(() => {
+        mockValidate.mockResolvedValue({
+          isValid: true,
+          keyId: 'k1',
+          userId: 'user-1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+          billingOwnerType: CreditHolderType.Organization,
+          organizationId: orgId,
+        });
+        mockFindById.mockReturnValue(
+          Promise.resolve({
+            id: 'user-1',
+            _id: 'user-1',
+            isBanned: false,
+            disputePending: false,
+            isSystem: true,
+            serviceAccountOrganizationId: orgId,
+          })
+        );
+        mockOrgFindById.mockResolvedValue({ id: orgId, userId: 'owner-1', users: [] });
+      });
+
+      it.each([
+        ['omits an organizationId', { message: 'hi', sessionId: 'sess-1' }],
+        ['names the key org', { message: 'hi', sessionId: 'sess-1', organizationId: orgId }],
+      ])('bills the key org when the body %s', async (_label, body) => {
+        const { req, res } = fire({ body });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(invokedBody().body.organizationId).toBe(orgId);
+        expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      });
+
+      it('refuses a body that names a different org (403) before creating a quest', async () => {
+        const { req, res } = fire({
+          body: { message: 'hi', sessionId: 'sess-1', organizationId: new Types.ObjectId().toHexString() },
+        });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
+
+      it("hands the key's billing owner type to the QuestMaster completion meter", async () => {
+        const { req, res } = fire();
+        await handler(req, res);
+        const { createCompletionMeter: createMeter } = invokeOptions.value as {
+          createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+        };
+        createMeter({ organizationId: orgId, featureLabel: 'QuestMaster planning' });
+
+        const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
+        expect(createCompletionMeter).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          'QuestMaster planning',
+          expect.objectContaining({ apiKeyId: 'k1', apiKeyBillingOwnerType: CreditHolderType.Organization })
+        );
+      });
+
+      it('checks the freeze against the key org, the key and its user', async () => {
+        mockFindActiveFreeze.mockResolvedValueOnce({
+          scopeType: 'Organization',
+          frozenAt: new Date('2026-11-01T00:00:00Z'),
+        });
+        const { req, res } = fire();
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'organization' });
+        expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: orgId, apiKeyId: 'k1' });
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
+
+      it('refuses a holder who is no longer on the key org', async () => {
+        mockFindById.mockReturnValue(
+          Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
+        );
+        const { req, res } = fire();
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -1353,6 +1488,88 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptDetails).toEqual(DETAILS);
+  });
+
+  it('carries the server admission id into the blocking process body', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
+      })
+    );
+  });
+
+  it('ignores client-supplied admission fields on the blocking path', async () => {
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        questMasterStartId: 'client-forged',
+        questAdmittedAs: 'subscriber',
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
+      })
+    );
+  });
+
+  it.each([true, false])('returns a typed allowance refusal without processing (wait=%s)', async wait => {
+    mockInvoke.mockRejectedValueOnce(
+      new ForbiddenError('Free quest already started', {
+        errorCode: 'free_quest_limit_reached',
+      })
+    );
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true, enableQuestMaster: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'free_quest_limit_reached' });
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'runs legacy tools without QuestMaster after the free start is spent (wait=%s)',
+    async wait => {
+      mockInvoke.mockImplementationOnce(async ({ body }) => {
+        expect(body.enableQuestMaster).toBe(true);
+        throw new ForbiddenError('Free quest already started', { errorCode: 'free_quest_limit_reached' });
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      expect(mockInvoke).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({ enableQuestMaster: false, enableMementos: true, enableAgents: true }),
+        })
+      );
+      expect(mockDeleteSession).not.toHaveBeenCalled();
+      if (wait) {
+        expect(mockProcess).toHaveBeenCalledWith(
+          expect.objectContaining({ body: expect.objectContaining({ enableQuestMaster: false }) })
+        );
+      } else {
+        expect(mockProcess).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it('does not retry unrelated legacy tools refusals', async () => {
+    mockInvoke.mockRejectedValueOnce(new ForbiddenError('Subscription lookup failed'));
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', enableTools: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockProcess).not.toHaveBeenCalled();
   });
 
   it('omits the breakdown without the flag, keeping the response shape unchanged', async () => {

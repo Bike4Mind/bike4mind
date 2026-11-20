@@ -12,6 +12,7 @@ const mockUserHasMFA = vi.fn();
 const mockCountPasskeys = vi.fn();
 const mockJwtVerify = vi.fn();
 const mockJwtSign = vi.fn();
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: vi.fn(async () => false) }));
 
 class UnprocessableEntityError extends Error {
   constructor(message: string) {
@@ -88,6 +89,7 @@ vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
 }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   grantPackageRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),

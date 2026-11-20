@@ -1,11 +1,9 @@
 import {
   SessionEvents,
-  applyWorkspaceSessionSettings,
   redactSessionForClient,
   sessionDeleteContract,
   sessionGetContract,
   sessionUpdateContract,
-  stripSurfaceOwnedFields,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
@@ -19,40 +17,16 @@ import {
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { readSession } from '@server/sessions/readSession';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
 // that also drives the OpenAPI spec. `req.validated` / `req.validatedParams` are the parsed body/id.
-const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res) => {
-  const session = await sessionService.getSession(
-    req.user!.id,
-    { id: req.validatedParams.id },
-    { db: { sessions: sessionRepository, users: userRepository } }
-  );
-
-  // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.
-  const doc = session as typeof session & { toJSON?: () => typeof session };
-  const plain = typeof doc.toJSON === 'function' ? doc.toJSON() : session;
-  try {
-    const effective = await applyWorkspaceSessionSettings(
-      plain,
-      { user: req.user, logger: req.logger },
-      premiumWorkspaceSessionSettings
-    );
-    return res.json(redactSessionForClient(effective));
-  } catch (error) {
-    req.logger.warn('Workspace session settings unavailable for GET; returning without owned fields', error);
-    // User-set provenance can preserve stored values during writes, but cannot make an owned
-    // value authoritative when its workspace resolver is unavailable.
-    const fallback = stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings, { surface: plain.surface });
-    return res.json(redactSessionForClient(fallback));
-  }
-});
+const getHandler = nextRouteForContract(sessionGetContract).get(readSession);
 
 const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (req, res) => {
   const { id } = req.validatedParams;

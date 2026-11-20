@@ -17,7 +17,8 @@ import {
   type TurnActivity,
   type TurnProgress,
 } from './statusLine';
-import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
+import { useReplyStatShown } from './replyStatsPrefs';
+import { describeTokenRate, formatTokenRate } from './tokenRate';
 
 const pulse = keyframes({
   '0%, 100%': { opacity: 0.3 },
@@ -90,7 +91,7 @@ function ActivityDetailView({
  */
 export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; activity: TurnActivity }) {
   const showDollars = useShowDollarCosts();
-  const showRate = useShowTokenRate();
+  const showRate = useReplyStatShown('speed');
   const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(false);
   const detailId = useId();

@@ -42,6 +42,8 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
+const mockResolveSecondFactor = vi.hoisted(() => vi.fn());
+vi.mock('@server/auth/signInSecondFactor', () => ({ resolveSecondFactor: mockResolveSecondFactor }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
@@ -87,6 +89,7 @@ async function runCallback(relayState: string, redirectPattern: RegExp = /\/auth
 describe('/api/auth/saml/callback - OAuth client source tag', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
     mockSamlErr.mockReturnValue(null);
     mockSamlInfo.mockReturnValue({});
   });
@@ -146,6 +149,19 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
     await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: '/settings?client_id=x' }).toString());
     expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', undefined);
   });
+
+  it('hands org-required enrollment to existing setup without issuing a session', async () => {
+    mockSamlUser.mockReturnValue({ id: 'member', isBanned: false });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending' });
+    const res = await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: '/new' }).toString());
+    expect(res._getRedirectUrl()).toBe('/auth/success?redirectTo=%2Fnew#mfaToken=pending&userId=member&mfa=setup');
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: AuthStrategy.SAML, createdVia: 'saml' },
+      enterpriseIdp: true,
+    });
+    const { issueBrowserSession } = await import('@server/auth/issueSession');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
 });
 
 describe('/api/auth/saml/callback - structured logging', () => {
@@ -158,6 +174,7 @@ describe('/api/auth/saml/callback - structured logging', () => {
     vi.clearAllMocks();
     mockSamlErr.mockReturnValue(null);
     mockSamlInfo.mockReturnValue({});
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'debug').mockImplementation(() => {});
@@ -212,5 +229,49 @@ describe('/api/auth/saml/callback - structured logging', () => {
     expect(everything).not.toContain(samlResponse);
     expect(everything).not.toContain('access-token-canary');
     expect(everything).not.toContain('person@example.com');
+  });
+});
+
+describe('/api/auth/saml/callback - callbacks naming no usable IdP', () => {
+  async function runWithQuery(query: Record<string, string | string[]>) {
+    const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
+      method: 'GET',
+      query,
+      headers: { 'user-agent': 'UA/9' },
+    });
+    Object.assign(req, { ip: '203.0.113.7', logger });
+    await captured.handler!(req, res);
+    return res;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('redirects a repeated RelayState to the login page without an error log', async () => {
+    const res = await runWithQuery({ RelayState: ['a', 'b'] });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_idp_context');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('redirects an unknown IdP to the login page without an error log', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValueOnce(null);
+
+    const res = await runWithQuery({ idp: 'not-an-idp' });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_idp');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unexpected failure (DB) at error', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findByIdWithSecrets).mockRejectedValueOnce(new Error('db down'));
+
+    const res = await runWithQuery({ idp: 'idp-1' });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(logger.error).toHaveBeenCalledWith('SAML callback processing error', expect.anything());
   });
 });

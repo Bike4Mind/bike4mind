@@ -11,10 +11,39 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { organizationGroupWithMembersResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
+import type { Request, Response } from 'express';
+import { withTransaction } from '@bike4mind/database';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 
 const listGroupsResponseSchema = z.object({ groups: z.array(organizationGroupWithMembersResponseSchema) });
 
-const handler = baseApi().get(
+const createHandler = baseApi({ auth: 'jwtOnly' }).post(
+  asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+    const organizationId = req.query.id?.toLowerCase();
+    if (!organizationId) throw new NotFoundError('Organization not found');
+    const { type } = z
+      .object({ type: z.string().trim().min(1).max(100) })
+      .strict()
+      .parse(req.body);
+    const result = await withTransaction(async () => {
+      const result = await organizationService.createStandardGroup(
+        req.user,
+        { organizationId, type },
+        { db: { organizations: organizationRepository, groups: groupRepository, users: userRepository } }
+      );
+      await recordOrganizationAuditEvent({
+        organizationId,
+        actorUserId: req.user.impersonatedBy ?? req.user.id,
+        action: 'policy.updated',
+        targetId: `group-type:${type}`,
+      });
+      return result;
+    });
+    res.status(200).json(result);
+  })
+);
+
+const listHandler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const organizationId = req.query.id;
     if (!organizationId) throw new NotFoundError('Organization not found');
@@ -31,6 +60,10 @@ const handler = baseApi().get(
     return respond(res, listGroupsResponseSchema, { groups });
   })
 );
+
+// Choose authentication before an API key can be validated or metered.
+const handler = (req: Request, res: Response) =>
+  (req.method?.toUpperCase() === 'POST' ? createHandler : listHandler)(req, res);
 
 export const config = {
   api: {

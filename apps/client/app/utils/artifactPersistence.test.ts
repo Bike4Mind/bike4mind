@@ -80,7 +80,13 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
-import { findArtifactSaveTarget, findExistingArtifactId, persistArtifacts } from './artifactPersistence';
+import {
+  ARTIFACT_VERSION_CREATED_EVENT,
+  findArtifactSaveTarget,
+  findExistingArtifactId,
+  findReadableArtifactId,
+  persistArtifacts,
+} from './artifactPersistence';
 
 const SESSION = 's1';
 
@@ -213,6 +219,36 @@ describe('persistArtifacts - React versioning', () => {
   });
 });
 
+describe('persistArtifacts - version announcement', () => {
+  const listen = () => {
+    const seen: string[] = [];
+    const handler = (event: Event) => seen.push((event as CustomEvent<{ artifactId: string }>).detail.artifactId);
+    window.addEventListener(ARTIFACT_VERSION_CREATED_EVENT, handler);
+    return { seen, stop: () => window.removeEventListener(ARTIFACT_VERSION_CREATED_EVENT, handler) };
+  };
+
+  it('announces the row that got a new version, once the save has gone through', async () => {
+    await persistArtifacts([block('react', 'todo', 'T1')], SESSION);
+    const todoId = store.rows.find(r => r.identifier === 'todo')!.id;
+    reply += 1;
+    const { seen, stop } = listen();
+
+    await persistArtifacts([block('react', 'todo', 'T2')], SESSION);
+    stop();
+
+    expect(seen).toEqual([todoId]);
+  });
+
+  it('announces nothing when a new row is created', async () => {
+    const { seen, stop } = listen();
+
+    await persistArtifacts([block('react', 'todo', 'T1')], SESSION);
+    stop();
+
+    expect(seen).toEqual([]);
+  });
+});
+
 describe('findExistingArtifactId', () => {
   it('matches the identifier field, including identifiers that contain underscores', async () => {
     seed({ id: 'artifact_react_my_app_5_0', type: 'react', identifier: 'my_app' });
@@ -263,6 +299,49 @@ describe('findExistingArtifactId', () => {
     seed({ id: 'artifact_react_old_0_0', type: 'react', identifier: 'old' });
 
     expect(await findExistingArtifactId('react', '', SESSION)).toBeNull();
+    expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe('findReadableArtifactId', () => {
+  it("resolves a row the owner-only list can't see, through the by-identifier route", async () => {
+    get.mockImplementationOnce(async () => ({ status: 200, data: { artifact: { id: 'artifact_react_app_5_0' } } }));
+
+    expect(await findReadableArtifactId('react', 'app', SESSION)).toBe('artifact_react_app_5_0');
+    expect(get).toHaveBeenCalledWith('/api/artifacts/by-identifier', {
+      params: { sessionId: SESSION, type: 'react', identifier: 'app' },
+    });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the id-segment match when the route finds nothing', async () => {
+    seed({ id: 'artifact_react_legacy_3_0', type: 'react' });
+    get.mockImplementationOnce(async () => ({ status: 200, data: { artifact: null } }));
+
+    expect(await findReadableArtifactId('react', 'legacy', SESSION)).toBe('artifact_react_legacy_3_0');
+  });
+
+  it('spends one list call, not two, on the id-segment fallback after a null route answer', async () => {
+    seed({ id: 'artifact_react_legacy_3_0', type: 'react' });
+    get.mockImplementationOnce(async () => ({ status: 200, data: { artifact: null } }));
+
+    await findReadableArtifactId('react', 'legacy', SESSION);
+
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back when the route errors', async () => {
+    seed({ id: 'artifact_react_app_5_0', type: 'react', identifier: 'app' });
+    get.mockImplementationOnce(async () => {
+      throw new Error('boom');
+    });
+
+    expect(await findReadableArtifactId('react', 'app', SESSION)).toBe('artifact_react_app_5_0');
+  });
+
+  it('returns null without a session or identifier, and never calls the API', async () => {
+    expect(await findReadableArtifactId('react', 'app', undefined)).toBeNull();
+    expect(await findReadableArtifactId('react', '', SESSION)).toBeNull();
     expect(get).not.toHaveBeenCalled();
   });
 });

@@ -267,7 +267,8 @@ const GEARS: GearDef[] = [
     key: 'mfa',
     credits: 500,
     kind: 'skill',
-    check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
+    check: async ({ userId }) =>
+      !!(await User.exists({ _id: userId, $or: [{ 'mfa.totpEnabled': true }, { 'mfa.passkeyEnabled': true }] })),
   },
   {
     // Filters on slackMetadata.channelId (required on the subdocument) rather than slackMetadata

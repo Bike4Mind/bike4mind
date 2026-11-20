@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { requireEnv } from '@bike4mind/common';
+import { requireConfiguredSecret, requireEnv } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
@@ -37,7 +37,9 @@ const MAC_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 // Its own key derived from the JWT secret, so a link token can never verify as an auth JWT or vice versa.
 let cachedKey: Buffer | undefined;
 const fileLinkKey = () =>
-  (cachedKey ??= createHmac('sha256', Resource.JWT_SECRET.value).update('b4m-file-link-token/v1').digest());
+  (cachedKey ??= createHmac('sha256', requireConfiguredSecret('JWT_SECRET', Resource.JWT_SECRET.value))
+    .update('b4m-file-link-token/v1')
+    .digest());
 
 const mac = (key: Buffer, payload: string) => createHmac('sha256', key).update(payload).digest('base64url');
 

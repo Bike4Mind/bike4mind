@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   answerCostUnit,
+  creditBalanceParams,
   formatAnswerCost,
   formatAnswerCostAmount,
   formatCreditAmount,
@@ -65,5 +66,16 @@ describe('formatAnswerCost', () => {
   it('never shows a paid answer as free', () => {
     expect(formatAnswerCost(0.04)).toBe('<1 credit');
     expect(formatAnswerCost(0)).toBe('0 credits');
+  });
+});
+
+describe('creditBalanceParams', () => {
+  it('rounds down so the plural form matches the amount shown', () => {
+    expect(creditBalanceParams(1.6)).toEqual({ count: 1, amount: '1' });
+    expect(creditBalanceParams(12345.678)).toEqual({ count: 12345, amount: '12,345' });
+  });
+
+  it('shows a negative balance as 0', () => {
+    expect(creditBalanceParams(-3)).toEqual({ count: 0, amount: '0' });
   });
 });

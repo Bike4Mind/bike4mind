@@ -3,7 +3,7 @@
 # Frozen baseline for scripts/check-contract-gate.sh scan 3: handlers under
 # apps/client/pages/api that accept API keys (no `auth: 'jwtOnly'`) and call an LLM
 # directly, but name no credit-billing seam from
-# apps/client/server/billing/meterPlatformCompletion.ts.
+# packages/server-utils/src/billing/meterPlatformCompletion.ts.
 #
 # Rules:
 #   - This list only shrinks. Do not add a handler: meter its LLM calls, or make an

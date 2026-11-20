@@ -12,9 +12,11 @@ import {
   RESEARCH_RUN_STATUSES,
   RESEARCH_RUN_STOP_REASONS,
   RESEARCH_RUN_TRIGGERS,
+  RESEARCH_SOURCES,
   RESEARCH_UNLISTED_SOURCES,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { ResearchItemRuleSchema } from './DataLakeResearchConfigModel';
 
 const ModelName = 'DataLakeResearchRun';
 
@@ -22,6 +24,9 @@ interface IDataLakeResearchRunModel extends Model<IDataLakeResearchRunDocument> 
 
 /** The levers as executed. Mirrors `ResearchRunLevers`; see DataLakeResearchTypes.ts. */
 const ResearchRunLeversSchema = {
+  // No default on the snapshot: one taken before feeds has neither, and the executor upgrades it.
+  source: { type: String, enum: RESEARCH_SOURCES },
+  feedUrl: { type: String },
   query: { type: String, required: true },
   model: { type: String },
   maxResults: { type: Number, required: true },
@@ -31,25 +36,37 @@ const ResearchRunLeversSchema = {
   reviewDomains: { type: [String], default: [] },
   // No default: a snapshot taken before the tiers has none, and the executor upgrades it.
   unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
+  // No default on the snapshot: one taken before auto-admit has neither, and the executor upgrades it.
+  autoAdmitTrusted: { type: Boolean },
+  maxAutoAdmits: { type: Number },
   allowedDomains: { type: [String], default: [] },
   blockedDomains: { type: [String], default: [] },
   minRelevance: { type: Number, required: true },
   costCeilingMicroUsd: { type: Number, required: true },
   proposedTags: { type: [String], default: [] },
+  // No default on the snapshot: one taken before item rules has none, and the executor upgrades it.
+  itemRules: { type: [ResearchItemRuleSchema], default: undefined },
 };
 
 const ResearchRunTotalsSchema = {
   searchHits: { type: Number, default: 0 },
   filteredBySource: { type: Number, default: 0 },
+  // No default: a run stored before the split must read undefined, not 0, so its combined count keeps its label.
+  unlistedDropped: { type: Number },
+  unresolvedRedirect: { type: Number, default: 0 },
   belowRelevance: { type: Number, default: 0 },
   judgeFailed: { type: Number, default: 0 },
   fetchFailed: { type: Number, default: 0 },
   proposed: { type: Number, default: 0 },
+  autoAdmitted: { type: Number, default: 0 },
+  autoAdmitSkipped: { type: Number, default: 0 },
   duplicatePending: { type: Number, default: 0 },
   alreadyInLake: { type: Number, default: 0 },
   suppressedByTombstone: { type: Number, default: 0 },
   unusableSource: { type: Number, default: 0 },
   notJudged: { type: Number, default: 0 },
+  blockedByRule: { type: Number, default: 0 },
+  reviewedByRule: { type: Number, default: 0 },
 };
 
 /**
@@ -70,6 +87,8 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
     stopReason: { type: String, enum: RESEARCH_RUN_STOP_REASONS, default: null },
     spentMicroUsd: { type: Number, default: 0 },
     totals: { type: ResearchRunTotalsSchema, default: () => emptyResearchRunTotals() },
+    // Beside the totals, not in them: a waiting item is not an outcome bucket.
+    feedBacklog: { type: Number, default: null },
     judgeModel: { type: String, default: null },
     error: { type: String, default: null },
   },
@@ -148,13 +167,14 @@ class DataLakeResearchRunRepository
 
   /** The `$set` body shared by every settle variant below - only the status filter differs. */
   private settleFields(input: SettleResearchRunInput) {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
+    const { status, completedAt, stopReason, spentMicroUsd, totals, feedBacklog, judgeModel, error } = input;
     return {
       status,
       completedAt,
       stopReason: stopReason ?? null,
       spentMicroUsd,
       totals,
+      feedBacklog: feedBacklog ?? null,
       judgeModel: judgeModel ?? null,
       error: error ?? null,
     };

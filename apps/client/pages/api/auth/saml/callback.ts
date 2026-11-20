@@ -9,7 +9,8 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
+import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -23,7 +24,9 @@ import { Logger } from '@bike4mind/observability';
 const handleSamlCallback = async (req: any, res: any) => {
   try {
     // Extract IDP info from the SAML response/state (simplified; production may want session storage).
-    const RelayState = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    const rawRelayState: unknown = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    // A repeated parameter arrives as an array, which URLSearchParams below would throw on.
+    const RelayState = typeof rawRelayState === 'string' ? rawRelayState : undefined;
     let idpId: string | undefined;
     // Post-login path round-tripped via RelayState; sanitized client-side in
     // /auth/success, so carried through opaquely here.
@@ -43,7 +46,7 @@ const handleSamlCallback = async (req: any, res: any) => {
 
     if (!idpId) {
       // Fallback: try to get the IDP from query params (for testing)
-      idpId = req.query?.idp as string;
+      idpId = typeof req.query?.idp === 'string' ? req.query.idp : undefined;
       req.logger.debug('Falling back to IDP from query params', { idpId });
     }
 
@@ -159,6 +162,20 @@ const handleSamlCallback = async (req: any, res: any) => {
           // mostly names no visit. Read anyway for the same-site case.
           visitId: readVisitId(req.headers.cookie),
         });
+      }
+
+      const secondFactor = await resolveSecondFactor(req, user, {
+        origin: { strategy: AuthStrategy.SAML, createdVia: 'saml' },
+        enterpriseIdp: true,
+      });
+      if (secondFactor.kind !== 'satisfied') {
+        const handoff = mfaHandoffFragment({
+          mfaToken: secondFactor.mfaToken,
+          userId: user.id,
+          mode: secondFactor.kind === 'enroll' ? 'setup' : 'verify',
+          passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+        });
+        return res.redirect(`/auth/success${authSuccessRedirectQuery(redirectTo)}${handoff}`);
       }
 
       const { accessToken } = await issueBrowserSession(req, res, user.id, {

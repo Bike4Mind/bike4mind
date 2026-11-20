@@ -92,7 +92,7 @@ describe('a platform-key completion is metered', () => {
   });
 
   it('does not count an import of a meter as metering', () => {
-    const importOnly = `import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+    const importOnly = `import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 const { llm } = await OperationsModelService.getOperationsModel();
 await llm.complete(model, messages);`;
     const called = `${importOnly}\nconst meter = createRequestCompletionMeter(req, 'x');`;

@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { count: mockCount, countTaggableNotebooks: mockCountTaggable },
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));
 

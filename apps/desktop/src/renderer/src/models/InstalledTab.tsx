@@ -17,6 +17,7 @@ import type { ChatModelOption } from '@shared/chat';
 import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { TrashIcon } from '../chat/icons';
+import { VISUALLY_HIDDEN } from '../visuallyHidden';
 import { FitBadge } from './FitBadge';
 import { installedCache, listedAtLabel, type LastInstalled } from './installedCache';
 import { hasModelDefaults, ModelDefaultsDialog } from './ModelDefaultsDialog';
@@ -60,15 +61,6 @@ const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['thinking', 'Thinking'],
   ['embeddings', 'Embeddings'],
 ];
-
-const visuallyHidden = {
-  position: 'absolute',
-  width: '1px',
-  height: '1px',
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-} as const;
 
 /** Contexts are set in powers of two, so 4096 reads as 4K and 131072 as 128K. */
 function contextLabel(tokens: number): string {
@@ -196,7 +188,7 @@ function InstalledRow({
               Remove
             </Button>
           </Tooltip>
-          <Box component="span" id={blockedId} sx={visuallyHidden}>
+          <Box component="span" id={blockedId} sx={VISUALLY_HIDDEN}>
             {removeBlocked}
           </Box>
         </>
