@@ -243,7 +243,11 @@ import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentE
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecutor.audioToolConfig';
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
-import { buildAgentProductionToolConfig, getAgentProductionToolConfigDeps } from './agentExecutor.productionToolConfig';
+import {
+  buildAgentProductionToolConfig,
+  getAgentProductionToolConfigDeps,
+  productionToolsOpen,
+} from './agentExecutor.productionToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
 import { withDirectedSessionTools, withDirectedSystemContext } from './agentExecutor.directedSession';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
@@ -2424,7 +2428,16 @@ async function runExecution(
 
     // The production tools drive the same capped image, video and music jobs, so they need those configs even
     // when the toolbelt does not name the plain media tools (the media tools are offered only when named).
-    const productionToolsEnabled = PRODUCTION_TOOL_NAMES.some(name => profileEnabledTools.includes(name));
+    const productionDeps = getAgentProductionToolConfigDeps(logger);
+    const productionToolsEnabled = await productionToolsOpen(
+      {
+        user: user as IUserDocument,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: PRODUCTION_TOOL_NAMES.some(name => profileEnabledTools.includes(name)),
+      },
+      productionDeps
+    );
     const imageJobConfig = await buildAgentImageToolConfig(
       {
         userId: execution.userId,
@@ -2482,7 +2495,7 @@ async function runExecution(
         audioSettings: execution.audioConfig,
         audioJobs,
       },
-      getAgentProductionToolConfigDeps(logger)
+      productionDeps
     );
 
     const subagentToolConfig = buildSubagentToolConfig({
