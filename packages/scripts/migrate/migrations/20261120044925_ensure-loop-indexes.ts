@@ -1,5 +1,5 @@
 import type { Model } from 'mongoose';
-import { AgentExecutionModel, Inbox, WorkItem } from '@bike4mind/database';
+import { AgentExecutionModel, Inbox, Loop, LoopEvent, WorkItem } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 type IndexKey = Record<string, 1 | -1>;
@@ -22,8 +22,11 @@ export const ensureIndexes = async <T>(model: Model<T>, keys: IndexKey[]): Promi
   }
 };
 
-/** The indexes the loop scheduler, loop tickets and loop notices read through, on collections that are large. */
-export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox', IndexKey[]> = {
+/**
+ * The indexes the loop scheduler, loop tickets and loop notices read through. Loop and LoopEvent are new and small;
+ * they are listed so every loop index exists before the scheduler runs, not only once autoIndex gets to it.
+ */
+export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox' | 'loop' | 'loopEvent', IndexKey[]> = {
   agentExecution: [
     { runnerLeaseUntil: 1 },
     { loopId: 1, ticketPriority: 1, createdAt: 1 },
@@ -38,6 +41,20 @@ export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox', Index
     { 'origin.ticketId': 1, 'origin.stage': 1, loopId: 1 },
   ],
   inbox: [{ sourceKey: 1 }],
+  loop: [
+    { status: 1, nextRunAt: 1 },
+    { activeExecutionIds: 1 },
+    { userId: 1, updatedAt: -1 },
+    { 'alarm.kind': 1 },
+    { 'hold.kind': 1 },
+    { 'triggers.fromLoopId': 1 },
+  ],
+  loopEvent: [
+    { loopId: 1, createdAt: -1 },
+    { executionId: 1, requestedAt: 1 },
+    { 'resolution.outcome': 1, foldedAt: 1 },
+    { workItemId: 1, createdAt: -1 },
+  ],
 };
 
 const migration: MigrationFile = {
@@ -48,6 +65,8 @@ const migration: MigrationFile = {
     await ensureIndexes(AgentExecutionModel, LOOP_INDEXES.agentExecution);
     await ensureIndexes(WorkItem, LOOP_INDEXES.workItem);
     await ensureIndexes(Inbox, LOOP_INDEXES.inbox);
+    await ensureIndexes(Loop, LOOP_INDEXES.loop);
+    await ensureIndexes(LoopEvent, LOOP_INDEXES.loopEvent);
   },
 
   down: async () => {

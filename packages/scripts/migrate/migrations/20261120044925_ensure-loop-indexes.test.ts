@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentExecutionModel, Inbox, WorkItem } from '@bike4mind/database';
+import { AgentExecutionModel, Inbox, Loop, LoopEvent, WorkItem } from '@bike4mind/database';
 import migration, { ensureIndexes, LOOP_INDEXES } from './20261120044925_ensure-loop-indexes';
 
 const models = [
   [AgentExecutionModel, LOOP_INDEXES.agentExecution],
   [WorkItem, LOOP_INDEXES.workItem],
   [Inbox, LOOP_INDEXES.inbox],
+  [Loop, LOOP_INDEXES.loop],
+  [LoopEvent, LOOP_INDEXES.loopEvent],
 ] as const;
 
 afterEach(() => vi.restoreAllMocks());
