@@ -183,8 +183,10 @@ export type StartAgentExecutionResult =
       reason: StartAgentExecutionFailureReason;
       /** Caller-safe message; already phrased for an end user. */
       message: string;
-      /** Set only for `dispatch_failed` - the doc exists but dispatch acceptance was not confirmed. */
+      /** Set only for `dispatch_failed` after the execution doc was created. */
       executionId?: string;
+      /** Set only when the executor may still have accepted the dispatch, so the run can still start. */
+      dispatchUnconfirmed?: true;
     };
 
 export async function startAgentExecution(
@@ -498,6 +500,7 @@ export async function startAgentExecution(
         reason: 'dispatch_failed',
         message: `Execution ${executionId} dispatch could not be confirmed. Check it before starting another run.`,
         executionId,
+        dispatchUnconfirmed: true,
       };
     }
     logger.error('[Start] Executor rejected dispatch - cleaning up dispatch-time Quest', {

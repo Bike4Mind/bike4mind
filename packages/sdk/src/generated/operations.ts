@@ -377,6 +377,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listHandoffDevices: {
+    method: 'GET',
+    path: '/api/v1/handoff-devices',
+  },
   listImageModels: {
     method: 'GET',
     path: '/api/v1/image-models',
@@ -501,6 +505,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
+  replyToBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
+  },
   republishArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/republish',
@@ -536,6 +544,10 @@ export const operations = {
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
+  },
+  sendSessionHandoff: {
+    method: 'POST',
+    path: '/api/v1/session-handoffs',
   },
   startAgentExecution: {
     method: 'POST',
