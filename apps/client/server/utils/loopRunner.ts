@@ -39,7 +39,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
-import { loopAdmission, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from './loopBudget';
+import { laneCreditCap, loopAdmission, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from './loopBudget';
 import {
   buildLoopQuery,
   LOOP_PROMPT_ANSWERS,
@@ -141,12 +141,15 @@ export async function admitDesktopRun(
   loop: ILoop,
   stage: Omit<ILoopStageConfig, 'stage'>,
   runsAfterClaim: number,
-  now: Date
+  now: Date,
+  lanesLeft = 1
 ): Promise<{ model: string; escalated: boolean; tools: string[]; creditCap?: number } | RunnerRefusal> {
   const { model, escalated } = loopRunModel(loop, stage, runsAfterClaim, ticketRunLimit(loop.stages));
   const admission = await loopAdmission(loop, model, now);
   if (!admission.ok) return refuse(409, admission.kind, ADMISSION_ERRORS[admission.kind]);
-  return { model, escalated, tools: stage.tools?.length ? stage.tools : loop.tools, creditCap: admission.creditCap };
+  const creditCap = laneCreditCap(admission.creditCap, lanesLeft, admission.iterationCredits);
+  if (creditCap === 'too_small') return refuse(409, 'paced', "A lane's share of the budget is under one iteration");
+  return { model, escalated, tools: stage.tools?.length ? stage.tools : loop.tools, creditCap };
 }
 
 const ADMISSION_ERRORS: Record<'credits' | 'loop_budget' | 'user_budget' | 'paced', string> = {
@@ -194,11 +197,12 @@ export async function claimRunnerTicket(
   }
 
   const stage = stageConfigOf(loop, ticket.stage);
-  const admitted = await admitDesktopRun(loop, stage, runs + 1, now);
-  if (isRefusal(admitted)) return admitted;
-  if ((await agentExecutionRepository.countActiveDesktopByUserId(userId)) >= MAX_DESKTOP_RUNS_PER_USER) {
+  const activeDesktop = await agentExecutionRepository.countActiveDesktopByUserId(userId);
+  if (activeDesktop >= MAX_DESKTOP_RUNS_PER_USER) {
     return refuse(409, 'lanes_full', `You have ${MAX_DESKTOP_RUNS_PER_USER} desktop runs active`);
   }
+  const admitted = await admitDesktopRun(loop, stage, runs + 1, now, MAX_DESKTOP_RUNS_PER_USER - activeDesktop);
+  if (isRefusal(admitted)) return admitted;
 
   const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
   const runId = new Types.ObjectId().toString();
@@ -206,6 +210,11 @@ export async function claimRunnerTicket(
   if (!claimed) return refuse(409, 'claimed', 'The ticket was claimed by another run');
 
   const leaseUntil = leaseFrom(now);
+  const releaseRun = () =>
+    Promise.all([
+      agentExecutionRepository.finishRunnerRun(runId, userId, { status: 'failed' }),
+      workItemRepository.foldTicketRun(ticket.id, runId, { status: 'open', executionId: null }, true),
+    ]).catch(releaseError => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { releaseError }));
   try {
     const prompt = await loopPrompt(loop, claimed, stage, logger);
     await agentExecutionRepository.createRunnerRun(runId, {
@@ -233,6 +242,11 @@ export async function claimRunnerTicket(
       checkpoint: { steps: [], iteration: 0, pendingText: '', seq: 0 },
       runnerLeaseUntil: leaseUntil,
     });
+    if ((await agentExecutionRepository.countActiveDesktopByUserId(userId)) > MAX_DESKTOP_RUNS_PER_USER) {
+      // A parallel claim passed the lane check too: back out.
+      await releaseRun();
+      return refuse(409, 'lanes_full', `You have ${MAX_DESKTOP_RUNS_PER_USER} desktop runs active`);
+    }
     logger.info(`[Loops] Desktop run ${runId} claimed ticket ${ticket.id} of loop ${loop.id}`);
     await pushLoopChanged(userId, loop.id, logger);
     return {
@@ -255,10 +269,7 @@ export async function claimRunnerTicket(
     };
   } catch (error) {
     // The create may have landed before it threw (a timeout), so its run is ended too.
-    await Promise.all([
-      agentExecutionRepository.finishRunnerRun(runId, userId, { status: 'failed' }),
-      workItemRepository.foldTicketRun(ticket.id, runId, { status: 'open', executionId: null }, true),
-    ]).catch(releaseError => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { releaseError }));
+    await releaseRun();
     throw error;
   }
 }
@@ -366,6 +377,9 @@ export async function heartbeatRunnerRun(
   return { leaseExpiresAt: new Date(renewed.runnerLeaseUntil).toISOString() };
 }
 
+/** Tail kept of a run's unfinished text, so the run doc stays far below the 16MB document limit. */
+const PENDING_TEXT_MAX = 32 * 1024;
+
 type RunnerCheckpoint = { steps?: unknown[]; iteration?: number; pendingText?: string; seq?: number };
 
 /** A persisted progress step, in the executor's checkpoint step shape (AgentStep, b4m-core/agents/src/types.ts). */
@@ -397,7 +411,7 @@ export function runnerFramesToSteps(
   };
   for (const frame of frames) {
     if (frame.type === 'text') {
-      pendingText += frame.text;
+      pendingText = (pendingText + frame.text).slice(-PENDING_TEXT_MAX);
       relay.push({ action: 'agent_text_delta', executionId, iteration, delta: frame.text });
     } else if (frame.type === 'tool-start') {
       if (pendingText.trim()) push({ type: 'thought', content: pendingText });
@@ -494,6 +508,7 @@ export async function completeRunnerRun(
     await stopAborted(run, logger);
     return refuse(410, 'aborted', 'The run was stopped');
   }
+  if (run.runnerLeaseUntil && run.runnerLeaseUntil < now) return refuse(410, 'lease_lost', 'The lease lapsed');
   const loop = run.loopId ? await loopRepository.findByIdAndUserId(run.loopId, userId) : null;
   const ticket = await workItemRepository.findByExecutionId(run.id);
   if (ticket?.status === 'in_progress' && loop) {
