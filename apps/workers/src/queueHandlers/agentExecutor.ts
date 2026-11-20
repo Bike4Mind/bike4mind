@@ -40,6 +40,7 @@ import {
   fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,
+  Connection,
   agentRepository,
   mementoRepository,
   questRepository,
@@ -427,6 +428,9 @@ const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta'
 /** How long an empty viewer list is reused for every frame (ms): most runs have no viewer, so each frame would
  * otherwise read the list. A viewer subscribing meanwhile gets its snapshot and misses at most this much. */
 const NO_VIEWERS_CACHE_MS = 10_000;
+/** Frames only the run's owner can act on: sent to the owner's own viewer connections, never to other viewers,
+ * matching the subscribe snapshot (apps/client/server/websocket/agentExecute.ts, `withPermission`). */
+const OWNER_ONLY_ACTIONS = new Set(['permission_request']);
 
 /**
  * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
@@ -511,11 +515,31 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
     return viewers.ids.filter(id => id !== connectionId);
   };
 
+  let ownerUserId: Promise<string | undefined> | undefined;
+  /** The viewer connections opened by the run's owner; none when that cannot be read. */
+  const ownerViewers = async (targets: string[]): Promise<string[]> => {
+    if (targets.length === 0) return [];
+    try {
+      ownerUserId ??= agentExecutionRepository.findById(viewerExecutionId!).then(execution => execution?.userId);
+      const userId = await ownerUserId;
+      if (!userId) return [];
+      const rows = await Connection.find({ connectionId: { $in: targets }, userId }, { connectionId: 1 }).lean();
+      return rows.map(row => row.connectionId);
+    } catch (err) {
+      ownerUserId = undefined;
+      logger.warn('[WS] Failed to read the owner viewers; sending owner-only frame to no viewer', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  };
+
   return async (action: string, payload: Record<string, unknown> = {}) => {
     const data = Buffer.from(JSON.stringify({ action, ...payload }));
     // The owner's send starts before the viewer read, so its frames keep today's timing and order.
     const ownerSend = headless ? undefined : post(connectionId, action, data);
-    const targets = await viewerTargets(action);
+    const viewing = await viewerTargets(action);
+    const targets = OWNER_ONLY_ACTIONS.has(action) ? await ownerViewers(viewing) : viewing;
     await Promise.all([ownerSend, ...targets.map(target => post(target, action, data))]);
   };
 }

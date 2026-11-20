@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
-import { agentExecutionRepository } from '@bike4mind/database';
+import { agentExecutionRepository, Connection } from '@bike4mind/database';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
 const postToConnection = vi.fn();
@@ -146,6 +146,27 @@ describe('createWsSender with viewers', () => {
     await send('status', {});
     expect(findViewers).toHaveBeenCalledTimes(1);
     expect(targetsOf()).toEqual(['conn-1', 'conn-1', 'conn-1']);
+  });
+
+  it("sends a permission request only to the owner's own viewer connections", async () => {
+    vi.spyOn(agentExecutionRepository, 'findById').mockResolvedValue({ userId: 'owner' } as never);
+    const find = vi.spyOn(Connection, 'find').mockReturnValue({
+      lean: async () => [{ connectionId: 'viewer-2' }],
+    } as never);
+    const { createWsSender } = await import('./agentExecutor');
+    await createWsSender(HEADLESS_CONNECTION_ID, logger as never, 'exec1')('permission_request', {});
+    expect(find).toHaveBeenCalledWith(
+      { connectionId: { $in: ['viewer-1', 'viewer-2'] }, userId: 'owner' },
+      { connectionId: 1 }
+    );
+    expect(targetsOf()).toEqual(['viewer-2']);
+  });
+
+  it('sends a permission request to no viewer when the owner cannot be read', async () => {
+    vi.spyOn(agentExecutionRepository, 'findById').mockRejectedValue(new Error('db down'));
+    const { createWsSender } = await import('./agentExecutor');
+    await createWsSender('conn-1', logger as never, 'exec1')('permission_request', {});
+    expect(targetsOf()).toEqual(['conn-1']);
   });
 
   it('never reads viewers without a viewer execution id', async () => {
