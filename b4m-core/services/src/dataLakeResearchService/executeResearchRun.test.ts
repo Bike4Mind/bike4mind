@@ -174,6 +174,26 @@ describe('executeResearchRun', () => {
       expect(result.totals.proposed).toBe(1);
     });
 
+    it('counts a flagged unlisted hit as an unresolved redirect, not a source-rule drop', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [
+          { ...hit(1, 'www.google.com'), unresolvedRedirect: true },
+          hit(2, 'other.com'),
+          hit(3, 'docs.example.com'),
+        ],
+      });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(calls.judged).toEqual(['https://docs.example.com/3']);
+      expect(result.totals.unresolvedRedirect).toBe(1);
+      expect(result.totals.filteredBySource).toBe(1);
+    });
+
     it('drops everything outside the review list when other sites are ignored', async () => {
       const { ports, calls } = makePorts({ candidates: [hit(1, 'other.com'), hit(2, 'docs.example.com')] });
 
