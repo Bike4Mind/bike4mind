@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Box from '@mui/joy/Box';
-import type { PremiumNavDescriptor } from '@client/app/premiumContract';
 import Typography from '@mui/joy/Typography';
+import type { PremiumNavDescriptor } from '@client/app/premiumContract';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
 import { premiumNavItemForRedirect } from '@client/app/utils/premiumNav';
 import { sanitizeRedirectTo } from '@client/app/utils/authRedirect';
@@ -55,6 +55,8 @@ export default function RedirectProductHint({ mode }: { mode: 'signIn' | 'signUp
         mt: '8px',
         justifyContent: 'center',
         textAlign: 'center',
+        // A long site name has no spaces to wrap at.
+        overflowWrap: 'anywhere',
       }}
     >
       {/* React escapes the text node, so i18next must not HTML-escape the label as well. */}
