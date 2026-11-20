@@ -21,6 +21,8 @@ function days(count: number): UsageBar[] {
 }
 
 describe('bucketLabel', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   // The day buckets ARE UTC days, so formatting them locally would slide every label.
   it('names a day bucket by its UTC date', () => {
     expect(bucketLabel('2026-10-07T00:00:00.000Z', 'day')).toBe(
@@ -31,6 +33,7 @@ describe('bucketLabel', () => {
   });
 
   it('names an hour bucket by the local clock, zero padded', () => {
+    vi.stubEnv('TZ', 'UTC');
     const at = '2026-10-07T05:00:00.000Z';
     expect(bucketLabel(at, 'hour')).toBe(String(new Date(at).getHours()).padStart(2, '0'));
   });

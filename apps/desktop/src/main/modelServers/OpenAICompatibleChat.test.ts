@@ -46,6 +46,8 @@ async function collect(client: OpenAICompatibleChat, request: Parameters<OpenAIC
   return events;
 }
 
+const started = (event: CompletionStreamEvent) => 'toolStarted' in event;
+
 const delta = (content: object, finish: string | null = null) => ({
   choices: [{ delta: content, finish_reason: finish }],
 });
@@ -103,10 +105,8 @@ describe('OpenAICompatibleChat', () => {
       ),
       { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
     );
-    expect(one.filter(event => event.toolStarted)).toEqual([
-      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
-    ]);
-    expect(one.findIndex(event => event.toolStarted)).toBeLessThan(one.findIndex(event => event.type === 'tool_use'));
+    expect(one.filter(started)).toEqual([{ type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } }]);
+    expect(one.findIndex(started)).toBeLessThan(one.findIndex(event => event.type === 'tool_use'));
 
     const parallel = await collect(
       chat(async () =>
@@ -127,7 +127,7 @@ describe('OpenAICompatibleChat', () => {
       ),
       { model: MODEL, messages: [{ role: 'user', content: 'go' }] }
     );
-    expect(parallel.filter(event => event.toolStarted)).toEqual([
+    expect(parallel.filter(started)).toEqual([
       { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
       { type: 'content', toolStarted: { name: 'grep', id: 'call_2' } },
     ]);
