@@ -31,6 +31,8 @@ export interface SystemHealthResponse {
     readyState: number;
   };
   oauth: OAuthConfigStatus;
+  /** True on a B4M_SELF_HOST deploy, where config comes from env/chart values rather than SST secrets. */
+  selfHost: boolean;
 }
 
 /**
@@ -167,5 +169,6 @@ export async function getSystemHealthStatus(): Promise<SystemHealthResponse> {
       readyState: mongoose.connection.readyState,
     },
     oauth: await getOAuthConfigStatus(),
+    selfHost: process.env.B4M_SELF_HOST === 'true',
   };
 }
