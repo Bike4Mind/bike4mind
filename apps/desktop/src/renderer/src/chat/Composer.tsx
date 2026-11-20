@@ -250,7 +250,9 @@ export function Composer({
   onSuggestionDismissed?: () => void;
 }) {
   const showDollars = useShowDollarCosts();
-  const [text, setText] = useState('');
+  // Starts from the saved draft: an empty first render would reach the save effect below and clear
+  // it on disk until the restored text is saved again.
+  const [text, setText] = useState(() => (sessionId && composerDrafts.state.getState().drafts[sessionId]) || '');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
   const [caret, setCaret] = useState(0);

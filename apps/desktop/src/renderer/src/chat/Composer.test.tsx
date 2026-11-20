@@ -414,6 +414,16 @@ describe('the draft and the conversation it belongs to', () => {
     expect(composerDrafts.state.getState().drafts).toEqual({});
   });
 
+  it('does not clear a saved draft, even for a moment, when the composer mounts on it', () => {
+    composerDrafts.state.setState({ drafts: { s1: 'saved' }, hydrated: true });
+    const changes = vi.fn();
+    const unsubscribe = composerDrafts.state.subscribe(changes);
+    mount({ sessionId: 's1' });
+    unsubscribe();
+    expect(input().value).toBe('saved');
+    expect(changes).not.toHaveBeenCalled();
+  });
+
   it('restores a saved draft that is read in after the conversation opened', () => {
     composerDrafts.state.setState({ drafts: {}, hydrated: false });
     mount({ sessionId: 's1' });
