@@ -73,6 +73,12 @@ describe('ReferralRewardNotice', () => {
     expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });
   });
 
+  it('asks the server for an account that only shares a link', () => {
+    useUser.setState({ currentUser: { id: 'u1', regInvites: [], referralCode: 'abc123' } } as never);
+    render(<ReferralRewardNotice />);
+    expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: true });
+  });
+
   it('still announces when browser storage is blocked', () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
