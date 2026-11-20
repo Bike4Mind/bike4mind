@@ -215,6 +215,13 @@ describe('loadAgentMcpTools - custom connectors', () => {
     expect(autoApprovedCustomToolNames).toEqual(['acme__search']);
   });
 
+  it('names no platform connector as switched on, so an agent run gets none', async () => {
+    const listConnections = vi.fn(async () => [offer()]);
+    await run({ listConnections, callTool: vi.fn() });
+    expect(listConnections).toHaveBeenCalledTimes(1);
+    expect(listConnections).toHaveBeenCalledWith('u1', {});
+  });
+
   it('seeds nothing when the org requires approval for every call, but still offers the tools', async () => {
     const { mcpToolsByServer, autoApprovedCustomToolNames } = await run({
       listConnections: vi.fn(async () => [offer({ requireApprovalForAll: true })]),

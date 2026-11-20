@@ -51,6 +51,56 @@ describe('AuthTokenGeneratorService', () => {
     expect(result).toBeNull();
   });
 
+  it('never falls back to a placeholder previous secret', () => {
+    const placeholder = 'my-secret-placeholder-value';
+    const forged = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'access' }, placeholder, { algorithm: 'HS256' });
+    const forgedRefresh = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'refresh' }, placeholder, {
+      algorithm: 'HS256',
+    });
+    const svc = makeService();
+    expect(() => svc.verifyToken(forged, placeholder)).toThrow();
+    expect(svc.verifyRefreshToken(forgedRefresh, placeholder)).toBeNull();
+  });
+
+  it.each(['access', 'refresh'] as const)(
+    'refuses a %s token signed with a previous key when current configuration throws',
+    tokenType => {
+      const configurationError = new Error('JWT_SECRET is not configured');
+      const previousSecret = 'previous-configured-secret';
+      const service = new AuthTokenGeneratorService({
+        get accessTokenSecret(): string {
+          throw configurationError;
+        },
+        get refreshTokenSecret(): string {
+          throw configurationError;
+        },
+        accessTokenExpiresIn: '1h',
+        refreshTokenExpiresIn: '7d',
+      });
+      const token = jwt.sign({ id: 'user-1', typ: tokenType }, previousSecret, { algorithm: 'HS256' });
+
+      const verify = () =>
+        tokenType === 'access'
+          ? service.verifyToken(token, previousSecret)
+          : service.verifyRefreshToken(token, previousSecret);
+
+      expect(verify).toThrow(configurationError);
+    }
+  );
+
+  it('accepts a legitimate refresh token signed with the previous key when current configuration is valid', () => {
+    const previousSecret = 'previous-configured-secret';
+    const token = jwt.sign({ id: 'user-1', tokenVersion: 2, typ: 'refresh' }, previousSecret, {
+      algorithm: 'HS256',
+    });
+
+    expect(makeService().verifyRefreshToken(token, previousSecret)).toEqual({
+      userId: 'user-1',
+      tokenVersion: 2,
+      impersonatedBy: undefined,
+    });
+  });
+
   describe('mfaPending tokens are rejected on the refresh path (MFA bypass regression)', () => {
     // In production accessTokenSecret === refreshTokenSecret (both Config.JWT_SECRET),
     // so a token signed for the access path also verifies on the refresh path. The

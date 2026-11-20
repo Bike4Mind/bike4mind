@@ -688,8 +688,11 @@ export interface QuestHost {
 export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
 
 export interface DelegationHost {
-  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
-  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
+  /**
+   * Where a delegated child goes: the parent's checkout, or with `isolate` a worktree of its own
+   * when the project is a repository.
+   */
+  placement(title: string | undefined, prompt: string, isolate: boolean): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {
