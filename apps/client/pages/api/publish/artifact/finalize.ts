@@ -17,7 +17,6 @@ import {
   PUBLISH_LIMITS,
   ArtifactTypeSchema,
   type ArtifactFile,
-  type ArtifactVersionMeta,
   type PublishResult,
   type ValidationViolation,
   normalizePublishTags,
@@ -26,8 +25,8 @@ import {
   validateBundle,
   checkScopePermission,
   resolveVisibility,
-  archivedVersionBytes,
   checkPublishQuota,
+  planPublishVersions,
   buildPublishS3KeyPrefix,
   buildPublishUrlPath,
   invalidatePublishCdn,
@@ -306,27 +305,17 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   // re-publish (same sha). On first publish, `previous` is null -> [new] only.
   // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
   const now = new Date();
-  const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
-  const versionsToPush: ArtifactVersionMeta[] = [];
-  if (previous?.sha256Index && !haveShas.has(previous.sha256Index)) {
-    versionsToPush.push({
-      publishedAt: previous.publishedAt,
-      publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-      size: previous.size,
-      sha256Index: previous.sha256Index,
-      ...(priorIndex ? { indexBytes: priorIndex.length } : {}),
-    });
-    haveShas.add(previous.sha256Index);
-  }
-  if (!haveShas.has(indexEntry.sha256)) {
-    versionsToPush.push({
-      publishedAt: now,
+  const { versionsToPush, archivedBytes } = planPublishVersions({
+    previous,
+    priorIndex,
+    incoming: {
+      sha256: indexEntry.sha256,
       publishedBy: String(req.user.id),
+      publishedAt: now,
       size: { totalBytes, fileCount: filesWithMeta.length },
-      sha256Index: indexEntry.sha256,
       indexBytes: indexEntry.size,
-    });
-  }
+    },
+  });
 
   // 5c. Cumulative per-owner quota re-check (defense in depth - the draft may
   // have been issued before other publishes consumed the allowance). Excludes
@@ -337,11 +326,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     ownerId: String(req.user.id),
     orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
     isAdmin: req.user.isAdmin,
-    incoming: {
-      bytes: totalBytes,
-      fileCount: filesWithMeta.length,
-      archivedBytes: archivedVersionBytes([...(previous?.versions ?? []), ...versionsToPush], indexEntry.sha256),
-    },
+    incoming: { bytes: totalBytes, fileCount: filesWithMeta.length, archivedBytes },
     replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
   });
   if (!quota.ok) {
