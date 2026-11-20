@@ -2586,6 +2586,7 @@ async function runExecution(
       artifactsEnabled: enableArtifacts,
       isNewExecution,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     // Each agent round's output is capped at what the payer can afford; the loop below turns the
@@ -5100,6 +5101,7 @@ async function processSubagentDispatch(
     const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
       artifactsEnabled: childArtifactsEnabled,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {

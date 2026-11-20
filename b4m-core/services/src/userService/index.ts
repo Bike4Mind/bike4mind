@@ -19,7 +19,6 @@ export * from './completionSequences';
 export * from './deviceLinkage';
 export * from './sourceTag';
 export * from './recordPolicyAcceptance';
-export * from './adminDelete';
 export * from './revokeSessions';
 export * from './searchUserCollection';
 export * from './recalculateUserStorage';

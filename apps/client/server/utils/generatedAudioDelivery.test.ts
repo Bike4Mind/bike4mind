@@ -135,7 +135,10 @@ describe('deliverGeneratedAudio', () => {
       const { res } = await deliver({ audio });
       expect(res._getStatusCode()).toBe(200);
       expect(res._getRedirectUrl()).toBe('');
-      expect(res._getData()).toEqual(audio);
+      // Buffer.equals: a deep toEqual on this 4MB buffer took seconds.
+      const sent: Buffer = res._getData();
+      expect(sent.length).toBe(audio.length);
+      expect(sent.equals(audio)).toBe(true);
       expect(upload).not.toHaveBeenCalled();
     });
   });

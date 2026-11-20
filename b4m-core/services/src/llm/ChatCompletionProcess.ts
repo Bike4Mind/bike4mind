@@ -345,7 +345,7 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
 import {
   resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
@@ -4398,10 +4398,10 @@ export class ChatCompletionProcess {
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
-      const artifactEmissionContent = getSettingsValue(
-        'ArtifactEmissionPrompt',
-        defaultAdminSettings,
-        ARTIFACT_EMISSION_PROMPT
+      // Names the admin-listed Python data origins when there are any; byte-identical otherwise.
+      const artifactEmissionContent = withArtifactDataOrigins(
+        getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+        getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
       );
       // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
       // default so the nudge can never be silently stripped.

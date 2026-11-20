@@ -5,13 +5,14 @@ import { Source_Serif_4, Libre_Franklin, JetBrains_Mono, Inter } from 'next/font
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
-import { gaBootstrapScript, getGaMeasurementId } from './utils/gaConsentBootstrap';
+import { gaBootstrapScript, getGaMeasurementIds } from './utils/gaConsentBootstrap';
 import { Metadata } from 'next';
 
 // Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
 // deliberate no-op. See infra/web.ts for why a wrong value is worse than unset.
 const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
-const GA_MEASUREMENT_ID = getGaMeasurementId();
+// The app's own property first: gtag.js loads under it, and configures the others itself.
+const GA_MEASUREMENT_IDS = getGaMeasurementIds();
 
 // The app's UI face, applied to <html>. A Franklin Gothic revival, and a text
 // face first: it sets reply prose as well as interface chrome, so it has to hold
@@ -92,14 +93,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body>
         <ColorSchemeScript />
-        {GA_MEASUREMENT_ID && (
+        {GA_MEASUREMENT_IDS.length > 0 && (
           <>
             <Script
-              src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`}
+              src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_IDS[0]}`}
               strategy="afterInteractive"
             />
             <Script id="google-analytics" strategy="afterInteractive">
-              {gaBootstrapScript(GA_MEASUREMENT_ID, GA_COOKIE_DOMAIN)}
+              {gaBootstrapScript(GA_MEASUREMENT_IDS, GA_COOKIE_DOMAIN)}
             </Script>
           </>
         )}

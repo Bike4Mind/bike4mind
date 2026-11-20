@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1232 routes: 112 contracted, 11 aliases of another route, 327 with no static caller in `apps/client/app`.
+1237 routes: 112 contracted, 11 aliases of another route, 329 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 364 | 0 | 201 | 156 | 0 | 7 | 67 |
+| admin | 366 | 0 | 201 | 158 | 0 | 7 | 68 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -140,11 +140,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
-| studio | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
+| studio | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
 | subscribers | 5 | 0 | 4 | 0 | 0 | 1 | 0 |
 | subscriptions | 10 | 0 | 6 | 4 | 0 | 0 | 2 |
 | system-prompts | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| test | 6 | 0 | 0 | 0 | 0 | 6 | 6 |
+| test | 7 | 0 | 0 | 0 | 0 | 7 | 7 |
 | tools | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | transforms | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | turnstile | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -248,6 +248,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/credit-economy` | GET | jwt | - | GET: ? | no | - | 1: `components/admin/CreditAnalysis/components/CreditEconomy.tsx` |
 | `/api/admin/dlq/all-messages` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/discard` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 2: `components/admin/DlqTriageRecommendation.tsx`, `hooks/data/dlqManagement.ts` |
+| `/api/admin/dlq/discard-group` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/history` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/messages` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
 | `/api/admin/dlq/queues` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
@@ -485,6 +486,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/usage-by-source` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/EventMetrics/hooks/useUsageBySource.ts` |
 | `/api/admin/usage-margin` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
 | `/api/admin/user-api-keys/[id]/end-user-id` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/user-api-keys/[id]/moderation-exception` | PUT | jwt | - | PUT: `users:moderate` | no | - | 0 |
 | `/api/admin/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | `admin:*` | PATCH: `users:moderate` | no | - | 0 |
 | `/api/admin/user-api-keys/[id]/reset-rate-limit` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/userApiKeys.ts` |
 | `/api/admin/user-api-keys/[id]/restore` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
@@ -1678,7 +1680,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/studio/compositions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioCompositions.ts` |
 | `/api/studio/compositions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/studioCompositions.ts` |
+| `/api/studio/compositions/[id]/renders` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioRenders.ts` |
 | `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
+| `/api/studio/files/[id]/speech-script` | GET | jwt | - | - | no | - | 1: `hooks/data/speechScript.ts` |
 | `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 | `/api/studio/image-jobs/cutouts` | POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 
@@ -1721,6 +1725,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/test/cleanup` | DELETE | handler | - | - | no | - | 0 |
 | `/api/test/create-user` | POST | handler | - | - | no | - | 0 |
 | `/api/test/expire-account-deletion` | POST | handler | - | - | no | - | 0 |
+| `/api/test/mfa-code` | GET | handler | - | - | no | - | 0 |
 | `/api/test/otc-code` | GET | handler | - | - | no | - | 0 |
 | `/api/test/propose-lake-content` | POST | handler | - | - | no | - | 0 |
 
