@@ -100,7 +100,11 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     bucket: 'appFilesBucket',
     holds: 'Outbound mail bodies too large for the event bus, awaiting the email-send worker',
     locatedBy: 'The `queued-mail/` prefix',
-    erasure: { action: 'expires', after: '1 day (bucket lifecycle rule)' },
+    erasure: {
+      action: 'expires',
+      after:
+        'Within 3 days (1-day bucket lifecycle rule, run daily; a versioned bucket keeps the old version 1 more day)',
+    },
   },
   {
     kind: 's3',

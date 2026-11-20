@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { EmailEvents } from '../eventBus';
+import { EmailEvents, type EmailSendDetail } from '../eventBus';
 import { putMailBody } from './mailBodyStore';
 import type { MailSendResult } from './transport';
 import type { SendEmailOptions } from './index';
@@ -22,6 +22,17 @@ export interface QueuedMail {
  */
 export type QueuedMailResult = MailSendResult | { queued: true } | false;
 
+async function withinEventLimit(properties: EmailSendDetail, mail: QueuedMail): Promise<EmailSendDetail> {
+  if (Buffer.byteLength(JSON.stringify(properties)) <= MAX_INLINE_MAIL_BYTES) return properties;
+  const bodySize = Buffer.byteLength(mail.html) + Buffer.byteLength(mail.text ?? '');
+  if (bodySize > MAX_OFFLOADED_MAIL_BYTES) {
+    throw new Error(`mail body is ${bodySize} bytes, over the ${MAX_OFFLOADED_MAIL_BYTES}-byte message limit`);
+  }
+  const key = await putMailBody(mail.text === undefined ? { html: mail.html } : { html: mail.html, text: mail.text });
+  const { body: _body, text: _text, ...rest } = properties;
+  return { ...rest, bodyRef: { key } };
+}
+
 /**
  * The mailer every process other than the email-send worker sends through. It has the shape of
  * MailService.sendEmail, so it drops into the `mailer` port the service-layer notifiers take: it
@@ -33,19 +44,6 @@ export type QueuedMailResult = MailSendResult | { queued: true } | false;
  * delivery result. packages/scripts/src/checkMailSendSites.test.ts keeps direct sends from
  * coming back.
  */
-type QueuedMailProperties = Parameters<typeof EmailEvents.Send.publish>[0];
-
-async function withinEventLimit(properties: QueuedMailProperties, mail: QueuedMail): Promise<QueuedMailProperties> {
-  if (Buffer.byteLength(JSON.stringify(properties)) <= MAX_INLINE_MAIL_BYTES) return properties;
-  const bodySize = Buffer.byteLength(mail.html) + Buffer.byteLength(mail.text ?? '');
-  if (bodySize > MAX_OFFLOADED_MAIL_BYTES) {
-    throw new Error(`mail body is ${bodySize} bytes, over the ${MAX_OFFLOADED_MAIL_BYTES}-byte message limit`);
-  }
-  const key = await putMailBody(mail.text === undefined ? { html: mail.html } : { html: mail.html, text: mail.text });
-  const { body: _body, text: _text, ...rest } = properties;
-  return { ...rest, bodyRef: { key } };
-}
-
 export const queuedMailer = {
   async sendEmail(to: string | string[], mail: QueuedMail, options: SendEmailOptions = {}): Promise<QueuedMailResult> {
     if (process.env.B4M_SELF_HOST === 'true') {

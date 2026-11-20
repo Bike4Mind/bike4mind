@@ -12,10 +12,13 @@ import {
 
 const sinkDomainFor = (to: string) => findMailSinkDomain(to, parseMailSinkDomains(process.env.MAIL_SINK_DOMAINS));
 
+// S3 answers both a missing key and a missing grant with 403 here, so the message names both causes.
 export class MailBodyMissingError extends Error {
   constructor(key: string, s3Error: string) {
     super(
-      `mail body ${key} is gone (S3 ${s3Error}): it expires 1 day after queueing, so a DLQ redrive past that cannot be delivered`
+      `mail body ${key} could not be read (S3 ${s3Error}): it has expired (the bucket lifecycle removes it 1-3 days ` +
+        'after queueing, so a later DLQ redrive cannot be delivered), or this worker lacks MAIL_BODY_BUCKET or ' +
+        'GetObject on the queued-mail/ prefix'
     );
     this.name = 'MailBodyMissingError';
   }

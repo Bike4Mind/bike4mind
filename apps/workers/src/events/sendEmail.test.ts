@@ -252,7 +252,7 @@ describe('an event whose body was offloaded', () => {
     mocks.getMailBody.mockRejectedValue(s3Error(name, status));
     const failure = deliverRef();
     await expect(failure).rejects.toBeInstanceOf(MailBodyMissingError);
-    await expect(failure).rejects.toThrow(`mail body ${key} is gone (S3 ${name}): it expires 1 day after queueing`);
+    await expect(failure).rejects.toThrow(`mail body ${key} could not be read (S3 ${name}): it has expired`);
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
