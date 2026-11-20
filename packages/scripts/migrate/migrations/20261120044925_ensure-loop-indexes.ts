@@ -23,12 +23,12 @@ export const ensureIndexes = async <T>(model: Model<T>, keys: IndexKey[]): Promi
 };
 
 /** The indexes the loop scheduler, loop tickets and loop notices read through, on collections that are large. */
-export const LOOP_INDEXES = {
+export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox', IndexKey[]> = {
   agentExecution: [
     { runnerLeaseUntil: 1 },
     { loopId: 1, ticketPriority: 1, createdAt: 1 },
     { loopId: 1, createdAt: 1 },
-  ] satisfies IndexKey[],
+  ],
   workItem: [
     { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
     { status: 1, loopId: 1 },
@@ -36,8 +36,8 @@ export const LOOP_INDEXES = {
     { priority: 1, status: 1 },
     { executionId: 1 },
     { 'origin.ticketId': 1, 'origin.stage': 1, loopId: 1 },
-  ] satisfies IndexKey[],
-  inbox: [{ sourceKey: 1 }] satisfies IndexKey[],
+  ],
+  inbox: [{ sourceKey: 1 }],
 };
 
 const migration: MigrationFile = {
