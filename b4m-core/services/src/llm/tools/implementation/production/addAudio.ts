@@ -155,27 +155,44 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
   let pendingMusic: string | undefined;
   let cutLines: string[] = [];
 
+  // Each part is paid for as it is made, so one part failing must not lose the others before they are saved.
+  const attempt = async (part: AudioPart, make: () => Promise<void>): Promise<void> => {
+    try {
+      await make();
+    } catch (error) {
+      notes.push(`${part} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   if (args.voiceover !== false && wants('voiceover', args, directorClips(timeline, 'voice'))) {
-    const voice = await makeVoiceover(audio, slots, totalMs);
-    if (voice.clips.length > 0) replacements.voice = voice.clips;
-    notes.push(...voice.notes);
-    cutLines = voice.cutLines;
+    await attempt('voiceover', async () => {
+      const voice = await makeVoiceover(audio, slots, totalMs);
+      if (voice.clips.length > 0) replacements.voice = voice.clips;
+      notes.push(...voice.notes);
+      cutLines = voice.cutLines;
+    });
   }
   if (args.soundEffects?.length && wants('soundEffects', args, directorClips(timeline, 'sfx'))) {
-    const sfx = await makeSoundEffects(audio, slots, args.soundEffects);
-    if (sfx.clips.length > 0) replacements.sfx = sfx.clips;
-    notes.push(...sfx.notes);
+    const requests = args.soundEffects;
+    await attempt('soundEffects', async () => {
+      const sfx = await makeSoundEffects(audio, slots, requests);
+      if (sfx.clips.length > 0) replacements.sfx = sfx.clips;
+      notes.push(...sfx.notes);
+    });
   }
   const musicShortMs = musicShortfallMs(timeline, musicReachMs(config, totalMs));
-  if (args.music && (musicShortMs > 0 || wants('music', args, directorClips(timeline, 'music')))) {
-    const underVoice = (replacements.voice ?? directorClips(timeline, 'voice')).length > 0;
-    const music = await makeMusic(context, config, args.music.prompt, totalMs, underVoice);
-    if (music.clips.length > 0) {
-      replacements.music = music.clips;
-      if (musicShortMs > 0) notes.push(`the music bed ended ${musicShortMs} ms before the cut, so a new one was made.`);
-    }
-    notes.push(...music.notes);
-    pendingMusic = music.pending;
+  const musicPrompt = args.music?.prompt;
+  if (musicPrompt && (musicShortMs > 0 || wants('music', args, directorClips(timeline, 'music')))) {
+    await attempt('music', async () => {
+      const underVoice = (replacements.voice ?? directorClips(timeline, 'voice')).length > 0;
+      const music = await makeMusic(context, config, musicPrompt, totalMs, underVoice);
+      if (music.clips.length > 0) {
+        replacements.music = music.clips;
+        if (musicShortMs > 0)
+          notes.push(`the music bed ended ${musicShortMs} ms before the cut, so a new one was made.`);
+      }
+      notes.push(...music.notes);
+      pendingMusic = music.pending;
+    });
   }
 
   if (Object.keys(replacements).length > 0) {

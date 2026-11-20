@@ -22,6 +22,7 @@ import {
 } from './index';
 import { createProductionAudio } from './audio';
 import { DIRECTOR_TRACK_IDS, directorClips } from './layout';
+import { describeProductionError } from './shared';
 
 vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
 
@@ -250,7 +251,7 @@ describe('production director tools', () => {
     ]);
   });
 
-  it('clears the old cut when the storyboard is replaced', async () => {
+  it('clears the old voice when the storyboard is replaced but keeps the picture until assemble', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
     await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, voiceover: true });
@@ -259,9 +260,18 @@ describe('production director tools', () => {
 
     await run(productionStoryboardTool, harness, { ...STORYBOARD, replace: true });
     const timeline = harness.composition().timeline;
-    for (const kind of ['video', 'music', 'voice', 'sfx', 'captions'] as const) {
+    for (const kind of ['voice', 'sfx'] as const) {
       expect(directorClips(timeline, kind)).toEqual([]);
     }
+    // A run that stops before production_assemble still leaves a cut that plays.
+    expect(directorClips(timeline, 'video')).toHaveLength(3);
+    expect(directorClips(timeline, 'captions')).toHaveLength(3);
+  });
+
+  it('reports an unexpected failure to the director instead of ending the run', () => {
+    expect(describeProductionError(new Error('socket hang up'))).toMatch(
+      /^Error: this step failed unexpectedly \(socket hang up\)/
+    );
   });
 
   it('feeds the product photo to every image job as a reference input and posts job cards', async () => {
@@ -375,6 +385,11 @@ describe('production director tools', () => {
       false,
     ]);
     expect(result.takesDropped).toBeUndefined();
+    expect(result.linesChanged).toEqual([
+      { shot: 'shot-2', was: 'Meet the bottle.', now: 'Meet it.' },
+      { shot: 'shot-3', was: 'Shop now.', now: 'Shop the' },
+    ]);
+    expect(result.next).toContain('linesChanged');
     const after = harness.composition().shots;
     expect(after.slice(0, 3).map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])).toEqual(
       before.map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])
