@@ -198,7 +198,7 @@ export function useSendMessage({
   const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
   // Only the admin flags: the server already checked the full Productions access (audience, plan) before it
-  // marked the session, and the executor re-checks it on every run.
+  // marked the session, and the executor re-checks Productions access for the user on every run.
   const productionsFlagOn = studioFeatureSettingKeys('productions').every(isAdminFeatureEnabled);
   // Layer-2 preference. Default `'off'` per IUserPreferences. Only meaningful
   // when Layer-1 (`agentModeFeatureEnabled`, resolved above via
@@ -1163,7 +1163,8 @@ export function useSendMessage({
         const directedCompositionId = options?.productionCompositionId;
         if (directedCompositionId) {
           // Mirrors the marker the server writes on start, so the next turn in this notebook already routes as
-          // directed. The executor re-checks access each run, so a refused marker only costs the forced route.
+          // directed. The executor re-checks Productions access each run (not the composition), so a refused marker
+          // only costs the forced route.
           setCurrentSession(prev =>
             prev?.id === dispatchSessionId ? { ...prev, productionCompositionId: directedCompositionId } : prev
           );
