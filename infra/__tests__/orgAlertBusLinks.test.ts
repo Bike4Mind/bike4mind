@@ -1,0 +1,179 @@
+/**
+ * @vitest-environment node
+ *
+ * A handler that registers the org alert observer turns an org credit debit (subtractCredits) or
+ * member-cap check into an org alert, and orgAlertDispatcher in packages/server-utils/src/organizations
+ * queues its email as an email.send event on the bus. Without eventBus in the Lambda's link the
+ * publish throws, notifyOrgEvent swallows it, and the alert is lost on every deployed stage.
+ *
+ * Rule: every infra handler whose source imports an observer-registering module links eventBus,
+ * unless it is listed in NOT_TRACED_TO_AN_ORG_EVENT. Text-matched, not executed: infra/ is an SST
+ * program and does not load outside `sst`.
+ */
+import { describe, it, expect } from 'vitest';
+import { existsSync, readdirSync, readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { balanced, soleMatch, stripComments } from './helpers/infraSource';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
+const dropLineComments = (source: string) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/([^:'"`])\/\/.*$/gm, '$1');
+
+// Importing any of these runs registerOrgAlertObserver at module load.
+const REGISTERING_MODULES = [
+  'packages/server-utils/src/queueHandlers/utils.ts',
+  'packages/server-utils/src/s3/utils.ts',
+  'packages/server-utils/src/websocket/utils.ts',
+  'apps/workers/src/utils/eventContext.ts',
+];
+const REGISTERS_OBSERVER =
+  /registerOrgAlertObserver|queueHandlers\/utils['"]|s3\/utils['"]|websocket\/utils['"]|utils\/eventContext['"]/;
+
+// Built from parts so the infra handler scan in packages/scripts does not read these as handler paths.
+const WORKERS = ['apps', 'workers', 'src'].join('/');
+const CLIENT_SERVER = ['apps', 'client', 'server'].join('/');
+
+/**
+ * Observer-registering handlers left without the bus because no path from them to an org debit or
+ * org event was found. Trace a handler before adding it here; once it can raise one, link eventBus.
+ */
+const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
+  // Socket handlers. Voice settlement only refunds the unused hold.
+  ...[
+    'agentExecute',
+    'ccAgentDisconnect',
+    'ccAgentEvent',
+    'ccAgentRegister',
+    'connect',
+    'dataSubscribeRequest',
+    'dataUnsubscribeRequest',
+    'disconnect',
+    'heartbeat',
+    'jupyterNotebookProgress',
+    'keepCommandRequest',
+    'keepCommandResponse',
+    'reauthConnection',
+    'voiceSessionEnded',
+    'voiceSessionSendTranscript',
+  ].map(name => `${CLIENT_SERVER}/websocket/${name}`),
+  // Hold sweeps refund; grant releases pay users from platform pools.
+  ...[
+    'creditHoldSweep',
+    'voiceHoldSweep',
+    'signupGrantHeldRelease',
+    'signupDomainHoldTriage',
+    'secopsTriageWorker',
+  ].map(name => `${WORKERS}/cron/${name}`),
+  // Runs on the lake owner's own provider keys, unmetered.
+  `${WORKERS}/emailIngestion/emailAnalyzer`,
+  `${WORKERS}/queueHandlers/lakeInconsistencyModelDetection`,
+  // Containment debits a User holder, never an org.
+  `${WORKERS}/queueHandlers/riskEvidence`,
+  // Ingest, purge, export, delivery and notification work; no metered completion found.
+  `${WORKERS}/events/sendPush`,
+  `${WORKERS}/events/studioJobCompleted`,
+  `${WORKERS}/s3/appFileUploadComplete`,
+  ...[
+    'dataLakeCleanup',
+    'driveDisconnectPurge',
+    'driveLakeIngest',
+    'fabFileChunk',
+    'generatedMediaPurge',
+    'generationCallback',
+    'githubLakeIngest',
+    'githubLakeRevoke',
+    'githubWebhook',
+    'publishThumbnail',
+    'questExport',
+    'slackExport',
+    'sreFix',
+    'webhookDelivery',
+    'whatsNewJob',
+  ].map(name => `${WORKERS}/queueHandlers/${name}`),
+]);
+
+type Site = { file: string; module: string; registers: boolean; link: string };
+
+const HANDLER = new RegExp(`handler:\\s*['"\`]((?:${WORKERS}|${CLIENT_SERVER})/[^'"\`]+)\\.\\w+['"\`]`, 'g');
+
+/** Every handler declared in infra/*.ts, with whether its source registers and the link of its props object. */
+function scanSites(): Site[] {
+  const sites: Site[] = [];
+  const infraFiles = readdirSync(path.join(REPO_ROOT, 'infra')).filter(name => name.endsWith('.ts'));
+  for (const name of infraFiles) {
+    const file = `infra/${name}`;
+    const source = dropLineComments(read(file));
+    for (const match of source.matchAll(HANDLER)) {
+      const module = match[1];
+      const sourceFile = [`${module}.ts`, `${module}.tsx`, `${module}/index.ts`].find(candidate =>
+        existsSync(path.join(REPO_ROOT, candidate))
+      );
+      // Premium handlers are generated at deploy time and absent from this tree; they are pinned below.
+      if (!sourceFile) continue;
+      let depth = 0;
+      let open = match.index;
+      for (; open >= 0; open--) {
+        if (source[open] === '}') depth++;
+        else if (source[open] === '{' && depth-- === 0) break;
+      }
+      let close = match.index;
+      for (depth = 0; close < source.length; close++) {
+        if (source[close] === '{') depth++;
+        else if (source[close] === '}' && depth-- === 0) break;
+      }
+      const props = source.slice(open, close);
+      sites.push({
+        file,
+        module,
+        registers: REGISTERS_OBSERVER.test(stripComments(read(sourceFile))),
+        link: /\blink:\s*(\[[^\]]*\])/.exec(props)?.[1] ?? '',
+      });
+    }
+  }
+  return sites;
+}
+
+const linksBus = (link: string) => /\beventBus\b/.test(link);
+const SITES = scanSites();
+
+describe('handlers that raise org alerts link the event bus', () => {
+  it('finds the observer-registering handlers', () => {
+    expect(SITES.filter(site => site.registers).length).toBeGreaterThan(NOT_TRACED_TO_AN_ORG_EVENT.size);
+  });
+
+  it('every observer-registering handler links eventBus unless listed as not traced to an org event', () => {
+    const missing = SITES.filter(
+      site => site.registers && !linksBus(site.link) && !NOT_TRACED_TO_AN_ORG_EVENT.has(site.module)
+    ).map(site => `${site.module} in ${site.file}: link ${site.link || '(none)'} lacks eventBus`);
+    expect(missing, 'link eventBus, or trace the handler and list it in NOT_TRACED_TO_AN_ORG_EVENT').toEqual([]);
+  });
+
+  it('lists only handlers that still register the observer without the bus', () => {
+    const stale = [...NOT_TRACED_TO_AN_ORG_EVENT].filter(
+      module => !SITES.some(site => site.module === module && site.registers && !linksBus(site.link))
+    );
+    expect(stale, 'drop these from NOT_TRACED_TO_AN_ORG_EVENT').toEqual([]);
+  });
+
+  it.each(REGISTERING_MODULES)('%s registers the observer', file => {
+    expect(stripComments(read(file))).toMatch(/\bregisterOrgAlertObserver\(\)/);
+  });
+
+  // Debiting a run can raise an org alert; the handler source is generated, so it is matched by name.
+  it('links the event bus on the Bob run worker', () => {
+    const queues = stripComments(read('infra/queues.ts'));
+    const subscribe = soleMatch(
+      queues,
+      /const bobRunQueueSubscription = bobRunQueue\.subscribe\(/g,
+      'bob run queue subscription'
+    );
+    const subscription = balanced(queues, subscribe.index, '(', ')');
+    const [, link] = soleMatch(subscription, /\blink:\s*\[([^\]]*)\]/g, 'bob run worker link');
+    expect(link.split(',').map(entry => entry.trim())).toContain('eventBus');
+  });
+});
