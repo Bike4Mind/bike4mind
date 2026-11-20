@@ -12,6 +12,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const stripComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const readRepo = (file: string) => stripComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
 
+const prefixIn = (file: string) => /MAIL_BODY_PREFIX = '([^']+)'/.exec(readRepo(file))?.[1];
+
 const workerBlock = () => {
   const source = readRepo('infra/eventBus.ts');
   const from = source.indexOf(`handler: '${['apps', 'workers', 'src'].join('/')}/events/sendEmail.handler'`);
@@ -21,6 +23,12 @@ const workerBlock = () => {
 };
 
 describe('offloaded mail bodies', () => {
+  it('uses the same prefix in infra and in the mailer', () => {
+    const infraPrefix = prefixIn('infra/mailBodyOffload.ts');
+    expect(infraPrefix).toBe('queued-mail/');
+    expect(prefixIn('packages/server-utils/src/utils/mailer/mailBodyStore.ts')).toBe(infraPrefix);
+  });
+
   it('grants objects under the prefix only, put and get separately', () => {
     const source = readRepo('infra/mailBodyOffload.ts');
     expect(source).toContain("actions: ['s3:PutObject']");

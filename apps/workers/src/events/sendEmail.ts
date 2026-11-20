@@ -29,6 +29,7 @@ const deliver = withEventContext(async (event, logger) => {
     logger.info('Email skipped: recipient is on a sink domain', { to: loggedTo, subject, sinkDomain });
     return;
   }
+  if (body === undefined) throw new Error('mail with an offloaded body cannot be sent by this worker yet');
 
   const emailData: {
     subject: string;
