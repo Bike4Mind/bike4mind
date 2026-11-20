@@ -42,6 +42,7 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
+import { parseReferralMilestones } from '../utils/referralMilestones';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -393,6 +394,7 @@ export const SettingKeySchema = z.enum([
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
+  'ReferralMilestones',
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
   'ReferralLinkSignupsPerMonth',
@@ -4630,6 +4632,20 @@ export const settingsMap = {
       "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
+  ReferralMilestones: {
+    ...makeStringSetting({
+      key: 'ReferralMilestones',
+      name: 'Referral Reward: Milestones',
+      defaultValue: '',
+      description:
+        'Credits an inviter earns once a number of the friends they referred are active (a verified email and a first answer), as friends:credits pairs separated by commas, e.g. 5:500, 10:1500. Each milestone pays once. An inviter already past a milestone is paid it when their next friend becomes active. Empty turns milestones off.',
+      category: 'Referrals',
+    }),
+    schema: z.string().refine(value => parseReferralMilestones(value) !== null, {
+      message:
+        'Use friends:credits pairs separated by commas, e.g. 5:500, 10:1500. At most 10, each friend count once, 1 to 10,000 friends and 1 to 100,000,000 credits.',
+    }),
+  },
   ReferralHoldDays: makeNumberSetting({
     key: 'ReferralHoldDays',
     name: 'Referral Reward Hold (days)',

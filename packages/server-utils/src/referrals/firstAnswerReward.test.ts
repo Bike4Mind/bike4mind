@@ -1,15 +1,23 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindById, mockCountDocuments, mockAddCredits, mockGetSettingsMap, mockSlack, mockBuildAdapters } =
-  vi.hoisted(() => ({
-    mockFindById: vi.fn(),
-    mockCountDocuments: vi.fn(),
-    mockAddCredits: vi.fn(),
-    mockGetSettingsMap: vi.fn(),
-    mockSlack: vi.fn(),
-    mockBuildAdapters: vi.fn(),
-  }));
+const {
+  mockFindById,
+  mockCountDocuments,
+  mockAddCredits,
+  mockGetSettingsMap,
+  mockSlack,
+  mockBuildAdapters,
+  mockPayMilestones,
+} = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+  mockCountDocuments: vi.fn(),
+  mockAddCredits: vi.fn(),
+  mockGetSettingsMap: vi.fn(),
+  mockSlack: vi.fn(),
+  mockBuildAdapters: vi.fn(),
+  mockPayMilestones: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -22,7 +30,12 @@ vi.mock('../credits/creditRewardAdapters', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
-  getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
+  getSettingsValue: (key: string, settings: Record<string, string>, fallback: unknown = 0) =>
+    key === 'ReferralMilestones' ? (settings[key] ?? fallback) : Number(settings[key] ?? fallback),
+}));
+vi.mock('./milestoneReward', async importOriginal => ({
+  ...(await importOriginal<typeof import('./milestoneReward')>()),
+  payReachedMilestones: mockPayMilestones,
 }));
 vi.mock('../integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
@@ -90,10 +103,11 @@ describe('rewardInviterForFirstAnswer', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
-  it('pays nothing while the amount is 0', async () => {
+  it('pays nothing while the amount is 0 and no milestone is set', async () => {
     mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '0' });
     await rewardInviterForFirstAnswer('friend1');
     expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayMilestones).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -151,6 +165,57 @@ describe('rewardInviterForFirstAnswer', () => {
     mockCountDocuments.mockResolvedValue(50);
     await rewardInviterForFirstAnswer('friend1');
     expect(mockSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks milestones for the inviter after the per-friend reward', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000', ReferralMilestones: '5:500, 10:1500' });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockAddCredits).toHaveBeenCalledTimes(1);
+    expect(mockPayMilestones).toHaveBeenCalledExactlyOnceWith(
+      'inviter1',
+      [
+        { friends: 5, credits: 500 },
+        { friends: 10, credits: 1500 },
+      ],
+      expect.any(Function)
+    );
+    expect(mockAddCredits.mock.invocationCallOrder[0]).toBeLessThan(mockPayMilestones.mock.invocationCallOrder[0]);
+  });
+
+  it('checks milestones while the per-friend amount is 0', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '0', ReferralMilestones: '5:500' });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayMilestones).toHaveBeenCalledExactlyOnceWith(
+      'inviter1',
+      [{ friends: 5, credits: 500 }],
+      expect.any(Function)
+    );
+  });
+
+  it('runs the spike alert on a milestone payout', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralMilestones: '5:500', ReferralAlertRewardsPerDay: '50' });
+    mockCountDocuments.mockResolvedValue(50);
+    mockPayMilestones.mockImplementation(
+      async (_inviter: string, _tiers: unknown, onPaid: (id: string) => Promise<void>) => onPaid('milestone-tx')
+    );
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockCountDocuments).toHaveBeenCalledWith(expect.objectContaining({ _id: { $lt: 'milestone-tx' } }));
+    expect(mockSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('pays no milestone to a blocked inviter', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralMilestones: '5:500' });
+    givenUsers(verifiedFriend, { isBanned: true });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockPayMilestones).not.toHaveBeenCalled();
+  });
+
+  it('pays no milestone for a friend who is not active yet', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralMilestones: '5:500' });
+    givenUsers({ ...verifiedFriend, firstValueAt: null });
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockPayMilestones).not.toHaveBeenCalled();
   });
 
   it('never throws when a dependency fails', async () => {

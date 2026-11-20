@@ -154,6 +154,7 @@ export * from './utils/emailList';
 export * from './utils/researchSourceTiers';
 export * from './utils/researchFeedFingerprint';
 export * from './utils/emailAlias';
+export * from './utils/referralMilestones';
 export * from './utils/emailDomain';
 export * from './utils/pythonArtifactDataOrigins';
 export * from './utils/canonicalEmail';

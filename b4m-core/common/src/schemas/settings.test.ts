@@ -1712,3 +1712,18 @@ describe('changesCustomerPrice', () => {
     expect(settingsMap.teamPlanMaxSeats.changesCustomerPrice).toBeUndefined();
   });
 });
+
+describe('ReferralMilestones', () => {
+  const { schema } = settingsMap.ReferralMilestones;
+
+  it('saves an empty value or friends:credits pairs', () => {
+    expect(schema.safeParse('').success).toBe(true);
+    expect(schema.safeParse('5:500, 10:1500').success).toBe(true);
+  });
+
+  it('refuses a value the reward could not read', () => {
+    expect(schema.safeParse('5 friends: 500').success).toBe(false);
+    expect(schema.safeParse('5:500, 5:900').success).toBe(false);
+    expect(schema.safeParse(500).success).toBe(false);
+  });
+});
