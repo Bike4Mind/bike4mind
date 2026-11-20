@@ -21,12 +21,6 @@ describe('productReferenceFileIds', () => {
     ).toEqual([id(2), id(1)]);
   });
 
-  it('is empty when the production has no product images', () => {
-    expect(productReferenceFileIds({ brief: {}, brandKit: { productFileIds: [] } })).toEqual([]);
-  });
-});
-
-describe('withProductLook', () => {
   it('treats ids that differ only in case as one file', () => {
     expect(
       productReferenceFileIds({
@@ -36,6 +30,12 @@ describe('withProductLook', () => {
     ).toEqual([id(0xab), id(2)]);
   });
 
+  it('is empty when the production has no product images', () => {
+    expect(productReferenceFileIds({ brief: {}, brandKit: { productFileIds: [] } })).toEqual([]);
+  });
+});
+
+describe('withProductLook', () => {
   it('moves the look to the front without duplicating it', () => {
     expect(withProductLook([id(1), id(2), id(3)], id(3))).toEqual([id(3), id(1), id(2)]);
   });
