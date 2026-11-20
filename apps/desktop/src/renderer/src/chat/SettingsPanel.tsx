@@ -49,6 +49,7 @@ import { useMenuBarSetting } from './menuBarSetting';
 import type { NotifyScope } from '@shared/attention';
 import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
+import { SoundMixControl } from './orchestrator/SoundMixControl';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
 import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
@@ -212,8 +213,9 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
     id: 'orchestrator-sound',
     icon: <SoundIcon />,
     label: 'Orchestrator sounds',
-    summary: enabled ? 'A chime when an agent needs you or a run finishes.' : 'Off.',
-    description: 'Play a chime when an agent needs your attention or a run finishes.',
+    summary: enabled ? 'Sounds are on.' : 'Muted.',
+    description:
+      'Play a chime when an agent needs your attention, and the sounds picked below. Turn off to mute everything.',
     control: (
       <Switch
         size="sm"
@@ -224,6 +226,18 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
         }}
       />
     ),
+  };
+}
+
+function orchestratorSoundMixEntry(): ConfigEntry {
+  return {
+    id: 'orchestrator-sound-mix',
+    icon: <SoundIcon />,
+    label: 'Sound volume and events',
+    summary: 'Volume and which moments make a sound.',
+    description:
+      'The needs-you chime always plays while sounds are on. A sound pack (picked from the view menu) replaces the other sounds.',
+    control: <SoundMixControl />,
   };
 }
 
@@ -609,6 +623,7 @@ function useSettingsEntries(
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      orchestratorSoundMixEntry(),
       notifyScopeEntry(notifyScope, setNotifyScope),
       menuBarEntry(menuBar, toggleMenuBar),
       {
@@ -673,7 +688,14 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
+    entries: [
+      'appearance',
+      'orchestrator-sound',
+      'orchestrator-sound-mix',
+      'notify-scope',
+      'menu-bar',
+      'nested-sessions',
+    ],
   },
   {
     id: 'conversations',
@@ -685,7 +707,13 @@ const GENERAL_GROUPS = [
   { id: 'connection', label: 'Connection & updates', entries: ['server', 'updates', 'dollar-costs'] },
 ];
 
-const EXPANDED_SETTINGS = new Set(['orchestration-policy', 'local-context', 'server', 'updates']);
+const EXPANDED_SETTINGS = new Set([
+  'orchestrator-sound-mix',
+  'orchestration-policy',
+  'local-context',
+  'server',
+  'updates',
+]);
 
 /** Entries missing from GENERAL_GROUPS land in a trailing "Other" group instead of vanishing. */
 function groupEntries(entries: ConfigEntry[]) {
@@ -760,12 +788,7 @@ export function SettingsScreen({
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
           whole window, so the back button lines up with the page below it: shares settingsColumnSx with the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={1}
-          sx={{ ...settingsColumnSx, py: 1.25 }}
-        >
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...settingsColumnSx, py: 1.25 }}>
           <IconButton
             size="sm"
             variant="plain"
@@ -815,10 +838,7 @@ export function SettingsScreen({
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
-          <Box
-            sx={{ ...settingsColumnSx, py: 4 }}
-            data-testid={`settings-page-${section}`}
-          >
+          <Box sx={{ ...settingsColumnSx, py: 4 }} data-testid={`settings-page-${section}`}>
             <SectionPage section={section} entries={entries[section]} />
           </Box>
         </Box>

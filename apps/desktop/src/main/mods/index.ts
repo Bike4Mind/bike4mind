@@ -3,11 +3,24 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { skinAssetUrl, type SkinSummary, type SkinTokens } from '@shared/mods';
+import {
+  skinAssetUrl,
+  type SkinSummary,
+  type SkinTokens,
+  type SoundPackEvent,
+  type SoundPackSummary,
+} from '@shared/mods';
 import { needsYouLookalikeKeys } from '@shared/needsYouColor';
 import { appWindows } from '../windows';
-import { loadSkins, type LoadedSkin, type SkinLoadResult } from './skinFolder';
-import { registerSkinProtocol } from './skinProtocol';
+import {
+  loadSkins,
+  loadSoundPacks,
+  type LoadedSkin,
+  type LoadedSoundPack,
+  type SkinLoadResult,
+  type SoundPackLoadResult,
+} from './skinFolder';
+import { registerSkinProtocol, type ServedMod } from './skinProtocol';
 
 // A copy into the folder fires a burst of events; one rescan after it settles is enough.
 const RESCAN_DEBOUNCE_MS = 300;
@@ -19,34 +32,48 @@ const RESCAN_DEBOUNCE_MS = 300;
  */
 export function registerSkins(): void {
   const modsRoot = join(app.getPath('userData'), 'mods');
-  let loaded = new Map<string, LoadedSkin>();
-  let latest: SkinSummary[] = [];
+  let loadedSkins = new Map<string, LoadedSkin>();
+  let loadedPacks = new Map<string, LoadedSoundPack>();
+  let latest: ModSummaries = { skins: [], soundPacks: [] };
   let generation = 0;
 
-  registerSkinProtocol(() => loaded);
+  // One scheme for both kinds; a folder is one mod, so a skin and a pack never share an id.
+  registerSkinProtocol(() => new Map<string, ServedMod>([...loadedSkins, ...loadedPacks]));
 
-  const scan = async (): Promise<SkinSummary[]> => {
+  const scan = async (): Promise<ModSummaries> => {
     const mine = ++generation;
-    const results = await loadSkins(modsRoot);
+    const [skinResults, packResults] = await Promise.all([loadSkins(modsRoot), loadSoundPacks(modsRoot)]);
     // An older scan can finish after a newer one; only the newest may publish.
     if (mine === generation) {
-      loaded = new Map(results.flatMap(result => (result.ok ? [[result.skin.manifest.id, result.skin] as const] : [])));
-      latest = results.map(toSummary);
+      loadedSkins = new Map(
+        skinResults.flatMap(result => (result.ok ? [[result.skin.manifest.id, result.skin] as const] : []))
+      );
+      loadedPacks = new Map(
+        packResults.flatMap(result => (result.ok ? [[result.pack.manifest.id, result.pack] as const] : []))
+      );
+      latest = { skins: skinResults.map(toSummary), soundPacks: packResults.map(toSoundPackSummary) };
     }
-    for (const result of results) {
+    for (const result of skinResults) {
       if (!result.ok) console.warn(`SKINS: ${result.id} rejected: ${result.error}`);
       else
         for (const key of needsYouLookalikeKeys(result.skin.tokens))
           console.warn(`SKINS: ${result.skin.manifest.id}: ignoring ${key}, too close to the needs-you colour`);
     }
+    for (const result of packResults) {
+      if (!result.ok) console.warn(`SKINS: sound pack ${result.id} rejected: ${result.error}`);
+    }
     return latest;
   };
 
-  const broadcast = (summaries: SkinSummary[]) => {
-    for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.skinsChanged, summaries);
+  const broadcast = (summaries: ModSummaries) => {
+    for (const window of appWindows()) {
+      window.webContents.send(IPC_CHANNELS.skinsChanged, summaries.skins);
+      window.webContents.send(IPC_CHANNELS.soundPacksChanged, summaries.soundPacks);
+    }
   };
 
-  ipcMain.handle(IPC_CHANNELS.skinsList, () => scan());
+  ipcMain.handle(IPC_CHANNELS.skinsList, async () => (await scan()).skins);
+  ipcMain.handle(IPC_CHANNELS.soundPacksList, async () => (await scan()).soundPacks);
 
   let timer: NodeJS.Timeout | null = null;
   let watcher: FSWatcher | null = null;
@@ -79,6 +106,29 @@ export function registerSkins(): void {
     if (timer) clearTimeout(timer);
     watcher?.close();
   });
+}
+
+interface ModSummaries {
+  skins: SkinSummary[];
+  soundPacks: SoundPackSummary[];
+}
+
+export function toSoundPackSummary(result: SoundPackLoadResult): SoundPackSummary {
+  if (!result.ok) {
+    return { status: 'broken', id: result.id, ...(result.name ? { name: result.name } : {}), error: result.error };
+  }
+  const { manifest } = result.pack;
+  return {
+    status: 'ok',
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    ...(manifest.author ? { author: manifest.author } : {}),
+    ...(manifest.description ? { description: manifest.description } : {}),
+    sounds: Object.fromEntries(
+      Object.entries(manifest.sounds).map(([event, path]) => [event, skinAssetUrl(manifest.id, path)])
+    ) as Partial<Record<SoundPackEvent, string>>,
+  };
 }
 
 export function toSummary(result: SkinLoadResult): SkinSummary {

@@ -12,27 +12,59 @@ export const MOD_ID_PATTERN = /^(?=[a-z0-9-]*[a-z])(?!0x)[a-z0-9][a-z0-9-]{1,62}
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-export const modManifestSchema = z
+const manifestBase = {
+  manifest: z.literal(1),
+  id: z
+    .string()
+    .regex(MOD_ID_PATTERN, 'must be 2-63 lowercase letters, digits or dashes, contain a letter and not start with 0x'),
+  name: z.string().min(1).max(60),
+  version: z.string().regex(SEMVER, 'must be a semantic version like 1.0.0'),
+  contract: z.number().int().positive(),
+  author: z.string().max(100).optional(),
+  description: z.string().max(500).optional(),
+};
+
+// One file directly inside sounds/: no subfolders, no dot segments, no absolute paths.
+const soundPath = z
+  .string()
+  .max(120)
+  .regex(/^sounds\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(mp3|ogg)$/, 'must be sounds/<name>.mp3 or .ogg');
+
+/** The moments a sound pack may voice. `needs-you` is deliberately not one: that sound is never replaceable. */
+export const SOUND_PACK_EVENTS = ['agent-done', 'agent-error', 'approval-requested', 'finale'] as const;
+export type SoundPackEvent = (typeof SOUND_PACK_EVENTS)[number];
+
+/** Strict, so a pack that sets `needs-you` (or any other key) is rejected rather than loaded with it ignored. */
+export const soundPackSoundsSchema = z
   .strictObject({
-    manifest: z.literal(1),
-    id: z
-      .string()
-      .regex(
-        MOD_ID_PATTERN,
-        'must be 2-63 lowercase letters, digits or dashes, contain a letter and not start with 0x'
-      ),
-    name: z.string().min(1).max(60),
-    version: z.string().regex(SEMVER, 'must be a semantic version like 1.0.0'),
-    kind: z.enum(['skin', 'layout', 'view']),
-    contract: z.number().int().positive(),
-    entry: z.string().min(1).max(200).optional(),
-    author: z.string().max(100).optional(),
-    description: z.string().max(500).optional(),
-    permissions: z.array(z.string().min(1).max(40)).max(20).optional(),
+    'agent-done': soundPath,
+    'agent-error': soundPath,
+    'approval-requested': soundPath,
+    finale: soundPath,
   })
+  .partial();
+
+export type SoundPackSounds = z.infer<typeof soundPackSoundsSchema>;
+
+const dataManifestSchema = z.strictObject({
+  ...manifestBase,
+  kind: z.enum(['skin', 'layout', 'view']),
+  entry: z.string().min(1).max(200).optional(),
+  permissions: z.array(z.string().min(1).max(40)).max(20).optional(),
+});
+
+const soundPackManifestSchema = z.strictObject({
+  ...manifestBase,
+  kind: z.literal('sounds'),
+  sounds: soundPackSoundsSchema,
+});
+
+/** A mod's mod.json: the discriminated union on `kind`; a sound pack carries its sounds map right here. */
+export const modManifestSchema = z
+  .discriminatedUnion('kind', [dataManifestSchema, soundPackManifestSchema])
   .superRefine((manifest, context) => {
     // Only a view carries code; a data mod naming an entry document or asking for permissions is malformed.
-    if (manifest.kind === 'view') return;
+    if (manifest.kind === 'view' || manifest.kind === 'sounds') return;
     if (manifest.entry !== undefined) {
       context.addIssue({ code: 'custom', path: ['entry'], message: `a ${manifest.kind} has no entry document` });
     }
@@ -46,6 +78,10 @@ export const modManifestSchema = z
   });
 
 export type ModManifest = z.infer<typeof modManifestSchema>;
+export type SoundPackManifest = Extract<ModManifest, { kind: 'sounds' }>;
+
+/** The sound pack data format this app reads. */
+export const SOUND_PACK_CONTRACT = 1;
 
 /** The skin data format this app reads. A skin written for another one is listed as broken. */
 export const SKIN_CONTRACT = 1;
@@ -77,15 +113,11 @@ export const SKIN_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be a #rrggbb colour');
 
-// One file directly inside sprites/ or sounds/: no subfolders, no dot segments, no absolute paths.
+// One file directly inside sprites/: no subfolders, no dot segments, no absolute paths.
 const imagePath = z
   .string()
   .max(120)
   .regex(/^sprites\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(png|webp|jpg|jpeg)$/, 'must be sprites/<name>.png, .webp or .jpg');
-const soundPath = z
-  .string()
-  .max(120)
-  .regex(/^sounds\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(mp3|ogg)$/, 'must be sounds/<name>.mp3 or .ogg');
 
 /**
  * tokens.json. Every key is optional and unknown keys reject the skin. `needs-you` is accepted under
@@ -127,5 +159,18 @@ export type SkinSummary =
       tokens: SkinTokens;
       /** Loaded, but parts of it are ignored (needsYouColor.ts); the picker shows these. */
       warnings?: string[];
+    }
+  | { status: 'broken'; id: string; name?: string; error: string };
+
+/** A sound pack as the renderer sees it: every sound path already turned into an asset URL. */
+export type SoundPackSummary =
+  | {
+      status: 'ok';
+      id: string;
+      name: string;
+      version: string;
+      author?: string;
+      description?: string;
+      sounds: Partial<Record<SoundPackEvent, string>>;
     }
   | { status: 'broken'; id: string; name?: string; error: string };

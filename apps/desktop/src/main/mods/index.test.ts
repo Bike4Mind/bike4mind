@@ -15,7 +15,7 @@ vi.mock('node:fs', () => ({ watch: vi.fn() }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(async () => undefined) }));
 vi.mock('../windows', () => ({ appWindows: () => [] }));
 vi.mock('./skinProtocol', () => ({ registerSkinProtocol: vi.fn() }));
-vi.mock('./skinFolder', () => ({ loadSkins: harness.loadSkins }));
+vi.mock('./skinFolder', () => ({ loadSkins: harness.loadSkins, loadSoundPacks: vi.fn(async () => []) }));
 
 const rejected = (id: string): SkinLoadResult => ({ ok: false, id, error: 'bad' });
 
@@ -123,6 +123,45 @@ describe('toSummary', () => {
     expect(summary).toMatchObject({
       status: 'ok',
       warnings: ['states.working is too close to the needs-you colour, so the default is used'],
+    });
+  });
+});
+
+describe('toSoundPackSummary', () => {
+  it('turns every sound path into an asset URL and carries no file paths', async () => {
+    const { toSoundPackSummary } = await import('./index');
+    const summary = toSoundPackSummary({
+      ok: true,
+      pack: {
+        manifest: {
+          manifest: 1,
+          id: 'chimes',
+          name: 'Chimes',
+          version: '1.0.0',
+          kind: 'sounds',
+          contract: 1,
+          sounds: { finale: 'sounds/finale.ogg', 'agent-done': 'sounds/done.ogg' },
+        },
+        assets: new Map(),
+      },
+    });
+
+    expect(summary).toEqual({
+      status: 'ok',
+      id: 'chimes',
+      name: 'Chimes',
+      version: '1.0.0',
+      sounds: { finale: 'b4m-skin://chimes/sounds/finale.ogg', 'agent-done': 'b4m-skin://chimes/sounds/done.ogg' },
+    });
+  });
+
+  it('reports a rejected pack as broken', async () => {
+    const { toSoundPackSummary } = await import('./index');
+    expect(toSoundPackSummary({ ok: false, id: 'bad', name: 'Bad', error: 'nope' })).toEqual({
+      status: 'broken',
+      id: 'bad',
+      name: 'Bad',
+      error: 'nope',
     });
   });
 });
