@@ -82,7 +82,7 @@ test.describe('Admin - Navigation', () => {
 
   for (const [slug, section] of [
     ['registration-invites', 'invites'],
-    ['partner-signup-rules', 'packages'],
+    ['partner-signup-rules', 'partners'],
     ['held-signup-grants', 'pending'],
   ]) {
     test(`retired ${slug} link lands on the ${section} Invite Center section`, async ({
