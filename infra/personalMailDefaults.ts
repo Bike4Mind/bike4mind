@@ -6,7 +6,7 @@
  * SES_IDENTITY and MAIL_TRANSPORT becomes `ses`; infra/mailTransport.ts then reads the filled env as
  * it would an exported one. The names are read from SSM rather than written into this repo.
  *
- * Production, dev, previews and self-host keep whatever the deployer exports. Any explicit
+ * Production, dev, shared-dev and previews keep whatever the deployer exports. Any explicit
  * MAIL_TRANSPORT / SES_* value wins, so MAIL_TRANSPORT=smtp is the opt-out.
  */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
@@ -15,23 +15,43 @@ export type PersonalMailDefaultsResult = 'applied' | 'skipped-stage' | 'skipped-
 
 const EXPLICIT_KEYS = ['MAIL_TRANSPORT', 'SES_IDENTITY', 'SES_CONFIGURATION_SET'] as const;
 
-// Preview test mirrors isPreviewStage in infra/constants.ts, which reads $app and so cannot load here.
+// shared-dev is a permanent team stage (sst.config.ts), so it opts in explicitly like dev.
+const NON_PERSONAL_STAGES = ['shared-dev'];
+
+// Preview test must stay in sync with isPreviewStage in infra/constants.ts, which reads $app and so
+// cannot load here.
 export const isPersonalMailStage = (stage: string, env: NodeJS.ProcessEnv): boolean =>
   !PRODUCTION_STAGES.includes(stage) &&
-  !(env.IS_PREVIEW === 'true' || /^pr\d+$/.test(stage)) &&
-  env.B4M_SELF_HOST !== 'true';
+  !NON_PERSONAL_STAGES.includes(stage) &&
+  !(env.IS_PREVIEW === 'true' || /^pr\d+$/.test(stage));
 
 export const personalMailParameterNames = (appName: string) => ({
   configurationSet: `/${appName}/shared/mail/ses-configuration-set`,
   identity: `/${appName}/shared/mail/ses-identity`,
 });
 
-const readParameter = async (lookup: (name: string) => Promise<string | undefined>, name: string) => {
+// The values land in the SES grant's resource ARNs (infra/mailTransport.ts), so anything that is not a
+// plain name (a wildcard, a slash, whitespace) is rejected rather than widening the grant.
+const CONFIGURATION_SET_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
+const IDENTITY_SHAPE = /^([A-Za-z0-9._%+-]+@)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+
+type ParameterRead = { value: string } | { problem: string };
+
+const readParameter = async (
+  lookup: (name: string) => Promise<string | undefined>,
+  name: string,
+  shape: RegExp
+): Promise<ParameterRead> => {
+  let value: string | undefined;
   try {
-    return (await lookup(name))?.trim() || undefined;
-  } catch {
-    return undefined;
+    value = (await lookup(name))?.trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { problem: /ParameterNotFound/.test(message) ? `${name} not found` : `${name} unreadable (${message})` };
   }
+  if (!value) return { problem: `${name} not found` };
+  if (!shape.test(value)) return { problem: `${name} is not a valid SES name` };
+  return { value };
 };
 
 export async function applyPersonalMailDefaults({
@@ -50,18 +70,17 @@ export async function applyPersonalMailDefaults({
 
   const names = personalMailParameterNames(appName);
   const [configurationSet, identity] = await Promise.all([
-    readParameter(lookup, names.configurationSet),
-    readParameter(lookup, names.identity),
+    readParameter(lookup, names.configurationSet, CONFIGURATION_SET_SHAPE),
+    readParameter(lookup, names.identity, IDENTITY_SHAPE),
   ]);
-  if (!configurationSet || !identity) {
-    console.warn(
-      `[mail] personal stage ${stage}: SES defaults not found under /${appName}/shared/mail/, staying on SMTP`
-    );
+  if (!('value' in configurationSet) || !('value' in identity)) {
+    const problems = [configurationSet, identity].flatMap(read => ('problem' in read ? [read.problem] : []));
+    console.warn(`[mail] personal stage ${stage}: no SES defaults (${problems.join('; ')}), staying on SMTP`);
     return 'skipped-missing';
   }
 
   env.MAIL_TRANSPORT = 'ses';
-  env.SES_CONFIGURATION_SET = configurationSet;
-  env.SES_IDENTITY = identity;
+  env.SES_CONFIGURATION_SET = configurationSet.value;
+  env.SES_IDENTITY = identity.value;
   return 'applied';
 }

@@ -53,12 +53,12 @@ pnpm sst secret set MAIL_FROM "noreply@yourdomain.com" --stage <stage>
 
 ### Personal stages
 
-A personal stage (any stage other than `production`, `dev`, a `pr<number>` preview or a self-hosted deploy) can send through SES without exporting anything. At deploy time it reads two SSM String parameters from the account it deploys into:
+A personal stage (any stage other than `production`, `dev`, `shared-dev` or a `pr<number>` preview) can send through SES without exporting anything. At deploy time it reads two SSM String parameters from the account it deploys into:
 
 - `/<app>/shared/mail/ses-configuration-set` - the SES configuration set name
 - `/<app>/shared/mail/ses-identity` - the verified SES identity (usually a domain)
 
-`<app>` is the SST app name (`bike4mind` unless you override it). When both exist and are non-empty, the stage deploys with `MAIL_TRANSPORT=ses` and those names. When either is missing, the deploy logs a warning and stays on SMTP, so forks without the parameters deploy as before.
+`<app>` is the SST app name (`bike4mind` unless you override it). When both exist and are non-empty, the stage deploys with `MAIL_TRANSPORT=ses` and those names. When either is missing, unreadable or not a plain SES name, the deploy logs a warning and stays on SMTP. `shared-dev` and the other team stages only use SES when you export the variables below.
 
 - Anything you export wins. Setting `MAIL_TRANSPORT`, `SES_CONFIGURATION_SET` or `SES_IDENTITY` skips the defaults entirely, so `MAIL_TRANSPORT=smtp` opts a personal stage out of SES.
 - The stage's `MAIL_FROM` secret must be an address on the SES identity's domain.

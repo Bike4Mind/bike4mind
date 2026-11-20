@@ -119,11 +119,7 @@ export default $config({
       stage: $app.stage,
       env: process.env,
       appName: $app.name,
-      lookup: name =>
-        aws.ssm
-          .getParameter({ name })
-          .then(result => result.value)
-          .catch(() => undefined),
+      lookup: name => aws.ssm.getParameter({ name }).then(result => result.value),
     });
 
     const {

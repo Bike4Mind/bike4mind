@@ -1,10 +1,11 @@
 /**
  * Outbound mail transport for the email-send worker (apps/workers/src/events/sendEmail.ts).
  *
- * MAIL_TRANSPORT selects the transport the worker uses at runtime: `smtp` (the default, nodemailer
- * against the MAIL_* secrets) or `ses` (the SESv2 SDK under the worker's execution role). The SES
- * grant is scoped to the verified sending identity and the configuration set the deployer names,
- * so it is built here from the account and region the stage deploys into rather than written down.
+ * MAIL_TRANSPORT selects the transport the worker uses at runtime: `smtp` (the default when nothing
+ * is set, nodemailer against the MAIL_* secrets) or `ses` (the SESv2 SDK under the worker's execution
+ * role). The SES grant is scoped to the verified sending identity and the configuration set the
+ * deployer names, or that infra/personalMailDefaults.ts fills from SSM on a personal stage before
+ * this module loads, so it is built here from the account and region the stage deploys into.
  * The grant exists whenever both names are set, so a tier can carry it while still on SMTP and flip
  * the transport in a later deploy without an IAM change in the same step.
  *

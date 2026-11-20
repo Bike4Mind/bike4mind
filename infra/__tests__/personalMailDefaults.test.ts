@@ -21,9 +21,9 @@ describe('applyPersonalMailDefaults', () => {
   it.each([
     ['production', {}],
     ['dev', {}],
+    ['shared-dev', {}],
     ['pr123', {}],
     ['alice', { IS_PREVIEW: 'true' }],
-    ['alice', { B4M_SELF_HOST: 'true' }],
   ])('leaves stage %s (%o) alone without reading SSM', async (stage, extra) => {
     const env: NodeJS.ProcessEnv = { ...extra };
     const { result, lookup } = await run(stage, env);
@@ -74,6 +74,10 @@ describe('applyPersonalMailDefaults', () => {
         return 'set-a';
       }),
     ],
+    ['the set param is a wildcard', lookupFrom({ [SET_PARAM]: '*', [IDENTITY_PARAM]: 'example.com' })],
+    ['the identity param is a wildcard', lookupFrom({ [SET_PARAM]: 'set-a', [IDENTITY_PARAM]: '*' })],
+    ['the identity param carries a path', lookupFrom({ [SET_PARAM]: 'set-a', [IDENTITY_PARAM]: 'example.com/*' })],
+    ['the set param carries inner whitespace', lookupFrom({ [SET_PARAM]: 'set a', [IDENTITY_PARAM]: 'example.com' })],
   ])('stays on SMTP and sets nothing when %s', async (_case, lookup) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const env: NodeJS.ProcessEnv = {};
@@ -82,16 +86,50 @@ describe('applyPersonalMailDefaults', () => {
     expect(env).toEqual({});
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it('accepts an email-address identity', async () => {
+    const env: NodeJS.ProcessEnv = {};
+    const { result } = await run(
+      'alice',
+      env,
+      lookupFrom({ [SET_PARAM]: 'set_a-1', [IDENTITY_PARAM]: 'noreply@mail.example.com' })
+    );
+    expect(result).toBe('applied');
+    expect(env.SES_IDENTITY).toBe('noreply@mail.example.com');
+  });
+
+  it('names a lookup failure other than ParameterNotFound in the warning instead of calling it missing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env: NodeJS.ProcessEnv = {};
+    const lookup = vi.fn(async () => {
+      throw new Error('ExpiredTokenException: the SSO session has expired');
+    });
+    const { result } = await run('alice', env, lookup);
+    expect(result).toBe('skipped-missing');
+    expect(env).toEqual({});
+    expect(warn.mock.calls[0][0]).toContain('unreadable (ExpiredTokenException');
+    expect(warn.mock.calls[0][0]).not.toContain('not found');
+  });
+
+  it('reports a ParameterNotFound rejection as not found', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const lookup = vi.fn(async () => {
+      throw new Error('ParameterNotFound: no such parameter');
+    });
+    await run('alice', {}, lookup);
+    expect(warn.mock.calls[0][0]).toContain(`${SET_PARAM} not found`);
+    expect(warn.mock.calls[0][0]).not.toContain('unreadable');
+  });
 });
 
 describe('isPersonalMailStage', () => {
-  it('matches only non-production, non-preview, non-self-host stages', () => {
+  it('matches only non-production, non-shared, non-preview stages', () => {
     expect(isPersonalMailStage('alice', {})).toBe(true);
     expect(isPersonalMailStage('pr42-alice', {})).toBe(true);
     expect(isPersonalMailStage('production', {})).toBe(false);
     expect(isPersonalMailStage('dev', {})).toBe(false);
+    expect(isPersonalMailStage('shared-dev', {})).toBe(false);
     expect(isPersonalMailStage('pr42', {})).toBe(false);
     expect(isPersonalMailStage('alice', { IS_PREVIEW: 'true' })).toBe(false);
-    expect(isPersonalMailStage('alice', { B4M_SELF_HOST: 'true' })).toBe(false);
   });
 });

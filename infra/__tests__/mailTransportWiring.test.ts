@@ -74,6 +74,9 @@ describe('email-send worker mail transport wiring', () => {
     expect(call).toBeGreaterThan(-1);
     expect(call).toBeLessThan(sstConfig.indexOf("await import('./infra')"));
     expect(sstConfig).toContain('appName: $app.name,');
+    // A copy of process.env would leave the module-top reads in mailTransport.ts on the unfilled env.
+    expect(sstConfig).toContain('env: process.env,');
+    expect(sstConfig).toContain('stage: $app.stage,');
   });
 
   it('builds the personal-stage parameter paths from the app name, never a literal account id or ARN', () => {
