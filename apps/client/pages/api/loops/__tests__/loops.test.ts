@@ -223,7 +223,6 @@ describe('EnableLoops gate', () => {
     ['collection', 'post'],
     ['item', 'get'],
     ['item', 'patch'],
-    ['item', 'delete'],
     ['run', 'post'],
     ['override', 'post'],
     ['coach', 'get'],
@@ -236,6 +235,25 @@ describe('EnableLoops gate', () => {
       statusCode: 404,
     });
     for (const fn of Object.values(repo)) expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('EnableLoops off, owner controls', () => {
+  it('still lets an owner pause a loop', async () => {
+    settings.EnableLoops = false;
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
+    await call('item', 'patch', { query: { id: OID }, body: { status: 'paused' } }).result;
+    expect(repo.updateForUser).toHaveBeenCalled();
+  });
+
+  it('still lets an owner delete a loop', async () => {
+    settings.EnableLoops = false;
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    repo.deleteForUser.mockResolvedValue(true);
+    tickets.listForLoop.mockResolvedValue([]);
+    const { res, result } = call('item', 'delete', { query: { id: OID } });
+    await result;
+    expect(res._getStatusCode()).toBe(204);
   });
 });
 
@@ -758,7 +776,23 @@ describe('/api/loops/budget', () => {
 });
 
 describe('DELETE /api/loops/:id', () => {
+  it('is a 409 while the loop has runs in progress', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ activeExecutionIds: ['e1'] }));
+    tickets.listForLoop.mockResolvedValue([]);
+    await expect(call('item', 'delete', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(repo.deleteForUser).not.toHaveBeenCalled();
+  });
+
+  it('is a 409 while a ticket is in progress (a desktop run)', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    tickets.listForLoop.mockResolvedValue([{ id: 't1', status: 'in_progress' }]);
+    await expect(call('item', 'delete', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(repo.deleteForUser).not.toHaveBeenCalled();
+  });
+
   it('deletes the caller loop', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    tickets.listForLoop.mockResolvedValue([]);
     repo.deleteForUser.mockResolvedValue(true);
     const { res, result } = call('item', 'delete', { query: { id: OID } });
     await result;
