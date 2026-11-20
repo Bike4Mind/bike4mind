@@ -428,7 +428,6 @@ describe('executeResearchRun', () => {
     expect(calls.proposals).toHaveLength(1);
   });
 
-  // Rule 4: only a card that actually reached a reviewer counts against the limit.
   describe('bucket accounting', () => {
     const OUTCOME_BUCKETS = [
       'filteredBySource',
@@ -492,6 +491,7 @@ describe('executeResearchRun', () => {
     });
   });
 
+  // Rule 4: only a card that actually reached a reviewer counts against the limit.
   describe('rule 4 - the proposal limit', () => {
     it('stops at exactly maxProposals', async () => {
       const { ports, calls } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4)] });

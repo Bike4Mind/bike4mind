@@ -350,8 +350,8 @@ export async function executeResearchRun(
     // Rule 1: the free filter, before anything is spent.
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
-      const b = dropBucketFor(verdict);
-      totals[b] = (totals[b] ?? 0) + 1;
+      const bucket = dropBucketFor(verdict);
+      totals[bucket] = (totals[bucket] ?? 0) + 1;
       markFeedItem(candidate, 'settled');
       continue;
     }
@@ -379,8 +379,8 @@ export async function executeResearchRun(
           }
           const unreachedVerdict = classifySource(unreached.url, levers);
           if (!isQueueableVerdict(unreachedVerdict)) {
-            const b = dropBucketFor(unreachedVerdict);
-            totals[b] = (totals[b] ?? 0) + 1;
+            const bucket = dropBucketFor(unreachedVerdict);
+            totals[bucket] = (totals[bucket] ?? 0) + 1;
           } else totals.notJudged += 1;
         }
         return settle('judge_unavailable');

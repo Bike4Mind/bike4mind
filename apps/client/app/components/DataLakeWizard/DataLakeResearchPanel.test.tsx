@@ -945,7 +945,7 @@ describe('DataLakeResearchPanel', () => {
     it('keeps the combined label for a run stored before the split', () => {
       const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
       renderPanel({
-        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } as never })],
+        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } })],
       });
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/6 blocked by your site lists/);
