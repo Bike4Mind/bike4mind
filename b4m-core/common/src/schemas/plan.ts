@@ -123,12 +123,17 @@ export function normalizePlan(value: unknown): NormalizedPlan {
   return { plan: { version: 1, source, items: items(input.items, 'items'), updatedAt }, warnings };
 }
 
-/** Counts leaf work, not both a group and its children. Cancelled groups exclude their subtree. */
-export function planProgress(plan: Plan): { done: number; total: number; current?: string; next?: string } {
-  const leaves = plan.items
+/** Leaf work items: a group counts as its children, and a cancelled group drops its whole subtree. */
+export function planLeaves(items: PlanItem[]): PlanItem[] {
+  return items
     .filter(item => item.status !== 'cancelled')
     .flatMap(item => (item.children?.length ? item.children : [item]))
     .filter(item => item.status !== 'cancelled');
+}
+
+/** Counts leaf work, not both a group and its children. Cancelled groups exclude their subtree. */
+export function planProgress(plan: Plan): { done: number; total: number; current?: string; next?: string } {
+  const leaves = planLeaves(plan.items);
   const current = leaves.find(item => item.status === 'in_progress');
   const next = leaves.find(item => item.status === 'pending');
   return {

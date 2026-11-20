@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { planProgress, type PlanItem, type PlanItemStatus } from '@bike4mind/common';
+import { planLeaves, planProgress, type PlanItem, type PlanItemStatus } from '@bike4mind/common';
 import { useCliStore } from '../store';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
@@ -54,17 +54,9 @@ function Row({ item, indent }: FlatRow) {
   );
 }
 
-// Same leaf set as planProgress: a cancelled group drops its whole subtree.
-// Keep in sync with planProgress in @bike4mind/common.
-const liveLeaves = (items: PlanItem[]): PlanItem[] =>
-  items
-    .filter(item => item.status !== 'cancelled')
-    .flatMap(item => (item.children?.length ? item.children : [item]))
-    .filter(item => item.status !== 'cancelled');
-
 /** Leaf the summary and the expanded window both centre on: first in progress, else first pending. */
 const currentLeaf = (items: PlanItem[]): PlanItem | undefined => {
-  const live = liveLeaves(items);
+  const live = planLeaves(items);
   return live.find(item => item.status === 'in_progress') ?? live.find(item => item.status === 'pending');
 };
 
@@ -75,7 +67,7 @@ export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   if (items.length === 0) return null;
 
   if (!active) {
-    if (liveLeaves(items).every(item => item.status === 'completed')) return null;
+    if (planLeaves(items).every(item => item.status === 'completed')) return null;
     const { done, total } = planProgress({ version: 1, source: 'write_todos', items, updatedAt: 0 });
     const current = currentLeaf(items);
     return (
