@@ -47,6 +47,7 @@ vi.mock('./LocalLoopScheduler', () => ({
     start = mocks.start;
     stop = mocks.stop;
     poke() {}
+    resetHolds() {}
     releaseAll = async () => undefined;
     stopTicketRun = mocks.stopTicketRun;
     suspend = mocks.suspend;

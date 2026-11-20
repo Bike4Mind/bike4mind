@@ -683,6 +683,20 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(1);
   });
 
+  it('drops the session-open and credit-cap holds when the owner edits the loop', async () => {
+    make();
+    ticket('a');
+    chat.createCodeSession.mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+    scheduler.start();
+    await settle();
+    expect(chat.createCodeSession).toHaveBeenCalledTimes(1);
+    scheduler.resetHolds('loop-1');
+    await settle();
+    expect(chat.createCodeSession).toHaveBeenCalledTimes(2);
+  });
+
   it('records a requeued event for each run a quit stops', async () => {
     make();
     const t = ticket('a');

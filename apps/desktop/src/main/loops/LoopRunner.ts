@@ -260,6 +260,9 @@ export class LoopRunner {
         if ((this.creditStops.get(ticket.loopId) ?? 0) > this.now()) continue;
         const claim = await this.deps.client.claim(ticket.ticketId);
         if ('refused' in claim) {
+          // Shown, but other loops keep claiming: only this loop's organization dropped the user.
+          if (claim.refused === 'organization_not_found')
+            this.waitingReason ??= `${policy.loopName}: you are no longer a member of its organization`;
           // Any other refusal is about this ticket only (taken, not open, its loop's budget).
           if (!USER_WIDE_REFUSALS.has(claim.refused)) continue;
           this.waitingReason = USER_WIDE_REASON[claim.refused] ?? claim.refused;

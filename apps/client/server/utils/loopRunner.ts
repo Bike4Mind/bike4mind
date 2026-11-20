@@ -415,7 +415,8 @@ export function runnerFramesToSteps(
   };
   for (const frame of frames) {
     if (frame.type === 'text') {
-      pendingText = (pendingText + frame.text).slice(-PENDING_TEXT_MAX);
+      // Drop a low surrogate the cut left without its high half.
+      pendingText = (pendingText + frame.text).slice(-PENDING_TEXT_MAX).replace(/^[\uDC00-\uDFFF]/, '');
       relay.push({ action: 'agent_text_delta', executionId, iteration, delta: frame.text });
     } else if (frame.type === 'tool-start') {
       if (pendingText.trim()) push({ type: 'thought', content: pendingText });

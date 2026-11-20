@@ -276,6 +276,15 @@ describe('LoopRunner claiming', () => {
     expect(h.runner.state().waitingReason).toBe('your desktop runs are at their limit');
   });
 
+  it("says why an organization loop's tickets are refused, and keeps claiming others", async () => {
+    await h.approve();
+    h.tickets.push(ticket('t2'));
+    vi.mocked(h.client.claim).mockResolvedValueOnce({ refused: 'organization_not_found' });
+    await h.runner.tick();
+    expect(vi.mocked(h.client.claim).mock.calls).toEqual([['t1'], ['t2']]);
+    expect(h.runner.state().waitingReason).toBe('Docs loop: you are no longer a member of its organization');
+  });
+
   it("runs on the claim's model", async () => {
     h = harness({ model: 'claude-sonnet-5-5' });
     await h.approve();

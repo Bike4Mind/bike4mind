@@ -251,12 +251,12 @@ const DELEGATING_TOOLS = new Set(['session_spawn', 'session_send']);
 const FORCE_PUSH = /(^|\s)(--force(-with-lease|-if-includes)?(=\S*)?|-[A-Za-z]*f[A-Za-z]*|--mirror|\+\S+)(\s|$)/;
 const MERGE = /\bgh\s+pr\s+merge\b|\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/;
 
-/** A refspec (`main`, `HEAD:main`, `+x:refs/heads/master`) whose destination is main or master; first token is the remote. */
+/** A refspec (`main`, `HEAD:main`, `+x:refs/heads/master`) whose destination is a usual default branch; first token is the remote. */
 function pushesDefaultBranch(afterPush: string): boolean {
   const [, ...refspecs] = afterPush.split(/\s+/).filter(token => token && !token.startsWith('-'));
   return refspecs.some(refspec => {
     const destination = refspec.replace(/^\+/, '').split(':').pop() ?? '';
-    return /^(refs\/heads\/)?(main|master)$/.test(destination.replace(/^["']|["']$/g, ''));
+    return /^(refs\/heads\/)?(main|master|develop|trunk)$/.test(destination.replace(/^["']|["']$/g, ''));
   });
 }
 

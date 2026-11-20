@@ -167,6 +167,8 @@ export function registerLocalLoops(
     const enabled = readLoopsEnabled(await api.get<unknown>(SETTINGS_PATH).catch(() => null));
     if (enabled === undefined || currentScope !== asked || enabled === loopsEnabled()) return;
     store.setSetting(LOOPS_ENABLED, enabled);
+    // The mirror stopped itself when the server said loops were off; let it post again.
+    if (enabled) mirror.reset();
     schedule();
     push();
   };
@@ -284,7 +286,7 @@ export function registerLocalLoops(
       else delete next.repo;
     }
     store.putLoop(next);
-    scheduler.poke();
+    scheduler.resetHolds(id);
     return detail(id);
   });
   handle(IPC_CHANNELS.localLoopsDeleteLoop, input => {
@@ -292,6 +294,7 @@ export function registerLocalLoops(
     if (scheduler.summary(loopOf(id)).lanesBusy > 0)
       throw new BadRequestError('Pause the loop and let its runs end first.');
     store.deleteLoop(id);
+    scheduler.resetHolds(id);
     return summaries();
   });
   handle(IPC_CHANNELS.localLoopsSetStatus, input => {

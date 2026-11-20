@@ -58,4 +58,17 @@ describe('runnerFramesToSteps', () => {
     );
     expect(steps[0]).toMatchObject({ type: 'thought', content: 'from before' });
   });
+
+  it('caps buffered text to its 32KB tail without splitting a surrogate pair', () => {
+    // One char past an even 32KB of surrogate pairs: the cut lands inside the first pair.
+    const text = 'a' + '\u{1F600}'.repeat(16 * 1024) + 'b';
+    const { pendingText } = runnerFramesToSteps(
+      'run-1',
+      [{ type: 'text', text }],
+      { iteration: 0, pendingText: '' },
+      1
+    );
+    expect(pendingText.length).toBe(32 * 1024 - 1);
+    expect(pendingText.charCodeAt(0)).toBe(0xd83d);
+  });
 });

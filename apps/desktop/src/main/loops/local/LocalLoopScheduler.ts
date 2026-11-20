@@ -245,6 +245,13 @@ export class LocalLoopScheduler {
     this.poke();
   }
 
+  /** The owner edited or deleted the loop: holds set under its old settings no longer apply. */
+  resetHolds(loopId: string): void {
+    this.capBackoff.delete(loopId);
+    this.openBackoff.delete(loopId);
+    this.poke();
+  }
+
   /**
    * A run with no end in the store was cut off (quit, crash, power loss): its session is gone with the old
    * process, so its ticket goes back to open without counting the run.
@@ -1113,6 +1120,7 @@ export class LocalLoopScheduler {
         !this.waitingReason &&
         !this.paced.has(loop.id) &&
         (this.capBackoff.get(loop.id) ?? 0) <= now &&
+        (this.openBackoff.get(loop.id) ?? 0) <= now &&
         (this.serverBackoff.get(loop.id)?.until ?? 0) <= now &&
         !lanes.some(lane => lane.run.loopId === loop.id) &&
         this.hasWork(loop, at),
