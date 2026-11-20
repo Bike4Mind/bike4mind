@@ -23,7 +23,15 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_TASKS = ['typecheck:fast', 'test'];
 
 // A change to any of these can move every package's result, so they run the full graph.
-const FULL_RUN_FILES = ['turbo.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json'];
+const FULL_RUN_FILES = [
+  'turbo.json',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'tsconfig.json',
+  // Install behaviour, not a dependency version, so a change here need not move the lockfile.
+  '.npmrc',
+];
 
 // A change here can flip the verdict for files this branch never touched: the lint config, or a
 // root manifest/lockfile change that moves an eslint plugin or typescript-eslint version.

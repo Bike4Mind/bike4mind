@@ -297,9 +297,11 @@ read access to repository contents; the publication job runs only for pushes or 
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
-suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows (one
-installer for x64 and arm64, built on an x64 runner).
+typechecks on macOS, Linux and Windows, runs the full desktop unit suite on macOS only
+(Linux and Windows run just the packaging-script test here: the `desktop` test-shards leg in
+ci.yml already covers the full suite on Linux, and the local tool layer the suite exercises
+assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows (one installer for
+x64 and arm64, built on an x64 runner).
 The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
 paused; local x64 packaging remains available. Publication waits for all build jobs and

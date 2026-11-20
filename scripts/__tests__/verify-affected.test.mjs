@@ -58,6 +58,7 @@ describe('needsFullRun', () => {
     expect(needsFullRun(['pnpm-lock.yaml'], turbo)).toBe(true);
     expect(needsFullRun(['turbo.json'], turbo)).toBe(true);
     expect(needsFullRun(['vitest.shared.ts'], turbo)).toBe(true);
+    expect(needsFullRun(['.npmrc'], turbo)).toBe(true);
   });
 
   it('leaves package changes to the filter', () => {
