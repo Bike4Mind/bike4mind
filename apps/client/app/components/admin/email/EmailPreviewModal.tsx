@@ -35,6 +35,7 @@ const getStatusColor = (status: EmailSendStatus) => {
     case EmailSendStatus.PENDING:
       return 'warning';
     case EmailSendStatus.PROCESSING:
+    case EmailSendStatus.QUEUED:
       return 'primary';
     case EmailSendStatus.FAILED:
     case EmailSendStatus.BOUNCED:

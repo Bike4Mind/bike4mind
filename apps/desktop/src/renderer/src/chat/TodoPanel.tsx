@@ -2,46 +2,53 @@ import { useState } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { countTodos, type TodoItem, type TodoStatus } from '@shared/todos';
+import { todoProgress, type PlanItem, type PlanItemStatus } from '@shared/todos';
 import { contentColumnSx, thinScrollbarSx } from './layout';
 
-const MARKER: Record<TodoStatus, string> = {
+const MARKER: Record<PlanItemStatus, string> = {
   completed: '\u2713',
   in_progress: '\u25cf',
   pending: '\u25cb',
+  cancelled: '\u2715',
 };
 
 /**
  * The plan worth drawing, or null.
  *
- * Hidden once every item is done and no turn is running: a finished plan left on screen reads as
- * work still owed. While a turn is open it stays, so the last tick is seen landing. Shared by this
- * bar and the session panel's Plan section so the two agree on when there is a plan at all.
+ * Hidden once every item is done or cancelled and no turn is running: a finished plan left on
+ * screen reads as work still owed. While a turn is open it stays, so the last tick is seen landing,
+ * unless every item is cancelled and there is nothing to count. Shared by this bar and the session
+ * panel's Plan section so the two agree on when there is a plan at all.
  */
-export function visiblePlan(todos: readonly TodoItem[] | null, turnOpen: boolean): readonly TodoItem[] | null {
+export function visiblePlan(todos: readonly PlanItem[] | null, turnOpen: boolean): readonly PlanItem[] | null {
   if (!todos || todos.length === 0) return null;
-  if (countTodos(todos).completed === todos.length && !turnOpen) return null;
+  const { done, total } = todoProgress(todos);
+  if (total === 0 || (done === total && !turnOpen)) return null;
   return todos;
 }
 
 /** The items themselves, with their status markers. */
-export function TodoList({ todos }: { todos: readonly TodoItem[] }) {
+export function TodoList({ todos }: { todos: readonly PlanItem[] }) {
   return (
     <Stack
       component="ul"
       spacing={0.25}
       sx={{ m: 0, mt: 0.5, p: 0, listStyle: 'none', maxHeight: '25vh', overflowY: 'auto', ...thinScrollbarSx }}
     >
-      {todos.map((todo, index) => (
+      {todos.map(todo => (
         <Stack
           component="li"
-          key={`${index}-${todo.content}`}
+          key={todo.id}
           direction="row"
           spacing={1}
           alignItems="baseline"
           data-testid={`chat-todo-item-${todo.status}`}
         >
-          <Typography level="body-xs" aria-hidden textColor={todo.status === 'pending' ? 'text.tertiary' : undefined}>
+          <Typography
+            level="body-xs"
+            aria-hidden
+            textColor={todo.status === 'pending' || todo.status === 'cancelled' ? 'text.tertiary' : undefined}
+          >
             {MARKER[todo.status]}
           </Typography>
           <Typography
@@ -49,10 +56,11 @@ export function TodoList({ todos }: { todos: readonly TodoItem[] }) {
             textColor={todo.status === 'in_progress' ? 'text.primary' : 'text.tertiary'}
             sx={{
               fontWeight: todo.status === 'in_progress' ? 'lg' : undefined,
-              textDecoration: todo.status === 'completed' ? 'line-through' : undefined,
+              textDecoration: todo.status === 'completed' || todo.status === 'cancelled' ? 'line-through' : undefined,
             }}
+            data-testid="chat-todo-text"
           >
-            {todo.content}
+            {todo.status === 'in_progress' ? (todo.activeForm ?? todo.content) : todo.content}
           </Typography>
         </Stack>
       ))}
@@ -68,13 +76,12 @@ export function TodoList({ todos }: { todos: readonly TodoItem[] }) {
  * and a list unfolded over the composer on every turn costs more room than it earns; the item
  * in progress rides the bar so the closed state still says what is happening.
  */
-export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | null; turnOpen: boolean }) {
+export function TodoPanel({ todos, turnOpen }: { todos: readonly PlanItem[] | null; turnOpen: boolean }) {
   const [open, setOpen] = useState(false);
   const plan = visiblePlan(todos, turnOpen);
   if (!plan) return null;
 
-  const counts = countTodos(plan);
-  const current = plan.find(todo => todo.status === 'in_progress');
+  const progress = todoProgress(plan);
 
   return (
     <Box sx={contentColumnSx} data-testid="chat-todo-panel">
@@ -88,9 +95,9 @@ export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | nu
           sx={{ all: 'unset', cursor: 'pointer', display: 'block', width: '100%' }}
         >
           <Typography level="body-xs" textColor="text.tertiary" noWrap>
-            {`Plan \u00b7 ${counts.completed} of ${plan.length} done`}
-            {!open && current ? (
-              <Box component="span" sx={{ color: 'text.secondary' }}>{` \u00b7 ${current.content}`}</Box>
+            {`Plan \u00b7 ${progress.done} of ${progress.total} done`}
+            {!open && progress.current ? (
+              <Box component="span" sx={{ color: 'text.secondary' }}>{` \u00b7 ${progress.current}`}</Box>
             ) : null}
           </Typography>
         </Box>

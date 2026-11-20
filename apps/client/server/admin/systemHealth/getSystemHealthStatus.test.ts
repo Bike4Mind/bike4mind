@@ -49,10 +49,16 @@ describe('getSystemHealthStatus email', () => {
 
     const { email } = await getSystemHealthStatus();
 
-    expect(email).toEqual({ configured: true, transport: 'ses', missingSecrets: [], secrets: { MAIL_FROM: true } });
+    expect(email).toEqual({
+      configured: true,
+      transport: 'ses',
+      missingSecrets: [],
+      optionalSecrets: [],
+      secrets: { MAIL_FROM: true },
+    });
   });
 
-  it('names the SMTP credentials on a self-host deploy even when the status transport says ses', async () => {
+  it('names the SMTP settings on a self-host deploy even when the status transport says ses', async () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.MAIL_STATUS_TRANSPORT = 'ses';
     configValues.MAIL_FROM = 'noreply@example.com';
@@ -61,6 +67,14 @@ describe('getSystemHealthStatus email', () => {
 
     expect(email.configured).toBe(false);
     expect(email.transport).toBe('smtp');
-    expect(email.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(email.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT']);
+    expect(email.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
+  });
+
+  it('reports selfHost from B4M_SELF_HOST', async () => {
+    expect((await getSystemHealthStatus()).selfHost).toBe(false);
+
+    process.env.B4M_SELF_HOST = 'true';
+    expect((await getSystemHealthStatus()).selfHost).toBe(true);
   });
 });
