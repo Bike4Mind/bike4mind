@@ -153,7 +153,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async recordDispatchFailure(id: string, statusReason: string): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { statusReason }, $inc: { consecutiveFailures: 1 }, $unset: { leaseUntil: '' } }
+      { $set: { statusReason }, $inc: { consecutiveFailures: 1 }, $unset: { leaseUntil: '' } },
+      { runValidators: true }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
