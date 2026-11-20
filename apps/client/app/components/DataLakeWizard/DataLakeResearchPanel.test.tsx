@@ -155,13 +155,15 @@ describe('DataLakeResearchPanel', () => {
   });
 
   describe('opening the form', () => {
+    let scrollIntoView: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    });
     afterEach(() => {
-      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      scrollIntoView.mockRestore();
     });
 
     it('scrolls the edit form into view and focuses its first field', () => {
-      const scrollIntoView = vi.fn();
-      Element.prototype.scrollIntoView = scrollIntoView;
       renderPanel({ configs: [config()] });
       expect(scrollIntoView).not.toHaveBeenCalled();
 
@@ -172,9 +174,18 @@ describe('DataLakeResearchPanel', () => {
       expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
     });
 
+    it('scrolls and focuses again when Edit is pressed on the config whose form is already open', () => {
+      renderPanel({ configs: [config()] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
     it('does the same for a new configuration', () => {
-      const scrollIntoView = vi.fn();
-      Element.prototype.scrollIntoView = scrollIntoView;
       renderPanel();
 
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));

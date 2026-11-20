@@ -781,6 +781,7 @@ export function DataLakeResearchPanel({
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
+  const [formOpenCount, setFormOpenCount] = useState(0);
   const formRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const isDirty = editingId !== null && JSON.stringify(draft) !== JSON.stringify(draftBaseline);
@@ -790,7 +791,7 @@ export function DataLakeResearchPanel({
     if (editingId === null) return;
     formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
     nameInputRef.current?.focus({ preventScroll: true });
-  }, [editingId]);
+  }, [editingId, formOpenCount]);
   // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
   // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
   // panel's TabPanel, because an unmount takes the draft with it.
@@ -844,6 +845,7 @@ export function DataLakeResearchPanel({
     setAdvancedOpen(false);
     setEditingId('');
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
   const openEdit = (config: IDataLakeResearchConfigResponse) => {
     setSaveNotice(null);
@@ -853,6 +855,7 @@ export function DataLakeResearchPanel({
     setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
     setEditingId(config.id);
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
   const closeForm = () => setEditingId(null);
 
