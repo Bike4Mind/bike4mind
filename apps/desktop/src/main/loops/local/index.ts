@@ -100,7 +100,7 @@ export function registerLocalLoops(
     killSessionProcesses: sessionId => background.killSession(sessionId),
     machine: async () => {
       const env = auth.getState().environment.url;
-      // ponytail: the home volume stands in for every repo's worktrees, as for LoopRunner.
+      // The home volume stands in for every repo's worktrees, as for LoopRunner.
       return { sample: await sampleMachine(homedir(), powerMonitor), settings: await policies.settings(env) };
     },
     otherLanes: () => runner.busy,

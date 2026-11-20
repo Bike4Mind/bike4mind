@@ -70,7 +70,7 @@ export function registerLoopRunner(
     killSessionProcesses: sessionId => background.killSession(sessionId),
     store,
     environment,
-    // ponytail: the home volume stands in for every repo's .b4m/worktrees; per-repo statfs if they differ.
+    // The home volume stands in for every repo's .b4m/worktrees; per-repo statfs if they differ.
     sample: () => sampleMachine(homedir(), powerMonitor),
     gh: runGh,
     github,

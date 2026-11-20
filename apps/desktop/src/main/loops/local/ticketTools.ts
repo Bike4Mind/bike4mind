@@ -31,7 +31,7 @@ const LIST_DESCRIPTION_CHARS = 500;
 const SPLIT_MIN = 2;
 const SPLIT_MAX = 20;
 const SIBLING_REF = /^\$(\d+)$/;
-/** ponytail: per-run cap on tickets a run files, as on the server; per-run budgets are later work. */
+/** Per-run cap on tickets a run files, as on the server; per-run budgets are later work. */
 export const MAX_TICKET_CREATES_PER_RUN = 20;
 
 const title = (value: unknown): string => {

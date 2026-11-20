@@ -409,7 +409,7 @@ export class LocalLoopScheduler {
       const machine = admit(sample, previous, this.lanes.size + this.deps.otherLanes(), settings);
       if (!machine.ok) return machine.reason;
 
-      // ponytail: the floor price, not the model's; Desktop's catalog carries no max_tokens to price an iteration.
+      // The floor price, not the model's; Desktop's catalog carries no max_tokens to price an iteration.
       const admission = localAdmission(fresh, spend, MIN_ITERATION_CREDITS, now);
       if (!admission.ok) {
         if (admission.kind === 'paced') this.paced.set(loop.id, admission.readyAt.getTime());
@@ -661,7 +661,7 @@ export class LocalLoopScheduler {
   }
 
   /**
-   * The run's spend so far, from its sessions' usage events. ponytail: usage lands per model response, so the
+   * The run's spend so far, from its sessions' usage events. Usage lands per model response, so the
    * per-run cap is enforced at those boundaries, not mid-response.
    */
   private spend(lane: Lane, messageId: string, credits: number | undefined): void {
@@ -875,7 +875,7 @@ export class LocalLoopScheduler {
 
   /**
    * End the run's marking, so its sessions become ordinary conversations, and remove the worktrees of a run that
-   * opened no PR. ponytail: a worktree with a PR stays until the owner deletes its session; G5 can collect it.
+   * opened no PR. A worktree with a PR stays until the owner deletes its session; G5 can collect it.
    */
   private async retire(lane: Lane): Promise<void> {
     const sessions = this.deps.chat.loopRunSessions(lane.run.id);
