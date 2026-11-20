@@ -32,6 +32,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   };
 });
 import { ModelLiveView, type ModelCaptureRequest } from './ModelLiveView';
+import { ModelVersionStore } from './ModelVersionStore';
 
 const SOURCE = `export const params = { width: { value: 60, min: 20, max: 200, step: 1 } };
 export default function model({ m, p }) { return m.Manifold.cube([p.width, 10, 10]); }
@@ -397,5 +398,104 @@ describe('ModelLiveView', () => {
     await expect(view.capture(['front'])).rejects.toThrow(/No Bike4Mind window/);
     canCapture = true;
     await expect(view.capture(['front'])).rejects.toThrow(/in time/);
+  });
+});
+
+describe('ModelLiveView versions', () => {
+  let dir: string;
+  let file: string;
+  let store: ModelVersionStore;
+  let changed: number;
+  let view: ModelLiveView;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'model-view-versions-'));
+    file = join(dir, 'chest.model.js');
+    writeFileSync(file, SOURCE);
+    store = new ModelVersionStore(join(dir, 'versions'), { warn: () => undefined });
+    changed = 0;
+    view = new ModelLiveView(
+      { state: () => undefined, captureTarget: () => null, captureRequest: () => false },
+      { debounceMs: 10_000 },
+      {
+        record: input => store.record('s1', input),
+        list: () => store.list('s1'),
+        get: number => store.get('s1', number),
+        changed: () => changed++,
+      }
+    );
+  });
+
+  afterEach(async () => {
+    view.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const record = (angles: Record<string, number> = {}) =>
+    view.recordVersion({ generation: view.current().generation, jointAngles: angles, thumbnail: null });
+
+  it("keeps main's own path and source for the current generation, once per generation", async () => {
+    await view.open(file);
+    const [first, second] = await Promise.all([record({ lid: 20 }), record()]);
+    expect(first).toMatchObject({ number: 1, path: file, source: SOURCE, jointAngles: { lid: 20 } });
+    expect(second).toBe(first);
+    expect(changed).toBe(1);
+  });
+
+  it('keeps nothing for a stale generation', async () => {
+    await view.open(file);
+    const stale = view.current().generation - 1;
+    expect(await view.recordVersion({ generation: stale, jointAngles: {}, thumbnail: null })).toBeNull();
+    expect(await view.versions()).toEqual([]);
+  });
+
+  it('wants a version only for a current generation not asked for yet and not matching the newest', async () => {
+    await view.open(file);
+    const { generation } = view.current();
+    expect(await view.wantsVersion(generation - 1)).toBe(false);
+    expect(await view.wantsVersion(generation)).toBe(true);
+    await record();
+    expect(await view.wantsVersion(generation)).toBe(false);
+    // A reopen rebuilds the newest version's source under a new generation.
+    await view.refresh();
+    expect(await view.wantsVersion(view.current().generation)).toBe(false);
+  });
+
+  it('notes a slider write on the version it produces', async () => {
+    await view.open(file);
+    await record();
+    await view.setParam('width', 90);
+    await view.refresh();
+    expect((await record())?.note).toBe('width = 90');
+  });
+
+  it('restores by writing the source back and keeps the rebuild as a new version with its pose', async () => {
+    await view.open(file);
+    await record({ lid: 45 });
+    writeFileSync(file, `${SOURCE}// edited\n`);
+    await view.refresh();
+    await record();
+    const restored = await view.restoreVersion(1);
+    expect(restored.number).toBe(1);
+    expect(readFileSync(file, 'utf8')).toBe(SOURCE);
+    expect(view.current().source).toBe(SOURCE);
+    const kept = await record({ lid: 0 });
+    expect(kept).toMatchObject({ number: 3, note: 'Restored v1', restoredFrom: 1, jointAngles: { lid: 45 } });
+    expect((await view.versions()).map(version => version.number)).toEqual([1, 2, 3]);
+  });
+
+  it('opens the restored file when the pane shows another one', async () => {
+    await view.open(file);
+    await record();
+    const other = join(dir, 'lamp.model.js');
+    writeFileSync(other, 'export default () => null');
+    await view.open(other);
+    await view.restoreVersion(1);
+    expect(view.current().path).toBe(file);
+  });
+
+  it('refuses a version that is not kept', async () => {
+    await view.open(file);
+    await expect(view.restoreVersion(9)).rejects.toThrow('There is no v9 in this conversation.');
   });
 });

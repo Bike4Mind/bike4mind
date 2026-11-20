@@ -70,6 +70,7 @@ const handler = adminApi({
       escalatedAt: escalated.escalatedAt,
       escalationTrigger: escalated.escalationTrigger,
       escalationAlertedAt: alert.alertedAt,
+      escalationAlertQueuedAt: alert.queuedAt,
     },
     alert: alert.outcome,
   });

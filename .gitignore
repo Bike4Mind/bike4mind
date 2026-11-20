@@ -109,6 +109,11 @@ packages/premium/interactive-meetings/
 # source untracked, one bulk `git add` away from publishing it.
 packages/premium/arnold/
 
+# Premium overlay snapshot mount, hydrated at the pinned ref by the deploy pipeline before
+# pnpm install. Listed individually like the entries above, so a local clone here never
+# shows as untracked source in this PUBLIC repo.
+packages/premium/sentinel/
+
 # Docusaurus
 docs-site/build/
 docs-site/.docusaurus/
@@ -204,3 +209,9 @@ stale-organization-pointers-*.json
 # Python bytecode from local test runs (the selfhost charts have Python tests).
 __pycache__/
 *.pyc
+
+# Temp lint fixture from scripts/__tests__/require-update-validators.test.mjs, left behind if a run aborts
+scripts/update-validator-baseline-fixture-*.mjs
+
+# Per-developer iOS signing (see apps/ios/Config/Local.xcconfig.example)
+apps/ios/Config/Local.xcconfig

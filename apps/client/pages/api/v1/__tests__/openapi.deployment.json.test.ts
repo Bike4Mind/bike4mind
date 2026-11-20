@@ -2,20 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import committedSpec from '@public/openapi.json';
 
-const generated = vi.hoisted(() => ({ spec: null as Record<string, unknown> | null }));
+import { diffOpenApiDocument, type OpenApiPatchNode } from '@bike4mind/common';
+import { createOpenApiSpecHandler } from '@server/utils/openApiSpecHandler';
+
+const generated = vi.hoisted(() => ({ patch: null as OpenApiPatchNode | null }));
 
 vi.mock('@server/premium-generated/deploymentOpenApi.generated', () => ({
-  get deploymentOpenApiSpec() {
-    return generated.spec;
+  get deploymentOpenApiPatch() {
+    return generated.patch;
   },
 }));
 
-const PLACEHOLDER = 'https://your-deployment.example.com';
+const PLACEHOLDER = committedSpec.servers[0].url;
 
-const addOnSpec = {
-  openapi: '3.1.0',
-  servers: [{ url: PLACEHOLDER }],
+// The full deployment document the generator would produce: core plus one add-on operation.
+const deploymentSpec = {
+  ...committedSpec,
   paths: {
+    ...committedSpec.paths,
     '/api/v1/widgets': {
       get: { operationId: 'listWidgets', 'x-codeSamples': [{ source: `curl ${PLACEHOLDER}/api/v1/widgets` }] },
     },
@@ -28,7 +32,9 @@ async function loadHandler() {
   return (await import('../openapi.deployment.json')).default;
 }
 
-function get(handler: (req: NextApiRequest, res: NextApiResponse) => unknown, headers: Record<string, string> = {}) {
+type Handler = (req: NextApiRequest, res: NextApiResponse) => unknown;
+
+function fetchSpec(handler: Handler, headers: Record<string, string>) {
   let status = 200;
   let body = '';
   const res = {
@@ -46,12 +52,19 @@ function get(handler: (req: NextApiRequest, res: NextApiResponse) => unknown, he
     },
   } as unknown as NextApiResponse;
   handler({ method: 'GET', headers } as unknown as NextApiRequest, res);
+  return { status, body };
+}
+
+const rawBody = (handler: Handler, headers: Record<string, string> = {}) => fetchSpec(handler, headers).body;
+
+function get(handler: Handler, headers: Record<string, string> = {}) {
+  const { status, body } = fetchSpec(handler, headers);
   return { status, json: JSON.parse(body) as { paths: Record<string, unknown>; servers: { url: string }[] } };
 }
 
 describe('GET /api/v1/openapi.deployment.json', () => {
   beforeEach(() => {
-    generated.spec = null;
+    generated.patch = null;
   });
 
   it('serves the committed core spec when no add-on contracts were generated', async () => {
@@ -60,14 +73,20 @@ describe('GET /api/v1/openapi.deployment.json', () => {
     expect(Object.keys(json.paths)).toEqual(Object.keys(committedSpec.paths));
   });
 
-  it('serves the generated deployment spec when there is one', async () => {
-    generated.spec = addOnSpec;
+  it('serves the core spec plus the add-on operations when a patch was generated', async () => {
+    generated.patch = diffOpenApiDocument(committedSpec, deploymentSpec);
     const { json } = get(await loadHandler());
-    expect(Object.keys(json.paths)).toEqual(['/api/v1/widgets']);
+    expect(Object.keys(json.paths)).toEqual(Object.keys(deploymentSpec.paths));
+  });
+
+  it('serves the same bytes as the full deployment document would', async () => {
+    generated.patch = diffOpenApiDocument(committedSpec, deploymentSpec);
+    const headers = { host: 'api.acme.test', 'x-forwarded-proto': 'https' };
+    expect(rawBody(await loadHandler(), headers)).toBe(rawBody(createOpenApiSpecHandler(deploymentSpec), headers));
   });
 
   it('points the generated spec at the request origin, like the core spec route', async () => {
-    generated.spec = addOnSpec;
+    generated.patch = diffOpenApiDocument(committedSpec, deploymentSpec);
     const { json } = get(await loadHandler(), { host: 'api.acme.test', 'x-forwarded-proto': 'https' });
     expect(json.servers).toEqual([{ url: 'https://api.acme.test', description: 'Current deployment' }]);
     expect(JSON.stringify(json.paths)).toContain('curl https://api.acme.test/api/v1/widgets');

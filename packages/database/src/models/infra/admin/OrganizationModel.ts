@@ -9,6 +9,8 @@ import {
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
   OrgMemberPopulation,
   orgAclRowConfersMembership,
+  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  ConcurrencyConflictError,
 } from '@bike4mind/common';
 import mongoose, { type ClientSession, HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
@@ -33,6 +35,30 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
 // shared with the engine's derived member counts (assembleLakeAccessView's org holderCount), which
 // must count exactly the members this gate admits.
 const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
+
+type StorageSnapshot = Pick<IOrganizationDocument, 'storageLimit' | 'storageLimitOverride' | 'planStorageLimit'> & {
+  __v?: number;
+};
+const STORAGE_SNAPSHOT_FIELDS = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+const STORAGE_SNAPSHOT_PROJECTION = { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 };
+const STORAGE_LIMIT_UPDATE_ATTEMPTS = 3;
+
+function storageSnapshotFilter(snapshot: StorageSnapshot): mongoose.FilterQuery<IOrganizationDocument> {
+  return {
+    $and: STORAGE_SNAPSHOT_FIELDS.map(field =>
+      Object.hasOwn(snapshot, field)
+        ? { [field]: { $eq: snapshot[field], $exists: true } }
+        : { [field]: { $exists: false } }
+    ),
+  };
+}
+
+function captureLegacyStorageOverride(snapshot: StorageSnapshot): number | null {
+  if (Object.hasOwn(snapshot, 'storageLimitOverride')) return snapshot.storageLimitOverride ?? null;
+  // Even an explicitly null plan retires the legacy effective-limit fallback.
+  if (Object.hasOwn(snapshot, 'planStorageLimit')) return null;
+  return snapshot.storageLimit ?? null;
+}
 
 /**
  * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
@@ -150,8 +176,11 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
-    // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
+    // MB. Stored effective limit (override, else plan, else default); written only by setPlanStorageLimit
+    // and setStorageLimitOverride. No schema default so an unset limit tracks DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
     storageLimit: { type: Number, min: 0 },
+    storageLimitOverride: { type: Number, min: 0 },
+    planStorageLimit: { type: Number, min: 0 },
     // Bytes owned by the org; written only through incrementCurrentStorage and the reconciliation's
     // setCurrentStorageIfUnchanged.
     currentStorageSize: { type: Number, min: 0 },
@@ -291,6 +320,49 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  async setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(organizationId)) return false;
+    for (let attempt = 0; attempt < STORAGE_LIMIT_UPDATE_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.organizationModel
+        .findById(organizationId, STORAGE_SNAPSHOT_PROJECTION)
+        .lean<StorageSnapshot | null>();
+      if (!snapshot) return false;
+      const override = captureLegacyStorageOverride(snapshot);
+      const updated = await this.organizationModel.findOneAndUpdate(
+        { _id: organizationId, ...storageSnapshotFilter(snapshot) },
+        {
+          $set: { storageLimitOverride: override, planStorageLimit: limitMb, storageLimit: override ?? limitMb },
+          $inc: { __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (updated) return true;
+    }
+    throw new ConcurrencyConflictError('Organization', { organizationId });
+  }
+
+  async setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null> {
+    for (let attempt = 0; attempt < STORAGE_LIMIT_UPDATE_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.organizationModel
+        .findById(organizationId, STORAGE_SNAPSHOT_PROJECTION)
+        .lean<StorageSnapshot | null>();
+      if (!snapshot) return null;
+      const updated = await this.organizationModel.findOneAndUpdate(
+        { _id: organizationId, ...storageSnapshotFilter(snapshot) },
+        {
+          $set: {
+            storageLimitOverride: limitMb,
+            storageLimit: limitMb ?? snapshot.planStorageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+          },
+          $inc: { __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (updated) return updated.toJSON();
+    }
+    throw new ConcurrencyConflictError('Organization', { organizationId });
   }
 
   /** Seat counts keyed by Stripe customer id, in one query. Not on the interface: only the billing reconciliation needs it. */

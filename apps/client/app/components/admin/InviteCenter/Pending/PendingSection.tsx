@@ -11,6 +11,7 @@ import { AdminTab } from '../../adminSidebarConfig';
 import {
   INVITE_CENTER_HELD_GRANTS_PARAM,
   INVITE_CENTER_SEARCH_PARSERS,
+  PENDING_ACTIVE_DAYS,
   PENDING_HELD_REASONS,
   PENDING_INVITES,
   PENDING_SEARCH_KEYS,
@@ -66,11 +67,19 @@ const SORT_LABEL: Readonly<Record<(typeof PENDING_SORTS)[number], string>> = {
 const options = <K extends string>(labels: Readonly<Record<K, string>>) =>
   (Object.entries(labels) as [K, string][]).map(([value, label]) => ({ value, label }));
 
+const DEFAULT_ACTIVE_DAYS: (typeof PENDING_ACTIVE_DAYS)[number] = '7';
+const lastDays = (days: string | number) => `last ${days} day${Number(days) === 1 ? '' : 's'}`;
+
 const FILTERS: readonly AdminFilter[] = [
   { id: 'status', label: 'Status', options: options(STATUS_LABEL) },
   { id: 'heldReason', label: 'Held reason', options: options(REASON_LABEL) },
   { id: 'source', label: 'Source', options: options(SOURCE_LABEL) },
   { id: 'invite', label: 'Invite', options: options(INVITE_LABEL) },
+  {
+    id: 'activeDays',
+    label: 'Activity',
+    options: PENDING_ACTIVE_DAYS.map(value => ({ value, label: `Active in ${lastDays(value)}` })),
+  },
   { id: 'sort', label: 'Sort', options: options(SORT_LABEL) },
 ];
 
@@ -86,11 +95,8 @@ const SECTION_LINKS = [
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
 
-/** The activity window the header counts over; the route accepts 1 to 90. */
-const PENDING_ACTIVE_DAYS = 7;
-
-const PendingHeader = () => {
-  const { data, isError } = useAdminSignupGrantPendingSummary(PENDING_ACTIVE_DAYS);
+const PendingHeader = ({ activeDays }: { activeDays: number }) => {
+  const { data, isError } = useAdminSignupGrantPendingSummary(activeDays);
   const exposure = data?.exposure;
   const trickle = data?.trickle;
   const queue = data?.queue;
@@ -110,7 +116,7 @@ const PendingHeader = () => {
         comparison={exposure ? `${credits(exposure.totalRemaining)} left in all grants` : undefined}
       />
       <StatTile
-        label={`Active in last ${PENDING_ACTIVE_DAYS} days`}
+        label={`Payable, active in ${lastDays(activeDays)}`}
         value={activity ? activity.accounts : activity === null ? UNAVAILABLE : blank}
         comparison={activity ? `${credits(activity.remaining)} left in their grants` : undefined}
       />
@@ -182,11 +188,14 @@ export function PendingSection() {
     heldReason: pick(PENDING_HELD_REASONS, listState.filters.heldReason),
     source: pick(PENDING_SOURCES, listState.filters.source),
     invite: pick(PENDING_INVITES, listState.filters.invite),
+    activeDays: pick(PENDING_ACTIVE_DAYS, listState.filters.activeDays),
     sort: pick(PENDING_SORTS, listState.filters.sort) ?? 'oldest',
   };
   const list = useAdminSignupGrantPendingList(filters);
   const rows = list.data?.pages.flatMap(page => page.data) ?? [];
-  const filtered = Boolean(filters.status || filters.heldReason || filters.source || filters.invite);
+  const filtered = Boolean(
+    filters.status || filters.heldReason || filters.source || filters.invite || filters.activeDays
+  );
   const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
   const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
@@ -294,7 +303,9 @@ export function PendingSection() {
           color="neutral"
           size="sm"
           data-testid="pending-clear-filters-btn"
-          onClick={() => updateList({ filters: { status: '', heldReason: '', source: '', invite: '', sort: '' } })}
+          onClick={() =>
+            updateList({ filters: { status: '', heldReason: '', source: '', invite: '', activeDays: '', sort: '' } })
+          }
         >
           Clear filters
         </Button>
@@ -340,7 +351,7 @@ export function PendingSection() {
         </div>
       )}
       <Stack gap={1.5} sx={{ display: heldActionsOpen ? 'none' : undefined }}>
-        <PendingHeader />
+        <PendingHeader activeDays={Number(filters.activeDays ?? DEFAULT_ACTIVE_DAYS)} />
         <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
         {failed.length > 0 && (
           <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">

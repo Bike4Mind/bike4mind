@@ -4182,3 +4182,67 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
     expect(mockDownload).not.toHaveBeenCalledWith(THUMB_KEY);
   });
 });
+
+describe('GET /api/publish/serve - immutable current index', () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  it('serves the committed payload instead of a legacy canonical object', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+    mockDownload.mockImplementation(async (key: string) => {
+      if (key !== `user/scope123/my-slug/${indexObjectPath}`) throw new Error('Wrong live payload');
+      return Buffer.from('<html><head></head><body>COMMITTED_PAYLOAD</body></html>');
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toContain('COMMITTED_PAYLOAD');
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+  it('keeps an archived version separate from the current payload', async () => {
+    const oldSha = 'a'.repeat(64);
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ indexObjectPath, sha256Index: 'b'.repeat(64), versions: [{ sha256Index: oldSha }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ARCHIVED_PAYLOAD</body></html>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1', v: oldSha });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/versions/${oldSha}.html`);
+    expect(mockDownload).not.toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+});
+
+it('downloads the committed index payload even when a losing publisher left different canonical bytes', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  mockDownload.mockImplementation(async (key: string) =>
+    Buffer.from(key.endsWith(indexObjectPath) ? 'WINNER_BYTES' : 'LOSER_BYTES')
+  );
+  const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true });
+  await promise;
+  expect(res._getStatusCode()).toBe(200);
+  expect(Buffer.from(res._getData()).toString()).toBe('WINNER_BYTES');
+  expect(res.getHeader('Content-Disposition')).toBe('attachment');
+  expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+});
+
+it('signs the committed revision for an explicitly downloaded index', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  const origin = 'https://objects.example.test';
+  signing.enabled = true;
+  mockBrowserSigningOrigin.mockResolvedValue(origin);
+  mockGetSignedUrl.mockImplementation(async (key: string) => `${origin}/${key}?sig=test`);
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  try {
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true, sign: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      `user/scope123/my-slug/${indexObjectPath}`,
+      'get',
+      expect.any(Object)
+    );
+    expect(res._getJSONData().url).toContain(indexObjectPath);
+  } finally {
+    signing.enabled = false;
+  }
+});

@@ -2,9 +2,8 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { Skill, SkillListing, SkillListingReport } from '@bike4mind/database';
-import { organizationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError } from '@bike4mind/common';
-import { serializeListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
+import { adminAudienceIdsFor, serializeListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 import { loadVersionQueue, requireReviewer, reviewScope } from '@server/skillMarket/reviewQueue';
 
 const QUEUE_LIMIT = 100;
@@ -12,14 +11,14 @@ const QUEUE_LIMIT = 100;
 /**
  * GET /api/skills/market/review-queue?filter=pending|audit|reports|legacy
  *
- * Super-admins see every listing; org admins see their orgs' Organization listings only. `legacy`
+ * Super-admins see every listing; org and Space admins see only their own orgs' and Spaces' listings. `legacy`
  * (super-admin only) lists the pre-market global-read skills for a read-only audit - they are not
  * auto-revoked.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: string }>>(async (req, res) => {
   const actor: MarketActor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
-  const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
-  requireReviewer(actor, adminOrgIds);
+  const adminAudience = await adminAudienceIdsFor(actor.id);
+  requireReviewer(actor, adminAudience);
 
   const filter = req.query.filter ?? 'pending';
 
@@ -44,7 +43,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
   }
 
   if (filter === 'reports') {
-    const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds);
+    const { scope, scopedListingIds } = await reviewScope(actor, adminAudience);
     const grouped = await SkillListingReport.aggregate<{
       _id: string;
       count: number;
@@ -84,7 +83,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
     });
   }
 
-  const { rows } = await loadVersionQueue(actor, adminOrgIds, {
+  const { rows } = await loadVersionQueue(actor, adminAudience, {
     filter: filter === 'audit' ? 'audit' : 'pending',
     limit: QUEUE_LIMIT * 3,
   });

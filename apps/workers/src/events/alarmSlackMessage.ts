@@ -153,6 +153,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
     links: ['signup-activity'],
   },
+  'side-app-mint-our-fault': {
+    title: 'Connected apps cannot get tokens',
+    level: 'warn',
+    category: 'infra',
+    unit: 'failed token exchanges',
+    meaning:
+      'Token exchanges for connected apps are failing on our side at a sustained rate. Users of those apps cannot start AI requests until it clears.',
+    action:
+      'Check the Next.js server log for the side-app-mint-our-fault lines and the errors just above them. A database outage shows up in the hourly health alert queue as well.',
+  },
   'turnstile-policy-inactive': {
     title: 'The sign-in bot challenge is switched off',
     level: 'page',
@@ -513,6 +523,28 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
     action:
       'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-age': {
+    title: 'The model price snapshot is out of date',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'stale hours',
+    meaning:
+      'The model price snapshot the usage poller reads has not been refreshed for 48 hours or more. Usage is still priced from the stale and static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot: look at the model discovery Lambda log for the snapshot write, and at its schedule. Once it writes a fresh snapshot the next hourly poll clears this alarm.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-missing': {
+    title: 'The model price snapshot is missing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'missing hours',
+    meaning:
+      'The usage poller could not use the model price snapshot on 48 hourly polls in a row (it was absent, unreadable or invalid). Usage is still priced from the static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot. Then check the poller can read the snapshot object: the bucket setting on the poller Lambda, its read permission, and the poller log line "model price snapshot unavailable".',
     links: ['model-prices'],
   },
   'provider-usage-poll-errors': {

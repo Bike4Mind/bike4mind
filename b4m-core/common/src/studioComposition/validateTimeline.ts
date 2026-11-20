@@ -15,6 +15,7 @@ export const STUDIO_TIMELINE_ISSUE_CODES = [
   'aspect_ratio_mismatch',
   'unknown_file',
   'unsupported_file_kind',
+  'unknown_sync_clip',
 ] as const;
 export type StudioTimelineIssueCode = (typeof STUDIO_TIMELINE_ISSUE_CODES)[number];
 
@@ -165,9 +166,33 @@ const validateMediaClips = (timeline: StudioTimeline, context: StudioTimelineRef
   });
 
 /**
+ * A caption synced to a voice clip must name a clip on a voice track. The editor drops a link whose clip was
+ * removed (shiftSyncedCaptions), so a dangling one means a writer outside the editor left it behind.
+ */
+const validateCaptionSync = (timeline: StudioTimeline): StudioTimelineIssue[] => {
+  const voiceClipIds = new Set(
+    timeline.tracks.flatMap(track => (track.kind === 'voice' ? track.clips.map(clip => clip.id) : []))
+  );
+  return timeline.tracks.flatMap((track, trackIndex) => {
+    if (track.kind !== 'captions') return [];
+    return track.clips.flatMap((clip, clipIndex): StudioTimelineIssue[] =>
+      clip.syncedVoiceClipId === undefined || voiceClipIds.has(clip.syncedVoiceClipId)
+        ? []
+        : [
+            {
+              code: 'unknown_sync_clip',
+              path: ['tracks', trackIndex, 'clips', clipIndex, 'syncedVoiceClipId'],
+              message: `Caption "${clip.id}" is synced to "${clip.syncedVoiceClipId}", which is not a voice clip`,
+            },
+          ]
+    );
+  });
+};
+
+/**
  * The rules a schema-valid timeline must also meet before preview or render: unique ids, no overlap within a
  * track, every clip inside the timeline, fades inside their clip, renderable output sizes, and (given context)
- * known files of a kind the track plays and trims inside their source. Returns every issue rather than the first, so an editor can mark
+ * known files of a kind the track plays and trims inside their source, and synced captions naming a voice clip. Returns every issue rather than the first, so an editor can mark
  * them all at once. Parse with StudioTimelineSchema first; this assumes a parsed timeline.
  */
 export const validateStudioTimeline = (
@@ -178,4 +203,5 @@ export const validateStudioTimeline = (
   ...validateUniqueIds(timeline),
   ...timeline.tracks.flatMap((_, trackIndex) => validateTrackLane(timeline, trackIndex)),
   ...validateMediaClips(timeline, context),
+  ...validateCaptionSync(timeline),
 ];

@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   admit: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -45,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   // The balance pre-flight's holder reads (see StartResearchRunAdapters).
   userRepository: { name: 'users' },
   organizationRepository: { name: 'organizations' },
+  spendFreezeRepository: { name: 'spendFreezes' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));

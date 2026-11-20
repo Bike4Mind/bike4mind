@@ -195,6 +195,23 @@ describe('ViewSwitcher', () => {
     expect(onViewChange).toHaveBeenCalledWith('tavern');
   });
 
+  it('selects Office as an ambient scene', async () => {
+    await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-view-option-office').click());
+    expect(onViewChange).toHaveBeenCalledWith('office');
+    expect(ORCHESTRATOR_VIEW_INFO.office.group).toBe('scene');
+
+    await themed.render(
+      <ViewSwitcher view="office" onViewChange={onViewChange} ambient={{ on: true, onToggle: vi.fn() }} />
+    );
+    expect(el('orchestrator-view-menu-btn').textContent).toContain('Office');
+    act(() => el('orchestrator-view-menu-btn').click());
+    expect(el('orchestrator-ambient-toggle').getAttribute('aria-checked')).toBe('true');
+    expect(stepView('aquarium', 1)).toBe('office');
+    expect(stepView('office', 1)).toBe('board');
+  });
+
   it('cycles views from the keyboard shortcut', async () => {
     await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} />);
     act(() => {

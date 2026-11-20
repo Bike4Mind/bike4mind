@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   list: {} as Record<string, unknown>,
   listArgs: [] as unknown[],
   summary: {} as Record<string, unknown>,
+  summaryArgs: [] as number[],
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -26,7 +27,10 @@ vi.mock('@client/app/hooks/data/adminSignupGrant', () => ({
     mocks.listArgs.push(filters);
     return mocks.list;
   },
-  useAdminSignupGrantPendingSummary: () => mocks.summary,
+  useAdminSignupGrantPendingSummary: (activeDays: number) => {
+    mocks.summaryArgs.push(activeDays);
+    return mocks.summary;
+  },
 }));
 
 vi.mock('./PendingBulkDialog', () => ({
@@ -87,6 +91,7 @@ describe('PendingSection', () => {
     mocks.search = {};
     mocks.navigate.mockClear();
     mocks.listArgs = [];
+    mocks.summaryArgs = [];
     mocks.list = listOf([row()]);
     mocks.summary = { data: SUMMARY, isError: false };
     useAdminModal.setState(useAdminModal.getInitialState());
@@ -96,7 +101,7 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('7');
-    expect(active).toContain('Active in last 7 days');
+    expect(active).toContain('Payable, active in last 7 days');
     expect(active).toContain('4');
     expect(active).toContain('5,000 left in their grants');
     expect(dueToday).toContain('Drip due today (UTC)');
@@ -177,6 +182,7 @@ describe('PendingSection', () => {
       heldReason: undefined,
       source: undefined,
       invite: undefined,
+      activeDays: undefined,
       sort: 'remaining',
     });
 
@@ -226,6 +232,7 @@ describe('PendingSection', () => {
     { pendingStatus: 'blocked' },
     { pendingReason: 'risk_review' },
     { pendingSource: 'package' },
+    { pendingActiveDays: '30' },
     { pendingSort: 'remaining' },
   ])('clears selection on an external URL change to %j', search => {
     const { rerender } = render(<PendingSection />, { wrapper: Wrapper });
@@ -265,6 +272,34 @@ describe('PendingSection', () => {
     expect(search({ pendingInvite: 'invited' })).toMatchObject({ pendingInvite: 'uninvited' });
   });
 
+  it('filters by activity, shares the window with the header and persists it in the URL', () => {
+    mocks.search = { pendingActiveDays: '30' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ activeDays: '30' });
+    expect(mocks.summaryArgs.at(-1)).toBe(30);
+    expect(tiles()[2]).toContain('Payable, active in last 30 days');
+    fireEvent.click(screen.getByTestId('admin-filter-activeDays'));
+    fireEvent.click(screen.getByTestId('admin-filter-activeDays-7'));
+    const { search } = mocks.navigate.mock.calls.at(-1)![0];
+    expect(search({ pendingActiveDays: '30' })).toMatchObject({ pendingActiveDays: '7' });
+  });
+
+  it('ignores an invalid activity window', () => {
+    mocks.search = { pendingActiveDays: '91' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ activeDays: undefined });
+    expect(mocks.summaryArgs.at(-1)).toBe(7);
+  });
+
+  it('uses the singular for the one-day window', () => {
+    mocks.search = { pendingActiveDays: '1' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(tiles()[2]).toContain('Payable, active in last 1 day');
+    expect(tiles()[2]).not.toContain('1 days');
+    fireEvent.click(screen.getByTestId('admin-filter-activeDays'));
+    expect(screen.getByTestId('admin-filter-activeDays-1').textContent).toBe('Active in last 1 day');
+  });
+
   it('sizes the Source column for its chips rather than an equal share of the table', () => {
     mocks.list = listOf([row({ inviteSource: 'organization' })]);
     render(<PendingSection />, { wrapper: Wrapper });
@@ -279,14 +314,17 @@ describe('PendingSection', () => {
 
   it('offers to clear filters when filters match nothing', () => {
     mocks.list = listOf([]);
-    mocks.search = { pendingStatus: 'blocked' };
+    mocks.search = { pendingActiveDays: '30' };
     render(<PendingSection />, { wrapper: Wrapper });
     expect(screen.getByText('No accounts match these filters')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('pending-clear-filters-btn'));
     const { search } = mocks.navigate.mock.calls.at(-1)![0];
-    expect(search({ pendingStatus: 'blocked', pendingInvite: 'invited', pendingSort: 'remaining' })).toMatchObject({
+    expect(
+      search({ pendingStatus: 'blocked', pendingInvite: 'invited', pendingActiveDays: '30', pendingSort: 'remaining' })
+    ).toMatchObject({
       pendingStatus: undefined,
       pendingInvite: undefined,
+      pendingActiveDays: undefined,
       pendingSort: undefined,
     });
   });

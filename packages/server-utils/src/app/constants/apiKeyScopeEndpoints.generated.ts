@@ -442,4 +442,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/user-api-keys/:id/rotate',
     'GET /api/user-api-keys/billing-organizations',
   ],
+  [ApiKeyScope.ARTIFACTS_PUBLISH]: [
+    'POST|DELETE /api/v1/artifacts/:id/publish',
+    'POST /api/v1/artifacts/:id/republish',
+  ],
 };

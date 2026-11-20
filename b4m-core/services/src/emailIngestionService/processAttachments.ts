@@ -10,7 +10,11 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
 import { createFabFile } from '../fabFileService/create';
-import { ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
+import { EmailAttachment, ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
+
+export const MAX_FILE_SIZE = 20 * 1024 * 1024; // bytes, per attachment
+export const MAX_ATTACHMENTS_PER_EMAIL = 20; // count of attachments that pass the per-file checks (phantoms and per-file rejects excluded)
+export const MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL = 25 * 1024 * 1024; // bytes, summed over attachments that pass the per-file checks
 
 /**
  * Maps the one alias spelling email clients use to its supported type. Every other claim is
@@ -64,6 +68,25 @@ function mapToFabFileAdapters(
 }
 
 /**
+ * True for MIME parts that are not real attachments:
+ * 1. Inline images/content < 50KB
+ * 2. Related content (embedded images with cid: references)
+ * 3. Very small files < 2KB (likely metadata)
+ * 4. Specific phantom MIME types
+ */
+function isNonAttachmentPart(attachment: EmailAttachment): boolean {
+  return Boolean(
+    (attachment.contentDisposition === 'inline' && attachment.size < 50000) ||
+    attachment.related === true || // Embedded images
+    attachment.size < 2048 || // Very small files (< 2KB)
+    attachment.contentType?.includes('pkcs7-signature') || // S/MIME signatures
+    attachment.contentType?.includes('ms-tnef') || // Outlook metadata
+    attachment.filename === 'smime.p7s' || // Digital signatures
+    (attachment.filename?.startsWith('ATT') && attachment.size < 5000) // Generic metadata
+  );
+}
+
+/**
  * Process email attachments and upload to fabFiles
  *
  * Filters out inline images < 50KB and uploads substantial attachments
@@ -99,22 +122,12 @@ export async function processAttachments(
   }
 
   const processedAttachments: ProcessedAttachment[] = [];
+  let acceptedCount = 0;
+  let acceptedBytes = 0;
 
-  for (const attachment of parsedEmail.attachments) {
+  for (const [index, attachment] of parsedEmail.attachments.entries()) {
     try {
-      // Skip unwanted MIME parts:
-      // 1. Inline images/content < 50KB
-      // 2. Related content (embedded images with cid: references)
-      // 3. Very small files < 2KB (likely metadata)
-      // 4. Specific phantom MIME types
-      const shouldSkip =
-        (attachment.contentDisposition === 'inline' && attachment.size < 50000) ||
-        attachment.related === true || // Embedded images
-        attachment.size < 2048 || // Very small files (< 2KB)
-        attachment.contentType?.includes('pkcs7-signature') || // S/MIME signatures
-        attachment.contentType?.includes('ms-tnef') || // Outlook metadata
-        attachment.filename === 'smime.p7s' || // Digital signatures
-        (attachment.filename?.startsWith('ATT') && attachment.size < 5000); // Generic metadata
+      const shouldSkip = isNonAttachmentPart(attachment);
 
       if (shouldSkip) {
         Logger.info(
@@ -132,7 +145,6 @@ export async function processAttachments(
         throw new BadRequestError(`Attachment filename exceeds 255 characters: ${filename.substring(0, 50)}...`);
       }
 
-      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
       if (size > MAX_FILE_SIZE) {
         Logger.warn(`Attachment too large: ${filename} (${size} bytes)`);
         throw new BadRequestError(`Attachment ${filename} exceeds 20MB size limit`);
@@ -142,6 +154,22 @@ export async function processAttachments(
         Logger.warn(`Attachment has no content: ${filename}`);
         throw new BadRequestError(`Attachment ${filename} has no content`);
       }
+
+      // Only attachments that passed the per-file checks above are charged. Parser order, stop at
+      // the first cap hit so a later small file never resumes ingestion.
+      const overCount = acceptedCount >= MAX_ATTACHMENTS_PER_EMAIL;
+      const overBytes = acceptedBytes + size > MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL;
+      if (overCount || overBytes) {
+        Logger.warn(
+          `Skipping ${parsedEmail.attachments.slice(index).filter(a => !isNonAttachmentPart(a)).length} remaining attachment(s): ` +
+            (overCount
+              ? `per-email limit of ${MAX_ATTACHMENTS_PER_EMAIL} attachments reached`
+              : `per-email limit of ${MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL} total bytes reached`)
+        );
+        break;
+      }
+      acceptedCount++;
+      acceptedBytes += size;
 
       Logger.info(`Uploading attachment: ${filename} (${size} bytes, ${mimeType})`);
 

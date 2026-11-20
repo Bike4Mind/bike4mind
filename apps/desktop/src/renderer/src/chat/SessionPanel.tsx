@@ -7,7 +7,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import type { ChatProject } from '@shared/chat';
 import type { PrBarState } from '@shared/pullRequest';
-import { countTodos, type TodoItem } from '@shared/todos';
+import { todoProgress, type PlanItem } from '@shared/todos';
 import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { ChangesBar, CreatePullRequestButton } from './ChangesBar';
 import { ContextBreakdown } from './ContextBreakdown';
@@ -139,7 +139,7 @@ export interface SessionPanelProps {
   };
   /** The same figures the composer's usage ring draws; see ComposerUsage. */
   context: ComposerUsage;
-  plan: { todos: readonly TodoItem[] | null; turnOpen: boolean };
+  plan: { todos: readonly PlanItem[] | null; turnOpen: boolean };
   background: BackgroundSectionProps;
 }
 
@@ -212,10 +212,11 @@ function changesSection({ changes }: SessionPanelProps): SectionSpec | null {
 function planSection({ plan }: SessionPanelProps): SectionSpec | null {
   const todos = visiblePlan(plan.todos, plan.turnOpen);
   if (!todos) return null;
+  const { done, total } = todoProgress(todos);
   return {
     id: 'plan',
     title: 'Plan',
-    summary: <SummaryText>{`${countTodos(todos).completed}/${todos.length}`}</SummaryText>,
+    summary: <SummaryText>{`${done}/${total}`}</SummaryText>,
     content: <TodoList todos={todos} />,
   };
 }

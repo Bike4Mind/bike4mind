@@ -2,7 +2,7 @@ import { test as setup } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { seedAuthStorageState } from './helpers/auth-seed';
-import { apiCreateTestUser, apiCreateInviteCode, apiUpdateAdminSetting } from './helpers/api';
+import { apiCreateTestUser, apiCreateInviteCode, apiGetAdminSettings, apiUpdateAdminSetting } from './helpers/api';
 import { isSharedRealEnv } from './helpers/env';
 import { saveCoreData, saveTestRunId, getE2ETestId } from './helpers/test-users';
 
@@ -36,6 +36,11 @@ setup('create and authenticate admin user', async ({ page, request }) => {
   const result = await apiCreateTestUser(request, ADMIN_USER);
   const adminId = (result.user.id || result.user._id) as string;
   const adminToken = result.accessToken;
+
+  // Every test account is enrolled in MFA, so the suite runs with the stage setting on or off; the
+  // value is logged so a failure report shows which state this run had.
+  const enforceMfa = (await apiGetAdminSettings(request, adminToken)).get('enforceMFA') === true;
+  console.log(`[core.setup] stage enforceMFA=${enforceMfa}`);
 
   // Enable the Agents feature globally (admin-only setting)
   await apiUpdateAdminSetting(request, adminToken, 'EnableAgents', true);

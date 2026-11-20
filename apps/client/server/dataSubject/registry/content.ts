@@ -45,6 +45,16 @@ export const contentHolders = {
     parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  AssistantBrief: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The source ingested email's id, not an address.
+    unrelatedPaths: ['happened.source.emailId', 'handled.source.emailId', 'decisions.source.emailId'],
+  },
+  AssistantInstruction: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   BriefcasePrompt: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

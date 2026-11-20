@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { styled } from '@mui/system';
 import { useBlocker } from '@tanstack/react-router';
 import { Button, Chip, Input, Modal, ModalDialog, Slider, Stack, Typography } from '@mui/joy';
@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import {
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_OUTPUT_ASPECT_RATIOS,
+  shiftSyncedCaptions,
   studioFileMediaKind,
   type IFabFileDocument,
   type StudioCompositionResponse,
@@ -22,6 +23,7 @@ import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
 import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
+import { ExportPanel } from './ExportPanel';
 import SecondsField from './SecondsField';
 import ShotsBoard from './ShotsBoard';
 import { formatTimecode } from './timelinePlayback';
@@ -29,6 +31,7 @@ import {
   DEFAULT_IMAGE_CLIP_MS,
   addCaptionClip,
   addMediaClip,
+  setClipCrop,
   setTimelineDuration,
   toggleOutput,
   type StudioMediaTrackKind,
@@ -143,7 +146,15 @@ const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durati
  * selected clip's inspector. Timeline edits stay in a local draft that autosaves.
  */
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
-  const [timeline, setTimeline] = useState(composition.timeline);
+  const [timeline, setTimelineState] = useState(composition.timeline);
+  // Every edit goes through here, so captions synced to a voice clip follow its audio when it moves.
+  const setTimeline = useCallback(
+    (update: SetStateAction<StudioTimeline>) =>
+      setTimelineState(current =>
+        shiftSyncedCaptions(current, typeof update === 'function' ? update(current) : update)
+      ),
+    []
+  );
   const timelineRef = useRef(timeline);
   useEffect(() => {
     timelineRef.current = timeline;
@@ -257,6 +268,11 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
           >
             {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
           </Chip>
+          <ExportPanel
+            compositionId={composition.id}
+            timeline={timeline}
+            canExport={status.kind === 'saved' && dirtyFields.size === 0}
+          />
         </Toolbar>
 
         <PlanGrid>
@@ -278,6 +294,10 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               files={files}
               clock={clock}
               onSourceDuration={reportDuration}
+              selectedClipId={selectedClipId}
+              onCropChange={(clipId, rect) =>
+                setTimeline(current => setClipCrop(current, clipId, output.aspectRatio, rect))
+              }
             />
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />
@@ -298,6 +318,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
             timeline={timeline}
             clipId={selectedClipId}
             files={files}
+            sourceDurationsMs={context.sourceDurationsMs}
             onChange={setTimeline}
             onDeselect={() => setSelectedClipId(null)}
           />

@@ -1,5 +1,7 @@
 import { MAX_IMAGE_PIXELS } from '../imageResize';
 import { UnsupportedImageFormatError } from './index';
+import { jimpFromRgba } from './jimpBitmap';
+import { isWebp } from './webpDecode';
 
 /** More frames than this and an animated image is not moderated frame by frame: it is blocked. */
 export const MAX_MODERATED_FRAMES = 60;
@@ -45,15 +47,8 @@ const clearRect = (canvas: Uint8Array, canvasWidth: number, r: Rect) => {
   }
 };
 
-const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): Promise<Buffer> => {
-  // Dynamic import for the same bundler reason as RekognitionImageModerationService's jimp use.
-  const { Jimp } = await import('jimp');
-  // Unpooled copy: jimp's fromBitmap re-reads a Buffer's whole backing ArrayBuffer from offset 0,
-  // so a pooled Buffer.from() slice would encode whatever sits at the start of the pool.
-  const data = Buffer.alloc(canvas.length);
-  data.set(canvas);
-  return Buffer.from(await Jimp.fromBitmap({ data, width, height }).getBuffer('image/jpeg'));
-};
+const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): Promise<Buffer> =>
+  Buffer.from(await (await jimpFromRgba(canvas, width, height)).getBuffer('image/jpeg'));
 
 /**
  * The images a viewer actually shows for an animated GIF, APNG or animated WebP, sampled down to
@@ -81,7 +76,7 @@ async function splitAnimation(bytes: Buffer): Promise<Buffer[] | null> {
   if (magic === 'GIF87a' || magic === 'GIF89a') return gifFrames(bytes);
   // The chunk-name probes keep still PNG/WebP files off the parsers entirely.
   if (bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return bytes.includes('acTL', 8, 'latin1') ? apngFrames(bytes) : null;
-  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') {
+  if (isWebp(bytes)) {
     return bytes.includes('ANMF', 12, 'latin1') ? webpFrames(bytes) : null;
   }
   return null;

@@ -136,6 +136,7 @@ vi.mock('@bike4mind/database', async () => {
   // `false` skips the second (ArtifactEmissionPrompt) read entirely.
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

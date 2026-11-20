@@ -310,6 +310,19 @@ describe('POST /api/ai/sound-effects', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  it.each([
+    ['warn', { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true }],
+    ['error', { code: 'orphaned_submit', message: 'unknown outcome' }],
+  ] as const)('logs a failed job at %s by its error', async (level, error) => {
+    mocks.runAudioJobInline.mockResolvedValue(soundJob({ state: 'failed', error }));
+    const { res, logger, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    const other = level === 'warn' ? 'error' : 'warn';
+    expect(logger[level]).toHaveBeenCalledWith('Sound-effects generation failed', expect.objectContaining({ error }));
+    expect(logger[other]).not.toHaveBeenCalledWith('Sound-effects generation failed', expect.anything());
+  });
+
   it('maps a rate-limited job to the provider-busy 429 with the Retry-After the job recorded', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
       soundJob({

@@ -74,8 +74,14 @@ if (maxWorkers !== undefined) {
 const TEST_TIMEOUT_MS = 15_000;
 const HOOK_TIMEOUT_MS = 30_000;
 
+// On CI, console output from passing tests filled the client shard logs (~85% of an 8.5MB log)
+// past GitHub's display limit, burying the output of the test that actually failed. A failing
+// test still prints everything it logged. Local runs keep the full stream.
+const SILENT = process.env.CI ? ('passed-only' as const) : false;
+
 export const sharedTest = {
   testTimeout: TEST_TIMEOUT_MS,
   hookTimeout: HOOK_TIMEOUT_MS,
+  silent: SILENT,
   ...(maxWorkers !== undefined ? { maxWorkers, minWorkers: 1 } : {}),
 };

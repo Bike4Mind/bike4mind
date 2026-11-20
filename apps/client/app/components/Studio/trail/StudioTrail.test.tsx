@@ -106,6 +106,20 @@ describe('StudioTrail', () => {
     expect(screen.getByTestId('studio-trail-step-source')).toHaveAttribute('data-restorable', 'false');
   });
 
+  it('does not offer restore for an exported video, whose request is not a Create form', () => {
+    h.state = {
+      ...h.state,
+      data: {
+        ...LINEAGE,
+        children: [visible('export', -1, { generator: 'video', modelId: 'studio-render' })],
+        edges: [{ parentId: 'take', childId: 'export', role: 'timeline_clip' }],
+      },
+    };
+    render(<StudioTrail fileId="take" onRestore={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('studio-trail-step-export')).toHaveAttribute('data-restorable', 'false');
+    expect(screen.getByTestId('studio-trail-step-take')).toHaveAttribute('data-restorable', 'true');
+  });
+
   it('lists the files made from the take with their role', () => {
     render(<StudioTrail fileId="take" />, { wrapper: TestWrapper });
     expect(within(screen.getByTestId('studio-trail-children')).getByTestId('studio-trail-step-child')).toBeVisible();

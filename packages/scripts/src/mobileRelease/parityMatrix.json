@@ -54,7 +54,7 @@
       "title": "Account deletion and restore",
       "web": "green",
       "ios": "green",
-      "android": "red",
+      "android": "yellow",
       "notes": "Required by both stores before public release."
     },
     {
@@ -62,7 +62,7 @@
       "title": "Settings and profile",
       "web": "green",
       "ios": "green",
-      "android": "red"
+      "android": "green"
     },
     {
       "id": "studio-media-gallery",
@@ -76,7 +76,8 @@
       "title": "Deep links and universal / app links",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the link items in apps/android/DEVICE_TESTING.md pass on a device with assetlinks.json live."
     },
     {
       "id": "share-capture",
@@ -91,6 +92,14 @@
       "web": "na",
       "ios": "green",
       "android": "red"
+    },
+    {
+      "id": "assistant-brief",
+      "title": "Assistant brief, opened from the brief_ready push and in-app",
+      "web": "red",
+      "ios": "yellow",
+      "android": "yellow",
+      "notes": "Android: green once the brief items in apps/android/DEVICE_TESTING.md pass on a device."
     },
     {
       "id": "live-agent-progress",

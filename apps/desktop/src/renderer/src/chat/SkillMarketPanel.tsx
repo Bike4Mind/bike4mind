@@ -43,7 +43,7 @@ function ListingCard({ listing, onOpen }: { listing: SkillMarketListing; onOpen:
           </Typography>
           {listing.visibility !== 'public' && (
             <Chip size="sm" variant="soft" color="neutral">
-              {listing.visibility === 'organization' ? 'Org' : 'Unlisted'}
+              {listing.visibility === 'organization' ? 'Org' : listing.visibility === 'space' ? 'Space' : 'Unlisted'}
             </Chip>
           )}
           {listing.riskTier === 'high' && (

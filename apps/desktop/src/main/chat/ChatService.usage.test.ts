@@ -190,15 +190,20 @@ describe('ChatService usage reporting', () => {
     return id;
   }
 
-  it('marks the system message and only the last message, in every round', async () => {
+  it('marks the shared half of the system prompt and only the last message, in every round', async () => {
     await runTwoRoundTurn();
 
-    expect(markers(0)).toEqual([true, true]);
-    expect(wireOf(0).messages[0].role).toBe('system');
+    // The system prompt goes as two blocks: what sessions share, then the per-session lines.
+    expect(markers(0)).toEqual([true, undefined, true]);
+    expect(
+      wireOf(0)
+        .messages.slice(0, 2)
+        .map(message => message.role)
+    ).toEqual(['system', 'system']);
     // Round 2 adds an assistant tool_use and a user tool_result: the old breakpoint on the
     // prompt is gone and the new one sits on the tool_result message.
-    expect(markers(1)).toEqual([true, undefined, undefined, true]);
-    expect(wireOf(1).messages[3].role).toBe('user');
+    expect(markers(1)).toEqual([true, undefined, undefined, undefined, true]);
+    expect(wireOf(1).messages[4].role).toBe('user');
   });
 
   it('sends no markers on a backend that would reject the flag', async () => {

@@ -18,10 +18,15 @@ import {
   SIDEBAR_SECTIONS,
   filterSidebarSections,
   findSectionKeyForTab,
-  splitSectionItems,
   type SidebarBadge,
+  isSamePagePath,
+  sectionEntries,
+  splitSectionEntries,
+  type SidebarEntry,
   type SidebarGate,
   type SidebarItem,
+  type SidebarPageLink,
+  type SidebarSection,
 } from './adminSidebarConfig';
 import { adminTabToSlug } from './adminTabSlugs';
 import { ADMIN_ACTION_COUNT_LABELS, formatAdminActionCount, type AdminActionCounts } from './adminActionCounts';
@@ -49,6 +54,14 @@ export type SidebarNavProps = {
   /** Hides the tabs this user may not open (a delegated admin's permissions). Omit to list all. */
   canOpenTab?: (tab: AdminTab) => boolean;
   onTabSelect: (tab: AdminTab) => void;
+  /** The sections to list. Defaults to SIDEBAR_SECTIONS; the layout passes it with contributed pages added. */
+  sections?: SidebarSection[];
+  /** Hides the contributed pages this user may not open. Omit to list all. */
+  canOpenPage?: (page: SidebarPageLink) => boolean;
+  /** The path of the open contributed page, to highlight. None of the tab items is active while it is set. */
+  activePagePath?: string | null;
+  /** Opens a contributed page in-app; without it a page link is a plain link. */
+  onPageSelect?: (path: string) => void;
   account?: SidebarAccount;
   /** Folds the nav to an icon rail. */
   collapsed?: boolean;
@@ -186,34 +199,38 @@ const NavIcon = ({ Icon, size = ICON_SIZE, rotate }: { Icon: ElementType; size?:
 );
 
 type NavLinkProps = {
-  item: SidebarItem;
+  href: string;
+  Icon: ElementType;
+  label: string;
+  testid?: string;
   active: boolean;
   endDecorator?: ReactNode;
-  onSelect: (tab: AdminTab) => void;
+  /** Selects in-app on a plain click; omit to leave the click to the browser. */
+  onSelect?: () => void;
 };
 
-const NavLink = ({ item, active, endDecorator, onSelect }: NavLinkProps) => (
+const NavLink = ({ href, Icon, label, testid, active, endDecorator, onSelect }: NavLinkProps) => (
   <Box
     component="a"
-    href={tabHref(item.tab)}
+    href={href}
     aria-current={active ? 'page' : undefined}
-    data-testid={item.testid}
+    data-testid={testid}
     {...focusableProps}
     onMouseEnter={titleIfTruncated}
     onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-      if (!isPlainClick(event)) return;
+      if (!onSelect || !isPlainClick(event)) return;
       event.preventDefault();
-      onSelect(item.tab);
+      onSelect();
     }}
     sx={navItemSx(active)}
   >
-    <NavIcon Icon={item.Icon} />
+    <NavIcon Icon={Icon} />
     <Box
       component="span"
       data-nav-label=""
       sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
     >
-      {item.label}
+      {label}
     </Box>
     {endDecorator}
   </Box>
@@ -316,6 +333,10 @@ export const SidebarNav = ({
   hiddenNotifications,
   canOpenTab,
   onTabSelect,
+  sections = SIDEBAR_SECTIONS,
+  canOpenPage,
+  activePagePath = null,
+  onPageSelect,
   account,
   collapsed = false,
   onToggleCollapsed,
@@ -335,9 +356,11 @@ export const SidebarNav = ({
     liveOpsTriage: showLiveOpsTriageTab,
   };
   // The rail has no filter box to show or clear a query, so it always lists every section.
-  const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, collapsed ? '' : query, canOpenTab);
+  const visibleSections = filterSidebarSections(sections, gates, collapsed ? '' : query, canOpenTab, canOpenPage);
   const filtering = query.trim() !== '';
-  const activeSectionKey = findSectionKeyForTab(activeTab);
+  const isPageActive = (page: SidebarPageLink) => activePagePath !== null && isSamePagePath(page.path, activePagePath);
+  const activeSectionKey =
+    sections.find(section => section.pages?.some(isPageActive))?.key ?? findSectionKeyForTab(activeTab);
 
   useEffect(() => {
     if (collapsed || !focusFilterOnExpand.current) return;
@@ -383,13 +406,7 @@ export const SidebarNav = ({
     }
     const count = pendingCount(item);
     if (!badge || count <= 0) return null;
-    return (
-      <CountPill
-        count={count}
-        label={ADMIN_ACTION_COUNT_LABELS[badge]}
-        testId={`admin-sidebar-${badge}-badge`}
-      />
-    );
+    return <CountPill count={count} label={ADMIN_ACTION_COUNT_LABELS[badge]} testId={`admin-sidebar-${badge}-badge`} />;
   };
 
   const focusables = () => Array.from(navRef.current?.querySelectorAll<HTMLElement>(`[${FOCUSABLE_ATTR}]`) ?? []);
@@ -421,11 +438,12 @@ export const SidebarNav = ({
       event.preventDefault();
       focusables()[0]?.focus();
     } else if (event.key === 'Enter') {
-      const firstMatch = visibleSections[0]?.items[0]?.tab;
+      const firstMatch = visibleSections[0] && sectionEntries(visibleSections[0])[0];
       if (!filtering || firstMatch === undefined) return;
       event.preventDefault();
       setQuery('');
-      onTabSelect(firstMatch);
+      if (firstMatch.kind === 'tab') onTabSelect(firstMatch.item.tab);
+      else onPageSelect?.(firstMatch.page.path);
     } else if (event.key === 'Escape' && query !== '') {
       // Handled here so Esc clears the filter instead of also closing the phone drawer.
       event.stopPropagation();
@@ -598,6 +616,23 @@ export const SidebarNav = ({
                       </MenuItem>
                     );
                   })}
+                  {section.pages?.map(page => {
+                    const active = isPageActive(page);
+                    return (
+                      <MenuItem
+                        key={page.path}
+                        aria-current={active ? 'page' : undefined}
+                        data-testid={page.testid}
+                        onClick={() => onPageSelect?.(page.path)}
+                        sx={{ ...navItemSx(active), minHeight: 36, gap: '10px' }}
+                      >
+                        <NavIcon Icon={page.Icon} />
+                        <Box component="span" sx={{ flex: 1 }}>
+                          {page.label}
+                        </Box>
+                      </MenuItem>
+                    );
+                  })}
                 </Menu>
               </Dropdown>
             );
@@ -714,11 +749,15 @@ export const SidebarNav = ({
         {visibleSections.map(section => {
           const labelId = `${idPrefix}-${section.key}`;
           const moreOpen = filtering || isMoreOpen(section.key);
-          const { shown, hiddenCount } = splitSectionItems(section.items, activeTab, moreOpen, hasWaitingWork);
+          const entries = sectionEntries(section);
+          // Contributed pages are the last rows, so they fall behind "More" like a trailing tab item.
+          const keepPastCut = (entry: SidebarEntry) =>
+            entry.kind === 'tab'
+              ? entry.item.tab === activeTab || hasWaitingWork(entry.item)
+              : isPageActive(entry.page);
+          const { shown, hiddenCount } = splitSectionEntries(entries, moreOpen, keepPastCut);
           const canCollapseAgain =
-            !filtering &&
-            moreOpen &&
-            splitSectionItems(section.items, activeTab, false, hasWaitingWork).hiddenCount > 0;
+            !filtering && moreOpen && splitSectionEntries(entries, false, keepPastCut).hiddenCount > 0;
           return (
             <Box key={section.key} component="section" data-testid={`admin-sidebar-section-${section.key}`}>
               <SectionLabel id={labelId}>{section.label}</SectionLabel>
@@ -727,16 +766,32 @@ export const SidebarNav = ({
                 aria-labelledby={labelId}
                 sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}
               >
-                {shown.map(item => (
-                  <li key={item.tab}>
-                    <NavLink
-                      item={item}
-                      active={item.tab === activeTab}
-                      endDecorator={itemBadge(item)}
-                      onSelect={onTabSelect}
-                    />
-                  </li>
-                ))}
+                {shown.map(entry =>
+                  entry.kind === 'tab' ? (
+                    <li key={entry.item.tab}>
+                      <NavLink
+                        href={tabHref(entry.item.tab)}
+                        Icon={entry.item.Icon}
+                        label={entry.item.label}
+                        testid={entry.item.testid}
+                        active={entry.item.tab === activeTab}
+                        endDecorator={itemBadge(entry.item)}
+                        onSelect={() => onTabSelect(entry.item.tab)}
+                      />
+                    </li>
+                  ) : (
+                    <li key={entry.page.path}>
+                      <NavLink
+                        href={entry.page.path}
+                        Icon={entry.page.Icon}
+                        label={entry.page.label}
+                        testid={entry.page.testid}
+                        active={isPageActive(entry.page)}
+                        onSelect={onPageSelect && (() => onPageSelect(entry.page.path))}
+                      />
+                    </li>
+                  )
+                )}
                 {(hiddenCount > 0 || canCollapseAgain) && (
                   <li>
                     <Box

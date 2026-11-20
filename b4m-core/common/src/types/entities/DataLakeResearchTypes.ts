@@ -386,6 +386,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'insufficient_credits',
   /** The lake is not active (archived, deleted or missing). */
   'lake_inactive',
+  /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
+  'spend_frozen',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 
@@ -448,6 +450,8 @@ export interface ResearchRunTotals {
   searchHits: number;
   /** Hits dropped by the allow/deny lists, before any model or network cost. */
   filteredBySource: number;
+  /** Hits still on a search provider's redirect link, so their real site is unknown. Counted apart from `filteredBySource`: no source rule saw the real host. */
+  unresolvedRedirect: number;
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
@@ -488,6 +492,7 @@ export interface ResearchRunTotals {
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   searchHits: 0,
   filteredBySource: 0,
+  unresolvedRedirect: 0,
   belowRelevance: 0,
   judgeFailed: 0,
   fetchFailed: 0,

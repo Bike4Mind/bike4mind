@@ -119,6 +119,41 @@ describe('apiKeyRateLimit counter selection', () => {
   });
 });
 
+describe('apiKeyRateLimit refusal body', () => {
+  beforeEach(() => {
+    store.clear();
+    vi.clearAllMocks();
+  });
+
+  it('names the per-minute limit, its value and its window', async () => {
+    const { minuteKey } = buildRateLimitKeys(KEY_ID);
+    store.set(minuteKey, { count: rateLimit.requestsPerMinute, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = patchRequest();
+
+    const err = await run(apiKeyRateLimit(), req, res);
+
+    expect(err).toBeInstanceOf(TooManyRequestsError);
+    expect((err as TooManyRequestsError).additionalInfo).toMatchObject({
+      errorCode: 'api_key_rate_limit_exceeded',
+      limit: rateLimit.requestsPerMinute,
+      windowSeconds: 60,
+    });
+  });
+
+  it('names the daily limit, its value and its window', async () => {
+    exhaustDailyQuota();
+    const { req, res } = patchRequest();
+
+    const err = await run(apiKeyRateLimit(), req, res);
+
+    expect((err as TooManyRequestsError).additionalInfo).toMatchObject({
+      errorCode: 'api_key_daily_limit_exceeded',
+      limit: rateLimit.requestsPerDay,
+      windowSeconds: 86_400,
+    });
+  });
+});
+
 describe('apiKeyRateLimit response headers', () => {
   beforeEach(() => {
     store.clear();

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNeedsYouAlerts } from './useNeedsYouAlerts';
@@ -34,9 +34,11 @@ const setBadgeCount = vi.fn(async (_count: number) => undefined);
 const onOpen = vi.fn();
 const takePendingOpen = vi.fn(async (): Promise<AttentionOpenEvent | null> => null);
 let focused = false;
+let scope: NotifyScope = 'agents';
+let viewingId: string | null = null;
 
 const Probe = ({ statuses, loaded }: { statuses: ReadonlyMap<string, ChatSessionStatus>; loaded: boolean }) => {
-  useNeedsYouAlerts(sessions, statuses, loaded, onOpen);
+  useNeedsYouAlerts(sessions, statuses, loaded, onOpen, viewingId);
   return null;
 };
 const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
@@ -44,6 +46,8 @@ const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
 
 beforeEach(() => {
   focused = false;
+  scope = 'agents';
+  viewingId = null;
   sessions = DEFAULT_SESSIONS;
   openListener = null;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
@@ -68,6 +72,8 @@ beforeEach(() => {
       claim,
       setBadgeCount,
       takePendingOpen,
+      getNotifyScope: vi.fn(async () => scope),
+      onNotifyScope: () => () => undefined,
       onOpen: (listener: (event: AttentionOpenEvent) => void) => {
         openListener = listener;
         return () => {
@@ -105,6 +111,79 @@ describe('useNeedsYouAlerts', () => {
     await render({ plain: 'processing' });
     await render({ plain: 'needs-action' });
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  describe('with the all scope', () => {
+    const PLAIN = { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' };
+
+    beforeEach(() => {
+      scope = 'all';
+      sessions = [...DEFAULT_SESSIONS, PLAIN];
+    });
+
+    it('notifies, chimes and badges for a plain session that starts needing the user', async () => {
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith({
+        sessionId: 'plain',
+        rootId: 'plain',
+        title: 'Plain needs you',
+        body: 'bash pnpm test',
+      });
+      expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it('stays quiet for an archived plain session', async () => {
+      sessions = [...DEFAULT_SESSIONS, { ...PLAIN, archived: true }];
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+    });
+
+    it('does not announce the plain session the user is viewing in a focused window', async () => {
+      viewingId = 'plain';
+      focused = true;
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it('claims the viewed plain session, so another window cannot announce it', async () => {
+      viewingId = 'plain';
+      focused = true;
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(claim).toHaveBeenCalledWith(['plain']);
+      expect(chime.playChime).not.toHaveBeenCalled();
+    });
+
+    it('stays silent in a second window when the viewing window claimed the entry first', async () => {
+      claim.mockResolvedValueOnce([]);
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('still announces an agent the user is viewing in a focused window', async () => {
+      viewingId = 'child';
+      focused = true;
+      await render({ child: 'processing' });
+      await render({ child: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+    });
+
+    it('announces the viewed plain session once the window is in the background', async () => {
+      viewingId = 'plain';
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('does not announce sessions that were already waiting when the window opened', async () => {

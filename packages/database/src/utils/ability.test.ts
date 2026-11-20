@@ -21,7 +21,7 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings } from '../models';
+import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings, Organization } from '../models';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -133,6 +133,63 @@ describe('db-core defineAbilitiesFor - group-shared document access', () => {
     const ability = defineAbilitiesFor(makeUser({ groups: [] }));
     const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
     expect(ability.can('read', doc)).toBe(false);
+  });
+});
+
+describe('db-core defineAbilitiesFor - Organization read is membership-only', () => {
+  type AclRow = { userId?: string; groupId?: string; permissions: string[] };
+  const org = (fields: { userId?: string; users?: AclRow[]; groups?: AclRow[]; isGlobalRead?: boolean }) =>
+    Object.assign(new Organization(), { userId: 'owner', users: [], groups: [], ...fields });
+
+  it('grants read to the owner and to a users[] row that confers membership', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', org({ userId: 'u1' }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['read'] }] }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['write'] }] }))).toBe(true);
+  });
+
+  it('refuses a users[] row that grants nothing conferring membership', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['share'] }] }))).toBe(false);
+  });
+
+  it('does not grant read on isGlobalRead alone', () => {
+    expect(defineAbilitiesFor(makeUser()).can('read', org({ isGlobalRead: true }))).toBe(false);
+  });
+
+  it('does not grant read on a group share alone, including an org-owned key grant', () => {
+    const groupShare = org({ groups: [{ groupId: 'g1', permissions: ['read'] }] });
+    expect(defineAbilitiesFor(makeUser({ groups: ['g1'] })).can('read', groupShare)).toBe(false);
+    const keyAccount = attachOrgApiKeyReach(makeUser({ id: 'svc', groups: [] }), {
+      organizationId: 'org-1',
+      readGroupIds: ['g1'],
+      dataLakeOrgIds: [],
+    });
+    expect(defineAbilitiesFor(keyAccount).can('read', groupShare)).toBe(false);
+  });
+
+  it('still lets a platform admin read any org', () => {
+    expect(defineAbilitiesFor(makeUser({ isAdmin: true })).can('read', org({}))).toBe(true);
+  });
+
+  it('compiles a list query with no isGlobalRead or groups arm', () => {
+    const query = JSON.stringify(
+      accessibleBy(defineAbilitiesFor(makeUser({ groups: ['g1'] })), 'read').ofType(Organization)
+    );
+    expect(query).not.toContain('isGlobalRead');
+    expect(query).not.toContain('groups');
+    expect(query).toContain('"userId":"u1"');
+  });
+
+  it('keeps read on the other shareables unchanged (isGlobalRead and group shares still read)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    expect(ability.can('read', Object.assign(new Project(), { userId: 'x', isGlobalRead: true }))).toBe(true);
+    expect(
+      ability.can(
+        'read',
+        Object.assign(new FabFile(), { userId: 'x', groups: [{ groupId: 'g1', permissions: ['read'] }] })
+      )
+    ).toBe(true);
   });
 });
 
@@ -366,6 +423,13 @@ describe('shared shareable arm', () => {
 
   it('covers Project, whose absence from db-core made shared projects unreachable in queue handlers', () => {
     expect(resourcesPassedTo(dbCoreSource)).toContain('Project');
+  });
+
+  it('routes Organization through the membership-only arm in both builders, never the shared one', () => {
+    for (const source of [dbCoreSource, clientSource]) {
+      expect(source).toContain('applyOrganizationShareableRules(allow, user, Organization);');
+      expect(resourcesPassedTo(source)).not.toContain('Organization');
+    }
   });
 
   it('does not reintroduce the dotted cross-entry filter in either copy', () => {

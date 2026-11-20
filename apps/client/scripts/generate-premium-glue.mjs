@@ -13,12 +13,13 @@
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
+ *   server/premium-generated/premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
- *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
+ *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec patch (null form)
  *
  * plus packages/scripts/migrate/migrations/core.generated.ts, the core migrations registry built
  * from the migration files on disk (not overlay glue, but every consumer already runs this script),
@@ -30,6 +31,7 @@
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   premiumTutorialOwners.generated.ts - tutorial owner contributions
+ *   premiumSlackInteractiveActions.generated.ts - Slack interactive action handlers
  *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
@@ -1488,6 +1490,44 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+// Premium packages can classify their own models for data-subject erasure and export
+// (b4mContributions.dataSubjectRegistryExport -> a module whose import registers the package's
+// mongoose models and which exports `dataSubjectRegistry: ContributedDataHolderRegistry`).
+// server/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
+// One entry per package, not a spread, so the registry merge sees a model two packages both claim.
+function generateDataSubjectRegistry(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumDataSubjectRegistry.generated.ts');
+  const typeImport = `import type { ContributedDataHolderRegistry } from '@server/dataSubject/types';`;
+  const declaration = 'export const premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[]';
+
+  const contributors = packages.filter(p => p.contributions.dataSubjectRegistryExport);
+
+  if (contributors.length === 0) {
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\n${declaration} = [];\n`);
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.dataSubjectRegistryExport, p.name, 'dataSubjectRegistryExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.dataSubjectRegistryExport,
+        'dataSubjectRegistryExport',
+        outPath
+      );
+      return `import { dataSubjectRegistry as registry${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  registry${i}`).join(',\n');
+
+  writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\n${declaration} = [\n${items}\n];\n`);
+}
+
 // Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport
 // -> a module exporting `agentExtensions: AgentExtensionContribution`): a per-surface orchestration
 // profile and tool-map guards. The workers' executor registry imports this file statically, so like
@@ -1600,6 +1640,50 @@ function generateTutorialOwners(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\nimport { assertTutorialOwners, type TutorialOwner } from '@bike4mind/common';\n${imports}\n\nexport const premiumTutorialOwners: TutorialOwner[] = assertTutorialOwners([\n${items}\n]);\n`
+  );
+}
+
+// --- Generate Slack interactive action contributions ---
+//
+// A premium package can handle Slack interactive action ids (b4mContributions.slackInteractiveActionsExport ->
+// a module exporting `slackInteractiveActions: SlackInteractiveActionHandler[]`). Only the Slack interactive API
+// route imports the generated file, so it must exist in BOTH forms; it is server-only and never reachable from
+// apps/client/app. The registry validates each entry at load, so the file carries no checks of its own.
+function generateSlackInteractiveActions(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSlackInteractiveActions.generated.ts');
+  const typeImport = `import type { SlackInteractiveActionHandler } from '../integrations/slack/interactiveActionRegistry';`;
+
+  const contributors = packages.filter(p => p.contributions.slackInteractiveActionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.slackInteractiveActionsExport, p.name, 'slackInteractiveActionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.slackInteractiveActionsExport,
+        'slackInteractiveActionsExport',
+        outPath
+      );
+      return `import { slackInteractiveActions as actions${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...actions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [\n${items}\n];\n`
   );
 }
 
@@ -1778,8 +1862,8 @@ function generateContracts(packages) {
   writeFile(
     join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
     `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
-      `import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';\n\n` +
-      `export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;\n`
+      `import type { OpenApiPatchNode } from '@bike4mind/common';\n\n` +
+      `export const deploymentOpenApiPatch: OpenApiPatchNode | null = null;\n`
   );
 
   const contributors = packages.filter(p => p.contributions.contractsExport);
@@ -2172,7 +2256,9 @@ generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
+generateDataSubjectRegistry(linkedPackages);
 generateTutorialOwners(linkedPackages);
+generateSlackInteractiveActions(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
 // the full list. Any NEW generator goes in whichever group matches how it imports the overlay.

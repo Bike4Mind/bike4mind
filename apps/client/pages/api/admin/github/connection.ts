@@ -18,7 +18,8 @@
 import { z } from 'zod';
 import { adminApi } from '@server/middlewares/adminApi';
 import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
-import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { encryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@bike4mind/server-utils/utils/validators';
@@ -282,12 +283,12 @@ const handler = adminApi({
           // We need to get credentials to mask them
           const connWithCreds = await orgGitHubConnectionRepository.findSystemDefaultWithCredentials();
           if (connWithCreds?.privateKey && isEncrypted(connWithCreds.privateKey)) {
-            decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+            decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
           }
         } else if (connection.connectionType === 'service_account') {
           const connWithCreds = await orgGitHubConnectionRepository.findSystemDefaultWithCredentials();
           if (connWithCreds?.accessToken && isEncrypted(connWithCreds.accessToken)) {
-            decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+            decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
           }
         }
       } catch (error) {
@@ -366,13 +367,13 @@ const handler = adminApi({
           connWithCreds.privateKey &&
           isEncrypted(connWithCreds.privateKey)
         ) {
-          decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+          decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
         } else if (
           connWithCreds?.connectionType === 'service_account' &&
           connWithCreds.accessToken &&
           isEncrypted(connWithCreds.accessToken)
         ) {
-          decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+          decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
         }
       } catch (error) {
         // Log but don't fail - just won't show masked credentials

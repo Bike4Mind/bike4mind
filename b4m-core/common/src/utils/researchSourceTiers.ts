@@ -78,20 +78,27 @@ export const isSameDomainSet = (a: readonly string[], b: readonly string[]): boo
 
 // Line breaks become spaces before stripping, because \p{Cc} also contains them.
 const RULE_LINE_BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/g;
-const RULE_STRIPPED_CHARS = /[\p{Cc}\p{Default_Ignorable_Code_Point}\u2800]/gu;
+const RULE_STRIPPED_CHARS =
+  /[\p{Cc}\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB\u2800]|[\u{13430}-\u{1343F}]|\u{16FE4}/gu;
 
 /**
  * A rule condition as it is stored and counted: line breaks become spaces, control and
- * default-ignorable characters (zero-width, bidi, soft hyphen, variation selectors, tags, fillers)
- * and braille blank are removed, whitespace runs collapse, then trimmed. Strips ZWJ, so emoji ZWJ
- * sequences split into their parts.
+ * default-ignorable characters (zero-width, bidi, soft hyphen, variation selectors, tags, fillers,
+ * interlinear annotation, Egyptian format controls), the braille blank and the Khitan filler are
+ * removed, the text is NFC-normalized so composed and decomposed accents match, whitespace runs
+ * collapse, then trimmed. Strips ZWJ, so emoji ZWJ sequences split into their parts.
  */
 export const cleanResearchItemRuleCondition = (condition: string): string =>
-  condition.replace(RULE_LINE_BREAKS, ' ').replace(RULE_STRIPPED_CHARS, '').replace(/\s+/g, ' ').trim();
+  condition
+    .replace(RULE_LINE_BREAKS, ' ')
+    .replace(RULE_STRIPPED_CHARS, '')
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 /** The one identity of a rule: cleaned, case-folded condition plus action. Normalizer, fingerprint and equality all use it. */
 export const researchItemRuleKey = (rule: ResearchItemRule): string =>
-  `${rule.action}\u0000${cleanResearchItemRuleCondition(rule.condition).toLowerCase()}`;
+  `${rule.action}\u0000${cleanResearchItemRuleCondition(rule.condition).toLowerCase().normalize('NFC')}`;
 
 const isResearchItemRuleAction = (value: unknown): value is ResearchItemRule['action'] =>
   typeof value === 'string' && (RESEARCH_ITEM_RULE_ACTIONS as readonly string[]).includes(value);

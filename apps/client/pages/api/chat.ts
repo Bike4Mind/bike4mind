@@ -32,6 +32,7 @@ import {
   projectRepository,
   questRepository,
   sessionRepository,
+  spendFreezeRepository,
   usageEventRepository,
   User,
   Session,
@@ -66,8 +67,11 @@ import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
-import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -101,6 +105,7 @@ const handler = nextRouteForContract(chatContract, {
         owner: req.user,
         ownerUntrusted: req.apiKeyInfo?.ownerUntrusted,
         billingOwnerType: req.apiKeyInfo?.billingOwnerType,
+        unpaidAccountLimits: req.apiKeyInfo?.unpaidAccountLimits,
         holdSlot: Boolean(req.validated.wait),
         req,
       })
@@ -203,7 +208,12 @@ async function handleChat(
     );
   }
 
-  // Refuse capped turns before creating a notebook or quest.
+  assertAiAccessAllowed(req.user);
+  // Refuse frozen and capped turns before creating a notebook or quest. The freeze goes first so a
+  // frozen caller is not told to wait for the daily reset; process() re-checks it for queued turns.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   await checkFreeTierDailySpendCap({
     user: req.user,
     req,
@@ -265,6 +275,7 @@ async function handleChat(
         sessionId,
         organizationId,
         apiKeyId: req.apiKeyInfo?.keyId,
+        apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
@@ -294,6 +305,7 @@ async function handleChat(
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
@@ -353,6 +365,7 @@ async function handleChat(
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
               ...turnAuth,
+              apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
               embeddingModel: currentEmbeddingModel,
               queryComplexity: 'simple',
               // Optional schema fields - declared for QuestStartBodySchema type conformance
@@ -478,7 +491,7 @@ async function handleChat(
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
-      // conditional since only the billing failures set it.
+      // conditional since only the billing failures and a moderation refusal set it.
       type: completedQuest.type,
       ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which

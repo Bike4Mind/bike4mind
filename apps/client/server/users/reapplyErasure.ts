@@ -16,6 +16,7 @@ import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDele
 import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { erasureRegistry } from '../dataSubject/erasureRegistry';
+import { assertContributedRegistryValid } from '../dataSubject/registry';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 
@@ -23,10 +24,11 @@ type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
  * Erase an account again after a database restore brought its rows back, repeating what the original
  * path removed (record.initiatedBy): a self-serve or unknown-path erasure also purges files, content and
  * the personal org (completeAccountDeletion.ts); an admin one deletes the row and runs the shared
- * purge only. An 'admin' record alone cannot tell an admin delete (server/admin/deleteUserAsAdmin.ts,
- * which purges no content) from an admin erasure (completeAccountDeletion.ts), so the restored row
- * decides: a scheduled admin deletion (`deletion.source` or the `deletion.erasureScope` snapshot) was
- * an erasure and is repeated in full. Keep in sync with those and with hardDeleteUser.ts.
+ * purge only. An admin Delete (server/admin/deleteUserAsAdmin.ts) now stamps `deletion.source: 'admin'`
+ * and runs the full purge like an admin erasure; records written before that change carry no such
+ * stamp and purged no content, so the restored row decides: a scheduled admin deletion
+ * (`deletion.source` or the `deletion.erasureScope` snapshot) was an erasure and is repeated in full.
+ * Keep in sync with those and with hardDeleteUser.ts.
  *
  * Sends no notifications or billing calls: no subscription cancel, deletion email, analytics event or
  * Slack/email notification, and `integrationGrants: null` skips the provider revokes. The original
@@ -60,6 +62,7 @@ export async function reapplyErasure(
     // File erasure acquires its own User lease and permanent export fence, including restored
     // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
     const assertLease = async () => {};
+    assertContributedRegistryValid();
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await erasureRegistry.erase(subject, assertLease);

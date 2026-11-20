@@ -33,6 +33,7 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
 import { AdminLayoutRoute } from './components/admin/AdminLayout';
+import { adminPageFrame } from './components/admin/shared/adminStyles';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -124,6 +125,7 @@ const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const OAuthLogoutPage = lazy(() => import('./routes/oauth/logout'));
 const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const PersonaRedeemPage = lazy(() => import('./routes/personas/redeem'));
 const HudPage = lazy(() => import('./routes/hud'));
@@ -200,9 +202,10 @@ function buildPremiumGatedElement(descriptor: (typeof premiumRoutes)[number]) {
 // own ProviderBundle; app-shell premium routes hang off layoutRoute (rendered
 // inside the notebook layout) and inherit ProviderBundle + chrome from its
 // Outlet, so wrapping again would double the context providers and their API
-// fetches. getParentRoute is a thunk (lazy), so referencing rootRoute/layoutRoute
-// (declared below) is safe. In the open-core fork `premiumRoutes` is empty -> both
-// arrays are empty.
+// fetches. Admin premium routes hang off adminLayoutRoute the same way: its guard,
+// providers and Suspense boundary already wrap them. getParentRoute is a thunk
+// (lazy), so referencing rootRoute/layoutRoute/adminLayoutRoute (declared below)
+// is safe. In the open-core fork `premiumRoutes` is empty -> every array is empty.
 const premiumPartition = partitionPremiumRoutes(premiumRoutes);
 
 // Public premium routes render bare under the root route: the URL is the authorization,
@@ -237,6 +240,20 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
     getParentRoute: () => layoutRoute,
     path: descriptor.path,
     component: () => gated,
+  });
+});
+// The frame is what a core admin detail route spreads on its own root, so a contributed page sets
+// no outer padding of its own. Access (full admins only) is the layout's, not the route's.
+const builtAdminPremiumRoutes = premiumPartition.admin.map(descriptor => {
+  const LazyComponent = lazy(descriptor.lazyImport);
+  return createRoute({
+    getParentRoute: () => adminLayoutRoute,
+    path: descriptor.path,
+    component: () => (
+      <Box data-testid="admin-contributed-page" sx={adminPageFrame}>
+        <LazyComponent />
+      </Box>
+    ),
   });
 });
 
@@ -1290,7 +1307,7 @@ const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'admin-layout',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} adminPages={premiumPartition.admin} />,
 });
 
 // The tabbed admin console (replaces /admin/index.tsx)
@@ -1438,6 +1455,32 @@ const oauthAuthorizeRoute = createRoute({
   }),
 });
 
+// OIDC RP-Initiated Logout (end_session_endpoint) - no layout, public. No consent redirect: signing
+// out must not wait on accepting the policies.
+export const oauthLogoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/oauth/logout',
+  beforeLoad: () => bootstrapSession(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <OAuthLogoutPage />
+    </Suspense>
+  ),
+  validateSearch: (
+    search: Record<string, unknown>
+  ): {
+    client_id?: string;
+    post_logout_redirect_uri?: string;
+    state?: string;
+    id_token_hint?: string;
+  } => ({
+    client_id: optionalStringParam(search, 'client_id'),
+    post_logout_redirect_uri: optionalStringParam(search, 'post_logout_redirect_uri'),
+    state: optionalStringParam(search, 'state'),
+    id_token_hint: optionalStringParam(search, 'id_token_hint'),
+  }),
+});
+
 // Create the route tree
 const routeTree = rootRoute.addChildren([
   // Layout-wrapped routes (main app)
@@ -1513,6 +1556,7 @@ const routeTree = rootRoute.addChildren([
     adminSubscriptionByStripeIdRoute,
     adminModelDetailRoute,
     adminModelDiscoveryRunRoute,
+    ...builtAdminPremiumRoutes,
   ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
@@ -1526,6 +1570,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  oauthLogoutRoute,
   bedrockNewsClaimRoute,
   personaRedeemRoute,
 ]);

@@ -4,6 +4,8 @@ import {
   INVITE_CENTER_SECTION_IDS,
   INVITE_CENTER_SECTION_PARAM,
   INVITE_CENTER_TAB_PARAMS,
+  PENDING_ACTIVE_DAYS,
+  PENDING_ACTIVE_DAYS_PARAM,
   PENDING_INVITE_PARAM,
   PENDING_SORT_PARAM,
   PENDING_STATUS_PARAM,
@@ -27,6 +29,7 @@ describe('invite center section parser', () => {
       'pendingReason',
       'pendingSource',
       'pendingInvite',
+      'pendingActiveDays',
       'pendingSort',
       'heldGrants',
     ]);
@@ -43,5 +46,11 @@ describe('invite center section parser', () => {
     expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_INVITE_PARAM]('')).toBeUndefined();
     expect(INVITE_CENTER_SEARCH_PARSERS.heldGrants('open')).toBe('open');
     expect(INVITE_CENTER_SEARCH_PARSERS.heldGrants('closed')).toBeUndefined();
+  });
+
+  it('accepts the activity presets and drops other values', () => {
+    const parse = INVITE_CENTER_SEARCH_PARSERS[PENDING_ACTIVE_DAYS_PARAM];
+    for (const days of PENDING_ACTIVE_DAYS) expect(parse(days)).toBe(days);
+    for (const value of [undefined, '', '0', '91', '2.5', 'week', 7]) expect(parse(value)).toBeUndefined();
   });
 });

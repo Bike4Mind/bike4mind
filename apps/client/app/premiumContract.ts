@@ -1,5 +1,6 @@
 import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
-import type { ComponentType } from 'react';
+import type { ComponentType, ElementType } from 'react';
+import type { AdminSidebarSectionKey } from './components/admin/adminSidebarSectionKeys';
 
 // Moved to @bike4mind/common so server and workers code can name them without importing this
 // React-typed module. Re-exported here because overlays import them from this path.
@@ -21,6 +22,18 @@ export type { PremiumApiKeyScope, PremiumEntitlementGrants } from '@bike4mind/co
  * `@client/*` alias).
  */
 
+/** Where a contributed admin page appears in the admin sidebar; see `PremiumRouteDescriptor.adminPage`. */
+export interface PremiumAdminPage {
+  /** Key of an existing admin sidebar section; the link is listed after that section's own items. */
+  section: AdminSidebarSectionKey;
+  /** Sidebar label; short, sentence case, and the same as the page title. */
+  label: string;
+  /** A lucide stroke icon; a default is used when omitted. */
+  Icon?: ElementType;
+  /** Stable `data-testid` for the sidebar link; derived from the path when omitted. */
+  testId?: string;
+}
+
 /**
  * A premium SPA route. The gating fields are the serializable subset of
  * `RestrictedPage`'s gating props - any future gating field added here must map
@@ -38,6 +51,25 @@ export interface PremiumRouteDescriptor {
     label: string;
     description: string;
   };
+  /**
+   * STRUCTURAL field, like `appShell`. Set -> the route is a page of the admin console: it is
+   * parented under the admin layout route, so it renders inside the admin shell (banner, sidebar,
+   * content frame) behind the console's guard, and the sidebar lists a link to it after the named
+   * section's own items. It is not an `AdminTab`: no `?tab=` slug, no console panel.
+   *  - `path` is literal (no `$param` segment, since the sidebar link points at it) and sits under
+   *    `/admin/ext/` with at least one segment after it, which keeps it clear of every core admin
+   *    route. A route without this field is refused anywhere under `/admin`.
+   *  - Open to full admins only. A delegated admin who reaches the path gets the denied state and
+   *    the sidebar hides the link; the layout's guard is the gate, so the gating fields do not apply.
+   *  - Set none of `public`, `appShell`, `edgeToEdge`, `hostsWorkspace`, `adminDashboard`,
+   *    `requireEntitlement`, `requireFeatureTag` or `fallbackPath`, and give each page its own path:
+   *    `partitionPremiumRoutes` throws on those combinations and on an unknown section.
+   *  - The page renders inside the shell's page frame, so it sets no outer padding of its own, opens
+   *    with `AdminPageHeader` and follows components/admin/DESIGN_GUIDE.md.
+   *  - A sidebar link gets no badge. In a typed descriptor `section` is a literal union: annotate the
+   *    descriptor with this interface (or use `as const`) so the string is not widened.
+   */
+  adminPage?: PremiumAdminPage;
   /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
@@ -102,10 +134,8 @@ export interface PremiumRouteDescriptor {
  * "More" flyout, which renders `premiumNavItems.generated.ts` generically.
  *
  * The gating fields share names and OR-semantics with `PremiumRouteDescriptor`,
- * but nav visibility differs from route gating in two deliberate ways:
- * a denied item is HIDDEN (never redirected - the route's own gate handles
- * direct navigation), and there is NO admin/developer bypass (each access
- * gate keeps its own bypass set; launch points show only for actual holders).
+ * and admins and developers pass both. A denied item is HIDDEN (never
+ * redirected - the route's own gate handles direct navigation).
  */
 export interface PremiumNavDescriptor {
   /** SPA route path to navigate to (normally one of the package's contributed routes). */
@@ -115,7 +145,7 @@ export interface PremiumNavDescriptor {
   testId?: string;
   /** Icon component; render at menu-row size (self-sized - the consumer renders it bare). */
   icon?: ComponentType;
-  /** Show only when the user holds the server-resolved entitlement (no bypass). */
+  /** Show only when the user holds the server-resolved entitlement (admins and developers always see it). */
   requireEntitlement?: string;
   /** Show only when the user carries the tag; OR with `requireEntitlement` when both set. */
   requireFeatureTag?: string;

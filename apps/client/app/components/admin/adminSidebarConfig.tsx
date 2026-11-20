@@ -184,6 +184,16 @@ export type SidebarItem = {
   delegateBadge?: AdminActionCountKey;
 };
 
+/** A link to a contributed admin page (a premium route that is not an `AdminTab`); see adminContributedPages.ts. */
+export type SidebarPageLink = {
+  /** A lucide stroke icon; the sidebar renders it at 16 px with a 2 px stroke. */
+  Icon: ElementType;
+  label: string;
+  /** The page's literal path, also the link's href. */
+  path: string;
+  testid?: string;
+};
+
 export type SidebarSection = {
   /** Stable key - persisted (the "More" state) and used in rail testids. */
   key: string;
@@ -192,6 +202,23 @@ export type SidebarSection = {
   label: string;
   /** Most used first: a long section shows only its first SIDEBAR_MORE_VISIBLE items until "More". */
   items: SidebarItem[];
+  /** Contributed pages, listed after `items` and counted with them for "More". Never set on SIDEBAR_SECTIONS itself. */
+  pages?: SidebarPageLink[];
+};
+
+/** One row of a section: a tab item or a contributed page link. */
+export type SidebarEntry = { kind: 'tab'; item: SidebarItem } | { kind: 'page'; page: SidebarPageLink };
+
+/** A section's rows in display order: its tab items, then its contributed pages. */
+export const sectionEntries = (section: SidebarSection): SidebarEntry[] => [
+  ...section.items.map((item): SidebarEntry => ({ kind: 'tab', item })),
+  ...(section.pages ?? []).map((page): SidebarEntry => ({ kind: 'page', page })),
+];
+
+/** Paths compare equal across a trailing slash and letter case, as the router matches them. */
+export const isSamePagePath = (a: string, b: string): boolean => {
+  const normalize = (path: string) => path.replace(/\/+$/, '').toLowerCase();
+  return normalize(a) === normalize(b);
 };
 
 /**
@@ -412,6 +439,22 @@ export const SIDEBAR_MORE_THRESHOLD = 7;
 export const SIDEBAR_MORE_VISIBLE = 5;
 
 /**
+ * The rows a section shows and how many sit behind its "More" row. A row `keepPastCut` accepts is
+ * never hidden: past the cut it is shown under the visible ones, in order.
+ */
+export const splitSectionEntries = <T,>(
+  entries: T[],
+  expanded: boolean,
+  keepPastCut: (entry: T) => boolean
+): { shown: T[]; hiddenCount: number } => {
+  if (expanded || entries.length <= SIDEBAR_MORE_THRESHOLD) return { shown: entries, hiddenCount: 0 };
+  const head = entries.slice(0, SIDEBAR_MORE_VISIBLE);
+  const keptTail = entries.slice(SIDEBAR_MORE_VISIBLE).filter(keepPastCut);
+  const shown = [...head, ...keptTail];
+  return { shown, hiddenCount: entries.length - shown.length };
+};
+
+/**
  * The items a section shows and how many sit behind its "More" row. The active item and any item
  * with work waiting are never hidden: past the cut they are shown under the visible ones, in order.
  */
@@ -420,25 +463,21 @@ export const splitSectionItems = (
   activeTab: AdminTab | string | null,
   expanded: boolean,
   hasWaitingWork: (item: SidebarItem) => boolean = () => false
-): { shown: SidebarItem[]; hiddenCount: number } => {
-  if (expanded || items.length <= SIDEBAR_MORE_THRESHOLD) return { shown: items, hiddenCount: 0 };
-  const head = items.slice(0, SIDEBAR_MORE_VISIBLE);
+): { shown: SidebarItem[]; hiddenCount: number } =>
   // A queue with work waiting must not hide under "More", or its badge is never seen.
-  const keptTail = items.slice(SIDEBAR_MORE_VISIBLE).filter(item => item.tab === activeTab || hasWaitingWork(item));
-  const shown = [...head, ...keptTail];
-  return { shown, hiddenCount: items.length - shown.length };
-};
+  splitSectionEntries(items, expanded, item => item.tab === activeTab || hasWaitingWork(item));
 
 /**
- * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, then (when
- * `query` is non-blank) only the items whose label or section label contains it. Sections left
- * empty are omitted.
+ * The sections an admin can see: gated items and tabs `canOpenTab` refuses dropped, contributed
+ * pages `canOpenPage` refuses dropped, then (when `query` is non-blank) only the rows whose label
+ * or section label contains it. Sections left empty are omitted.
  */
 export const filterSidebarSections = (
   sections: SidebarSection[],
   gates: Record<SidebarGate, boolean>,
   query: string,
-  canOpenTab: (tab: AdminTab) => boolean = () => true
+  canOpenTab: (tab: AdminTab) => boolean = () => true,
+  canOpenPage: (page: SidebarPageLink) => boolean = () => true
 ): SidebarSection[] => {
   const needle = query.trim().toLowerCase();
   return sections
@@ -452,7 +491,11 @@ export const filterSidebarSections = (
             sectionMatches ||
             [item.label, ...(item.aliases ?? [])].some(name => name.toLowerCase().includes(needle)))
       );
-      return { ...section, items };
+      if (!section.pages) return { ...section, items };
+      const pages = section.pages.filter(
+        page => canOpenPage(page) && (needle === '' || sectionMatches || page.label.toLowerCase().includes(needle))
+      );
+      return { ...section, items, pages };
     })
-    .filter(section => section.items.length > 0);
+    .filter(section => section.items.length > 0 || (section.pages?.length ?? 0) > 0);
 };

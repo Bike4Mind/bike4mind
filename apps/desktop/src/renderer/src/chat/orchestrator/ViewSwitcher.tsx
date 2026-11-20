@@ -7,10 +7,23 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { AquariumIcon, BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon, TileWallIcon } from '../icons';
+import {
+  AquariumIcon,
+  BoardIcon,
+  CaretDownIcon,
+  CheckIcon,
+  ConstellationIcon,
+  SwimlanesIcon,
+  TableIcon,
+  TavernIcon,
+  TileWallIcon,
+  TransitIcon,
+} from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
+import type { AgentDetailsSkin } from './AgentPeekDrawer';
+import { SkinMenuSection } from './SkinMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -21,6 +34,7 @@ interface ViewInfo {
   icon: ReactNode;
   /** Settles into a quiet scene when idle (ambient.ts), so the menu offers "Quiet when idle". */
   ambient: boolean;
+  detailsSkin?: AgentDetailsSkin;
 }
 
 /** Every view's menu entry; typed by id so adding a view to ORCHESTRATOR_VIEWS fails until it has one. */
@@ -31,12 +45,27 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <TavernIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#f2ece1', border: '#c4b8a5' },
+      dark: { background: '#29251f', border: '#5d5345' },
+    },
   },
   aquarium: {
     label: 'Aquarium',
     description: 'A quiet tank, one fish per agent',
     group: 'scene',
     icon: <AquariumIcon />,
+    ambient: true,
+    detailsSkin: {
+      light: { background: '#e7eff0', border: '#a9bec3' },
+      dark: { background: '#1d2c31', border: '#49616a' },
+    },
+  },
+  office: {
+    label: 'Office',
+    description: 'Manager and the team at Paper company',
+    group: 'scene',
+    icon: <BoardIcon />,
     ambient: true,
   },
   board: {
@@ -58,6 +87,27 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'A calm grid, one tile per agent',
     group: 'layout',
     icon: <TileWallIcon />,
+    ambient: false,
+  },
+  swimlanes: {
+    label: 'Swimlanes',
+    description: 'One lane per agent, nested under its parent',
+    group: 'layout',
+    icon: <SwimlanesIcon />,
+    ambient: false,
+  },
+  constellation: {
+    label: 'Constellation',
+    description: 'Agents as stars around the orchestrator',
+    group: 'layout',
+    icon: <ConstellationIcon />,
+    ambient: false,
+  },
+  transit: {
+    label: 'Transit',
+    description: 'A line of stops, agents placed by phase',
+    group: 'layout',
+    icon: <TransitIcon />,
     ambient: false,
   },
 };
@@ -249,6 +299,7 @@ export function ViewSwitcher({
             </MenuItem>
           </>
         )}
+        <SkinMenuSection />
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}

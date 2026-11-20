@@ -3,6 +3,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, describeAgentStates } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
+import type { ReactNode } from 'react';
 import { AQUARIUM_BACKDROP, fishLook, fishSprite } from './aquariumArt';
 import { MIDWATER_LANE, lampAction, placeFish, type FishPlacement } from './aquariumScene';
 
@@ -120,6 +121,7 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
         }}
       >
         <Box
+          data-agent-avatar={agent.id}
           sx={{
             width: '100%',
             height: '100%',
@@ -235,7 +237,15 @@ function Lamp({ action, onAction }: { action?: ViewAction; onAction(action: View
  * that needs the user swims to the front glass and the lamp on the rim lights. Clicking a fish (or the
  * lamp) opens it in the peek drawer, where answering and approving live.
  */
-export function Aquarium({ snapshot, onAction }: { snapshot: ViewSnapshot; onAction(action: ViewAction): void }) {
+export function Aquarium({
+  snapshot,
+  onAction,
+  agentDetailsOverlay,
+}: {
+  snapshot: ViewSnapshot;
+  onAction(action: ViewAction): void;
+  agentDetailsOverlay?: ReactNode;
+}) {
   const placements = placeFish(snapshot.agents);
   const summary = describeAgentStates(
     snapshot.agents.map(agent => agent.state),
@@ -248,13 +258,15 @@ export function Aquarium({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
       aria-label={`Aquarium: ${summary}`}
       data-testid="orchestrator-aquarium"
       sx={{
+        anchorName: '--orchestrator-scene',
         position: 'relative',
         flex: 1,
         minHeight: 320,
         overflow: 'hidden',
         containerType: 'size',
         bgcolor: '#0e2a33',
-        backgroundImage: `url(${AQUARIUM_BACKDROP})`,
+        // Set on the root by the active skin (statePalette.ts skinCssVariables); a literal name keeps this view import-free.
+        backgroundImage: `var(--b4m-skin-aquarium-backdrop, url("${AQUARIUM_BACKDROP}"))`,
         backgroundSize: 'cover',
         backgroundPosition: 'center bottom',
         imageRendering: 'pixelated',
@@ -272,6 +284,7 @@ export function Aquarium({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
         <Fish key={placement.agent.id} placement={placement} onAction={onAction} />
       ))}
       <Lamp action={lampAction(snapshot)} onAction={onAction} />
+      {agentDetailsOverlay}
     </Box>
   );
 }

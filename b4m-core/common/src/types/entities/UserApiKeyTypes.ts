@@ -144,7 +144,7 @@ export enum ApiKeyScope {
    * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
    * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
    * Claude Code" dialog.
-   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * Not bound to an org: membership is re-checked on every request (`audienceIdsFor` in
    * packages/server-utils/src/skillMarket/market.ts), so a member who leaves or is removed loses that org's
    * feed and zips while the key stays valid for their other orgs.
    */
@@ -223,6 +223,13 @@ export enum ApiKeyScope {
    * needs `ai:chat`/`ai:generate`.
    */
   AI_END_USER_ID = 'ai:end-user-id',
+  /**
+   * Publish, republish and unpublish the key owner's own artifacts as web pages
+   * (`/api/v1/artifacts/{id}/publish`, `/republish`). Publishing creates a public URL, so it is
+   * unsuffixed to stay out of the Read-only and Read & write presets; only Full access or ticking it
+   * grants it. Holding it does not let the key read artifacts; that stays `notebooks:read`. Not confined.
+   */
+  ARTIFACTS_PUBLISH = 'artifacts:publish',
 }
 
 /**
@@ -455,6 +462,23 @@ export interface IEmbedBranding {
  */
 export type ApiKeyStoredSecret = { keyDigest: string } | { keyHash: string };
 
+/**
+ * The only prompt moderation categories a key can be excepted from: the violence labels of the
+ * OpenAI check and the matching content filter of the Bedrock one. Matched exactly. Every other
+ * label, including any a provider adds later, always blocks; widening this list is a code change.
+ */
+export const MODERATION_EXCEPTION_CATEGORIES = ['violence', 'violence/graphic', 'VIOLENCE'] as const;
+export type ModerationExceptionCategory = (typeof MODERATION_EXCEPTION_CATEGORIES)[number];
+
+/** An admin-set prompt moderation exception on one key; see IUserApiKey.moderationException. */
+export interface IUserApiKeyModerationException {
+  categories: ModerationExceptionCategory[];
+  reason: string;
+  /** The admin who set it. */
+  setBy: string;
+  setAt: Date;
+}
+
 export interface IUserApiKey {
   id: string;
   userId: string;
@@ -558,6 +582,12 @@ export interface IUserApiKey {
    */
   spendCap?: number;
   /**
+   * Lets a turn sent with this key continue when prompt moderation flags it for nothing but the
+   * listed categories. Admin-set only, `select: false`, and absent from every read except
+   * findModerationException. Enforced in ChatCompletionProcess via moderationException.ts.
+   */
+  moderationException?: IUserApiKeyModerationException;
+  /**
    * Whether this embed key's billing OWNER holds the white-label entitlement.
    * Computed server-side on GET /api/user-api-keys only (never persisted) so the
    * Configure UI can gate the hide-branding toggle on the owner's plan rather
@@ -635,6 +665,15 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   incrementSpend: (id: string, credits: number) => Promise<void>;
   /** Sets the spend ceiling; `null` clears it ($unset), so the key becomes uncapped. */
   setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
+  /** Sets the prompt moderation exception; `null` clears it ($unset). */
+  setModerationException: (id: string, exception: IUserApiKeyModerationException | null) => Promise<void>;
+  /** The key's exception with the fields that decide whether it applies; null when the key has none. */
+  findModerationException: (id: string) => Promise<
+    | (Pick<IUserApiKey, 'userId' | 'status' | 'expiresAt'> & {
+        moderationException: IUserApiKeyModerationException;
+      })
+    | null
+  >;
   /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
   resetSpend: (id: string) => Promise<void>;
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */

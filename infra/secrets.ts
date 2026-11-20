@@ -111,6 +111,11 @@ export const secrets = {
   MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
   // Previous encryption key for key rotation - set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
+  // Root secret for HMAC signatures (per-purpose keys are derived from it). Unset: signatures use
+  // SECRET_ENCRYPTION_KEY. Generate with: openssl rand -hex 32
+  HMAC_SIGNING_SECRET: new sst.Secret('HMAC_SIGNING_SECRET', 'not-configured'),
+  // The secret that signed older values while they are still honoured; set it when rotating
+  HMAC_SIGNING_SECRET_PREVIOUS: new sst.Secret('HMAC_SIGNING_SECRET_PREVIOUS', 'not-configured'),
   // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
   // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +
   // server/chatCompletion/internal/route.ts). Dedicated so the AES encryption key

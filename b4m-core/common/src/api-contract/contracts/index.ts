@@ -15,7 +15,19 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
+import {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  replyToBriefDecisionContract,
+} from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
+import {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './assistantInstructions.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -49,6 +61,9 @@ import {
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
@@ -176,8 +191,17 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+  replyToBriefDecisionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
+  listHandoffDevicesContract,
+  sendSessionHandoffContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,
@@ -247,6 +271,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,

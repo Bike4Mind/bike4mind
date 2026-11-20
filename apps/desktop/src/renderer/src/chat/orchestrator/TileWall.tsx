@@ -4,7 +4,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
-import { stateJoyColor } from './statePalette';
+import { SKIN_CARD_VARIABLE, stateJoyColor, stateSkinSx } from './statePalette';
 
 /*
  * Built on the view contract alone: this file may import only @shared/viewSnapshot, @shared/agentState, ./statePalette,
@@ -130,7 +130,7 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
               color: 'inherit',
               cursor: 'pointer',
               borderRadius: 'md',
-              bgcolor: 'background.surface',
+              bgcolor: `var(${SKIN_CARD_VARIABLE}, var(--joy-palette-background-surface))`,
               border: asking ? '2px solid' : '1px solid',
               borderColor: asking ? 'warning.outlinedBorder' : 'divider',
               opacity: DIMMED.has(tile.state) ? 0.55 : 1,
@@ -144,7 +144,14 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
                 aria-hidden
                 data-testid="orchestrator-tile-dot"
                 data-color={color}
-                sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: `${color}.solidBg` }}
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  bgcolor: `${color}.solidBg`,
+                  ...stateSkinSx(tile.state, 'solid'),
+                }}
               />
               <Typography level="title-sm" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {tile.title}

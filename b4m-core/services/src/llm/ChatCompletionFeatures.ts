@@ -7,7 +7,7 @@ import {
   embeddingBackendForModel,
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
-import type { UserLimitEventKind } from '@bike4mind/common';
+import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
 
 export type LimitEventRecord = {
   userId: string;
@@ -258,6 +258,13 @@ interface DatabaseAdapters {
   mcpServers: IMcpServerRepository;
   /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
   newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Required so every construction site wires the freeze check; the turn is refused before any reservation. */
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
+  /**
+   * Reads a key's prompt moderation exception. Optional: wired only where an API key can start a
+   * turn, and without it no exception ever applies.
+   */
+  userApiKeys?: Pick<IUserApiKeyRepository, 'findModerationException'>;
   /**
    * Records a refusal or a settlement that left the balance negative, for the admin user timeline
    * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
@@ -610,11 +617,16 @@ export interface IChatCompletionServiceOptions {
     requestId?: string; // Quest ID for correlation
   }) => Promise<void>;
   /**
-   * Secret key for deriving daily telemetry salts via HMAC.
-   * Reuses SECRET_ENCRYPTION_KEY - no dedicated secret needed.
+   * Secret key for deriving daily telemetry salts via HMAC. The host supplies it; the apps take it
+   * from `signingKey('telemetry-salt')` in server-utils/src/security/signingKeys.ts.
    * When undefined, falls back to a deterministic placeholder (dev-only).
    */
   telemetryHmacSecret?: string;
+  /**
+   * Key that signs web_search image URLs (`signingKey('search-image-url')` in the apps). When
+   * undefined, `telemetryHmacSecret` signs them, which is what hosts without a separate key rely on.
+   */
+  imageUrlSigningSecret?: string;
   /**
    * Whether the Global Privacy Control (GPC) signal was detected in the request.
    * When true, telemetry capture is skipped for this request regardless of user preference.

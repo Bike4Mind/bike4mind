@@ -2,6 +2,7 @@ import type {
   IMcpConnectionPublic,
   IntegrationId,
   McpConnectionEffectiveStatus,
+  McpConnectionListEntry,
   McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { McpToolReviewEntry } from '@client/app/hooks/data/mcpConnections';
@@ -40,22 +41,60 @@ export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>
   connection.tools.filter(tool => tool.enabled && tool.state === 'active').length;
 
 /**
- * Connectors the composer can switch per chat: connected, switched on in Integrations, and with at
- * least one reviewed tool on. Anything else contributes no tools, so a row for it would toggle nothing.
+ * Connectors the composer can switch per chat: connected, switched on (in Integrations, or by an
+ * admin for a platform connector), and with at least one reviewed tool on. Anything else
+ * contributes no tools, so a row for it would toggle nothing.
  */
-export const composerConnections = (connections: readonly IMcpConnectionPublic[]): IMcpConnectionPublic[] =>
+export const composerConnections = (connections: readonly McpConnectionListEntry[]): McpConnectionListEntry[] =>
   connections.filter(c => c.status === 'connected' && c.enabled && offeredToolCount(c) > 0);
+
+/** The Tools-menu choices that decide which connectors a chat is offered (see LLMContext). */
+export interface ComposerConnectionChoices {
+  disabledMcpConnections: readonly string[];
+  enabledPlatformMcpConnections: readonly string[];
+}
+
+type ComposerConnectionKey = Pick<McpConnectionListEntry, 'id' | 'slug' | 'ownerType'>;
+
+/**
+ * A platform connector is on only once the user switched it on, by id, so a recreated one starts
+ * off; the user's own connector is on unless switched off, by slug.
+ */
+export const isComposerConnectionOn = (connection: ComposerConnectionKey, choices: ComposerConnectionChoices) =>
+  connection.ownerType === 'platform'
+    ? choices.enabledPlatformMcpConnections.includes(connection.id)
+    : !choices.disabledMcpConnections.includes(connection.slug);
+
+/** The one choice list that flipping this connector's switch changes, as an LLMContext update. */
+export const toggleComposerConnection = (
+  connection: ComposerConnectionKey,
+  choices: ComposerConnectionChoices
+): { disabledMcpConnections?: string[]; enabledPlatformMcpConnections?: string[] } => {
+  const on = isComposerConnectionOn(connection, choices);
+  if (connection.ownerType === 'platform') {
+    const ids = choices.enabledPlatformMcpConnections;
+    return { enabledPlatformMcpConnections: on ? ids.filter(id => id !== connection.id) : [...ids, connection.id] };
+  }
+  const slugs = choices.disabledMcpConnections;
+  return { disabledMcpConnections: on ? [...slugs, connection.slug] : slugs.filter(slug => slug !== connection.slug) };
+};
 
 /** Needs a browser sign-in: waiting for the first one, or the grant expired. API keys are re-entered instead. */
 export const needsSignIn = (connection: IMcpConnectionPublic): boolean =>
   connection.auth.kind !== 'api_key' &&
   (connection.status === 'pending_auth' || connection.status === 'needs_reconnect');
 
-/** Connections the drawer of `presetId` manages; the custom connector entry manages those with no preset. */
+/**
+ * The user's own connections the drawer of `presetId` manages; the custom connector entry manages
+ * those with no preset. A platform connector is an admin's to manage, so no drawer lists it.
+ */
 export const connectionsFor = (
-  connections: readonly IMcpConnectionPublic[],
+  connections: readonly McpConnectionListEntry[],
   presetId: IntegrationId | undefined
-): IMcpConnectionPublic[] => connections.filter(c => (presetId ? c.presetId === presetId : !c.presetId));
+): IMcpConnectionPublic[] =>
+  connections.filter(
+    (c): c is IMcpConnectionPublic => c.ownerType !== 'platform' && (presetId ? c.presetId === presetId : !c.presetId)
+  );
 
 /** Gallery connection state for one entry: connected when any of its connections is. */
 export const galleryConnectionState = (connections: readonly IMcpConnectionPublic[]): ConnectionState => ({

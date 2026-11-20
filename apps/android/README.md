@@ -53,6 +53,25 @@ project-specific is committed. Take the four values from the Firebase console (P
 
 With any of them unset the app builds and runs normally and simply never gets a push token (CI builds this way).
 
+Tapping a push routes by its `data` (`kit/push/PushRoute`): a `brief_ready` push opens that brief; any other push opens
+its `deepLink` (see below), else its `sessionId`. Which categories a user receives is a server-side preference
+(`preferences.pushNotifications`); the app has no settings screen for it yet.
+
+## Links
+
+`kit/links/DeepLinkRouter` (twin of the iOS router) maps Bike4Mind URLs to screens: `/notebooks/<id>` and
+`/sessions/<id>` open that chat, `/briefs/<id>` that brief, `/notebooks`, `/sessions` and the root the chats list.
+Any other page opens in the browser. It accepts `https://app.bike4mind.com` links and links to the server the build talks
+to, since a push `deepLink` is built from that server's URL.
+
+The manifest claims `app.bike4mind.com` for the paths with a native screen, with `autoVerify`. Android only opens them
+in the app once the server publishes `/.well-known/assetlinks.json` for the app's signing certificate; until then they
+open in the browser. To try one without that, target the app directly:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d https://app.bike4mind.com/notebooks/<id> com.bike4mind.app
+```
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to

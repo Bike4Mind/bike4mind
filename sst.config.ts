@@ -147,6 +147,8 @@ export default $config({
       PRODUCTION_STAGES,
       wafReadPermissions,
       wafWebAclArn,
+      contributedQueues,
+      dlqAlarmTopic,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -208,7 +210,9 @@ export default $config({
     // overlay pattern. Retry-exhaustion failures are still alarmed to Slack via the
     // retained tavern-heartbeat DLQ alarm (infra/dlqAlarms.ts).
     const { contributeInfra: contributeTavernInfra } = await import('./infra/premium-generated/tavern-infra.generated');
-    contributeTavernInfra({
+    // A variable, not an inline literal: an overlay whose params type does not declare eventBus yet
+    // would reject the extra key on a fresh object literal (excess-property check).
+    const tavernInfraContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
@@ -220,7 +224,9 @@ export default $config({
       routePrefix,
       appFilesBucket,
       isSharedRouterConsumer,
-    });
+      eventBus,
+    };
+    contributeTavernInfra(tavernInfraContext);
 
     // OptiHashi premium infra: compute alarm topics, MetricAlarms, run-poller cron.
     // Handler path uses generated stub (server/premium-generated/qworkRunPoller.ts) so
@@ -250,6 +256,22 @@ export default $config({
           }
         : {}),
     });
+
+    // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
+    // Also handed the shared bus, the package-declared queue pairs (infra/queues.ts) and the alarm
+    // topic, so a package can subscribe consumers and attach rules and alarms from its own infra.
+    // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
+    const { contributeInfra: contributeSentinelInfra } =
+      await import('./infra/premium-generated/sentinel-infra.generated');
+    const infrastructureContext = {
+      lambdaVpc,
+      allSecrets,
+      defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
+      eventBus,
+      contributedQueues,
+      alarmTopic: dlqAlarmTopic,
+    };
+    contributeSentinelInfra(infrastructureContext);
 
     return {
       appName: $app.name,

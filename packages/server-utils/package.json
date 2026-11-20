@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },
@@ -54,6 +54,7 @@
     "axios-retry": "^4.5.0",
     "cheerio": "1.2.0",
     "dayjs": "^1.11.23",
+    "escape-string-regexp": "^5.0.0",
     "file-type": "^22.1.0",
     "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",

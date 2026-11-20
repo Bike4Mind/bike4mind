@@ -20,6 +20,8 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
   'apps/client/server/admin/actionCounts.ts',
   'apps/workers/src/cron/imageModerationReviewSweep.ts',
+  // Writes an alert's delivery outcome back; it never records an incident.
+  'packages/server-utils/src/utils/mailer/deliveryOutcome.ts',
 ]);
 
 // Signing an incident image hands out a link to a blocked upload; only the view route may do it,

@@ -82,8 +82,13 @@ export const ImageModerationIncidentSchema = z.object({
   noActionBy: z.string().optional(),
   noActionAt: z.union([z.string(), z.date()]).optional(),
   // When the reviewer alert was delivered. Absent means no alert went out (none configured, or the
-  // send failed), so a later sweep can find the incidents nobody was told about.
+  // send failed) or a queued one is not confirmed yet, so a later sweep can find the incidents
+  // nobody was told about.
   alertedAt: z.union([z.string(), z.date()]).optional(),
+  // When the alert was handed to the email-send worker, and when a reviewer's copy last failed
+  // there or at publish. Neither means delivered; a queued alert is not resent while still in flight.
+  alertQueuedAt: z.union([z.string(), z.date()]).optional(),
+  alertFailedAt: z.union([z.string(), z.date()]).optional(),
   // When a scheduled sweep reminder digest last covered this incident while it awaited a verdict.
   lastReminderAt: z.union([z.string(), z.date()]).optional(),
   // Second review step. Escalation is stamped on an incident that is still pending and never changes
@@ -94,6 +99,9 @@ export const ImageModerationIncidentSchema = z.object({
   escalationTrigger: z.enum(INCIDENT_ESCALATION_TRIGGERS).optional(),
   // When the escalation email was delivered. Absent means a later sweep still owes it.
   escalationAlertedAt: z.union([z.string(), z.date()]).optional(),
+  // Same as alertQueuedAt / alertFailedAt, for the escalation email.
+  escalationAlertQueuedAt: z.union([z.string(), z.date()]).optional(),
+  escalationAlertFailedAt: z.union([z.string(), z.date()]).optional(),
   // When a sweep reminder digest to the second reviewers last covered this incident. Separate from
   // lastReminderAt so the two lists are reminded independently of each other.
   escalationLastReminderAt: z.union([z.string(), z.date()]).optional(),

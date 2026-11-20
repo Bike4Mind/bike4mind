@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, spendFrozenError } from '@bike4mind/common';
 
 /**
  * Batch submit runs on the platform Anthropic key, so it must admit every model and reserve the
@@ -24,7 +24,7 @@ const m = vi.hoisted(() => ({
   admissionArgs: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
@@ -128,6 +128,16 @@ describe('POST /api/transforms/batch metering', () => {
     m.reserve.mockRejectedValue(insufficientCreditsError('You do not have enough credits for batch transforms.'));
 
     await expect(submit([item('a')])).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.submitBatch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen and never submits', async () => {
+    m.reserve.mockRejectedValue(spendFrozenError({ scopeType: 'apiKey', frozenAt: new Date('2026-11-16T00:00:00Z') }));
+
+    await expect(submit([item('a')])).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'api_key' },
+    });
     expect(m.submitBatch).not.toHaveBeenCalled();
   });
 

@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios';
 import type {
   IMcpConnectionPublic,
   McpApiKeyScheme,
+  McpConnectionListEntry,
   McpConnectionTransport,
   McpPresetId,
   McpToolApprovalMode,
@@ -73,13 +74,13 @@ export const mcpConnectionErrorCode = (error: unknown): string | undefined => {
   return typeof code === 'string' ? code : undefined;
 };
 
-/** The viewer's connections; empty while the feature is switched off. */
+/** The viewer's connections and the platform connectors offered to them; empty while the feature is switched off. */
 export const useMcpConnections = (options: { enabled?: boolean } = {}) => {
   const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: mcpConnectionKeys.list(),
     enabled: !impersonating && (options.enabled ?? true),
-    queryFn: async () => (await api.get<IMcpConnectionPublic[]>('/api/mcp-connections')).data,
+    queryFn: async () => (await api.get<McpConnectionListEntry[]>('/api/mcp-connections')).data,
     staleTime: 60 * 1000,
   });
 };
@@ -88,7 +89,7 @@ export const useMcpConnections = (options: { enabled?: boolean } = {}) => {
 function useStoreConnection() {
   const queryClient = useQueryClient();
   return (connection: IMcpConnectionPublic) =>
-    queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.list(), previous => {
+    queryClient.setQueryData<McpConnectionListEntry[]>(mcpConnectionKeys.list(), previous => {
       const list = previous ?? [];
       return list.some(c => c.id === connection.id)
         ? list.map(c => (c.id === connection.id ? connection : c))
@@ -146,7 +147,7 @@ export const useDeleteMcpConnection = () => {
       return id;
     },
     onSuccess: id =>
-      queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.list(), previous =>
+      queryClient.setQueryData<McpConnectionListEntry[]>(mcpConnectionKeys.list(), previous =>
         (previous ?? []).filter(c => c.id !== id)
       ),
   });

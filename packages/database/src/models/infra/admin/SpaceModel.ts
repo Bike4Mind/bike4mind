@@ -31,6 +31,26 @@ export class SpaceRepository extends BaseRepository<ISpaceDocument> implements I
     return docs.map(doc => doc.toJSON());
   }
 
+  async findIdsForUser(userId: string) {
+    const docs = await this.model
+      .find({ deletedAt: null, $or: [{ ownerUserId: userId }, { 'members.userId': userId }] }, { _id: 1 })
+      .lean();
+    return docs.map(doc => String(doc._id));
+  }
+
+  async findIdsAdministeredBy(userId: string) {
+    const docs = await this.model
+      .find(
+        {
+          deletedAt: null,
+          $or: [{ ownerUserId: userId }, { members: { $elemMatch: { userId, role: 'admin' } } }],
+        },
+        { _id: 1 }
+      )
+      .lean();
+    return docs.map(doc => String(doc._id));
+  }
+
   countOwned(userId: string) {
     return this.model.countDocuments({ ownerUserId: userId, deletedAt: null });
   }
