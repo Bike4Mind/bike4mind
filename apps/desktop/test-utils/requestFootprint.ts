@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { CompletionMessage } from './completions';
-import type { WireTool } from './deferredTools';
+import { estimateTextTokens } from '../src/shared/contextLimit';
+import type { CompletionMessage } from '../src/main/chat/completions';
+import type { WireTool } from '../src/main/chat/deferredTools';
 
 export type PromptBlock = 'loaded-tools' | 'deferred-tools' | 'system' | 'history' | 'tool-changes';
 
@@ -13,7 +14,7 @@ export interface BlockFootprint {
 
 /**
  * Diagnostic serialization estimates, not provider token counts or evidence of a cache hit.
- * `bytes` is UTF-8 length; `estimatedTokens` is JSON characters (UTF-16 code units) / 3.
+ * `bytes` is UTF-8 length; `estimatedTokens` uses Desktop's shared per-script estimator.
  */
 export function promptFootprint(messages: readonly CompletionMessage[], tools: readonly WireTool[]): BlockFootprint[] {
   const schemas = (deferred: boolean) =>
@@ -33,7 +34,7 @@ export function promptFootprint(messages: readonly CompletionMessage[], tools: r
     return {
       block,
       bytes: Buffer.byteLength(serialized),
-      estimatedTokens: Math.ceil(serialized.length / 3),
+      estimatedTokens: estimateTextTokens(serialized),
       sha256: createHash('sha256').update(serialized).digest('hex'),
     };
   });

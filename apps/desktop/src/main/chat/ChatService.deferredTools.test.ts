@@ -14,7 +14,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { CompletionMessage } from './completions';
 import type { WireTool as DeclaredTool } from './deferredTools';
-import { promptFootprint, type BlockFootprint } from './promptFootprint';
+import { promptFootprint, type BlockFootprint } from '../../../test-utils/requestFootprint';
 
 type WireTool = { toolSchema: { name: string; defer_loading?: boolean } };
 type WireMessage = { role: string; content: unknown; cache?: boolean };

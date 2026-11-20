@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { estimateTextTokens } from '@shared/contextLimit';
 import type { CompletionMessage } from './completions';
-import { changedPromptBlocks, promptFootprint } from './promptFootprint';
+import { changedPromptBlocks, promptFootprint } from '../../../test-utils/requestFootprint';
 import type { WireTool } from './deferredTools';
 
 const messages: CompletionMessage[] = [
@@ -11,7 +12,19 @@ const tool: WireTool = {
   toolSchema: { name: 'fixture', description: 'Fixture tool.', parameters: { type: 'object', properties: {} } },
 };
 
-describe('prompt footprint', () => {
+describe('assembled request footprint', () => {
+  it.each(['Latin fixture.', '\u4eca\u5929 fixture \ud83d\ude00'])(
+    'uses the shared Desktop estimator for %s',
+    content => {
+      const history: CompletionMessage[] = [{ role: 'user', content }];
+      const block = promptFootprint(history, []).find(part => part.block === 'history')!;
+      const serialized = JSON.stringify(history);
+      expect(block.bytes).toBe(Buffer.byteLength(serialized));
+      expect(block.estimatedTokens).toBe(estimateTextTokens(serialized));
+      expect(block.estimatedTokens).not.toBe(Math.ceil(serialized.length / 3));
+    }
+  );
+
   it('exports only fixed block names, sizes, estimates and digests', () => {
     const result = promptFootprint(messages, [tool]);
     expect(result.map(part => part.block)).toEqual([

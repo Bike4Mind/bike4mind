@@ -8,7 +8,7 @@ provider spend. This is measurement only; it changes no runtime default.
 From `apps/desktop`, after building workspace dependencies:
 
 ```sh
-B4M_PROMPT_BASELINE=1 VITEST_MAX_WORKERS=25% pnpm exec vitest run src/main/chat/promptFootprint.test.ts src/main/chat/ChatService.deferredTools.test.ts src/main/chat/ChatService.agentWake.test.ts
+B4M_PROMPT_BASELINE=1 VITEST_MAX_WORKERS=25% pnpm exec vitest run src/main/chat/requestFootprint.test.ts src/main/chat/ChatService.deferredTools.test.ts src/main/chat/ChatService.agentWake.test.ts
 ```
 
 With `B4M_PROMPT_BASELINE=1` the deferred-tools suite prints a sanitized comparison
@@ -17,11 +17,14 @@ and estimates plus total request bytes. Without it nothing is printed.
 
 ## Method
 
-- `src/main/chat/promptFootprint.ts` splits a request into five fixed blocks
+- The test-only `test-utils/requestFootprint.ts` splits a request into five fixed blocks
   (loaded tools, deferred tools, textual system, history, tool changes) and reports
-  UTF-8 bytes, a `ceil(JSON characters / 3)` estimate and a SHA-256 per block. The
-  estimate is not a provider token count; compare bytes, or estimates from the same
-  estimator only.
+  UTF-8 bytes, Desktop's shared `estimateTextTokens` estimate over serialized JSON
+  and a SHA-256 per block. It stays outside runtime source and is imported only by
+  tests. The estimate is not a provider token count.
+- The complementary tool-state reminder baseline uses the same shared estimator
+  over its own named text blocks. Its block boundaries and serialization differ;
+  compare matched blocks, not totals across the two fixtures.
 - The fixtures run the real ChatService request assembly, local file read, worker
   spawn and parent wake with mocked completions. A "restart" is a new ChatService
   on the same SessionStore, not a process restart.

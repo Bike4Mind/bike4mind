@@ -12,7 +12,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { CompletionMessage } from './completions';
 import type { WireTool } from './deferredTools';
-import { changedPromptBlocks, promptFootprint } from './promptFootprint';
+import { changedPromptBlocks, promptFootprint } from '../../../test-utils/requestFootprint';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
