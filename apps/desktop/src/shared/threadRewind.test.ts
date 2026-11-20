@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatToolCall } from './chat';
+import { formatModelEditNote } from './modelEdit';
 import {
+  carriedNotes,
   changedThings,
   editWarnings,
   isTypedPrompt,
   promptHistory,
   regenerableReply,
-  turnsAfter,
   turnsChangedThings,
   typedText,
 } from './threadRewind';
@@ -102,11 +103,18 @@ describe('isTypedPrompt and typedText', () => {
   });
 });
 
-describe('turnsAfter', () => {
-  it('lists the turns an edit would drop', () => {
-    const messages = [user('u1'), reply('a1'), user('u2')];
-    expect(turnsAfter(messages, 'u1').map(message => message.id)).toEqual(['a1', 'u2']);
-    expect(turnsAfter(messages, 'missing')).toEqual([]);
+describe('carriedNotes', () => {
+  it('keeps the point-and-edit note and drops notes main writes for the turn', () => {
+    const modelEdit = formatModelEditNote({
+      path: 'model.ts',
+      units: 'mm',
+      parts: [{ name: 'lid', lines: [3], min: [0, 0, 0], max: [1, 1, 1] }],
+      sharedLines: [],
+      closeup: 'shot.png',
+    });
+    const prompt = user('u1', { notes: ['Run the /review skill.', modelEdit, 'The task was closed.'] });
+    expect(carriedNotes(prompt)).toEqual([modelEdit]);
+    expect(carriedNotes(user('u2'))).toEqual([]);
   });
 });
 

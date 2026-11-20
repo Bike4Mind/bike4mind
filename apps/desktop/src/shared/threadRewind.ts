@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatToolCall } from './chat';
+import { modelEditSummary } from './modelEdit';
 
 /**
  * Rewinding a thread: editing a sent prompt (which drops it and every turn after it) and
@@ -58,10 +59,13 @@ export function typedText(message: ChatMessage): string {
   return message.content;
 }
 
-/** The turns an edit of `messageId` would drop: the ones after it. Empty if it is not in the thread. */
-export function turnsAfter(messages: readonly ChatMessage[], messageId: string): ChatMessage[] {
-  const at = messages.findIndex(message => message.id === messageId);
-  return at < 0 ? [] : messages.slice(at + 1);
+/**
+ * The notes an edit of this prompt carries over. Only what the renderer attached for the prompt
+ * itself (a point-and-edit note: the picked parts and close-up) rides along; main re-resolves an
+ * inline-skill note from the new text, and its other notes describe the original turn's moment.
+ */
+export function carriedNotes(message: ChatMessage): string[] {
+  return (message.notes ?? []).filter(note => modelEditSummary([note]) !== null);
 }
 
 /** The reply Regenerate would replace: the last message, when it answers a prompt. */

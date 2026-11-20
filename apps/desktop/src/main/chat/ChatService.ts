@@ -108,7 +108,7 @@ import {
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
-import { isTypedPrompt, regenerableReply } from '@shared/threadRewind';
+import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRewind';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -3586,8 +3586,8 @@ export class ChatService {
    *
    * Refused rather than queued while a turn is running, and the truncation happens inside the
    * send's own claim on the session (startAcceptedTurn), after every refusal - so a refused edit
-   * leaves the thread as it was. The original's attachments ride with the edit; its notes do
-   * not, since an inline-skill note is resolved again from the new text.
+   * leaves the thread as it was. The original's attachments and point-and-edit note ride with the
+   * edit (see carriedNotes).
    */
   async editMessage(sessionId: string, messageId: string, text: string): Promise<SendMessageResult> {
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
@@ -3598,7 +3598,11 @@ export class ChatService {
     if (!original || !isTypedPrompt(original)) {
       return { ok: false, error: 'That message is no longer in this conversation.' };
     }
-    return this.send(sessionId, text, original.attachments ?? [], { replaces: messageId });
+    const notes = carriedNotes(original);
+    return this.send(sessionId, text, original.attachments ?? [], {
+      replaces: messageId,
+      ...(notes.length ? { notes } : {}),
+    });
   }
 
   /**

@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatMessage, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatModelEditNote, modelEditSummary } from '@shared/modelEdit';
 import { AttachmentStore } from './AttachmentStore';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -172,6 +173,28 @@ describe('ChatService rewind', () => {
       const first = (await store.get(id))!.messages[0];
       expect(await service.editMessage(id, first.id, '   ')).toMatchObject({ ok: false });
       expect(await thread(id)).toHaveLength(4);
+    });
+
+    it('keeps the point-and-edit note of the edited prompt, so the resent turn still names the parts', async () => {
+      const { id } = await service.createSession();
+      sessionIdOf = id;
+      const note = formatModelEditNote({
+        path: 'model.ts',
+        units: 'mm',
+        parts: [{ name: 'lid', lines: [3], min: [0, 0, 0], max: [1, 1, 1] }],
+        sharedLines: [],
+      });
+      await service.send(id, 'make this red', [], { notes: [note] });
+      await answer(0, 'made it red');
+
+      const first = (await store.get(id))!.messages[0];
+      expect(await service.editMessage(id, first.id, 'make this blue')).toMatchObject({ ok: true });
+      await answer(1, 'made it blue');
+
+      const edited = (await store.get(id))!.messages[0];
+      expect(edited.content).toBe('make this blue');
+      expect(modelEditSummary(edited.notes)).toEqual({ parts: ['lid'] });
+      expect(JSON.stringify(replyBody(1).messages)).toContain('Point-and-edit request');
     });
 
     it('keeps the edited prompt attachments and prunes the files only dropped turns referenced', async () => {

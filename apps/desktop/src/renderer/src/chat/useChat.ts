@@ -19,7 +19,7 @@ import type {
   SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
-import { regenerableReply } from '@shared/threadRewind';
+import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
@@ -1236,6 +1236,7 @@ export function useConversation(
           const at = current.findIndex(message => message.id === messageId);
           if (at < 0) return current;
           const { attachments } = current[at];
+          const notes = carriedNotes(current[at]);
           return [
             ...current.slice(0, at),
             {
@@ -1244,6 +1245,7 @@ export function useConversation(
               content: prompt,
               createdAt: new Date().toISOString(),
               ...(attachments?.length ? { attachments } : {}),
+              ...(notes.length ? { notes } : {}),
             },
           ];
         },
