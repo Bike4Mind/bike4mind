@@ -616,6 +616,7 @@ describe('MultiStepLogin - sign-up line while the public config loads', () => {
 
     expect(screen.getByTestId('signup-text')).toHaveTextContent('auth.registerNow');
     expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+    expectLineHeightHeld();
   });
 
   it('shows the invite and waitlist line once a closed-registration config loads', () => {
@@ -628,6 +629,7 @@ describe('MultiStepLogin - sign-up line while the public config loads', () => {
 
     expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
     expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
   });
 
   it('falls back to the invite and waitlist line when the config request fails', () => {
@@ -637,6 +639,7 @@ describe('MultiStepLogin - sign-up line while the public config loads', () => {
 
     expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
     expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
   });
 });
 
