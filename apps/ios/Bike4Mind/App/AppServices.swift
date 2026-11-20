@@ -56,6 +56,8 @@ final class AppServices {
   /// The signed-in account's profile, kept for the session; cleared when the session ends (`RootView.endSession`).
   let accountProfiles: AccountProfileStore
   let credits: CreditsViewModel
+  /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
+  let studioModels: StudioModelCatalog
 
   init(auth: AuthController) {
     self.auth = auth
@@ -145,6 +147,21 @@ final class AppServices {
       })
     briefNotifications = BriefNotificationHandler(
       briefs: briefAPI, pendingActions: pendingActionAPI, feedback: SystemApprovalFeedback())
+
+    studioModels = StudioModelCatalog(
+      currentEnvironment: { auth.environment },
+      resolveUserID: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return "fixture" }
+        #endif
+        return await auth.userID()
+      },
+      fetch: { kind in
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.studio.models(for: kind) }
+        #endif
+        return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
+      })
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
