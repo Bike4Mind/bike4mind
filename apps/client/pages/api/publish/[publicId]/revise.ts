@@ -11,7 +11,7 @@ import * as cheerio from 'cheerio';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
-import type { ArtifactVersionMeta, IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -21,6 +21,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
+import { planPublishVersions } from '@server/services/publish/planPublishVersions';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
@@ -263,27 +264,17 @@ const handler = baseApi().post(
       // Record the version, deduped by content sha and backfilling the version being
       // replaced if history doesn't yet contain it (see restore.ts for rationale).
       // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-      const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-      const versionsToPush: ArtifactVersionMeta[] = [];
-      if (!haveShas.has(currentSha)) {
-        versionsToPush.push({
-          publishedAt: artifact.publishedAt,
-          publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-          size: artifact.size,
-          sha256Index: currentSha,
-          indexBytes: currentBuf.length,
-        });
-        haveShas.add(currentSha);
-      }
-      if (!haveShas.has(newIndexSha)) {
-        versionsToPush.push({
-          publishedAt: now,
+      const { versionsToPush } = planPublishVersions({
+        previous: artifact,
+        priorIndex: currentBuf,
+        incoming: {
+          sha256: newIndexSha,
           publishedBy: String(req.user.id),
+          publishedAt: now,
           size: { totalBytes, fileCount: newManifest.length },
-          sha256Index: newIndexSha,
           indexBytes: revisedBuf.length,
-        });
-      }
+        },
+      });
 
       // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
       // the current one is archived, so a revision that changes the page grows it even if no larger.
