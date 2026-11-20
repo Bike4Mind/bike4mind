@@ -26,7 +26,10 @@ type Context = Omit<ToolContext, 'config'>;
 
 const schema = z.object({
   compositionId: CompositionIdArg,
-  shotIds: z.array(z.string().min(1)).optional().describe('The shots to work on; omit for every shot.'),
+  shotIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('The shots to work on; omit for every shot. A still placed in the editor is animated only when named.'),
   takesPerShot: z
     .number()
     .int()
@@ -57,6 +60,7 @@ type ShotReport = {
   clipFileId?: string;
   pending?: string[];
   problem?: string;
+  still?: string;
 };
 
 const patchShot = (shots: StudioShot[], id: string, patch: (shot: StudioShot) => StudioShot): StudioShot[] =>
@@ -162,14 +166,26 @@ async function makeClips(
   config: ProductionToolConfig,
   compositionId: string,
   shots: readonly StudioShot[],
-  reports: Map<string, ShotReport>
+  reports: Map<string, ShotReport>,
+  named: readonly string[] | undefined
 ): Promise<string | undefined> {
+  // A shot with no prompt is a still the user placed in the editor: animating it unasked spends a clip from the
+  // run's cap on a picture the user chose to keep still, so only a shot named in shotIds is animated.
+  for (const shot of shots.filter(
+    candidate => !candidate.prompt && !candidate.clipFileId && !named?.includes(candidate.id)
+  )) {
+    reports.set(shot.id, { ...reports.get(shot.id), id: shot.id, still: 'placed in the editor; left a still' });
+  }
   const model = config.video && pickVideoModel(config.video.usableModels);
   if (!model) return 'Video is not available, so the chosen stills stand in for clips.';
   const composition = await config.compositions.get(compositionId);
   const aspectRatio = primaryAspectRatio(composition);
   const started = new Map<string, string>();
-  for (const shot of shots.filter(candidate => candidate.chosenFileId && !candidate.clipFileId)) {
+  const toAnimate = shots.filter(
+    candidate => candidate.chosenFileId && !candidate.clipFileId && (candidate.prompt || named?.includes(candidate.id))
+  );
+  if (toAnimate.length === 0) return undefined;
+  for (const shot of toAnimate) {
     const shotMs = shot.durationMs ?? DEFAULT_SHOT_DURATION_MS;
     const submitted = await submitShotClip(context, config, {
       model,
@@ -238,7 +254,9 @@ export const productionGenerateShotTool: ToolDefinition = {
           }
           shots = await makeTakes(context, config, args.compositionId, shots, args.takesPerShot ?? 1, reports);
           const videoNote =
-            args.animate === false ? undefined : await makeClips(context, config, args.compositionId, shots, reports);
+            args.animate === false
+              ? undefined
+              : await makeClips(context, config, args.compositionId, shots, reports, args.shotIds);
 
           const final = await config.compositions.get(args.compositionId);
           const summary = final.shots

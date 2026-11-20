@@ -17,8 +17,16 @@ const SESSION_NAME_BRIEF_LENGTH = 40;
 const makeNonce = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+const productLines = (picked: IFabFileDocument | null, brandProducts: readonly string[]): string[] => {
+  if (picked) return [`Product photo (Files id): ${picked.id}`];
+  const [onFile] = brandProducts;
+  // The shots already take the brand kit's product as their reference; saying so keeps a re-direct from stalling
+  // on a request for a photo the production already has.
+  return onFile ? [`Product photo: already in the brand kit (${onFile}); every shot uses it.`] : [];
+};
+
 type DirectDialogProps = {
-  composition: Pick<StudioCompositionResponse, 'id' | 'brief'>;
+  composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit'>;
   open: boolean;
   onClose: () => void;
 };
@@ -46,7 +54,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         // follow-up turn (the user answering the director's question) can read it.
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
-        ...(product ? [`Product photo (Files id): ${product.id}`] : []),
+        ...productLines(product, composition.brandKit?.productFileIds ?? []),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',
