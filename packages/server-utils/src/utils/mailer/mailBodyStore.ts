@@ -25,9 +25,12 @@ const mailBodyBucket = () => {
 // A client per call, so a long-warm container never signs with expired credentials (as ../eventBus.ts).
 export async function putMailBody(body: StoredMailBody): Promise<string> {
   const Bucket = mailBodyBucket();
-  const { PutObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
+  const [{ PutObjectCommand }, { createS3Client }] = await Promise.all([
+    import('@aws-sdk/client-s3'),
+    import('@bike4mind/fab-pipeline'),
+  ]);
   const key = `${MAIL_BODY_PREFIX}${randomUUID()}.json`;
-  await new S3Client({}).send(
+  await createS3Client().send(
     new PutObjectCommand({ Bucket, Key: key, Body: JSON.stringify(body), ContentType: 'application/json' })
   );
   return key;
@@ -35,8 +38,11 @@ export async function putMailBody(body: StoredMailBody): Promise<string> {
 
 export async function getMailBody(key: string): Promise<StoredMailBody> {
   const Bucket = mailBodyBucket();
-  const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
-  const result = await new S3Client({}).send(new GetObjectCommand({ Bucket, Key: key }));
+  const [{ GetObjectCommand }, { createS3Client }] = await Promise.all([
+    import('@aws-sdk/client-s3'),
+    import('@bike4mind/fab-pipeline'),
+  ]);
+  const result = await createS3Client().send(new GetObjectCommand({ Bucket, Key: key }));
   const raw = await result.Body?.transformToString();
   if (raw === undefined) throw new Error(`mail body ${key} has no content`);
   const parsed: unknown = JSON.parse(raw);
