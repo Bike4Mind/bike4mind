@@ -14,6 +14,9 @@ data class AgentRunWatch(val trackingId: String, val executionId: String, val se
 /** Where the monitor reports. The app implements it with the ongoing notification. */
 interface AgentRunTracker {
     fun runChanged(run: AgentRunWatch, progress: AgentRunProgress)
+
+    /** Watching stopped, whatever the reason: a terminal state, a refusal, the poll cap or [AgentRunMonitor.stopAll]. */
+    fun runEnded(run: AgentRunWatch) {}
 }
 
 /**
@@ -42,6 +45,7 @@ class AgentRunMonitor(
                     poll(run)
                 } finally {
                     synchronized(watching) { watching.remove(run.executionId) }
+                    tracker.runEnded(run)
                 }
             }.also { watching[run.executionId] = it }
         }

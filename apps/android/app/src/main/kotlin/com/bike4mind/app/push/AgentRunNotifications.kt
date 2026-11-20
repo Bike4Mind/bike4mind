@@ -20,27 +20,37 @@ import com.bike4mind.kit.agents.AgentRunWatch
  * The ongoing notification for a running agent: Android's counterpart of the iOS Live Activity
  * (apps/ios Widgets/QuestLiveActivity.swift). On Android 16+ it uses ProgressStyle and asks to be promoted, so it
  * shows as a Live Update; older versions get a plain ongoing notification with an indeterminate bar. A run that
- * needs the user swaps it for a regular, alerting one; a finished run clears it.
+ * needs the user turns it into a regular, alerting one; a finished run clears it. While a run shows here,
+ * AgentRunKeepAlive keeps the app running so the polling behind it survives the user leaving the app.
  */
 internal class AgentRunNotifications(private val context: Context) : AgentRunTracker {
-    private val lastPhase = mutableMapOf<String, AgentRunPhase>()
+    private val lastPhase = mutableMapOf<Int, AgentRunPhase>()
 
     @SuppressLint("MissingPermission") // Guarded by areNotificationsEnabled(), which covers POST_NOTIFICATIONS.
     override fun runChanged(run: AgentRunWatch, progress: AgentRunProgress) {
+        if (progress.phase.isTerminal) return runEnded(run)
+        val id = notificationId(run)
+        val previous = synchronized(lastPhase) { lastPhase.put(id, progress.phase) }
         val manager = NotificationManagerCompat.from(context)
-        val tag = TAG_PREFIX + run.trackingId
-        val previous = synchronized(lastPhase) {
-            if (progress.phase.isTerminal) lastPhase.remove(tag) else lastPhase.put(tag, progress.phase)
-        }
-        if (progress.phase.isTerminal) return manager.cancel(tag, ID)
         if (!manager.areNotificationsEnabled()) return
-        if (progress.phase.needsUser) {
-            // onlyAlertOnce would silence an update to the ongoing entry, so it is replaced to make the ask heard.
-            if (previous?.needsUser != true) manager.cancel(tag, ID)
-            manager.notify(tag, ID, needsUser(run, progress))
+        val notification = if (progress.phase.needsUser) {
+            val firstAsk = previous?.needsUser != true
+            // An update under onlyAlertOnce is silent, so the ask is posted fresh. cancel() is a no-op while the
+            // keep-alive service is foreground on this id; the ask then alerts as an update instead.
+            if (firstAsk) manager.cancel(id)
+            needsUser(run, progress, alert = firstAsk)
         } else {
-            manager.notify(tag, ID, ongoing(run, progress))
+            ongoing(run, progress)
         }
+        manager.notify(id, notification)
+        AgentRunKeepAlive.hold(context, id, notification)
+    }
+
+    override fun runEnded(run: AgentRunWatch) {
+        val id = notificationId(run)
+        synchronized(lastPhase) { lastPhase.remove(id) }
+        AgentRunKeepAlive.release(id)
+        NotificationManagerCompat.from(context).cancel(id)
     }
 
     private fun ongoing(run: AgentRunWatch, progress: AgentRunProgress) =
@@ -54,7 +64,7 @@ internal class AgentRunNotifications(private val context: Context) : AgentRunTra
             .setOnlyAlertOnce(true)
             .setRequestPromotedOngoing(true)
             .setShortCriticalText(context.getString(R.string.agent_run_chip))
-            // Polling re-posts it every few seconds; if the process dies the entry lapses instead of lying forever.
+            // Each poll re-posts it; if polling stops without an end (process killed) it lapses instead of lying forever.
             .setTimeoutAfter(STALE_AFTER_MS)
             .setContentIntent(openChat(run))
             .apply {
@@ -67,13 +77,13 @@ internal class AgentRunNotifications(private val context: Context) : AgentRunTra
             }
             .build()
 
-    private fun needsUser(run: AgentRunWatch, progress: AgentRunProgress) =
+    private fun needsUser(run: AgentRunWatch, progress: AgentRunProgress, alert: Boolean) =
         NotificationCompat.Builder(context, PushNotifications.CHANNEL_ID)
             .setSmallIcon(android.R.drawable.sym_def_app_icon)
             .setContentTitle(run.title)
             .setContentText(progress.stageLabel ?: context.getString(R.string.agent_run_needs_you))
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setOnlyAlertOnce(true)
+            .setOnlyAlertOnce(!alert)
             .setAutoCancel(true)
             .setContentIntent(openChat(run))
             .build()
@@ -85,16 +95,18 @@ internal class AgentRunNotifications(private val context: Context) : AgentRunTra
             .putExtra("sessionId", run.sessionId)
         return PendingIntent.getActivity(
             context,
-            (TAG_PREFIX + run.trackingId).hashCode(),
+            notificationId(run),
             launch,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
 
+    /** Untagged, because a foreground service's notification is addressed by id alone. Pushes post tagged, at id 0. */
+    private fun notificationId(run: AgentRunWatch) = (TAG_PREFIX + run.trackingId).hashCode()
+
     companion object {
         const val CHANNEL_ID = "b4m_agent_runs"
         private const val TAG_PREFIX = "agent-run:"
-        private const val ID = 1
         private const val STALE_AFTER_MS = 60_000L
 
         /** Low importance: an update every few seconds must not buzz. Not MIN, which would block promotion. */

@@ -33,9 +33,14 @@ private class FakeAgentRunApi : AgentRunApi {
 
 private class RecordingTracker : AgentRunTracker {
     val changes = mutableListOf<Pair<AgentRunWatch, AgentRunProgress>>()
+    val ended = mutableListOf<AgentRunWatch>()
 
     override fun runChanged(run: AgentRunWatch, progress: AgentRunProgress) {
         changes += run to progress
+    }
+
+    override fun runEnded(run: AgentRunWatch) {
+        ended += run
     }
 }
 
@@ -77,6 +82,7 @@ class AgentRunMonitorTest {
         assertEquals(AgentRunProgress(AgentRunPhase.RUNNING, "Using web_search", 1), tracker.changes.first().second)
         assertEquals(3, api.polled.size, "no polling past the terminal state, and one watcher per run")
         assertTrue(monitor.watchedExecutionIds.isEmpty())
+        assertEquals(listOf(watch), tracker.ended)
     }
 
     @Test
@@ -99,28 +105,33 @@ class AgentRunMonitorTest {
         assertTrue(goneTracker.changes.isEmpty())
         assertEquals(1, gone.polled.size)
         assertTrue(goneMonitor.watchedExecutionIds.isEmpty())
+        assertEquals(listOf(watch), goneTracker.ended, "a refusal still ends the run's notification")
     }
 
     @Test
     fun pollingIsBounded() = runTest {
         val api = FakeAgentRunApi().apply { results += status(State.RUNNING) }
-        val monitor = monitor(api, RecordingTracker(), maxPolls = 4)
+        val tracker = RecordingTracker()
+        val monitor = monitor(api, tracker, maxPolls = 4)
         monitor.watch(watch)
         settle()
         assertEquals(4, api.polled.size)
         assertTrue(monitor.watchedExecutionIds.isEmpty())
+        assertEquals(listOf(watch), tracker.ended)
     }
 
     @Test
     fun stopAllCancelsEveryWatcher() = runTest {
         val api = FakeAgentRunApi().apply { results += status(State.RUNNING) }
-        val monitor = monitor(api, RecordingTracker())
+        val tracker = RecordingTracker()
+        val monitor = monitor(api, tracker)
         monitor.watch(watch)
         runCurrent()
         monitor.stopAll()
         advanceTimeBy(60_000)
         assertTrue(api.polled.isEmpty())
         assertTrue(monitor.watchedExecutionIds.isEmpty())
+        assertEquals(listOf(watch), tracker.ended)
     }
 }
 

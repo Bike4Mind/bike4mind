@@ -47,8 +47,7 @@
       "title": "First-launch welcome",
       "web": "na",
       "ios": "green",
-      "android": "yellow",
-      "notes": "Android: green once the agent-run items in apps/android/DEVICE_TESTING.md pass on a device, including an Android 16 Live Update."
+      "android": "red"
     },
     {
       "id": "account-deletion",
@@ -107,7 +106,8 @@
       "title": "Live agent progress outside the app (Live Activities)",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the agent-run items in apps/android/DEVICE_TESTING.md pass on a device, including an Android 16 Live Update."
     }
   ]
 }
