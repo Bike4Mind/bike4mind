@@ -2,6 +2,7 @@ import type { EventBridgeEvent } from 'aws-lambda';
 import { withEventContext } from '@workers/utils/eventContext';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { getMailBody, type StoredMailBody } from '@bike4mind/server-utils/utils/mailer/mailBodyStore';
 import { findMailSinkDomain, parseMailSinkDomains } from '@bike4mind/server-utils/utils/mailer/sinkDomains';
 import {
   isMailTestRequest,
@@ -11,10 +12,32 @@ import {
 
 const sinkDomainFor = (to: string) => findMailSinkDomain(to, parseMailSinkDomains(process.env.MAIL_SINK_DOMAINS));
 
+export class MailBodyMissingError extends Error {
+  constructor(key: string, s3Error: string) {
+    super(
+      `mail body ${key} is gone (S3 ${s3Error}): it expires 1 day after queueing, so a DLQ redrive past that cannot be delivered`
+    );
+    this.name = 'MailBodyMissingError';
+  }
+}
+
+async function readOffloadedBody(key: string): Promise<StoredMailBody> {
+  try {
+    return await getMailBody(key);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : undefined;
+    const status = (error as { $metadata?: { httpStatusCode?: number } } | undefined)?.$metadata?.httpStatusCode;
+    // The worker holds GetObject without ListBucket (infra/mailBodyOffload.ts), so S3 answers a missing key with 403.
+    if (name === 'NoSuchKey' || name === 'AccessDenied' || status === 404 || status === 403) {
+      throw new MailBodyMissingError(key, name ?? String(status));
+    }
+    throw error;
+  }
+}
+
 const deliver = withEventContext(async (event, logger) => {
-  const { to, subject, body, text, attachments, category, mirror, logRecipient } = EmailEvents.Send.schema.parse(
-    event.properties
-  );
+  const { to, subject, body, bodyRef, text, attachments, category, mirror, logRecipient } =
+    EmailEvents.Send.schema.parse(event.properties);
   // Mail published with logRecipient: false keeps its address out of this worker's logs too.
   const loggedTo = logRecipient === false ? '[redacted]' : to;
 
@@ -29,7 +52,8 @@ const deliver = withEventContext(async (event, logger) => {
     logger.info('Email skipped: recipient is on a sink domain', { to: loggedTo, subject, sinkDomain });
     return;
   }
-  if (body === undefined) throw new Error('mail with an offloaded body cannot be sent by this worker yet');
+  const content = bodyRef ? await readOffloadedBody(bodyRef.key) : { html: body, text };
+  if (content.html === undefined) throw new Error('email.send event carries neither a body nor a bodyRef');
 
   const emailData: {
     subject: string;
@@ -42,9 +66,9 @@ const deliver = withEventContext(async (event, logger) => {
     }[];
   } = {
     subject,
-    html: body,
+    html: content.html,
   };
-  if (text !== undefined) emailData.text = text;
+  if (content.text !== undefined) emailData.text = content.text;
 
   // If attachments are provided, convert base64 strings back to buffers
   if (attachments && attachments.length > 0) {
