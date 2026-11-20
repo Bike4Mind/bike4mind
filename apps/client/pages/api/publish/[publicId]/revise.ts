@@ -21,6 +21,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
+// From the module, not the barrel: tests that hand-build a partial barrel mock (limits.test.ts) do not export these.
 import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
