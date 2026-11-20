@@ -20,6 +20,14 @@ function frame(payload: unknown): string {
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Not vi.waitUntil: under fake timers it advances the clock while it polls.
+async function until(done: () => boolean): Promise<void> {
+  for (let spins = 0; !done(); spins++) {
+    if (spins > 5_000) throw new Error('condition never held');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 const HOSTED: ChatModelOption = { id: 'test-model', name: 'Test', backend: 'anthropic' };
 const LOCAL: ChatModelOption = {
   id: localModelId(OLLAMA_RUNTIME_ID, 'qwen3:0.6b'),
@@ -245,25 +253,72 @@ describe('ChatService reply stats', () => {
   });
 
   it('starts a new reply after a mid-turn message with its own clock and no tool time', async () => {
-    slowTools();
-    const id = await session();
-    await services[0].send(id, 'list');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
-    expect(await services[0].send(id, 'and the hidden ones?')).toMatchObject({ ok: true, queued: true });
-    streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
-    );
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
-    streams[1].write(frame({ type: 'content', text: 'none' }));
-    streams[1].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 3000 });
+    // Only Date is faked, so the clock moves when a test says it does and no real latency can leak in.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 10, 2) });
+    try {
+      type RunTools = (...args: unknown[]) => Promise<unknown>;
+      const proto = ChatService.prototype as unknown as { runTools: RunTools };
+      const run = proto.runTools;
+      vi.spyOn(proto, 'runTools').mockImplementation(async function (this: unknown, ...args: unknown[]) {
+        vi.setSystemTime(Date.now() + TOOL_MS);
+        return run.apply(this, args);
+      });
+      const id = await session();
+      await services[0].send(id, 'list');
+      await until(() => streams.length === 1);
+      expect(await services[0].send(id, 'and the hidden ones?')).toMatchObject({ ok: true, queued: true });
+      streams[0].write(
+        frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+      );
+      streams[0].write(frame('[DONE]'));
+      await until(() => streams.length === 2);
+      streams[1].write(frame({ type: 'content', text: 'none' }));
+      streams[1].write(frame('[DONE]'));
+      await until(() => events.filter(event => event.type === 'done').length === 2);
 
-    const replies = (await store.get(id))!.messages.filter(message => message.role === 'assistant');
-    expect(replies).toHaveLength(2);
-    expect(replies[0].stats!.toolMs).toBeGreaterThanOrEqual(TOOL_MS - 5);
-    expect(replies[1].stats!.toolMs).toBe(0);
-    expect(replies[1].stats!.totalMs - replies[1].stats!.modelMs).toBeLessThan(TOOL_MS / 2);
+      const replies = (await store.get(id))!.messages.filter(message => message.role === 'assistant');
+      expect(replies).toHaveLength(2);
+      expect(replies[0].stats!.toolMs).toBe(TOOL_MS);
+      expect(replies[1].stats!.toolMs).toBe(0);
+      expect(replies[1].stats!.totalMs).toBe(replies[1].stats!.modelMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times the first token of a self-hosted reply that opens with a tool call from its first tool delta', async () => {
+    const T0 = Date.UTC(2026, 10, 2);
+    vi.useFakeTimers({ toFake: ['Date'], now: T0 });
+    try {
+      let rounds = 0;
+      localStream.mockImplementation(async (request, emit) => {
+        // The title request goes out ahead of the reply's own.
+        if (JSON.stringify(request.messages[0]).includes('You name conversations')) {
+          emit({ type: 'content', text: 'Listing files', stopReason: 'end_turn' });
+          return;
+        }
+        if (rounds++ === 0) {
+          vi.setSystemTime(T0 + 300);
+          emit({ type: 'content', toolStarted: { name: 'glob_files', id: 'c1' } });
+          vi.setSystemTime(T0 + 5_000);
+          emit({ type: 'tool_use', tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*"}' }] });
+          emit({ type: 'content', stopReason: 'tool_use' });
+          return;
+        }
+        emit({ type: 'content', text: 'nothing here' });
+        emit({ type: 'content', stopReason: 'end_turn' });
+      });
+      const id = await session(LOCAL.id);
+      await services[0].send(id, 'list');
+      await until(() => events.some(event => event.type === 'done' || event.type === 'error'));
+
+      const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+      expect(reply?.rounds).toHaveLength(2);
+      expect(reply?.rounds?.[0].timing?.firstTokenAt).toBe(T0 + 300);
+      expect(reply?.stats?.firstTokenMs).toBe(300);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('times a tool round from the call starting, so its tokens are rated over the time they took', async () => {
@@ -561,14 +616,6 @@ describe('ChatService reply stats', () => {
 
     beforeEach(() => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], now: T0 }));
     afterEach(() => vi.useRealTimers());
-
-    // Not vi.waitUntil: under fake timers it advances the clock while it polls.
-    async function until(done: () => boolean): Promise<void> {
-      for (let spins = 0; !done(); spins++) {
-        if (spins > 5_000) throw new Error('condition never held');
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    }
 
     /** An agent's first request; `occupy` leaves another request with its prefix key waiting on the gate. */
     async function agentReply(occupy: boolean, hold: (releaseLeader: () => void) => Promise<void>) {

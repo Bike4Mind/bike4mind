@@ -86,9 +86,82 @@ describe('OpenAICompatibleChat', () => {
       ]);
     const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'read a' }] });
     expect(events).toEqual([
+      { type: 'content', toolStarted: { name: 'read_', id: 'call_1' } },
       { type: 'tool_use', tools: [{ name: 'read_file', arguments: '{"path":"a"}', id: 'call_1' }] },
       { type: 'content', stopReason: 'tool_use' },
     ]);
+  });
+
+  it('announces each tool call once, as its name first arrives, ahead of the finished calls', async () => {
+    const one = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '' } }] }),
+          delta({ tool_calls: [{ index: 0, function: { arguments: '{"path":"a"}' } }] }, 'tool_calls'),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(one.filter(event => event.toolStarted)).toEqual([
+      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
+    ]);
+    expect(one.findIndex(event => event.toolStarted)).toBeLessThan(one.findIndex(event => event.type === 'tool_use'));
+
+    const parallel = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{"a":1}' } }] }),
+          delta({ tool_calls: [{ index: 1, id: 'call_2', function: { name: 'grep', arguments: '{"b":' } }] }),
+          delta(
+            {
+              tool_calls: [
+                { index: 0, function: { arguments: '' } },
+                { index: 1, function: { arguments: '2}' } },
+              ],
+            },
+            'tool_calls'
+          ),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'go' }] }
+    );
+    expect(parallel.filter(event => event.toolStarted)).toEqual([
+      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
+      { type: 'content', toolStarted: { name: 'grep', id: 'call_2' } },
+    ]);
+
+    const afterText = await collect(
+      chat(async () =>
+        sse([
+          delta({ content: 'Let me look.' }),
+          delta(
+            { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{}' } }] },
+            'tool_calls'
+          ),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(afterText.slice(0, 2)).toEqual([
+      { type: 'content', text: 'Let me look.' },
+      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
+    ]);
+  });
+
+  it('announces a call without an id by its name alone', async () => {
+    const events = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, function: { name: 'read_file', arguments: '{}' } }] }, 'tool_calls'),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(events[0]).toEqual({ type: 'content', toolStarted: { name: 'read_file' } });
   });
 
   it('reports a length stop as max_tokens', async () => {

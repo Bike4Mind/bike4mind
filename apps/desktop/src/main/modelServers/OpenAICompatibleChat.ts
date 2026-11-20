@@ -863,9 +863,14 @@ export class OpenAICompatibleChat implements LocalChat {
           const index = typeof call.index === 'number' ? call.index : calls.size;
           const entry = calls.get(index) ?? { name: '', arguments: '' };
           if (typeof call.id === 'string') entry.id = call.id;
+          const unnamed = !entry.name;
           if (typeof call.function?.name === 'string') entry.name += call.function.name;
           if (typeof call.function?.arguments === 'string') entry.arguments += call.function.arguments;
           calls.set(index, entry);
+          // Once per call, as the hosted stream does: the reply's first token when it opens with a tool call.
+          if (unnamed && entry.name) {
+            onEvent({ type: 'content', toolStarted: { name: entry.name, ...(entry.id ? { id: entry.id } : {}) } });
+          }
         }
         if (typeof choice?.finish_reason === 'string')
           stopReason = STOP_REASONS[choice.finish_reason] ?? choice.finish_reason;
