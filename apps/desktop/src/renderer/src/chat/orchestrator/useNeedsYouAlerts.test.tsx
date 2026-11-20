@@ -5,7 +5,7 @@ import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writePresenter } from './orchestratorPrefs';
-import { PRESENTER_NOTICE_TITLE, useNeedsYouAlerts } from './useNeedsYouAlerts';
+import { PRESENTER_NOTICE_BODY, PRESENTER_NOTICE_TITLE, useNeedsYouAlerts } from './useNeedsYouAlerts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -170,8 +170,8 @@ describe('useNeedsYouAlerts', () => {
       await render({ child: 'needs-action', root: 'needs-action' });
       expect(chime.playChime).toHaveBeenCalledTimes(1);
       expect(notify.mock.calls.map(([notice]) => notice)).toEqual([
-        { sessionId: 'child', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: '' },
-        { sessionId: 'root', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: '' },
+        { sessionId: 'child', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY },
+        { sessionId: 'root', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY },
       ]);
       const shown = JSON.stringify(notify.mock.calls);
       for (const real of ['Audit', 'Review the auth middleware', 'pnpm test']) expect(shown).not.toContain(real);

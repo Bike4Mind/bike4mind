@@ -97,10 +97,13 @@ async function announce(entered: readonly string[], sessions: readonly ChatSessi
 /** The whole notice while Presenter mode is on (presenter.ts): a shared screen shows OS notices too. */
 export const PRESENTER_NOTICE_TITLE = 'An agent needs you';
 
+/** Tells a user who forgot Presenter mode is on why the notice is bare. */
+export const PRESENTER_NOTICE_BODY = 'Presenter mode is on';
+
 async function notify(sessionId: string, sessions: readonly ChatSessionSummary[]): Promise<void> {
   const rootId = rootSessionOf(sessions, sessionId);
   if (readPresenter()) {
-    await window.b4m.attention.notify({ sessionId, rootId, title: PRESENTER_NOTICE_TITLE, body: '' });
+    await window.b4m.attention.notify({ sessionId, rootId, title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY });
     return;
   }
   const title = needsYouTitle(sessions, sessionId, rootId);
