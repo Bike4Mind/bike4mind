@@ -61,6 +61,7 @@ import LakeSourceConnectActions from '../steps/LakeSourceConnectActions';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
+import { sourceCount } from './shared';
 
 // Right pane: selected lake's details + management actions
 
@@ -302,7 +303,7 @@ export function LakeInfoPanel({
                   onClick={onReviewProposals}
                   sx={{ flexShrink: 0, fontSize: '13px' }}
                 >
-                  {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
+                  {`${sourceCount(lake.pendingProposalCount)} to review`}
                 </Button>
               )}
               <Tooltip title="See who can access this lake, and who has read it" size="sm">

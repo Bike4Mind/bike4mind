@@ -77,7 +77,7 @@ import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
-import { prefixSegments } from './shared';
+import { prefixSegments, sourceCount } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
 
 // Left sidebar
@@ -547,9 +547,7 @@ export default function ManagerNav({
                                     slotProps={{
                                       action: {
                                         'aria-labelledby': undefined,
-                                        'aria-label': `Review ${lake.pendingProposalCount} ${
-                                          lake.pendingProposalCount === 1 ? 'source' : 'sources'
-                                        } in ${lake.name}`,
+                                        'aria-label': `Review ${sourceCount(lake.pendingProposalCount)} in ${lake.name}`,
                                         'data-testid': `datalake-manager-review-proposals-${lake.id}`,
                                       },
                                     }}
@@ -558,7 +556,7 @@ export default function ManagerNav({
                                       onReviewProposals(lake.id);
                                     }}
                                   >
-                                    {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
+                                    {`${sourceCount(lake.pendingProposalCount)} to review`}
                                   </Chip>
                                 </Tooltip>
                               )}
