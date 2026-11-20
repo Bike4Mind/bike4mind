@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   findUser: vi.fn(),
   listRuns: vi.fn(),
   pendingActions: vi.fn(),
+  openQuestions: vi.fn(),
   loadEmails: vi.fn(),
   loadDelegations: vi.fn(),
   markEmailsBriefed: vi.fn(),
@@ -32,7 +33,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   userRepository: { findById: mocks.findUser },
   agentExecutionRepository: { findByUserIdPaginated: mocks.listRuns },
-  questRepository: { findPendingActionsBySessionIds: mocks.pendingActions },
+  questRepository: {
+    findPendingActionsBySessionIds: mocks.pendingActions,
+    findOpenQuestionsBySessionIds: mocks.openQuestions,
+  },
   emailTriageItemRepository: { markBriefed: mocks.markEmailsBriefed, storedEmailIds: mocks.storedEmailIds },
   delegatedItemRepository: { markBriefed: mocks.markDelegationsBriefed },
 }));
@@ -93,6 +97,7 @@ describe('brief.compose handler', () => {
       { questId: 'q1', sessionId: 's1', ts: 7, tool: 'send_reply', params: { to: 'a' } },
       { questId: 'q2', sessionId: 's1', ts: 8, tool: 'archive' },
     ]);
+    mocks.openQuestions.mockResolvedValue([]);
     mocks.loadEmails.mockResolvedValue([
       {
         emailId: 'e1',
