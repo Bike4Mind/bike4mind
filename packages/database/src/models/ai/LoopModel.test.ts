@@ -669,6 +669,16 @@ describe('LoopRepository', () => {
     expect((await Loop.findById(loop.id))?.toJSON()).toMatchObject({ activeExecutionIds: ['e1'] });
   });
 
+  it('recordPendingExecution writes only under the claim, and markDispatched does not add the run twice', async () => {
+    const lease = new Date(Date.now() + 60_000);
+    const loop = await create({ status: 'live', leaseUntil: lease });
+    expect(await loopRepository.recordPendingExecution(loop.id, 'e1', new Date(lease.getTime() + 1))).toBe(false);
+    expect(await loopRepository.recordPendingExecution(loop.id, 'e1', lease)).toBe(true);
+    expect((await Loop.findById(loop.id))?.toJSON()).toMatchObject({ activeExecutionIds: ['e1'], leaseUntil: lease });
+    expect(await loopRepository.markDispatched(loop.id, 'e1', null, undefined, lease)).toBe(true);
+    expect((await Loop.findById(loop.id))?.toJSON()).toMatchObject({ activeExecutionIds: ['e1'] });
+  });
+
   it('recordDispatchFailure counts a failure on a live loop and releases the claim either way', async () => {
     const lease = new Date(Date.now() + 60_000);
     const live = await create({ status: 'live', leaseUntil: lease });

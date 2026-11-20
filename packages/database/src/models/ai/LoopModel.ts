@@ -159,6 +159,14 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
 
+  async recordPendingExecution(id: string, executionId: string, leaseUntil: Date): Promise<boolean> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, leaseUntil },
+      { $addToSet: { activeExecutionIds: executionId } }
+    );
+    return result.matchedCount > 0;
+  }
+
   async markDispatched(
     id: string,
     executionId: string,
@@ -170,7 +178,16 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       {
         $set: {
           activeExecutionIds: {
-            $concatArrays: [{ $ifNull: ['$activeExecutionIds', []] }, [{ $literal: executionId }]],
+            $let: {
+              vars: { ids: { $ifNull: ['$activeExecutionIds', []] } },
+              in: {
+                $cond: [
+                  { $in: [{ $literal: executionId }, '$$ids'] },
+                  '$$ids',
+                  { $concatArrays: ['$$ids', [{ $literal: executionId }]] },
+                ],
+              },
+            },
           },
           lastExecutionId: { $literal: executionId },
           // null: a `tickets` wake-mode loop, which only a ticket makes due.

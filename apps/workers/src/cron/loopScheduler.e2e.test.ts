@@ -342,6 +342,40 @@ describe('runLoopSchedulerTick', () => {
     expect(claim).toHaveBeenCalledWith('exec-1', ['pending', 'running'], 'aborted');
   });
 
+  it('puts the created run on the loop before the executor is invoked', async () => {
+    const loop = await createLoop();
+    let beforeInvoke: string[] | undefined;
+    h.startAgentExecution.mockImplementation(
+      async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
+        expect(await input.beforeDispatch?.('exec-1')).toBe(true);
+        beforeInvoke = (await reload(loop.id)).activeExecutionIds;
+        return { ok: true, executionId: 'exec-1' };
+      }
+    );
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(beforeInvoke).toEqual(['exec-1']);
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-1']);
+  });
+
+  it('refuses to invoke a created run once its loop lost the claim', async () => {
+    const loop = await createLoop();
+    let allowed: boolean | undefined;
+    h.startAgentExecution.mockImplementation(
+      async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
+        await Loop.updateOne({ _id: loop.id }, { $set: { leaseUntil: new Date(NOW.getTime() + 2 * LOOP_LEASE_MS) } });
+        allowed = await input.beforeDispatch?.('exec-1');
+        return { ok: false, reason: 'dispatch_failed', message: 'withdrawn', executionId: 'exec-1' };
+      }
+    );
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(allowed).toBe(false);
+    expect((await reload(loop.id)).activeExecutionIds ?? []).toEqual([]);
+  });
+
   it(`counts a start that failed before any run as a failure, stopping the loop after ${MAX_CONSECUTIVE_FAILURES}`, async () => {
     const loop = await createLoop();
     h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'dispatch_failed', message: 'not configured' });

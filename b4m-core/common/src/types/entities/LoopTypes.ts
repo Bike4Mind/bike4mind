@@ -545,7 +545,12 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   /** A start that failed before any run existed: counts as a failed run on a live loop, and releases the claim. */
   recordDispatchFailure(id: string, statusReason: string): Promise<void>;
   /**
-   * Adds the run to `activeExecutionIds` and releases the claim. `laneHoldAt` marks the loop held on its own
+   * Adds a just-created run to `activeExecutionIds` before its executor is invoked, while the claim (`leaseUntil`)
+   * is still held, so a lapsed lease cannot free the loop for an overlapping run. False when the claim was lost.
+   */
+  recordPendingExecution(id: string, executionId: string, leaseUntil: Date): Promise<boolean>;
+  /**
+   * Adds the run to `activeExecutionIds` (once, if `recordPendingExecution` already did) and releases the claim. `laneHoldAt` marks the loop held on its own
    * lane limit from then (all lanes now busy with ready tickets waiting); without it any hold is cleared. A null
    * `nextRunAt` unsets it (a `tickets` wake-mode loop). With `leaseUntil` (the claim's), writes only while that
    * claim is still held; false when it was not.

@@ -157,6 +157,11 @@ export type StartAgentExecutionInput = {
   escalated?: boolean;
   loopRunKind?: IAgentExecution['loopRunKind'];
   triageWorkItemIds?: string[];
+  /**
+   * Loop scheduler only: called with the new execution id before the executor is invoked. Returning false refuses
+   * the dispatch (`dispatch_failed`, with the id) and the run is never invoked.
+   */
+  beforeDispatch?: (executionId: string) => Promise<boolean>;
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -475,6 +480,11 @@ export async function startAgentExecution(
   }
 
   await pinning;
+  if (input.beforeDispatch && !(await input.beforeDispatch(executionId))) {
+    logger.warn('[Start] Dispatch refused by the caller before invoking the executor', { executionId });
+    if (persistedQuestId) await Quest.deleteOne({ _id: persistedQuestId }).catch(() => undefined);
+    return { ok: false, reason: 'dispatch_failed', message: 'Run start was withdrawn.', executionId };
+  }
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is

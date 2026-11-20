@@ -1155,6 +1155,7 @@ async function dispatchLoop(
           loopAttempt: ticket.runCount,
         }),
         ...(escalated && { escalated: true }),
+        beforeDispatch: recordPendingRun(loop),
       },
       logger
     );
@@ -1206,6 +1207,7 @@ async function dispatchTriage(
         loopRunKind: 'triage',
         triageWorkItemIds: untriaged.map(ticket => ticket.id),
         ...(admission.creditCap !== undefined && { creditCap: admission.creditCap }),
+        beforeDispatch: recordPendingRun(loop),
       },
       logger
     );
@@ -1214,6 +1216,12 @@ async function dispatchTriage(
     throw error;
   }
   return settleDispatch(loop, null, result, now, logger, more);
+}
+
+/** Puts the created run on the loop under its claim before the executor is invoked; refuses it if the claim lapsed. */
+function recordPendingRun(loop: ILoop): ((executionId: string) => Promise<boolean>) | undefined {
+  const lease = loop.leaseUntil;
+  return lease ? executionId => loopRepository.recordPendingExecution(loop.id, executionId, lease) : undefined;
 }
 
 /**
