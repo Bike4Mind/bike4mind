@@ -30,8 +30,8 @@ export interface WebSearchToolConfig {
   /**
    * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
    * actual search result before fetching it server-side, rather than trusting the model's copy of
-   * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
-   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset (or an
+   * it unconditionally. The apps supply `signingKey('search-image-url')` from
+   * server-utils/src/security/signingKeys.ts. A caller that leaves this unset (or an
    * empty/placeholder value) degrades to plain prose: no image search, no cards prompt, rather
    * than paying for images that would only fail verification and render as "Image unavailable".
    */
