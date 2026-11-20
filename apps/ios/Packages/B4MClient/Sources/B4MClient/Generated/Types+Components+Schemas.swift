@@ -54,6 +54,56 @@ extension Components {
                 case name
             }
         }
+        /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse`.
+        public struct UpgradeRequiredResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/error`.
+            public var error: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/request_id`.
+            public var requestId: Swift.String?
+            /// Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/name`.
+            @available(*, deprecated)
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/errorCode`.
+            public var errorCode: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/client_name`.
+            public var clientName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/minimum_version`.
+            public var minimumVersion: Swift.String
+            /// Creates a new `UpgradeRequiredResponse`.
+            ///
+            /// - Parameters:
+            ///   - error:
+            ///   - requestId:
+            ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///   - errorCode:
+            ///   - clientName:
+            ///   - minimumVersion:
+            public init(
+                error: Swift.String,
+                requestId: Swift.String? = nil,
+                name: Swift.String? = nil,
+                errorCode: Swift.String,
+                clientName: Swift.String,
+                minimumVersion: Swift.String
+            ) {
+                self.error = error
+                self.requestId = requestId
+                self.name = name
+                self.errorCode = errorCode
+                self.clientName = clientName
+                self.minimumVersion = minimumVersion
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case requestId = "request_id"
+                case name
+                case errorCode
+                case clientName = "client_name"
+                case minimumVersion = "minimum_version"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse`.
         public struct ScopeForbiddenResponse: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/error`.
@@ -147,56 +197,6 @@ extension Components {
                 case suspension
                 case requiredScopes = "required_scopes"
                 case alsoRequiredScopes = "also_required_scopes"
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse`.
-        public struct UpgradeRequiredResponse: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/error`.
-            public var error: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/request_id`.
-            public var requestId: Swift.String?
-            /// Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-            ///
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/name`.
-            @available(*, deprecated)
-            public var name: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/errorCode`.
-            public var errorCode: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/client_name`.
-            public var clientName: Swift.String
-            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/minimum_version`.
-            public var minimumVersion: Swift.String
-            /// Creates a new `UpgradeRequiredResponse`.
-            ///
-            /// - Parameters:
-            ///   - error:
-            ///   - requestId:
-            ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-            ///   - errorCode:
-            ///   - clientName:
-            ///   - minimumVersion:
-            public init(
-                error: Swift.String,
-                requestId: Swift.String? = nil,
-                name: Swift.String? = nil,
-                errorCode: Swift.String,
-                clientName: Swift.String,
-                minimumVersion: Swift.String
-            ) {
-                self.error = error
-                self.requestId = requestId
-                self.name = name
-                self.errorCode = errorCode
-                self.clientName = clientName
-                self.minimumVersion = minimumVersion
-            }
-            public enum CodingKeys: String, CodingKey {
-                case error
-                case requestId = "request_id"
-                case name
-                case errorCode
-                case clientName = "client_name"
-                case minimumVersion = "minimum_version"
             }
         }
         /// - Remark: Generated from `#/components/schemas/getSessionResponse200`.

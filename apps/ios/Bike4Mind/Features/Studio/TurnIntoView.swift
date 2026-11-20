@@ -39,6 +39,7 @@ private struct TurnIntoFlow: ViewModifier {
   @State private var grabbing: MediaItem?
   @State private var grabbed: MediaItem?
   @State private var editing: MediaItem?
+  @State private var composing: MediaItem?
 
   func body(content: Content) -> some View {
     content
@@ -52,6 +53,12 @@ private struct TurnIntoFlow: ViewModifier {
           }
         case .morph: picking = request.item
         case .grabFrame: grabbing = request.item
+        case .addMusic, .putOnVideo: composing = request.item
+        }
+      }
+      .sheet(item: $composing) { item in
+        if let context, let draft = SceneDraft.starting(from: item) {
+          SceneComposerView(draft: draft, context: context, onStarted: context.reveal)
         }
       }
       .sheet(item: $picking) { source in

@@ -140,7 +140,8 @@
       }
     }
 
-    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
+    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are,
+    /// except a Scene, which lands on `FixtureMediaAPI.sceneID` so its detail and "Made from" chips can be opened.
     private struct FixtureStudioAPI: StudioAPI {
       static let runTime: TimeInterval = 4
 
@@ -192,6 +193,8 @@
                   lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
                   pricing: MusicPricing(unit: .perSong, credits: 160))))
           ]
+        case .scene:
+          []
         }
       }
 
@@ -206,12 +209,17 @@
           kind: .image, id: "fixture-\(UUID().uuidString)", prompt: request.summaryPrompt, startedAt: Date())
       }
 
+      func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+        GenerationHandle(kind: .scene, id: "fixture-\(UUID().uuidString)", prompt: request.label, startedAt: Date())
+      }
+
       func status(of handle: GenerationHandle) async throws -> GenerationStatus {
         let elapsed = Date().timeIntervalSince(handle.startedAt)
         guard elapsed >= Self.runTime else {
           return GenerationStatus(phase: .running(progress: elapsed / Self.runTime))
         }
-        return GenerationStatus(phase: .succeeded)
+        return GenerationStatus(
+          phase: .succeeded, resultFileID: handle.kind == .scene ? FixtureMediaAPI.sceneID : nil)
       }
 
       func cancel(_ handle: GenerationHandle) async throws {}
@@ -400,6 +408,8 @@
     /// players work offline.
     private struct FixtureMediaAPI: MediaAPI {
       private static let now = Date()
+      /// A video item that plays the part of a composed Scene: its trail is the picture, soundtrack and cover.
+      static let sceneID = "fixture-media-8"
 
       private static let all: [MediaItem] = (0..<24).map { index in
         let kind: MediaKind = index % 5 == 3 ? .video : (index % 5 == 4 ? .audio : .image)
@@ -452,6 +462,21 @@
           return FileLineage(
             fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
             edges: [edge])
+        case Self.sceneID:
+          let scene = Self.all[8]
+          let song = Self.all[4]
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(scene, generator: "scene"), node(video, generator: "video"), node(song, generator: "music"),
+              node(image, generator: "image"),
+            ],
+            children: [],
+            edges: [
+              LineageEdge(parentID: video.id, childID: id, role: .sceneVideo),
+              LineageEdge(parentID: song.id, childID: id, role: .sceneAudio),
+              LineageEdge(parentID: image.id, childID: id, role: .sceneCover),
+            ])
         default:
           return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
         }
