@@ -113,6 +113,15 @@ export default $config({
       },
     });
 
+    // Must run before ./infra loads: infra/mailTransport.ts reads the mail env at module top.
+    const { applyPersonalMailDefaults } = await import('./infra/personalMailDefaults');
+    await applyPersonalMailDefaults({
+      stage: $app.stage,
+      env: process.env,
+      appName: $app.name,
+      lookup: name => aws.ssm.getParameter({ name }).then(result => result.value),
+    });
+
     const {
       fabFileBucket,
       generatedImagesBucket,
