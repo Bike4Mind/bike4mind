@@ -5,6 +5,7 @@ import {
   type ChatUsage,
   type ModelPhase,
 } from '@shared/chat';
+import { readReplyStats } from '@shared/replyStats';
 import { formatElapsed, formatTokens, type TurnProgress } from './statusLine';
 import { formatTokenRate, untimedOutputNote } from './tokenRate';
 
@@ -101,6 +102,9 @@ export interface ReplyStatsSource {
   usage?: ChatUsage | null | undefined;
 }
 
+/** Stored stats are read raw, so each entry point below takes them through readReplyStats. */
+const readSource = ({ stats, usage }: ReplyStatsSource): ReplyStatsSource => ({ stats: readReplyStats(stats), usage });
+
 const ESTIMATES = {
   thinking: 'estimated from the wait before the first output',
   thinkingTokens: 'estimated from the thinking frames the server streamed',
@@ -129,10 +133,10 @@ const finite = (value: number | undefined): value is number => value !== undefin
  * Thinking over output tokens where counted, else thinking over generation time (no tools, load or
  * prompt); null with no thinking, or a thinking time estimated from the wait, which holds the prompt.
  */
-export function thinkingShare({
-  stats,
-  usage,
-}: ReplyStatsSource): { share: number; basis: 'tokens' | 'time'; estimated: boolean } | null {
+export function thinkingShare(
+  source: ReplyStatsSource
+): { share: number; basis: 'tokens' | 'time'; estimated: boolean } | null {
+  const { stats, usage } = readSource(source);
   const counted = usage?.reasoningTokens;
   const reasoningTokens = counted ?? stats?.reasoningTokens;
   const outputTokens = usage?.outputTokens;
@@ -148,31 +152,22 @@ export function thinkingShare({
   return { share: Math.min(1, Math.max(0, reasoningMs / outputMs)), basis: 'time', estimated: false };
 }
 
-/** Stats stored before main kept loads, which it did together with outputMs, or as 0 where outputMs is unknown. */
-function storedBeforeLoads(stats: ChatReplyStats): boolean {
-  return stats.loadMs === undefined && stats.outputMs === undefined && stats.modelMs > 0;
-}
-
-/**
- * The load or wait main counted, a derived one as a wait; on a reply stored before that, the reported
- * load, only where no tool ran, so it was one request's. Null where under REPLY_STATS_SIGNIFICANT_WAIT_MS.
- */
-export function replyLoad({ stats, usage }: ReplyStatsSource): { ms: number; kind: 'load' | 'wait' } | null {
-  if (!stats) return null;
-  const old = storedBeforeLoads(stats);
-  const ms = old ? (stats.toolMs === 0 ? usage?.rate?.loadMs : undefined) : stats.loadMs;
+/** The load or wait main counted, a derived one as a wait; null where under REPLY_STATS_SIGNIFICANT_WAIT_MS. */
+export function replyLoad(source: ReplyStatsSource): { ms: number; kind: 'load' | 'wait' } | null {
+  const { stats } = readSource(source);
+  const ms = stats?.loadMs;
   if (!finite(ms) || ms < REPLY_STATS_SIGNIFICANT_WAIT_MS) return null;
-  return { ms, kind: !old && stats.derived?.includes('loadMs') ? 'wait' : 'load' };
+  return { ms, kind: stats?.derived?.includes('loadMs') ? 'wait' : 'load' };
 }
 
 /**
  * Tokens over generation time. A server's own timings where it sent them; otherwise what main
  * timed per request from the stream, which counts the network too and so is an estimate.
  */
-export function generationRate({
-  stats,
-  usage,
-}: ReplyStatsSource): { tokens: number; ms: number; estimated: boolean; untimedTokens?: number } | null {
+export function generationRate(
+  source: ReplyStatsSource
+): { tokens: number; ms: number; estimated: boolean; untimedTokens?: number; outputTokens?: number } | null {
+  const { stats, usage } = readSource(source);
   const rate = usage?.rate;
   if (rate && rate.evalTokens > 0 && rate.evalMs > 0) {
     return {
@@ -184,7 +179,13 @@ export function generationRate({
   }
   const timed = stats?.generation;
   if (!timed || timed.tokens <= 0 || timed.ms <= 0) return null;
-  return { tokens: timed.tokens, ms: timed.ms, estimated: true, untimedTokens: timed.untimedTokens };
+  return {
+    tokens: timed.tokens,
+    ms: timed.ms,
+    estimated: true,
+    untimedTokens: timed.untimedTokens,
+    outputTokens: timed.outputTokens,
+  };
 }
 
 /**
@@ -237,7 +238,6 @@ function totalNote(stats: ChatReplyStats, load: ReturnType<typeof replyLoad>): s
     includes.push(`${formatDuration(stats.firstTokenMs)} waiting for the first token`);
   }
   if (load?.kind === 'wait') includes.push(`${formatDuration(load.ms)} of server wait`);
-  if (stats.loadPartial) includes.push('any load or wait in a run before Continue, which did not record it');
   const parts = [
     ...(includes.length > 0 ? [`includes ${includes.join(', and ')}`] : []),
     ...(load?.kind === 'load' ? [`leaves out ${formatDuration(load.ms)} of model load`] : []),
@@ -252,7 +252,8 @@ function totalNote(stats: ChatReplyStats, load: ReturnType<typeof replyLoad>): s
  * A model load or server wait long enough to matter gets its own row; only a load the server
  * reported is left out of the total, as a derived wait can be a connection on every request.
  */
-export function replyStats(source: ReplyStatsSource, { live = false }: { live?: boolean } = {}): ReplyStat[] {
+export function replyStats(raw: ReplyStatsSource, { live = false }: { live?: boolean } = {}): ReplyStat[] {
+  const source = readSource(raw);
   const { stats, usage } = source;
   const derived = new Set<string>(stats?.derived ?? []);
   const format = live ? formatElapsed : formatDuration;
@@ -261,10 +262,7 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
   const share = live ? null : thinkingShare(source);
   const generation = live ? null : generationRate(source);
   const load = replyLoad(source);
-  const loadNotes = [
-    load && LOAD_KINDS[load.kind].note,
-    stats?.loadPartial && 'not counting a run before Continue, which did not record it',
-  ].filter((part): part is string => !!part);
+  const loadNotes = load ? [LOAD_KINDS[load.kind].note] : [];
   const { firstTokenMs, firstTokenLoadMs } = stats ?? {};
   const loadKind = LOAD_KINDS[derived.has('loadMs') ? 'wait' : 'load'];
   const cached = cacheReadShare(usage);
@@ -305,7 +303,13 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
       'speed',
       generation && formatTokenRate({ evalTokens: generation.tokens, evalMs: generation.ms }),
       generation?.estimated && ESTIMATES.speed,
-      (generation && untimedOutputNote(generation.tokens, usage?.outputTokens, generation.untimedTokens)) || undefined
+      (generation &&
+        untimedOutputNote(
+          generation.tokens,
+          generation.outputTokens ?? usage?.outputTokens,
+          generation.untimedTokens
+        )) ||
+        undefined
     ),
     cacheShare: stat('cacheShare', cached !== null ? formatShare(cached) : null),
     promptSpeed: stat(
@@ -379,7 +383,8 @@ export function speakReplyStats(rows: readonly ReplyStat[], credits: string | nu
  * `earlier`: a continued reply's stats from the runs before this one. Only the thinking time and
  * the first token are live; the rest is zero and left out of the live rail.
  */
-export function liveReplyStats(turn: TurnProgress, now: number, earlier?: ChatReplyStats): ChatReplyStats {
+export function liveReplyStats(turn: TurnProgress, now: number, stored?: unknown): ChatReplyStats {
+  const earlier = readReplyStats(stored);
   const open = turn.thinkingSince !== undefined ? Math.max(0, now - turn.thinkingSince) : 0;
   const thought = turn.thinkingMs !== undefined || turn.thinkingSince !== undefined;
   const reasoningMs = thought ? (earlier?.reasoningMs ?? 0) + (turn.thinkingMs ?? 0) + open : earlier?.reasoningMs;

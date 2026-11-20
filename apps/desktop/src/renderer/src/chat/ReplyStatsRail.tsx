@@ -2,6 +2,7 @@ import { Component, memo, useEffect, useLayoutEffect, useState, useSyncExternalS
 import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage, ChatUsage } from '@shared/chat';
+import { readReplyStats } from '@shared/replyStats';
 import { useShowDollarCosts } from './costDisplay';
 import {
   describeReplyStats,
@@ -62,7 +63,8 @@ export function railContent(
   // A resumed run's usage totals include the earlier runs'; until the first lands, the stored one stands.
   const usage = turn.usage ?? message.usage;
   // A continued reply stored before stats were kept: its earlier time is unknown, so none is shown.
-  const stats = turn.continued && !message.stats ? undefined : liveReplyStats(turn, now, message.stats);
+  const earlier = readReplyStats(message.stats);
+  const stats = turn.continued && !earlier ? undefined : liveReplyStats(turn, now, earlier);
   const rows = replyStats({ stats, usage }, { live: true });
   return { rows, shown: rows.filter(row => !hidden.has(row.id)), credits: null, usage };
 }

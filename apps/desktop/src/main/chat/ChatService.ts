@@ -33,6 +33,7 @@ import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
 import { localRunSettlement, type RunSpend } from '@shared/runSpend';
+import { readReplyStats } from '@shared/replyStats';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -3523,6 +3524,7 @@ export class ChatService {
     this.attendedTurns.add(sessionId);
     // A reply stored before it was stamped still says what it started on in its context snapshot.
     const startedOn = last.model ?? last.contextSnapshot?.model;
+    const earlierStats = readReplyStats(last.stats);
     const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
@@ -3543,7 +3545,7 @@ export class ChatService {
       ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
-      ...(last.stats ? { stats: last.stats } : {}),
+      ...(earlierStats ? { stats: earlierStats } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -4060,20 +4062,28 @@ export class ChatService {
     let produced: RawRound[] = [];
     // Reset with `produced` when a mid-turn message starts a new reply.
     let toolMs = 0;
+    // Where the last work (a round, or the tools after it) ended, so a wait for a mid-turn message or an
+    // artifact upload before the reply is stored is not counted as the reply's time.
+    let workEndedAt: number | undefined;
     // None for a reply continued from one stored before stats were kept: its earlier runs' time is
     // unknown, so nothing measured now could stand for the whole reply its usage covers.
-    const replyStats = (): ChatReplyStats | undefined => {
+    const replyStats = (endedAt = workEndedAt ?? Date.now()): ChatReplyStats | undefined => {
       if (resume && !resume.stats) return undefined;
       // A run refused before reaching the model adds nothing; a fresh reply that never ran has none.
       if (produced.length === 0) return resume?.stats;
-      return buildReplyStats({
-        endedAt: Date.now(),
-        rounds: produced,
-        toolMs,
-        ...(usage ? { usage } : {}),
-        local: isLocalModel(session.model),
-        ...(resume?.stats ? { earlier: resume.stats } : {}),
-      });
+      try {
+        return buildReplyStats({
+          endedAt,
+          rounds: produced,
+          toolMs,
+          ...(usage ? { usage } : {}),
+          local: isLocalModel(session.model),
+          ...(resume?.stats ? { earlier: resume.stats } : {}),
+        });
+      } catch (error) {
+        this.deps.logger.warn(`CHAT: reply stats dropped: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
     };
 
     try {
@@ -4696,6 +4706,7 @@ export class ChatService {
           sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
+        workEndedAt = round.timing.endedAt;
 
         // Within one request the server's counts are cumulative, so the last report wins; across
         // the requests an agent turn makes they are separate bills, so the turn's cost is their
@@ -4812,6 +4823,7 @@ export class ChatService {
               controller.signal
             );
         toolMs += Date.now() - toolsStartedAt;
+        workEndedAt = Date.now();
         toolCalls.push(...settled);
 
         // The system message is left as it was, so the cached prefix survives: a card's own result
@@ -4945,6 +4957,7 @@ export class ChatService {
           content = '';
           toolCalls = [];
           produced = [];
+          workEndedAt = undefined;
           toolMs = 0;
           usage = undefined;
           contextSnapshot = undefined;
@@ -5009,7 +5022,7 @@ export class ChatService {
         this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
         return expired ? 'expired' : 'failed';
       }
-      const stats = replyStats();
+      const stats = replyStats(Date.now());
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
       await this.settleReply(sessionId, !!resume, historyScope, {

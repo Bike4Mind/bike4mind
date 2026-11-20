@@ -68,6 +68,22 @@ describe('the cost on a reply', () => {
     expect(getComputedStyle(row).opacity).toBe('0');
   });
 
+  it.each([
+    ['an object', { loadMs: 1 }],
+    ['a number', 5],
+    ['null', null],
+    ['a string', 'loadMs'],
+  ])('renders the thread of a reply whose stored stats hold derived as %s', (_, derived) => {
+    render([
+      message('m1', {
+        usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250 } },
+        stats: { totalMs: 6000, modelMs: 6000, toolMs: 0, derived } as unknown as ChatMessage['stats'],
+      }),
+    ]);
+
+    expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 6.0s total');
+  });
+
   it('shows nothing on a reply the server reported no credits for', () => {
     render([
       message('m1'),
@@ -135,18 +151,6 @@ describe('the cost on a reply', () => {
       expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 34.0s total \xb7 28.0s server wait included');
       expect(costs()[0]?.getAttribute('title')).toContain('Total time: 34.0s (includes 28.0s of server wait)');
       expect(costs()[0]?.getAttribute('title')).toContain('Server wait: 28.0s (load, queue or connection)');
-    });
-
-    it('takes the load out of a reply stored before loads were kept, from what the server reported', () => {
-      render([
-        message('m1', {
-          usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250, promptMs: 500, loadMs: 28_000 } },
-          stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, firstTokenMs: 28_800 },
-        }),
-      ]);
-
-      expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 6.0s total + 28.0s model load');
-      expect(costs()[0]?.getAttribute('title')).toContain('Model load: 28.0s');
     });
 
     it('leaves out a stat unticked in Settings, keeps it in the title, and shows nothing with no other', () => {

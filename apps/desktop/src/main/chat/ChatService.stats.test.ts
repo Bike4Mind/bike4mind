@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { localBackend, localModelId, type ChatModelOption, type ChatStreamEvent } from '@shared/chat';
+import { localBackend, localModelId, type ChatMessage, type ChatModelOption, type ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { buildReplyStats } from './replyStats';
 import type { ModelCatalog } from './ModelCatalog';
 import { MessageQueue } from './MessageQueue';
 import { OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
@@ -25,6 +26,11 @@ const LOCAL: ChatModelOption = {
   backend: localBackend(OLLAMA_RUNTIME_ID),
   supportsTools: true,
 };
+
+vi.mock('./replyStats', async importOriginal => {
+  const actual = await importOriginal<typeof import('./replyStats')>();
+  return { ...actual, buildReplyStats: vi.fn(actual.buildReplyStats) };
+});
 
 describe('ChatService reply stats', () => {
   let streams: PassThrough[];
@@ -296,7 +302,7 @@ describe('ChatService reply stats', () => {
         type: 'content',
         stopReason: 'end_turn',
         usage: { inputTokens: 40, outputTokens: 10 },
-        rate: { evalTokens: 10, evalMs: 200, totalMs: 900, loadMs: 300 },
+        rate: { evalTokens: 10, evalMs: 200, loadMs: 300 },
       });
     });
     const id = await session(LOCAL.id);
@@ -307,7 +313,7 @@ describe('ChatService reply stats', () => {
     expect(reply?.stats).toMatchObject({ reasoningTokens: 3, derived: ['reasoningTokens'] });
     expect(reply?.stats?.reasoningMs).toBeGreaterThanOrEqual(15);
     expect(thinkingPhases()).toBe(1);
-    expect(reply?.usage?.rate).toEqual({ evalTokens: 10, evalMs: 200, totalMs: 900, loadMs: 300 });
+    expect(reply?.usage?.rate).toEqual({ evalTokens: 10, evalMs: 200, loadMs: 300 });
     expect(reply?.rounds?.[0].timing).toMatchObject({
       firstReasoningAt: expect.any(Number),
       lastReasoningAt: expect.any(Number),
@@ -488,6 +494,62 @@ describe('ChatService reply stats', () => {
     expect(reply?.error).toMatch(/folder list/);
     expect(post).not.toHaveBeenCalled();
     expect(reply).not.toHaveProperty('stats');
+    expect(end).not.toHaveProperty('stats');
+  });
+
+  it.each([
+    ['an object', { loadMs: 1 }],
+    ['a number', 5],
+    ['null', null],
+    ['a string', 'loadMs'],
+  ])('continues a reply whose stored stats hold derived as %s and still ends it', async (_, derived) => {
+    const id = await session();
+    await store.appendMessage(id, { id: 'u1', role: 'user', content: 'go', createdAt: new Date().toISOString() });
+    await store.appendMessage(id, {
+      id: 'a1',
+      role: 'assistant',
+      content: 'partway',
+      createdAt: new Date().toISOString(),
+      stopReason: 'tool_turn_limit',
+      stats: { totalMs: 8_000, modelMs: 3_000, toolMs: 5_000, derived } as unknown as ChatMessage['stats'],
+    });
+
+    await services[0].continueReply(id);
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'content', text: ' and done' }));
+    streams[0].write(frame('[DONE]'));
+    const end = await settled();
+
+    const reply = (await store.get(id))?.messages.find(message => message.id === 'a1');
+    expect(end).toMatchObject({ type: 'done' });
+    expect(reply?.stats).toMatchObject({ toolMs: 5_000 });
+    expect(reply?.stats).not.toHaveProperty('derived');
+  });
+
+  it('ends a reply with no stats when building them fails, on the success and the failure path', async () => {
+    vi.mocked(buildReplyStats).mockImplementationOnce(() => {
+      throw new Error('stats broke');
+    });
+    const ok = await hostedTurn(async stream => {
+      stream.write(frame({ type: 'content', text: 'Hello' }));
+    });
+    expect(ok.end).toMatchObject({ type: 'done' });
+    expect(ok.end).not.toHaveProperty('stats');
+    expect(ok.reply).not.toHaveProperty('stats');
+    expect(ok.reply?.content).toBe('Hello');
+
+    events.length = 0;
+    streams.length = 0;
+    vi.mocked(buildReplyStats).mockImplementationOnce(() => {
+      throw new Error('stats broke');
+    });
+    const id = await session();
+    await services[0].send(id, 'again');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'error', message: 'model failed' }));
+    streams[0].write(frame('[DONE]'));
+    const end = await settled();
+    expect(end).toMatchObject({ type: 'error' });
     expect(end).not.toHaveProperty('stats');
   });
 });

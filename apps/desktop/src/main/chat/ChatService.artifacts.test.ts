@@ -208,6 +208,20 @@ describe('ChatService artifacts', () => {
     });
   });
 
+  it("leaves the artifact upload out of the reply's total time", async () => {
+    const UPLOAD_MS = 400;
+    post.mockImplementation((endpoint: string) => {
+      if (endpoint === '/api/artifacts')
+        return new Promise(resolve => setTimeout(resolve, UPLOAD_MS, { status: 201, data: {} }));
+      return Promise.resolve({ data: stream, status: 200 });
+    });
+
+    const id = await reply(`Here.\n${HTML_ARTIFACT}`);
+
+    const stats = (await service.getSession(id))?.messages[1].stats;
+    expect(stats?.totalMs).toBeLessThan(UPLOAD_MS / 2);
+  });
+
   it('gives the artifact back to the model on the next turn', async () => {
     const id = await reply(`Here.\n${HTML_ARTIFACT}`);
 

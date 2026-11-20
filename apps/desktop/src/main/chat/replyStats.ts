@@ -5,6 +5,7 @@ import {
   type ChatRoundTiming,
   type ChatUsage,
 } from '@shared/chat';
+import { readReplyStats } from '@shared/replyStats';
 import { MIN_ESTIMATE_SPAN_MS } from './tokenRate';
 
 /** What one request adds to its reply's stats; ChatService's raw rounds fit this shape. */
@@ -53,28 +54,6 @@ export function roundLoad(round: StatsRound): { ms: number; derived: boolean } |
 function countedLoad(round: StatsRound): { ms: number; derived: boolean } | null {
   const load = roundLoad(round);
   return load && load.ms >= REPLY_STATS_SIGNIFICANT_WAIT_MS ? load : null;
-}
-
-/**
- * The counted load of a continued reply's earlier runs; partial where they were stored without it
- * (no outputMs either) and the reply's usage cannot tell it per request, as countedLoad does.
- */
-function earlierLoad({ earlier, usage, rounds }: ReplyStatsInput): { ms: number; partial: boolean } {
-  const known = (ms: number) => ({ ms, partial: false });
-  if (!earlier) return known(0);
-  if (earlier.loadMs !== undefined || earlier.outputMs !== undefined || !(earlier.modelMs > 0))
-    return { ms: earlier.loadMs ?? 0, partial: earlier.loadPartial === true };
-  const rate = usage?.rate;
-  if (!rate || rate.estimated) return known(0);
-  const reported = rate.loadMs;
-  if (reported !== undefined && Number.isFinite(reported)) {
-    const ours = rounds.reduce((sum, round) => sum + (round.usage?.rate?.loadMs ?? 0), 0);
-    const theirs = reported - ours;
-    if (!Number.isFinite(theirs) || theirs < REPLY_STATS_SIGNIFICANT_WAIT_MS) return known(0);
-    // Only a run that ran no tools was a single request, whose load the sum then is.
-    return earlier.toolMs === 0 ? known(theirs) : { ms: 0, partial: true };
-  }
-  return rate.loadReported === true ? known(0) : { ms: 0, partial: true };
 }
 
 /** The server's own time before generating: load and prompt processing; 0 where it reported neither. */
@@ -133,19 +112,20 @@ function lonelyToken(round: StatsRound): number {
 
 /** The reply's stats from its rounds, folded onto a continued reply's earlier runs. */
 export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
-  const { earlier, rounds } = input;
+  const { rounds } = input;
+  // Stored stats are read raw: an odd shape must not fail the reply that continues it.
+  const earlier = readReplyStats(input.earlier);
   // Re-decided below, so a server count arriving on a continued reply clears an earlier estimate.
   const derived = new Set<ChatReplyStatsEstimate>(earlier?.derived?.filter(estimate => estimate !== 'reasoningTokens'));
   let modelMs = earlier?.modelMs ?? 0;
   let reasoningMs = earlier?.reasoningMs;
   let firstTokenMs = earlier?.firstTokenMs;
   let generation = earlier?.generation;
-  const before = earlierLoad(input);
-  let loadMs = before.ms;
+  let loadMs = earlier?.loadMs ?? 0;
   let firstTokenLoadMs = earlier?.firstTokenMs !== undefined ? earlier.firstTokenLoadMs : undefined;
-  // Unknown for good when an earlier run that reached the model was stored before outputMs was kept.
-  let outputMs: number | null = earlier ? (earlier.outputMs ?? (earlier.modelMs > 0 ? null : 0)) : 0;
+  let outputMs = earlier?.outputMs ?? 0;
   let lonelyTokens = 0;
+  let ownOutputTokens = 0;
   // An earlier run's estimate stands in for the frames it was counted from.
   let reasoningFrames = earlier?.derived?.includes('reasoningTokens') ? (earlier.reasoningTokens ?? 0) : 0;
 
@@ -162,7 +142,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
         firstTokenMs = nonNegative(timing.firstTokenAt - timing.startedAt);
         if (load) firstTokenLoadMs = load.ms;
       }
-      if (outputMs !== null) outputMs += nonNegative(timing.endedAt - timing.firstTokenAt);
+      outputMs += nonNegative(timing.endedAt - timing.firstTokenAt);
     }
     reasoningFrames += round.reasoningFrames;
     const thinking = roundThinking(round, input.local);
@@ -172,6 +152,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     }
     // A self-hosted round is rated by its server, or by estimatedRate where its read guard trusts the stream.
     const generated = input.local ? null : roundGeneration(round);
+    ownOutputTokens += round.usage?.outputTokens ?? 0;
     if (generated) {
       generation = {
         tokens: (generation?.tokens ?? 0) + generated.tokens,
@@ -184,6 +165,12 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   }
   if (generation && lonelyTokens > 0) {
     generation = { ...generation, untimedTokens: (generation.untimedTokens ?? 0) + lonelyTokens };
+  }
+
+  // Of the reply's own requests only: the reply's usage also holds sub-agents' output, which no round timed.
+  const earlierOutput = earlier?.generation?.outputTokens;
+  if (generation && (!earlier || earlierOutput !== undefined)) {
+    generation = { ...generation, outputTokens: (earlierOutput ?? 0) + ownOutputTokens };
   }
 
   let reasoningTokens = input.usage?.reasoningTokens;
@@ -199,10 +186,8 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     totalMs: (earlier?.totalMs ?? 0) + nonNegative(input.endedAt - startedAt),
     modelMs,
     toolMs: (earlier?.toolMs ?? 0) + input.toolMs,
-    // Kept at 0 without outputMs too: the renderer reads a reply with neither as stored before loads.
-    ...(loadMs > 0 || outputMs === null ? { loadMs } : {}),
-    ...(before.partial ? { loadPartial: true as const } : {}),
-    ...(outputMs !== null && modelMs > 0 ? { outputMs } : {}),
+    ...(loadMs > 0 ? { loadMs } : {}),
+    ...(modelMs > 0 ? { outputMs } : {}),
     ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
     ...(firstTokenLoadMs !== undefined ? { firstTokenLoadMs } : {}),
     ...(reasoningMs !== undefined ? { reasoningMs } : {}),

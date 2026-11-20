@@ -1197,8 +1197,6 @@ export interface ChatUsage {
   cacheReadInputTokens?: number;
   /** Input written to the prompt cache this request, billed above the input rate. */
   cacheCreationInputTokens?: number;
-  /** The part of cacheCreationInputTokens written with the 1-hour TTL. */
-  cacheWrite1hInputTokens?: number;
   /** Thinking tokens the server reported; part of outputTokens, not on top of it. */
   reasoningTokens?: number;
   /**
@@ -1228,8 +1226,6 @@ export interface ChatTokenRate {
   loadMs?: number;
   /** True where the server reports its load (Ollama): no loadMs is none. False for llama-server, which never does. */
   loadReported?: boolean;
-  /** The server's own time for the whole request, load and prompt included. */
-  totalMs?: number;
   /** Prompt tokens the server reused from its cache instead of evaluating; not part of `promptTokens`. */
   cachedPromptTokens?: number;
   /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
@@ -1263,8 +1259,6 @@ export interface ChatReplyStats {
   toolMs: number;
   /** Of modelMs, each self-hosted request's load or wait of at least REPLY_STATS_SIGNIFICANT_WAIT_MS; see roundLoad. */
   loadMs?: number;
-  /** loadMs leaves out a run before Continue, which was stored without its load. */
-  loadPartial?: true;
   /** Of firstTokenMs, the counted load or wait of the request it was measured on. */
   firstTokenLoadMs?: number;
   /**
@@ -1281,9 +1275,10 @@ export interface ChatReplyStats {
   /**
    * A hosted reply's output tokens over the time spent generating them, summed over the requests
    * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
-   * is its usage's rate.
+   * is its usage's rate. `outputTokens` is the output of the reply's own requests, which leaves out
+   * sub-agents' that its usage includes.
    */
-  generation?: { tokens: number; ms: number; untimedTokens?: number };
+  generation?: { tokens: number; ms: number; untimedTokens?: number; outputTokens?: number };
   /** The figures above that are estimates; the thread marks them approximate. */
   derived?: ChatReplyStatsEstimate[];
 }

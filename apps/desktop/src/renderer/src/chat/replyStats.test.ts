@@ -92,26 +92,38 @@ describe('thinkingShare', () => {
   });
 });
 
+describe('stats stored in an odd shape', () => {
+  const rate = { evalTokens: 40, evalMs: 1250 };
+  it.each([
+    ['an object', { loadMs: 1 }],
+    ['a number', 5],
+    ['null', null],
+    ['a string', 'loadMs'],
+  ])('reads a reply whose derived is %s without throwing', (_, derived) => {
+    const stats = { ...base, derived } as unknown as ChatReplyStats;
+    const rows = replyStats({ stats, usage: { outputTokens: 40, rate } });
+    expect(rows.find(row => row.id === 'total')?.value).toBe('20.0s');
+    expect(() => thinkingShare({ stats, usage: { outputTokens: 40 } })).not.toThrow();
+    expect(() => replyLoad({ stats })).not.toThrow();
+    expect(() => generationRate({ stats, usage: { rate } })).not.toThrow();
+    expect(() => liveReplyStats({ startedAt: 0 } as TurnProgress, 1000, stats)).not.toThrow();
+  });
+
+  it('shows only the counts of a reply whose stats are not an object', () => {
+    const rows = replyStats({ stats: 'broken' as unknown as ChatReplyStats, usage: { outputTokens: 40 } });
+    expect(rows.find(row => row.id === 'total')).toBeUndefined();
+    expect(rows.find(row => row.id === 'tokens')?.value).toBe('40');
+  });
+});
+
 describe('replyLoad', () => {
-  it("takes main's counted load, else the server's reported one, once it is long enough to name", () => {
+  it("takes main's counted load once it is long enough to name, and none the server reported itself", () => {
     const reported = { rate: { evalTokens: 40, evalMs: 1300, loadMs: 5000 } };
     expect(replyLoad({ stats: { ...base, loadMs: 28_000 } })).toEqual({ ms: 28_000, kind: 'load' });
-    expect(replyLoad({ stats: base, usage: reported })).toEqual({ ms: 5000, kind: 'load' });
     expect(replyLoad({ stats: { ...base, loadMs: 40 } })).toBeNull();
     expect(replyLoad({ stats: { ...base, loadMs: Infinity } })).toBeNull();
     expect(replyLoad({ stats: base })).toBeNull();
-    // Stored with outputMs, so a missing loadMs is none, whatever the server reported.
     expect(replyLoad({ stats: { ...base, outputMs: 4_000 }, usage: reported })).toBeNull();
-    // A Continue of an old reply stores loadMs 0 with no outputMs: the summed load is not one request's.
-    expect(replyLoad({ stats: { ...base, loadMs: 0 }, usage: reported })).toBeNull();
-  });
-
-  it("holds an old reply's summed load to the per-request rule: only a reply that ran no tools was one request", () => {
-    const warm = { rate: { evalTokens: 600, evalMs: 20_000, loadMs: 1_500 } };
-    expect(replyLoad({ stats: { ...base, toolMs: 4_000 }, usage: warm })).toBeNull();
-    expect(replyLoad({ stats: base, usage: warm })).toEqual({ ms: 1_500, kind: 'load' });
-    expect(replyLoad({ stats: base, usage: { rate: { evalTokens: 600, evalMs: 20_000, loadMs: 900 } } })).toBeNull();
-    expect(replyLoad({ usage: warm })).toBeNull();
   });
 
   it('names a wait main worked out as a server wait, not a model load', () => {
@@ -343,17 +355,6 @@ describe('replyStats', () => {
     expect(describeReplyStats(rows)).toContain('Thinking (time): 25%');
   });
 
-  it('reads a cold reply stored before loads were kept from the load its server reported', () => {
-    const rows = replyStats({
-      stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, firstTokenMs: 28_800 },
-      usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1_250, promptMs: 500, loadMs: 28_000 } },
-    });
-    const row = (id: string) => rows.find(candidate => candidate.id === id);
-
-    expect(row('total')).toMatchObject({ value: '6.0s', note: 'leaves out 28.0s of model load' });
-    expect(row('load')).toEqual({ id: 'load', label: 'Model load', value: '28.0s' });
-  });
-
   it('notes on the first token only the load of the request it was timed on', () => {
     const stats = { ...base, outputMs: 4_000, loadMs: 38_000, firstTokenMs: 28_800 };
     const firstToken = (extra: Partial<ChatReplyStats>) =>
@@ -402,38 +403,6 @@ describe('replyStats', () => {
     expect(rows.find(row => row.id === 'load')).toBeUndefined();
   });
 
-  it('says only the part of a load or wait a run before Continue did not record is unknown', () => {
-    const unrecorded = 'any load or wait in a run before Continue, which did not record it';
-    const none = replyStats({ stats: { ...base, outputMs: 4_000, loadPartial: true, firstTokenMs: 400 } });
-    expect(none.find(row => row.id === 'total')).toMatchObject({ value: '20.0s', note: `includes ${unrecorded}` });
-    expect(none.find(row => row.id === 'load')).toBeUndefined();
-
-    const wait = replyStats({
-      stats: { ...base, outputMs: 4_000, loadMs: 9_000, loadPartial: true, firstTokenMs: 400, derived: ['loadMs'] },
-    });
-    expect(wait.find(row => row.id === 'total')).toMatchObject({
-      value: '20.0s',
-      note: `includes 9.0s of server wait, and ${unrecorded}`,
-    });
-    expect(wait.find(row => row.id === 'load')).toMatchObject({
-      label: 'Server wait',
-      value: '9.0s',
-      note: 'load, queue or connection; not counting a run before Continue, which did not record it',
-    });
-
-    const load = replyStats({
-      stats: { ...base, outputMs: 4_000, loadMs: 9_000, loadPartial: true, firstTokenMs: 400 },
-    });
-    expect(load.find(row => row.id === 'total')).toMatchObject({
-      value: '11.0s',
-      note: `includes ${unrecorded}; leaves out 9.0s of model load`,
-    });
-    expect(load.find(row => row.id === 'load')).toMatchObject({
-      label: 'Model load',
-      note: 'not counting a run before Continue, which did not record it',
-    });
-  });
-
   it('marks a hosted speed as timed by the app', () => {
     const rows = replyStats({
       stats: { ...base, generation: { tokens: 200, ms: 4000, untimedTokens: 1 } },
@@ -466,6 +435,20 @@ describe('replyStats', () => {
     expect(note(19, 3020, false, 1)).toBe('timed 19 of 3.0k output tokens');
     expect(note(2999, 3000)).toBeUndefined();
     expect(note(2999, 3000, true)).toBeUndefined();
+  });
+
+  it("counts only the reply's own output against the timed tokens, not a sub-agent's", () => {
+    const rows = replyStats({
+      stats: { ...base, generation: { tokens: 480, ms: 10_000, untimedTokens: 1, outputTokens: 500 } },
+      usage: { outputTokens: 3_000 },
+    });
+    expect(rows.find(row => row.id === 'speed')?.note).toBe('timed 480 of 500 output tokens');
+    expect(rows.find(row => row.id === 'tokens')?.value).toBe('3.0k');
+    const whole = replyStats({
+      stats: { ...base, generation: { tokens: 499, ms: 10_000, untimedTokens: 1, outputTokens: 500 } },
+      usage: { outputTokens: 3_000 },
+    });
+    expect(whole.find(row => row.id === 'speed')?.note).toBeUndefined();
   });
 
   it('does not note the token a hosted round leaves out of its timing by design', () => {
