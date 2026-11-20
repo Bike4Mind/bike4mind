@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatStreamEvent } from '@shared/chat';
 import type { LoopProgressFrame } from '@bike4mind/common';
-import { PROGRESS_LIMITS, ProgressBatcher, toPosts } from './progress';
+import { PROGRESS_LIMITS, ProgressBatcher, scrubSecrets, toFrame, toPosts } from './progress';
 
 const base = { sessionId: 's', messageId: 'm' };
 const call = { id: 'c1', name: 'bash_execute', input: { command: 'ls' }, status: 'running' as const };
@@ -73,5 +73,40 @@ describe('toPosts', () => {
       expect(Buffer.byteLength(JSON.stringify({ frames: post }))).toBeLessThan(256 * 1024);
       expect(post.length).toBeLessThanOrEqual(PROGRESS_LIMITS.frames);
     }
+  });
+});
+
+describe('scrubSecrets', () => {
+  const body = 'abcdefghijklmnop1234';
+  it.each([
+    ['env assignment', `OPENAI_API_KEY=${body}`],
+    ['password field', `{"DB_PASSWORD": "${body}"}`],
+    ['bearer', `curl -H "Authorization: Bearer ${body}"`],
+    ['sk key', `use ${'sk'}-${body}${body}`],
+    ['github token', `${'ghp'}_${body}${body}`],
+    ['aws key', `${'AKIA'}ABCDEFGHIJKLMNOP`],
+    ['private key', `${'-----BEGIN'} RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----`],
+  ])('removes %s', (_name, text) => {
+    expect(scrubSecrets(text)).not.toContain(body.slice(0, 12));
+    expect(scrubSecrets(text)).not.toContain('ABCDEFGHIJKL');
+  });
+
+  it('leaves ordinary commands alone', () => {
+    expect(scrubSecrets('git status && ls src')).toBe('git status && ls src');
+  });
+
+  it('scrubs tool input, preview and error frames', () => {
+    const input = toFrame({
+      type: 'tool-start',
+      ...base,
+      call: { ...call, input: { command: `export GH_TOKEN=${body}` } },
+    });
+    expect(JSON.stringify(input)).not.toContain(body);
+    const end = toFrame({
+      type: 'tool-end',
+      ...base,
+      call: { ...call, status: 'error', error: `SECRET=${body}`, preview: `API_KEY=${body}` },
+    });
+    expect(JSON.stringify(end)).not.toContain(body);
   });
 });

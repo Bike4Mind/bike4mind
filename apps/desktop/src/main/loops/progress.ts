@@ -1,5 +1,6 @@
 import type { LoopProgressFrame } from '@bike4mind/common';
 import type { ChatStreamEvent } from '@shared/chat';
+import { redact } from '../devlog/redact';
 
 /**
  * The progress route's limits (pages/api/loops/runner/runs/[runId]/[action].ts): 4000 chars per
@@ -9,8 +10,25 @@ export const PROGRESS_LIMITS = { fieldChars: 4_000, frames: 200, bodyBytes: 200_
 
 const CLIP_CHARS = 2_000;
 
+const REDACTED = '[redacted]';
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+const PROVIDER_TOKEN = /\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
+/** `FOO_API_KEY=value`, `DB_PASSWORD: value`: any name containing KEY, SECRET, TOKEN or PASSWORD. */
+const SECRET_ASSIGNMENT = /\b([A-Za-z0-9_.-]*(?:KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_.-]*)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi;
+
+/** Tool inputs and output reach the server as-is otherwise, and a shell command or file preview can hold credentials. */
+export function scrubSecrets(text: string): string {
+  return redact(
+    text
+      .replace(PRIVATE_KEY_BLOCK, REDACTED)
+      .replace(PROVIDER_TOKEN, REDACTED)
+      .replace(SECRET_ASSIGNMENT, (_match, name: string, gap: string) => `${name}${gap}${REDACTED}`)
+  );
+}
+
 function clip(text: string): string {
-  return text.length > CLIP_CHARS ? `${text.slice(0, CLIP_CHARS)}...` : text;
+  const scrubbed = scrubSecrets(text);
+  return scrubbed.length > CLIP_CHARS ? `${scrubbed.slice(0, CLIP_CHARS)}...` : scrubbed;
 }
 
 /** Cut a batch into posts the route accepts: long text split, frames and bytes capped per post. */
