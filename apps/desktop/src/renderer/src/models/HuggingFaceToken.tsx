@@ -96,9 +96,9 @@ function TokenDialog({
               Check and save
             </Button>
             <Button
-              disabled={busy}
-              variant="plain"
+              variant="outlined"
               color="neutral"
+              disabled={busy}
               onClick={onClose}
               data-testid="models-hf-token-cancel-btn"
             >
@@ -162,7 +162,7 @@ export function HuggingFaceToken({
       )}
       <Button
         size="sm"
-        variant="plain"
+        variant="outlined"
         color="neutral"
         disabled={removing}
         onClick={() => setEditing(true)}
@@ -173,7 +173,7 @@ export function HuggingFaceToken({
       {status.set && (
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           loading={removing}
           onClick={() => void remove()}

@@ -87,14 +87,21 @@ function ListingRow({
         )}
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           {open && (
-            <Button size="sm" variant="outlined" onClick={onNewVersion} data-testid="skill-listing-new-version-btn">
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={onNewVersion}
+              data-testid="skill-listing-new-version-btn"
+            >
               Submit new version from a local file...
             </Button>
           )}
           {open && listing.hasShareLink && (
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               onClick={() =>
                 void window.b4m.skillMarket
                   .copyShareLink(listing.id)
@@ -107,7 +114,7 @@ function ListingRow({
           )}
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             endDecorator={<ExternalLinkIcon />}
             onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'listing', id: listing.id })}
@@ -118,7 +125,7 @@ function ListingRow({
           {open && (
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="danger"
               onClick={onWithdraw}
               data-testid="skill-listing-withdraw-btn"
@@ -218,7 +225,7 @@ export function SkillListingsMine({ onChanged }: { onChanged?: () => void } = {}
             >
               Withdraw
             </Button>
-            <Button variant="plain" color="neutral" onClick={() => setWithdrawing(null)}>
+            <Button variant="outlined" color="neutral" onClick={() => setWithdrawing(null)}>
               Cancel
             </Button>
           </DialogActions>

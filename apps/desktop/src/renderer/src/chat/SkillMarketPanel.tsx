@@ -155,7 +155,7 @@ export function SkillMarketPanel({
           </Stack>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
             data-testid="skill-upload-pick-btn"

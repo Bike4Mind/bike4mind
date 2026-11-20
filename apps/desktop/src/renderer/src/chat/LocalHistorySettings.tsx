@@ -27,8 +27,8 @@ export function LocalHistorySettings() {
     <Stack spacing={1}>
       <Button
         size="sm"
+        variant="outlined"
         color="danger"
-        variant="soft"
         loading={clearing}
         onClick={() => void clear()}
         data-testid="settings-clear-history-btn"
