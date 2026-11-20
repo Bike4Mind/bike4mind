@@ -2433,7 +2433,7 @@ export class ChatService {
           action.report.status === 'escalation-requested' &&
           task.resolvedDecisions.includes(action.report.decisionId)
         )
-          return summarizeSession(child);
+          return this.withLivePlan(summarizeSession(child));
         if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
         next = { ...task, state: reportedState(action.report) };
       } else if (action.kind === 'accept') {
@@ -2483,7 +2483,7 @@ export class ChatService {
         }
         next = { ...task, state: { status: 'canceled', reason: action.reason } };
       } else if (action.kind === 'deny' || action.kind === 'upgrade') {
-        if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
+        if (task.resolvedDecisions.includes(action.decisionId)) return this.withLivePlan(summarizeSession(child));
         if (task.state.status !== 'escalation-requested' || task.state.decisionId !== action.decisionId)
           throw new Error('This decision is no longer pending.');
         if (action.kind === 'deny')
@@ -2587,7 +2587,7 @@ export class ChatService {
       const latest = await this.deps.store.get(sessionId);
       const summary = latest ? summarizeSession(latest) : updated;
       this.emitSummary(summary);
-      return summary;
+      return this.withLivePlan(summary);
     } finally {
       if (action.kind !== 'report') this.taskDecisions.delete(key);
     }
