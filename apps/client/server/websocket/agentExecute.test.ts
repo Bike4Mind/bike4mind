@@ -944,6 +944,21 @@ describe('subscribe / unsubscribe commands', () => {
     ]);
   });
 
+  it('withholds the pending permission prompt from a non-owner viewer', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    const paused = {
+      ...baseExecution,
+      status: 'awaiting_permission',
+      pendingPermission: { toolName: 'bash', toolInput: {}, requestedAt: new Date(), toolCallId: 'c1' },
+    };
+    mockFindById.mockResolvedValueOnce(paused).mockResolvedValueOnce(paused);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0].pendingPermission).toBeUndefined();
+  });
+
   it('lets a member of a shared session watch the run', async () => {
     vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
     mockFindSessionById.mockResolvedValueOnce({ userId: 'user-1', users: [{ userId: 'user-2' }] });

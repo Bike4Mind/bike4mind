@@ -813,6 +813,8 @@ async function handleSubscribe(
   const current = (await agentExecutionRepository.findById(execution.id)) ?? execution;
   await sendExecutionSnapshot(current, cmd.requestId, connectionId, endpoint, logger, '[Subscribe] Viewer subscribed', {
     withOutcome: true,
+    // Only the owner can answer a permission request (`handlePermissionResponse`), so a viewer gets no prompt.
+    withPermission: execution.userId === userId,
   });
 }
 
@@ -824,7 +826,7 @@ async function sendExecutionSnapshot(
   endpoint: string,
   logger: Logger,
   logLabel: string,
-  { withOutcome = false }: { withOutcome?: boolean } = {}
+  { withOutcome = false, withPermission = true }: { withOutcome?: boolean; withPermission?: boolean } = {}
 ): Promise<void> {
   // Persisted iteration trace for step replay. The checkpoint
   // carries the full step history; we include it inline when it fits in
@@ -870,14 +872,15 @@ async function sendExecutionSnapshot(
     // tool calls the executor replays on approval, and their arguments are
     // unbounded. Only what the permission card renders belongs in this envelope -
     // see the steps-budget note above, which assumes the rest of it stays under 1KB.
-    pendingPermission: execution.pendingPermission
-      ? {
-          toolName: execution.pendingPermission.toolName,
-          toolInput: execution.pendingPermission.toolInput,
-          requestedAt: execution.pendingPermission.requestedAt,
-          toolCallId: execution.pendingPermission.toolCallId,
-        }
-      : undefined,
+    pendingPermission:
+      withPermission && execution.pendingPermission
+        ? {
+            toolName: execution.pendingPermission.toolName,
+            toolInput: execution.pendingPermission.toolInput,
+            requestedAt: execution.pendingPermission.requestedAt,
+            toolCallId: execution.pendingPermission.toolCallId,
+          }
+        : undefined,
     // Confidence-gate state - clients re-render the gate UI when
     // they reconnect to a `paused` execution. `pendingGate` and `paused`
     // are written atomically by `setPendingGate`, so either both are
