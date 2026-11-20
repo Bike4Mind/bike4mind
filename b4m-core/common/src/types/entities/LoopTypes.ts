@@ -587,8 +587,13 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   pruneTriggersForStages(userId: string, fromLoopId: string, stages: string[]): Promise<void>;
   /** The owner's loops with a trigger on (`fromLoopId`, `stage`). */
   listTriggeredBy(userId: string, fromLoopId: string, stage: string): Promise<ILoop[]>;
-  /** Paused loops with `autoResume` set. */
-  listAutoPaused(): Promise<ILoop[]>;
+  /**
+   * Up to `limit` budget-paused loops due by `now`, and up to `limit` credit-paused loops, least recently checked
+   * first (by `nextRunAt`, which a paused loop does not otherwise use).
+   */
+  listAutoPaused(now: Date, limit: number): Promise<ILoop[]>;
+  /** Moves a credit-paused loop to the back of `listAutoPaused`'s credit check order. */
+  deferCreditsResumeCheck(id: string, at: Date): Promise<void>;
   /**
    * Sets a loop paused with this `autoResume` back to `live`, due at `now`, clearing `autoResume` and
    * `statusReason`. Conditional on both, so an owner's edit landing first wins. False when nothing matched.

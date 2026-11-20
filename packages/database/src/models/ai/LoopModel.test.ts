@@ -79,11 +79,32 @@ describe('LoopRepository', () => {
   describe('auto-paused loops', () => {
     const now = new Date('2026-10-30T00:00:00Z');
 
-    it('lists only paused loops with autoResume', async () => {
-      const budget = await create({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget reached' });
+    it('lists due budget-paused and credit-paused loops, least recently checked first, up to the limit', async () => {
+      const budget = await create({
+        status: 'paused',
+        autoResume: 'budget',
+        statusReason: 'Daily budget reached',
+        nextRunAt: now,
+      });
+      await create({ status: 'paused', autoResume: 'budget', nextRunAt: new Date(now.getTime() + 1) });
+      const creditsA = await create({
+        status: 'paused',
+        autoResume: 'credits',
+        nextRunAt: new Date(now.getTime() - 2),
+      });
+      const creditsB = await create({
+        status: 'paused',
+        autoResume: 'credits',
+        nextRunAt: new Date(now.getTime() - 1),
+      });
       await create({ status: 'paused' });
       await create({ status: 'live' });
-      expect((await loopRepository.listAutoPaused()).map(loop => loop.id)).toEqual([budget.id]);
+      const ids = async (limit: number) => (await loopRepository.listAutoPaused(now, limit)).map(loop => loop.id);
+      expect(await ids(10)).toEqual([budget.id, creditsA.id, creditsB.id]);
+      expect(await ids(1)).toEqual([budget.id, creditsA.id]);
+
+      await loopRepository.deferCreditsResumeCheck(creditsA.id, now);
+      expect(await ids(1)).toEqual([budget.id, creditsB.id]);
     });
 
     it('resumeAutoPaused only matches a paused loop with the same autoResume', async () => {

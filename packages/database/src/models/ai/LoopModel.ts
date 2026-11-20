@@ -436,9 +436,23 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return results.map(doc => doc.toJSON());
   }
 
-  async listAutoPaused(): Promise<ILoop[]> {
-    const results = await this.loopModel.find({ status: 'paused', autoResume: { $exists: true } });
-    return results.map(doc => doc.toJSON());
+  async listAutoPaused(now: Date, limit: number): Promise<ILoop[]> {
+    const [budget, credits] = await Promise.all([
+      this.loopModel
+        .find({ status: 'paused', autoResume: 'budget', nextRunAt: { $lte: now } })
+        .sort({ nextRunAt: 1 })
+        .limit(limit),
+      this.loopModel.find({ status: 'paused', autoResume: 'credits' }).sort({ nextRunAt: 1 }).limit(limit),
+    ]);
+    return [...budget, ...credits].map(doc => doc.toJSON());
+  }
+
+  async deferCreditsResumeCheck(id: string, at: Date): Promise<void> {
+    await this.loopModel.updateOne(
+      { _id: id, status: 'paused', autoResume: 'credits' },
+      { $set: { nextRunAt: at } },
+      { runValidators: true }
+    );
   }
 
   async resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean> {

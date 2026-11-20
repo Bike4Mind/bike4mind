@@ -111,6 +111,8 @@ export const MAX_LIVENESS_SWEEP = 100;
 export const LOOP_TRIAGE_BATCH = 20;
 /** The p2 tickets the cap demotes per loop per tick; the rest wait for later ticks. */
 export const MAX_DEMOTES_PER_LOOP_TICK = 50;
+/** Auto-paused loops of each kind (budget, credits) checked for resume per tick; the rest wait for later ticks. */
+export const MAX_AUTO_RESUME_CHECKS = 100;
 
 const MINUTE_MS = 60 * 1000;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
@@ -158,7 +160,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger, remainingM
     logger.error('[Loops] Desktop lease sweep failed', error as Error)
   );
 
-  for (const loop of await loopRepository.listAutoPaused()) {
+  for (const loop of await loopRepository.listAutoPaused(now, MAX_AUTO_RESUME_CHECKS)) {
     try {
       if (await resumeIfDue(loop, now)) await pushLoopChanged(loop.userId, loop.id, logger);
     } catch (error) {
@@ -824,7 +826,11 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<boolean> {
   const kind = loop.autoResume!;
   // Priced like admit, on the model the next run will use, so a stage-model loop does not resume only to re-pause.
   const canPay = () => canPayAgain(loop, async () => iterationPrice(loop, await nextRunModel(loop)));
-  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPay())) return false;
+  if (kind === 'budget' && (!loop.nextRunAt || new Date(loop.nextRunAt) > now)) return false;
+  if (kind === 'credits' && !(await canPay())) {
+    await loopRepository.deferCreditsResumeCheck(loop.id, now);
+    return false;
+  }
   if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now))) return false;
   if (!loop.lastExecutionId) return true;
   await loopEventRepository.recordAutoResumed({

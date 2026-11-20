@@ -345,13 +345,11 @@ describe('runLoopSchedulerTick', () => {
   it('puts the created run on the loop before the executor is invoked', async () => {
     const loop = await createLoop();
     let beforeInvoke: string[] | undefined;
-    h.startAgentExecution.mockImplementation(
-      async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
-        expect(await input.beforeDispatch?.('exec-1')).toBe(true);
-        beforeInvoke = (await reload(loop.id)).activeExecutionIds;
-        return { ok: true, executionId: 'exec-1' };
-      }
-    );
+    h.startAgentExecution.mockImplementation(async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
+      expect(await input.beforeDispatch?.('exec-1')).toBe(true);
+      beforeInvoke = (await reload(loop.id)).activeExecutionIds;
+      return { ok: true, executionId: 'exec-1' };
+    });
 
     await runLoopSchedulerTick(NOW, logger);
 
@@ -362,13 +360,11 @@ describe('runLoopSchedulerTick', () => {
   it('refuses to invoke a created run once its loop lost the claim', async () => {
     const loop = await createLoop();
     let allowed: boolean | undefined;
-    h.startAgentExecution.mockImplementation(
-      async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
-        await Loop.updateOne({ _id: loop.id }, { $set: { leaseUntil: new Date(NOW.getTime() + 2 * LOOP_LEASE_MS) } });
-        allowed = await input.beforeDispatch?.('exec-1');
-        return { ok: false, reason: 'dispatch_failed', message: 'withdrawn', executionId: 'exec-1' };
-      }
-    );
+    h.startAgentExecution.mockImplementation(async (input: { beforeDispatch?: (id: string) => Promise<boolean> }) => {
+      await Loop.updateOne({ _id: loop.id }, { $set: { leaseUntil: new Date(NOW.getTime() + 2 * LOOP_LEASE_MS) } });
+      allowed = await input.beforeDispatch?.('exec-1');
+      return { ok: false, reason: 'dispatch_failed', message: 'withdrawn', executionId: 'exec-1' };
+    });
 
     await runLoopSchedulerTick(NOW, logger);
 
@@ -1100,7 +1096,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     const loop = await createLoop({ status: 'paused', autoResume: 'credits' });
 
     await runLoopSchedulerTick(NOW, logger);
-    expect((await reload(loop.id)).status).toBe('paused');
+    expect(await reload(loop.id)).toMatchObject({ status: 'paused', nextRunAt: NOW });
     expect(h.nextIterationCredits).toHaveBeenCalledWith(model, 0);
 
     balance = { currentCredits: 20 };
