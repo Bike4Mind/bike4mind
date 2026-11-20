@@ -157,6 +157,12 @@ export const StudioCaptionClipSchema = z.object({
   ...ClipTimingShape,
   text: z.string().trim().min(1).max(STUDIO_TIMELINE_LIMITS.maxCaptionLength),
   style: StudioCaptionStyleSchema.prefault({}),
+  /**
+   * The voice clip this caption was timed from. While set, the editor moves the caption with that clip's audio
+   * (see shiftSyncedCaptions); the renderer ignores it. It must name a clip on a voice track (validateStudioTimeline:
+   * unknown_sync_clip); the editor drops the link when that clip is removed.
+   */
+  syncedVoiceClipId: TimelineIdSchema.optional(),
 });
 export type StudioCaptionClip = z.infer<typeof StudioCaptionClipSchema>;
 
