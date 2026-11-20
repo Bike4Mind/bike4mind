@@ -1,6 +1,6 @@
 import { hkdfSync } from 'crypto';
 import { mintFileContentSig } from '@bike4mind/utils';
-import type { StorageReadOverrides } from '@bike4mind/utils/contentDisposition';
+import type { fabFilesService } from '@bike4mind/services';
 import { Config } from '../utils/config';
 import { getFilesStorage } from '../utils/storage/index';
 
@@ -26,8 +26,7 @@ export const fileContentUrl = ({ id, filePath }: { id: string; filePath: string 
   return `${appOrigin()}/api/files/${encodeURIComponent(id)}/content?exp=${exp}&sig=${sig}`;
 };
 
-/** Mirrors fabFileService's FabFileSignOptions (b4m-core/services/src/fabFileService/get.ts). */
-export type FabFileSignOptions = { signingDate?: Date } & StorageReadOverrides;
+export type FabFileSignOptions = fabFilesService.FabFileSignOptions;
 
 /** Raw S3 GET for a FabFile; `options` carries the disposition overrides fabFileService computes per file. */
 export const signFabFileGet = (path: string, expiresIn: number, options: FabFileSignOptions = {}) =>

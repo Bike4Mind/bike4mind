@@ -39,6 +39,7 @@ describe('GET /api/modal-images/[name]', () => {
     expect(mockExists).toHaveBeenCalledWith({ imageUrl: `modal-images/${NAME}` });
     expect(mockSign.mock.calls[0][0]).toBe(`modal-images/${NAME}`);
     expect(mockSign.mock.calls[0][2].expiresIn).toBeLessThanOrEqual(900);
+    expect(mockSign.mock.calls[0][2].ResponseContentDisposition).toBe(`attachment; filename="${NAME}"`);
     expect(res.statusCode).toBe(302);
     expect(res._getRedirectUrl()).toBe('https://signed.example/x?sig=1');
     expect(res.getHeader('Cache-Control')).toBe('public, max-age=300');

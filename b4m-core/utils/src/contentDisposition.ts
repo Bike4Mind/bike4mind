@@ -93,8 +93,9 @@ export function buildContentDisposition(fileName: string, options: ContentDispos
 }
 
 /**
- * Types a browser renders without running script, so a storage read may serve them inline.
- * SVG, HTML, XML and every text type stay out: each can execute script or be sniffed into markup.
+ * Types a storage read may serve inline: media, plus PDF, whose embedded script (where a viewer runs
+ * it at all) stays inside the PDF viewer rather than the storage origin's DOM. SVG, HTML, XML and
+ * every text type stay out: each can run script in that origin or be sniffed into markup.
  */
 const INLINE_SAFE_MIME_TYPES = new Set([
   'image/png',
