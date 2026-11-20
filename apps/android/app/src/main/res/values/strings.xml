@@ -8,7 +8,7 @@
     <string name="action_try_again">Try again</string>
 
     <!-- Sign-in -->
-    <string name="signin_title">Bike4Mind</string>
+    <string name="signin_title">@string/app_name</string>
     <string name="signin_action">Sign in</string>
     <string name="signin_failed">Sign-in failed</string>
     <string name="signin_server_label">Server (debug builds only)</string>
@@ -36,7 +36,7 @@
     <string name="chat_refused_unknown">unknown</string>
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
-    <string name="chat_reply_pending">...</string>
+    <string name="chat_reply_pending" translatable="false">...</string>
 
     <!-- Brief -->
     <string name="brief_title">Brief</string>
@@ -60,5 +60,5 @@
     <string name="brief_open_approval">Open approval</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_default">Bike4Mind</string>
+    <string name="notification_channel_default">@string/app_name</string>
 </resources>

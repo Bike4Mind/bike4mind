@@ -3,8 +3,9 @@ package com.bike4mind.app.ui
 import androidx.compose.ui.unit.dp
 
 /**
- * The spacing scale for paddings and gaps. Same steps as apps/ios BrandTokens.Spacing; replace with the generated
- * Compose tokens (packages/design-tokens Kotlin emitter) once they land. Use a step, never a raw dp value.
+ * The spacing scale for paddings and gaps. Same steps as apps/ios BrandTokens.Spacing and SPACING_STEPS in
+ * packages/design-tokens/src/emitters/native/nativeTheme.ts (keep in sync); replace with the generated Compose
+ * tokens (packages/design-tokens Kotlin emitter) once they land. Use a step, never a raw dp value.
  */
 object Spacing {
     val xs = 4.dp
