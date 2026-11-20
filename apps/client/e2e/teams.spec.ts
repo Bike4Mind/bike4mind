@@ -396,9 +396,17 @@ test.describe('Teams', () => {
       expect(tabs).toEqual(
         expect.arrayContaining(['Overview', 'Members', 'Library', 'Usage', 'Analysis', 'Integrations'])
       );
-      for (const ownerOnly of ['Billing']) {
-        expect(tabs).not.toContain(ownerOnly);
-      }
+      // Billing stays owner-only, but a manager sees it locked and gets a read-only summary.
+      expect(tabs).toContain('Billing');
+      const lockedBilling = asManager.teamsPage.lockedTab('billing');
+      await expect(lockedBilling).toBeVisible();
+      await lockedBilling.click();
+      await expect(asManager.page.getByTestId('organization-billing-locked')).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
+      await expect(asManager.page.getByTestId('organization-billing-owner-only')).toBeVisible();
+      await expect(asManager.page.getByTestId('organization-billing-locked-credits')).not.toBeEmpty();
+      await expect(asManager.page.getByTestId('organization-billing-locked-seats')).not.toBeEmpty();
       // Integrations stands for a manager on its Connectors section alone; the owner-only
       // GitHub, Slack and Webhooks sections stay hidden.
       await asManager.teamsPage.openTab('Integrations');

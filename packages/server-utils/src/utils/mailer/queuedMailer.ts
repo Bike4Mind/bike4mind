@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { EmailEvents, type EmailSendDetail } from '../eventBus';
+import { EmailEvents, type EmailDeliveryRef, type EmailSendDetail } from '../eventBus';
 import { putMailBody } from './mailBodyStore';
 import type { MailSendResult } from './transport';
 import type { SendEmailOptions } from './index';
@@ -15,6 +15,11 @@ export interface QueuedMail {
   html: string;
   text?: string;
 }
+
+export type QueuedMailOptions = SendEmailOptions & {
+  /** Carried on the event so the worker can record the outcome; self-host callers record it themselves. */
+  ref?: EmailDeliveryRef;
+};
 
 /**
  * `queued` means the event bus accepted the mail, not that it was delivered: the email-send worker
@@ -45,14 +50,15 @@ async function withinEventLimit(properties: EmailSendDetail, mail: QueuedMail): 
  * coming back.
  */
 export const queuedMailer = {
-  async sendEmail(to: string | string[], mail: QueuedMail, options: SendEmailOptions = {}): Promise<QueuedMailResult> {
+  async sendEmail(to: string | string[], mail: QueuedMail, options: QueuedMailOptions = {}): Promise<QueuedMailResult> {
+    const { ref, ...mailOptions } = options;
     if (process.env.B4M_SELF_HOST === 'true') {
       const { default: mailer } = await import('./index');
-      return mailer.sendEmail(to, mail, options);
+      return mailer.sendEmail(to, mail, mailOptions);
     }
 
     const recipient = Array.isArray(to) ? to.join(', ') : to;
-    const { mirror, logRecipient, category } = options;
+    const { mirror, logRecipient, category } = mailOptions;
     const properties = {
       to: recipient,
       subject: mail.subject,
@@ -61,6 +67,7 @@ export const queuedMailer = {
       ...(category && { category }),
       ...(mirror !== undefined && { mirror }),
       ...(logRecipient !== undefined && { logRecipient }),
+      ...(ref && { ref }),
     };
     try {
       const result = await EmailEvents.Send.publish(await withinEventLimit(properties, mail));

@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   sendTestEmail: vi.fn(),
   getMailBody: vi.fn(),
+  recordOutcome: vi.fn(),
   logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 // Adapts an EventBridge-shaped event into the (event, logger) call the wrapped callback receives.
@@ -19,6 +20,9 @@ vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
   default: { sendEmail: mocks.send, sendTestEmail: mocks.sendTestEmail, transport: { kind: 'ses' } },
 }));
 vi.mock('@bike4mind/server-utils/utils/mailer/mailBodyStore', () => ({ getMailBody: mocks.getMailBody }));
+vi.mock('@bike4mind/server-utils/utils/mailer/deliveryOutcome', () => ({
+  recordEmailDeliveryOutcome: mocks.recordOutcome,
+}));
 import { handler, MailBodyMissingError } from './sendEmail';
 
 beforeEach(() => {
@@ -278,5 +282,44 @@ describe('an event whose body was offloaded', () => {
       { subject: 'Test', html: 'Body' },
       { category: undefined }
     );
+  });
+});
+
+describe('delivery outcome write-back', () => {
+  const ref = { kind: 'emailAttempt', attemptId: 'attempt-1' };
+  const sendWithRef = (to = 'test@example.org') => deliver({ to, subject: 'Test', body: 'Body', ref });
+
+  it('records a delivered send against its ref', async () => {
+    await sendWithRef();
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, { ok: true, at: expect.any(Date) });
+  });
+
+  it('records a failed send and still throws so the event is retried', async () => {
+    mocks.send.mockResolvedValue(false);
+    await expect(sendWithRef()).rejects.toThrow('Email delivery failed');
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, { ok: false, error: expect.any(String) });
+  });
+
+  it('records a sink-domain skip as failed without throwing or retrying', async () => {
+    vi.stubEnv('MAIL_SINK_DOMAINS', 'test.com');
+    await expect(sendWithRef('qa@test.com')).resolves.toBeUndefined();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, {
+      ok: false,
+      error: 'Recipient domain is not delivered on this stage',
+    });
+  });
+
+  it('routes an incident alert ref to the write-back unchanged', async () => {
+    const incidentRef = { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'escalation' };
+    await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', ref: incidentRef });
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(incidentRef, { ok: true, at: expect.any(Date) });
+  });
+
+  it('writes nothing back for mail published without a ref', async () => {
+    await send();
+    mocks.send.mockResolvedValue(false);
+    await expect(send()).rejects.toThrow();
+    expect(mocks.recordOutcome).not.toHaveBeenCalled();
   });
 });

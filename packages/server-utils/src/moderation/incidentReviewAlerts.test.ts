@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const outcome = vi.hoisted(() => ({ record: vi.fn() }));
+vi.mock('../utils/mailer/deliveryOutcome', () => ({ voidIncidentAlertRound: outcome.record }));
+beforeEach(() => outcome.record.mockReset());
 import type { ImageModerationIncident } from '@bike4mind/common';
 import {
   alertEscalationReviewers,
@@ -27,7 +31,11 @@ const REVIEW_LINK = 'https://app.example/admin?tab=moderation-incidents&amp;inci
 function setup(overrides: Partial<IncidentReviewAlertDeps> = {}) {
   const recorded: RecordedIncident = { ...INPUT, id: 'incident-123', createdAt: CREATED_AT };
   const deps: IncidentReviewAlertDeps = {
-    incidents: { record: vi.fn().mockResolvedValue(recorded), markAlerted: vi.fn().mockResolvedValue(undefined) },
+    incidents: {
+      record: vi.fn().mockResolvedValue(recorded),
+      markAlerted: vi.fn().mockResolvedValue(undefined),
+      markAlertQueued: vi.fn().mockResolvedValue(undefined),
+    },
     getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com', 'reviewer-two@example.com']),
     sendEmail: vi.fn().mockResolvedValue({ messageId: 'm-1' }),
     appUrl: () => 'https://app.example/',
@@ -83,6 +91,33 @@ describe('withReviewerAlerts', () => {
     const unconfigured = setup({ getRecipients: vi.fn().mockResolvedValue([]) });
     await unconfigured.incidents.record(INPUT);
     expect(unconfigured.deps.incidents.markAlerted).not.toHaveBeenCalled();
+  });
+
+  it('stamps only alertQueuedAt when every copy is queued, and tags each send with the incident ref', async () => {
+    const { deps, incidents } = setup({ sendEmail: vi.fn().mockResolvedValue({ queued: true }) });
+
+    await incidents.record(INPUT);
+
+    expect(deps.incidents.markAlertQueued).toHaveBeenCalledExactlyOnceWith('incident-123');
+    expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
+    const ref = { kind: 'incidentAlert', incidentId: 'incident-123', alert: 'review' };
+    expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[2])).toEqual([ref, ref]);
+  });
+
+  it('stamps nothing when a queued copy sits beside one that could not be queued', async () => {
+    const { deps, incidents } = setup({
+      sendEmail: vi.fn().mockResolvedValueOnce({ queued: true }).mockResolvedValueOnce(false),
+    });
+
+    await incidents.record(INPUT);
+
+    expect(deps.incidents.markAlertQueued).not.toHaveBeenCalled();
+    expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
+    // Voiding the round keeps the queued copy's delivery from closing it.
+    expect(outcome.record).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'incidentAlert', incidentId: 'incident-123', alert: 'review' },
+      expect.any(Date)
+    );
   });
 
   it('leaves alertedAt unset when only some reviewers were reached', async () => {
@@ -283,7 +318,10 @@ describe('alertEscalationReviewers', () => {
 
   function escalationSetup(overrides: Partial<IncidentEscalationAlertDeps> = {}) {
     const deps: IncidentEscalationAlertDeps = {
-      incidents: { markEscalationAlerted: vi.fn().mockResolvedValue(undefined) },
+      incidents: {
+        markEscalationAlerted: vi.fn().mockResolvedValue(undefined),
+        markEscalationAlertQueued: vi.fn().mockResolvedValue(undefined),
+      },
       getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com']),
       getEscalationRecipients: vi.fn().mockResolvedValue(['second-one@example.com', 'second-two@example.com']),
       sendEmail: vi.fn().mockResolvedValue({ messageId: 'm-1' }),
@@ -305,7 +343,7 @@ describe('alertEscalationReviewers', () => {
   it('emails each escalation reviewer separately, never the first list, and stamps the delivery', async () => {
     const deps = escalationSetup();
 
-    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: STAMPED_AT });
+    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: STAMPED_AT, queuedAt: null });
 
     expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[0])).toEqual([
       'second-one@example.com',
@@ -325,7 +363,7 @@ describe('alertEscalationReviewers', () => {
   it('reports no_recipients, sends nothing and stamps nothing when the escalation list is empty', async () => {
     const deps = escalationSetup({ getEscalationRecipients: vi.fn().mockResolvedValue([]) });
 
-    await expect(run(deps)).resolves.toEqual({ outcome: 'no_recipients', alertedAt: null });
+    await expect(run(deps)).resolves.toEqual({ outcome: 'no_recipients', alertedAt: null, queuedAt: null });
 
     expect(deps.sendEmail).not.toHaveBeenCalled();
     expect(deps.incidents.markEscalationAlerted).not.toHaveBeenCalled();
@@ -342,7 +380,7 @@ describe('alertEscalationReviewers', () => {
   ])('reports failed without stamping after %s, and never logs an address', async (_label, override) => {
     const deps = escalationSetup(override);
 
-    await expect(run(deps)).resolves.toEqual({ outcome: 'failed', alertedAt: null });
+    await expect(run(deps)).resolves.toEqual({ outcome: 'failed', alertedAt: null, queuedAt: null });
 
     expect(deps.incidents.markEscalationAlerted).not.toHaveBeenCalled();
     const logged = JSON.stringify([vi.mocked(deps.logger.error).mock.calls, vi.mocked(deps.logger.warn).mock.calls]);
@@ -352,10 +390,13 @@ describe('alertEscalationReviewers', () => {
 
   it('still reports the delivery when the stamp cannot be written, with no stamp time', async () => {
     const deps = escalationSetup({
-      incidents: { markEscalationAlerted: vi.fn().mockRejectedValue(new Error('write failed')) },
+      incidents: {
+        markEscalationAlerted: vi.fn().mockRejectedValue(new Error('write failed')),
+        markEscalationAlertQueued: vi.fn().mockRejectedValue(new Error('write failed')),
+      },
     });
 
-    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: null });
+    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: null, queuedAt: null });
     expect(deps.logger.error).toHaveBeenCalledWith(expect.stringContaining('escalationAlertedAt was not recorded'), {
       incidentId: 'incident-123',
     });
@@ -390,6 +431,32 @@ describe('alertEscalationReviewers', () => {
       expect(text).not.toContain(forbidden);
     }
     expect(new Set(text.match(/https?:\/\/[^\s"<]+/g))).toEqual(new Set([REVIEW_LINK]));
+  });
+});
+
+describe('alertEscalationReviewers when queued', () => {
+  it('stamps escalationAlertQueuedAt, not escalationAlertedAt, and returns the queue time', async () => {
+    const at = new Date('2026-10-20T13:00:05.000Z');
+    const deps: IncidentEscalationAlertDeps = {
+      incidents: { markEscalationAlerted: vi.fn(), markEscalationAlertQueued: vi.fn().mockResolvedValue(undefined) },
+      getRecipients: vi.fn().mockResolvedValue([]),
+      getEscalationRecipients: vi.fn().mockResolvedValue(['second-one@example.com']),
+      sendEmail: vi.fn().mockResolvedValue({ queued: true }),
+      appUrl: () => 'https://app.example/',
+      logger: { warn: vi.fn(), error: vi.fn() },
+    };
+
+    await expect(
+      alertEscalationReviewers({ id: 'incident-123', createdAt: CREATED_AT }, deps, () => at)
+    ).resolves.toEqual({ outcome: 'queued', alertedAt: null, queuedAt: at });
+
+    expect(deps.incidents.markEscalationAlertQueued).toHaveBeenCalledWith('incident-123', at);
+    expect(deps.incidents.markEscalationAlerted).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.sendEmail).mock.calls[0][2]).toEqual({
+      kind: 'incidentAlert',
+      incidentId: 'incident-123',
+      alert: 'escalation',
+    });
   });
 });
 

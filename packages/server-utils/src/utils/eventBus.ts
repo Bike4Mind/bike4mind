@@ -29,12 +29,12 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
 
   if (eventName === 'email.send') {
     const { default: mailer } = await import('./mailer/index');
-    const { to, subject, body, text, attachments, category, mirror, logRecipient } = detail as z.infer<
+    const { to, subject, body, text, attachments, category, mirror, logRecipient, ref } = detail as z.infer<
       typeof EmailEvents.Send.schema
     >;
     // queuedMailer sends self-host mail before it would offload, so a bodyRef never gets here.
     if (body === undefined) throw new Error('email.send needs an inline body on self-host: bodyRef is hosted-only');
-    await mailer.sendEmail(
+    const result = await mailer.sendEmail(
       to,
       {
         subject,
@@ -48,6 +48,13 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
       },
       { category, mirror, logRecipient }
     );
+    if (ref) {
+      const { recordEmailDeliveryOutcome } = await import('./mailer/deliveryOutcome');
+      await recordEmailDeliveryOutcome(
+        ref,
+        result ? { ok: true, at: new Date() } : { ok: false, error: 'The mail transport did not accept the message' }
+      );
+    }
     return;
   }
 
@@ -117,6 +124,20 @@ const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
 });
 
+/**
+ * What an email.send event delivers for, so the email-send worker can write the delivery outcome
+ * back to it (./mailer/deliveryOutcome.ts). Mail without one is fire-and-forget.
+ */
+export const EmailDeliveryRef = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('emailAttempt'), attemptId: z.string().min(1) }),
+  z.object({
+    kind: z.literal('incidentAlert'),
+    incidentId: z.string().min(1),
+    alert: z.enum(['review', 'escalation']),
+  }),
+]);
+export type EmailDeliveryRef = z.infer<typeof EmailDeliveryRef>;
+
 const EmailSendSchema = z
   .object({
     to: z.string(),
@@ -133,6 +154,7 @@ const EmailSendSchema = z
     /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
     mirror: z.boolean().optional(),
     logRecipient: z.boolean().optional(),
+    ref: EmailDeliveryRef.optional(),
     attachments: z
       .array(
         z.object({

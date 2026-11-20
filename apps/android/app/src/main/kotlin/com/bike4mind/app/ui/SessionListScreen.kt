@@ -20,7 +20,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -104,11 +103,16 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit, onOpenBrief: () -> Unit) {
+fun SessionListScreen(
+    graph: AppGraph,
+    onOpen: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onOpenBrief: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
     val model = viewModel { SessionListViewModel(graph) }
     val state by model.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -117,20 +121,7 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                 actions = {
                     TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text(stringResource(R.string.sessions_brief)) }
                     TextButton(onClick = model::refresh) { Text(stringResource(R.string.action_refresh)) }
-                    TextButton(onClick = {
-                        scope.launch {
-                            try {
-                                graph.push.unregisterBeforeSignOut()
-                                graph.session.signOut()
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (offline: Exception) {
-                                // The server-side logout is best effort; the local sign-out below still happens.
-                                graph.signOutLocally()
-                                graph.session.restore()
-                            }
-                        }
-                    }, modifier = Modifier.testTag("settings-signout-btn")) { Text(stringResource(R.string.sessions_sign_out)) }
+                    TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("sessions-settings-btn")) { Text(stringResource(R.string.sessions_settings)) }
                 },
             )
         },

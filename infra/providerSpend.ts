@@ -1,7 +1,8 @@
 /**
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
  * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
- * on the poller failing or skipping a provider or meeting output tokens it cannot price, and a small
+ * on the poller failing or skipping a provider, meeting output tokens it cannot price or reading an old
+ * or missing model price snapshot, and a small
  * dashboard. The ledger-derived twin is infra/llmSpend.ts. Also alarms on the nightly spend
  * reconciliation (spendReconciliationCron) drifting from the provider's billing or reconciling nothing.
  *
@@ -66,6 +67,9 @@ const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number],
     PROVIDER_SPEND_ALARM_USD_PER_HOUR_DEFAULT
   ),
 };
+
+/** Hours of snapshot age that alarms, and the number of consecutive hourly polls without a snapshot that alarms. */
+const MODEL_PRICE_SNAPSHOT_ALARM_HOURS = 48;
 
 let providerSpendDashboard: aws.cloudwatch.Dashboard | undefined;
 
@@ -211,6 +215,43 @@ if (isMonitoredStage) {
       treatMissingData: 'notBreaching',
       dimensions: { FunctionName: providerUsagePollCron.nodes.function.name },
       alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  }
+
+  if (providerUsagePollCron) {
+    // Published on every poll with no dimensions; the poller publishes Missing instead of an age when
+    // the snapshot cannot be used, so absence is explicit and a stage without the poller stays quiet.
+    new aws.cloudwatch.MetricAlarm('modelPriceSnapshotAge', {
+      name: `${prefix}-model-price-snapshot-age`,
+      alarmDescription: `The model price snapshot the usage poller reads is ${MODEL_PRICE_SNAPSHOT_ALARM_HOURS} hours old or more, so new model prices are not reaching it`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ModelPriceSnapshotAgeHours',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelPriceSnapshotMissing', {
+      name: `${prefix}-model-price-snapshot-missing`,
+      alarmDescription: `The usage poller could not use the model price snapshot on ${MODEL_PRICE_SNAPSHOT_ALARM_HOURS} consecutive hourly polls`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      datapointsToAlarm: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      metricName: 'ModelPriceSnapshotMissing',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
       tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });
   }
@@ -433,6 +474,27 @@ if (isMonitoredStage) {
             region,
             period: 3600,
             yAxis: { left: { min: 0, label: 'Tokens' } },
+          },
+        },
+        {
+          type: 'metric',
+          x: 0,
+          y: 6,
+          width: 12,
+          height: 6,
+          properties: {
+            title: 'Model price snapshot age (hours)',
+            metrics: [
+              [LLM_SPEND_NAMESPACE, 'ModelPriceSnapshotAgeHours', { stat: 'Maximum', label: 'Age (hours)' }],
+              [LLM_SPEND_NAMESPACE, 'ModelPriceSnapshotMissing', { stat: 'Maximum', label: 'Missing', yAxis: 'right' }],
+            ],
+            view: 'timeSeries',
+            region,
+            period: 3600,
+            yAxis: { left: { min: 0, label: 'Hours' }, right: { min: 0, max: 1, label: 'Missing' } },
+            annotations: {
+              horizontal: [{ label: 'Alarm', value: MODEL_PRICE_SNAPSHOT_ALARM_HOURS }],
+            },
           },
         },
       ],

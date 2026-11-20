@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EmailSendDetail } from './eventBus';
 
-const { sendToQueueMock, sendEmailMock, hostedSend } = vi.hoisted(() => ({
+const { sendToQueueMock, sendEmailMock, hostedSend, recordOutcomeMock } = vi.hoisted(() => ({
   sendToQueueMock: vi.fn(),
   sendEmailMock: vi.fn(),
   hostedSend: vi.fn(),
+  recordOutcomeMock: vi.fn(),
 }));
 
 vi.mock('./sqs', () => ({ sendToQueue: sendToQueueMock }));
@@ -19,6 +20,7 @@ vi.mock('@aws-sdk/client-eventbridge', () => ({
 vi.mock('sst', () => ({ Resource: { App: { name: 'local' }, AppEventBus: { name: 'events' } } }));
 
 vi.mock('./mailer/index', () => ({ default: { sendEmail: sendEmailMock } }));
+vi.mock('./mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: recordOutcomeMock }));
 
 const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = await import('./eventBus');
 
@@ -37,6 +39,27 @@ describe('EmailEvents.Send schema', () => {
     };
 
     expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+
+  it('keeps an attempt or incident-alert delivery ref', () => {
+    const base = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+    const attempt = { ...base, ref: { kind: 'emailAttempt' as const, attemptId: 'att-1' } };
+    const alert = {
+      ...base,
+      ref: { kind: 'incidentAlert' as const, incidentId: 'inc-1', alert: 'escalation' as const },
+    };
+
+    expect(EmailEvents.Send.schema.parse(attempt)).toEqual(attempt);
+    expect(EmailEvents.Send.schema.parse(alert)).toEqual(alert);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'invoice', attemptId: 'att-1' }],
+    ['an empty attempt id', { kind: 'emailAttempt', attemptId: '' }],
+    ['an empty incident id', { kind: 'incidentAlert', incidentId: '', alert: 'review' }],
+    ['an unknown alert', { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'digest' }],
+  ])('rejects a ref with %s', (_label, ref) => {
+    expect(EmailEvents.Send.schema.safeParse({ to: 'a@b.com', subject: 'Hi', body: 'x', ref }).success).toBe(false);
   });
 
   it('does not require any of the optional fields', () => {
@@ -152,6 +175,23 @@ describe('eventBus publishSelfHost', () => {
       { category: 'otc', mirror: false, logRecipient: false }
     );
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sent', { messageId: 'smtp-1' }, { ok: true, at: expect.any(Date) }],
+    ['failed', false, { ok: false, error: expect.any(String) }],
+  ])('records a %s delivery against the ref of a direct publish', async (_label, mailResult, outcome) => {
+    sendEmailMock.mockResolvedValue(mailResult);
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'att-1' };
+
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x', ref });
+
+    expect(recordOutcomeMock).toHaveBeenCalledExactlyOnceWith(ref, outcome);
+  });
+
+  it('records nothing for a self-host email without a ref', async () => {
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x' });
+    expect(recordOutcomeMock).not.toHaveBeenCalled();
   });
 
   it('enqueues a non-email event to SELF_HOST_EVENT_QUEUE as { detailType, detail }', async () => {

@@ -62,6 +62,18 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Updated the plan ${n} times`,
     active: 'Updating the plan...',
   },
+  TaskCreate: {
+    didAlone: 'Added to the plan',
+    toAlone: 'add to the plan',
+    many: n => `Added ${n} plan items`,
+    active: 'Updating the plan...',
+  },
+  TaskUpdate: {
+    didAlone: 'Updated the plan',
+    toAlone: 'update the plan',
+    many: n => `Updated the plan ${n} times`,
+    active: 'Updating the plan...',
+  },
   ask_user: {
     did: 'Asked:',
     didAlone: 'Asked a question',

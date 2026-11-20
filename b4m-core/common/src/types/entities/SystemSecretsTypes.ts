@@ -14,6 +14,10 @@ export const SST_PLACEHOLDER_VALUE = 'my-secret-placeholder-value';
  */
 export const NOT_CONFIGURED_PLACEHOLDER = 'not-configured';
 
+/** Where a self-host operator sets a missing setting. Shown by the mailer, resend-verification and System Health. */
+export const SELF_HOST_SETTINGS_HINT =
+  'Set each one in .env.selfhost (Docker Compose) or the chart config values / runtime Secret (Kubernetes), then restart the app.';
+
 /**
  * Check if a value is a placeholder (not configured or SST default).
  * Uses case-insensitive comparison and trims whitespace to prevent bypass attempts.
