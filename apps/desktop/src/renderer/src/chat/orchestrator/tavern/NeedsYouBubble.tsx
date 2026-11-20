@@ -20,7 +20,7 @@ function errorText(error: unknown): string {
  * Presenter mode copy only offers Open: its question is a placeholder and its parked call is in a transcript.
  */
 function usePlan(agent: AgentView): BubblePlan {
-  const { messages } = useSessionMessages(agent.id, refreshKeyOf(agent));
+  const { messages } = useSessionMessages(agent.id, refreshKeyOf(agent), false, !agent.redacted);
   if (agent.redacted) return { kind: 'open' };
   if (agent.decision) {
     return planForQuestion(agent.decision.question, { via: 'decision', decisionId: agent.decision.id });
