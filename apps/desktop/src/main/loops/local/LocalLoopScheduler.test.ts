@@ -610,6 +610,25 @@ describe('LocalLoopScheduler', () => {
     expect(scheduler.busy).toBe(0);
   });
 
+  it('holds the loop after its session could not be opened instead of retrying at once', async () => {
+    make();
+    const t = ticket('a');
+    chat.createCodeSession.mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+    scheduler.start();
+    await settle();
+    expect(chat.createCodeSession).toHaveBeenCalledTimes(1);
+    expect(store.ticket(t.id)).toMatchObject({ status: 'open', runCount: 0 });
+    scheduler.poke();
+    await settle();
+    expect(chat.createCodeSession).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.sessionOpenBackoff);
+    await settle();
+    expect(chat.createCodeSession).toHaveBeenCalledTimes(2);
+    expect(chat.turns).toHaveLength(1);
+  });
+
   it('records a requeued event for each run a quit stops', async () => {
     make();
     const t = ticket('a');

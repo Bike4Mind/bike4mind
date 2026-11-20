@@ -109,6 +109,8 @@ export const SCHEDULER_MS = {
    */
   serverUnreachableBackoff: 2 * 60_000,
   serverUnreachableBackoffMax: 30 * 60_000,
+  /** After a run's session could not be opened: its ticket goes straight back, so the next tick would retry at once. */
+  sessionOpenBackoff: 60_000,
 } as const;
 
 /** Runs in a row that error before the loop stops in `error`. */
@@ -187,6 +189,8 @@ export class LocalLoopScheduler {
   private readonly capBackoff = new Map<string, number>();
   /** loopId -> no run starts before `until`, after a run could not reach the Bike4Mind server; `ms` is that hold. */
   private readonly serverBackoff = new Map<string, { until: number; ms: number }>();
+  /** loopId -> no run starts before this, after a run's session could not be opened. */
+  private readonly openBackoff = new Map<string, number>();
   private quitting = false;
   /** Why no run starts now, for the whole machine (lanes busy, battery...). */
   private waitingReason: string | undefined;
@@ -237,6 +241,7 @@ export class LocalLoopScheduler {
   /** The owner asked for a run now: drop the server-unreachable hold so it is not waited out. */
   runNow(loopId: string): void {
     this.serverBackoff.delete(loopId);
+    this.openBackoff.delete(loopId);
     this.poke();
   }
 
@@ -400,7 +405,11 @@ export class LocalLoopScheduler {
 
       const work = this.nextWork(fresh, now, mine);
       if (!work) return undefined;
-      const backoff = Math.max(this.capBackoff.get(loop.id) ?? 0, this.serverBackoff.get(loop.id)?.until ?? 0);
+      const backoff = Math.max(
+        this.capBackoff.get(loop.id) ?? 0,
+        this.serverBackoff.get(loop.id)?.until ?? 0,
+        this.openBackoff.get(loop.id) ?? 0
+      );
       if (backoff > now.getTime()) {
         this.paced.set(loop.id, backoff);
         return undefined;
@@ -545,6 +554,7 @@ export class LocalLoopScheduler {
       return false;
     }
     if (!opened.ok) {
+      this.openBackoff.set(loop.id, this.now() + SCHEDULER_MS.sessionOpenBackoff);
       await this.finish(
         lane,
         opened.outcome === 'failed'
