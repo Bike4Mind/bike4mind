@@ -24,8 +24,8 @@ const MERGEABLE_STATES = new Set(['CLEAN', 'HAS_HOOKS']);
  * A base branch with a merge queue takes no direct merge, so readiness there means "enqueue";
  * the queue merges with its own method, so the repo's allowed methods do not matter.
  *
- * `requireReview: false` drops only the approval line, for a loop stage whose merge policy is
- * green CI (see loops/guards.ts mergeDecision); every other check still applies.
+ * `requireReview: false` drops the approval line, for a loop stage whose merge policy is
+ * green CI (see loops/guards.ts mergeDecision), and instead needs at least one passing check.
  */
 export function desktopMergeReadiness(
   snapshot: PrSnapshot,
@@ -46,6 +46,9 @@ export function desktopMergeReadiness(
     return { ready: false, reason: 'Waiting: checks are running.' };
   if (snapshot.checks.some(check => check.bucket === 'fail'))
     return { ready: false, reason: 'Waiting: a check is failing.' };
+  // Without a review, green CI is the only gate, so a PR with no passing check has none.
+  if (!requireReview && !snapshot.checks.some(check => check.bucket === 'pass'))
+    return { ready: false, reason: 'Waiting: no check has passed.' };
   if (!MERGEABLE_STATES.has(snapshot.mergeStateStatus)) {
     return { ready: false, reason: `Waiting: GitHub reports ${snapshot.mergeStateStatus.toLowerCase()}.` };
   }

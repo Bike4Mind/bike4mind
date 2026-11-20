@@ -49,9 +49,11 @@ describe('mergeDecision', () => {
     }
   });
 
-  it('refuses pending or failing CI, a draft and a conflict under green-ci too', () => {
+  it('refuses pending, failing or absent CI, a draft and a conflict under green-ci too', () => {
     for (const overrides of [
       { checks: [check('Build', 'pending')] },
+      { checks: [] },
+      { checks: [check('Docs', 'skipped')] },
       { checks: [check('Build', 'pass'), check('Lint', 'fail', false)] },
       { isDraft: true },
       { mergeable: 'CONFLICTING' as const },
