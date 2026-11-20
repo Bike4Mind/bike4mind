@@ -76,6 +76,15 @@ describe('latestTodos', () => {
     expect(latestTodos([reply(call('x', { todos: items }, 'denied'))])).toBeNull();
   });
 
+  it('skips a malformed TodoWrite or write_todos call, as it does a malformed todo_write', () => {
+    const first = call('a', { todos: [{ content: 'one', status: 'pending' }] });
+    for (const name of ['TodoWrite', 'write_todos']) {
+      expect(slim(latestTodos([reply(first), reply(call('b', { todos: 'nope' }, 'done', name))]))).toEqual([
+        { content: 'one', status: 'pending' },
+      ]);
+    }
+  });
+
   it('lets the newest plan call win across families', () => {
     const create = call('t', { subject: 'task' }, 'done', 'TaskCreate');
     const written = call('w', { todos: [{ content: 'listed', status: 'pending' }] });
@@ -115,6 +124,11 @@ describe('Claude Code task stream', () => {
       reply(update('u1', { taskId: '7', status: 'completed' })),
     ]);
     expect(plan).toEqual([{ id: '7', content: 'a', activeForm: 'Doing a', status: 'completed' }]);
+  });
+
+  it('falls back to creation order when a create result names no id, so an update to a real id is dropped', () => {
+    const plan = latestTodos([reply(create('c1', 'a')), reply(update('u1', { taskId: '7', status: 'completed' }))]);
+    expect(plan).toEqual([{ id: '1', content: 'a', activeForm: 'Doing a', status: 'pending' }]);
   });
 
   it('keeps cancelled tasks, which todoProgress leaves out of the count', () => {

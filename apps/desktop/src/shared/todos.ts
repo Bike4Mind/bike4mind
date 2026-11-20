@@ -68,43 +68,51 @@ function taskResult(call: ChatToolCall): ClaudeTaskCall['result'] {
   return taskId ? { taskId } : undefined;
 }
 
-/** Every plan-writing call that was accepted, oldest first. */
-function planCalls(messages: readonly ChatMessage[]): { call: ChatToolCall; message: number }[] {
-  return messages.flatMap((message, m) =>
-    (message.toolCalls ?? [])
-      .filter(call => own(PLAN_TOOLS, call.name) && call.status !== 'error' && call.status !== 'denied')
-      .map(call => ({ call, message: m }))
-  );
+function accepted(call: ChatToolCall): boolean {
+  return own(PLAN_TOOLS, call.name) !== undefined && call.status !== 'error' && call.status !== 'denied';
 }
 
-/** The plan the newest readable call sets, with the thread index of that call. */
-function planFrom(
-  calls: readonly { call: ChatToolCall; message: number }[]
-): { items: PlanItem[]; message: number } | null {
-  for (let c = calls.length - 1; c >= 0; c -= 1) {
-    const { call, message } = calls[c];
-    if (TASK_TOOLS.has(call.name)) {
+/** The fold of every accepted task call up to and including `toolCalls[lastCall]` of `messages[lastMessage]`. */
+function taskPlan(messages: readonly ChatMessage[], lastMessage: number, lastCall: number): PlanItem[] {
+  const tasks = messages
+    .slice(0, lastMessage + 1)
+    .flatMap((message, m) =>
+      (message.toolCalls ?? []).filter(
+        (call, c) => (m < lastMessage || c <= lastCall) && TASK_TOOLS.has(call.name) && accepted(call)
+      )
+    );
+  return fromClaudeTasks(tasks.map(task => ({ name: task.name, input: task.input, result: taskResult(task) }))).plan
+    .items;
+}
+
+/**
+ * The plan the newest readable call at or after `messages[from]` sets, with the thread index of that
+ * call. Walks backwards and stops at the first readable call; only a task call reads further back.
+ */
+function planFrom(messages: readonly ChatMessage[], from = 0): { items: PlanItem[]; message: number } | null {
+  for (let m = messages.length - 1; m >= from; m -= 1) {
+    const calls = messages[m].toolCalls ?? [];
+    for (let c = calls.length - 1; c >= 0; c -= 1) {
+      const call = calls[c];
+      if (!accepted(call)) continue;
       // Each task call is a delta, so the plan is the fold of the whole stream up to this one.
-      const tasks = calls.slice(0, c + 1).filter(entry => TASK_TOOLS.has(entry.call.name));
-      const items = fromClaudeTasks(
-        tasks.map(({ call: task }) => ({ name: task.name, input: task.input, result: taskResult(task) }))
-      ).plan.items;
-      return { items, message };
+      if (TASK_TOOLS.has(call.name)) return { items: taskPlan(messages, m, c), message: m };
+      if (call.name === TODO_TOOL_NAME) {
+        const parsed = parseTodos(call.input.todos);
+        if ('todos' in parsed) return { items: parsed.todos, message: m };
+        continue;
+      }
+      // A malformed list is skipped like a rejected todo_write, so it cannot hide an older plan.
+      const adapter = own(PLAN_TOOLS, call.name);
+      if (adapter && Array.isArray(call.input.todos)) return { items: adapter(call.input).plan.items, message: m };
     }
-    if (call.name === TODO_TOOL_NAME) {
-      const parsed = parseTodos(call.input.todos);
-      if ('todos' in parsed) return { items: parsed.todos, message };
-      continue;
-    }
-    const adapter = own(PLAN_TOOLS, call.name);
-    return adapter ? { items: adapter(call.input).plan.items, message } : null;
   }
   return null;
 }
 
 /** The most recent plan in a thread: what the last accepted plan call set, or null if none. */
 export function latestTodos(messages: readonly ChatMessage[]): PlanItem[] | null {
-  return planFrom(planCalls(messages))?.items ?? null;
+  return planFrom(messages)?.items ?? null;
 }
 
 /**
@@ -133,8 +141,7 @@ export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean)
   if (start < 0) return null;
   // Recency is judged on the call the plan is read from, so a rejected newest call cannot revive
   // an older plan; the task fold still reads the whole thread.
-  const plan = planFrom(planCalls(messages));
-  return plan && plan.message >= start ? plan.items : null;
+  return planFrom(messages, start)?.items ?? null;
 }
 
 /** Done/total over the items that count (cancelled ones are left out), plus the current and next item. */
