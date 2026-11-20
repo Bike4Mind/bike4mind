@@ -17,6 +17,7 @@ const activeActivity: BriefActivity = {
   periodEnd,
   runs: [{ query: 'Run the monthly invoice batch', status: 'completed', finishedAt: periodEnd }],
   approvals: [],
+  questions: [],
   emails: [],
   delegations: [],
 } as unknown as BriefActivity;

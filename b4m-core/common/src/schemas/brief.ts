@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BRIEF_QUESTION_CLOSED_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
 
 /**
  * Wire schemas for assistant briefs (`/api/v1/briefs`). A brief is server-composed and platform
@@ -38,6 +39,15 @@ export const BriefItemSchema = z.object({
   source: BriefSourceRefSchema.optional().describe('The record the item came from, when it was not agent activity.'),
 });
 
+/**
+ * What has become of an approval since the brief was composed, read live on every fetch. `pending` is the
+ * only state that can still be answered. `resolved` means it was answered or withdrawn but the outcome
+ * was not recorded (an action cleared before outcomes were kept, or a quest that no longer exists).
+ */
+export const BRIEF_APPROVAL_STATES = ['pending', 'approved', 'denied', 'replaced', 'lapsed', 'resolved'] as const;
+export const BriefApprovalStateSchema = z.enum(BRIEF_APPROVAL_STATES);
+export type BriefApprovalState = z.infer<typeof BriefApprovalStateSchema>;
+
 export const BriefDraftReplySchema = z
   .object({
     to: z.string().min(1).max(BRIEF_LIMITS.draftTo).describe("The source email's sender as received, unverified."),
@@ -54,12 +64,44 @@ export const BriefApprovalRefSchema = z.object({
   questId: z.string().min(1),
   sessionId: z.string().min(1).describe('The notebook holding the quest, where a client shows the approval card.'),
   pendingActionTs: z.number().int().positive(),
+  state: BriefApprovalStateSchema.describe(
+    'Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should ' +
+      'treat an unknown value as not actionable.'
+  ),
+});
+
+/**
+ * What has become of an agent question since the brief was composed, read live on every fetch. Only `open`
+ * can be replied to; `superseded` means the conversation has moved past the question.
+ */
+export const BRIEF_QUESTION_STATES = ['open', 'answered', 'superseded'] as const;
+export const BriefQuestionStateSchema = z.enum(BRIEF_QUESTION_STATES);
+export type BriefQuestionState = z.infer<typeof BriefQuestionStateSchema>;
+
+export const BRIEF_QUESTION_MAX_OPTIONS = 4;
+export const BRIEF_REPLY_MAX_LENGTH = 4000;
+
+/** An agent's question waiting on the user; answer it through `POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`. */
+export const BriefQuestionRefSchema = z.object({
+  questId: z.string().min(1).describe('The agent turn that asked the question.'),
+  sessionId: z.string().min(1).describe('The notebook the reply continues.'),
+  options: z
+    .array(z.string())
+    .max(BRIEF_QUESTION_MAX_OPTIONS)
+    .describe('Suggested answers, in order; `choiceIndex` on a reply refers to this list.'),
+  state: BriefQuestionStateSchema.describe(
+    'Live state of the question at fetch time. Only `open` can be replied to; a client should treat an ' +
+      'unknown value as not actionable.'
+  ),
 });
 
 export const BriefDecisionSchema = BriefItemSchema.extend({
   approval: BriefApprovalRefSchema.optional().describe(
-    'Present when the decision is an agent approval. The approval may have lapsed or been answered since the ' +
-      'brief was composed; the pending-actions endpoints are authoritative.'
+    'Present when the decision is an agent approval. `state` reflects the approval at fetch time; the ' +
+      'pending-actions endpoints stay authoritative for a decision racing this read.'
+  ),
+  question: BriefQuestionRefSchema.optional().describe(
+    'Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both.'
   ),
   draftReply: BriefDraftReplySchema.optional(),
 });
@@ -81,6 +123,35 @@ export const BriefIdParamSchema = z.object({
   id: z.string().min(1).describe('The brief id, as carried by the `brief_ready` push.'),
 });
 
+export const BriefDecisionParamsSchema = z.object({
+  id: z.string().min(1).describe('The brief id.'),
+  decisionId: z.string().min(1).describe('The decision item id within the brief.'),
+});
+
+export const BriefReplyRequestSchema = z.object({
+  text: z
+    .string()
+    .min(1)
+    .max(BRIEF_REPLY_MAX_LENGTH)
+    .regex(/\S/, 'Reply must not be blank')
+    .describe('The reply, sent to the agent as your next message.'),
+  choiceIndex: z
+    .number()
+    .int()
+    .min(0)
+    .max(BRIEF_QUESTION_MAX_OPTIONS - 1)
+    .optional()
+    .describe('Index into the question `options` when the reply picks one of them; recorded on the question.'),
+});
+
+export const BriefReplyResponseSchema = z.object({
+  executionId: z.string().describe('The agent run continuing the conversation with your reply.'),
+  sessionId: z.string().describe('The notebook the run belongs to.'),
+});
+
+/** `errorCode` values the reply route sends on top of the shared auth/billing codes. */
+export const BRIEF_REPLY_ERROR_CODES = [BRIEF_QUESTION_CLOSED_ERROR_CODE] as const satisfies readonly ApiErrorCode[];
+
 export const BriefListResponseSchema = z.object({
   briefs: z.array(BriefSchema).describe('Most recent first.'),
 });
@@ -88,5 +159,15 @@ export const BriefListResponseSchema = z.object({
 export type Brief = z.infer<typeof BriefSchema>;
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
+export type BriefApprovalRef = z.infer<typeof BriefApprovalRefSchema>;
+export type BriefQuestionRef = z.infer<typeof BriefQuestionRefSchema>;
+export type BriefReplyRequest = z.infer<typeof BriefReplyRequestSchema>;
+/** A decision as composed and stored; each ref's `state` is derived on every read, never stored. */
+export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question'> & {
+  approval?: Omit<BriefApprovalRef, 'state'>;
+  question?: Omit<BriefQuestionRef, 'state'>;
+  /** Set once by the reply route's claim, so a question is answered from the brief at most once. */
+  repliedAt?: Date;
+};
 export type BriefSourceRef = z.infer<typeof BriefSourceRefSchema>;
 export type BriefDraftReply = z.infer<typeof BriefDraftReplySchema>;

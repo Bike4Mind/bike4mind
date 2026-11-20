@@ -100,6 +100,7 @@ async function composeNextBrief() {
       periodEnd: end,
       runs: [],
       approvals: [],
+      questions: [],
       emails: await loadPendingBriefEmails(userId, end),
       delegations: [],
     }),
@@ -300,6 +301,7 @@ it('lets handled and FYI sections progress while approvals block older email dec
       periodEnd: end,
       runs: [],
       approvals: waiting,
+      questions: [],
       emails,
       delegations: [],
     });

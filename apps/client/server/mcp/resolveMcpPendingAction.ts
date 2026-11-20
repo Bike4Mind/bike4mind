@@ -1,5 +1,5 @@
 import { Quest, Session } from '@bike4mind/database';
-import { MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
+import { MCP_ACTION_REPLACED_ERROR_CODE, PENDING_ACTION_TTL_MS } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -12,9 +12,6 @@ import { describeCustomCallFailure } from '@bike4mind/server-utils/mcpConnection
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-
-// Token expiration time (15 minutes) - must match ChatCompletionProcess.ts
-const TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
 
 type ActingUser = Parameters<typeof resolvePendingActionTarget>[1];
 
@@ -97,18 +94,18 @@ export async function resolveMcpPendingAction({
     };
   }
 
-  if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {
+  if (pendingAction.ts && Date.now() - pendingAction.ts > PENDING_ACTION_TTL_MS) {
     logger.warn('[MCP Pending Action] Pending action expired', {
       questId,
       age: Date.now() - pendingAction.ts,
-      maxAge: TOKEN_EXPIRATION_MS,
+      maxAge: PENDING_ACTION_TTL_MS,
     });
-    await claimPendingAction(questId, pendingAction.ts);
+    await claimPendingAction(questId, pendingAction.ts, 'lapsed');
     return { status: 400, body: { error: 'This action has expired. Please request it again.' }, reason: 'expired' };
   }
 
   if (!confirmed) {
-    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    if (!(await claimPendingAction(questId, pendingAction.ts, 'denied'))) {
       logger.warn('[MCP Pending Action] Pending action already claimed before cancel', { questId });
       return { status: 409, body: { error: 'This action has already been processed.' }, reason: 'already_resolved' };
     }
@@ -128,7 +125,7 @@ export async function resolveMcpPendingAction({
       logger.warn('[MCP Pending Action] Custom connector tool is no longer available', { questId });
       return { status: 409, body: { error: `${displayName} no longer offers this action.` } };
     }
-    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    if (!(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
       logger.warn('[MCP Pending Action] Pending action already claimed', { questId });
       return { status: 409, body: { error: 'This action has already been processed.' }, reason: 'already_resolved' };
     }
@@ -274,7 +271,7 @@ export async function resolveMcpPendingAction({
 
     // Claimed only once every pre-execution check has passed, so a fixable failure above (e.g. a
     // repo not yet selected) leaves the action in place for another click.
-    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    if (!(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
       logger.warn('[MCP Pending Action] Pending action already claimed', { questId });
       return { status: 409, body: { error: 'This action has already been processed.' }, reason: 'already_resolved' };
     }

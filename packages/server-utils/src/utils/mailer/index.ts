@@ -1,4 +1,4 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isPlaceholderValue, SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '../config';
 import { postEmailMirrorToSlack } from '../../integrations/slack/slack';
@@ -12,7 +12,7 @@ import {
   type MailTransport,
   type MailTransportKind,
 } from './transport';
-import { getMailConfigStatus, type EmailConfigStatus } from './configStatus';
+import { getMailConfigStatus, isUnauthenticatedSmtpRelay, type EmailConfigStatus } from './configStatus';
 
 export {
   SMTP_DNS_TIMEOUT_MS,
@@ -22,7 +22,12 @@ export {
 } from './smtpTransport';
 export { resolveMailTransportKind } from './transport';
 export type { MailCategory, MailSendContext, MailSendResult, MailTransport, MailTransportKind } from './transport';
-export { getMailConfigStatus, requiredMailSecrets, statusTransportKind } from './configStatus';
+export {
+  getMailConfigStatus,
+  isUnauthenticatedSmtpRelay,
+  requiredMailSecrets,
+  statusTransportKind,
+} from './configStatus';
 export type { EmailConfigStatus, MailSecretName } from './configStatus';
 
 export interface SendEmailOptions {
@@ -49,11 +54,12 @@ export function createMailTransport(kind: MailTransportKind = resolveMailTranspo
   if (kind === 'ses') {
     return new SesTransport({ configurationSet: process.env.SES_CONFIGURATION_SET || undefined, otcConfigurationSet });
   }
+  const noAuth = isUnauthenticatedSmtpRelay();
   return new SmtpTransport({
     host: Config.MAIL_HOST,
     port: Config.MAIL_PORT,
-    username: Config.MAIL_USERNAME,
-    password: Config.MAIL_PASSWORD,
+    username: noAuth ? undefined : Config.MAIL_USERNAME,
+    password: noAuth ? undefined : Config.MAIL_PASSWORD,
     otcConfigurationSet,
   });
 }
@@ -74,10 +80,13 @@ export class MailService {
   private validateConfig() {
     const { missingSecrets } = this.getConfigStatus();
     if (missingSecrets.length > 0) {
+      const fix =
+        process.env.B4M_SELF_HOST === 'true'
+          ? SELF_HOST_SETTINGS_HINT
+          : `Set them via: ./for-env {stage} npx sst secret set ${missingSecrets[0]} ...`;
       Logger.warn(
         `Mail configuration incomplete (${this.transport.kind}) - emails will fail. ` +
-          `Missing or placeholder values: ${missingSecrets.join(', ')}. ` +
-          `Set them via: ./for-env {stage} npx sst secret set ${missingSecrets[0]} ...`
+          `Missing or placeholder values: ${missingSecrets.join(', ')}. ${fix}`
       );
     }
   }

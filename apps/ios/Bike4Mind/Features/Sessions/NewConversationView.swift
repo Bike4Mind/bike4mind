@@ -8,7 +8,7 @@ import SwiftUI
 struct NewConversationView: View {
   @Environment(AppServices.self) private var services
   @State private var model: NewConversationViewModel
-  @State private var profile: AccountProfile?
+  private var profile: AccountProfile? { services.cachedAccountProfile }
   @State private var isRecordingVoice = false
   @FocusState private var focused: Bool
 
@@ -59,7 +59,7 @@ struct NewConversationView: View {
         },
         onCancel: { isRecordingVoice = false })
     }
-    .task { profile = await services.accountProfile() }
+    .task { await services.refreshAccountProfile() }
     .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
     // A field left focused under a pushed screen is refocused on return, and that refocus does not lift the
     // safeAreaInset composer above the keyboard: drop focus whenever home is covered.

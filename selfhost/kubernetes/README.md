@@ -62,7 +62,7 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
    kubectl get pods,pvc,jobs --namespace bike4mind-eval
    ```
 
-   App and workers wait for Mongo PRIMARY and a successful storage initialization marker. The initializer creates the seven configured buckets, upload notification registrations and current Compose lifecycle policies, then writes the marker. It is safe to rerun. Its deterministic name changes when chart initialization inputs or values change, avoiding immutable Job updates. Change `initializationRevision` when an existing Secret's contents change or an explicit rerun is needed. Do not delete PVCs to retry initialization.
+   App and workers wait for Mongo PRIMARY and a successful storage initialization marker. The initializer creates the seven configured buckets, upload notification registrations and current Compose lifecycle policies, then writes the marker. It is safe to rerun. Its deterministic name changes when chart initialization inputs or values change, avoiding immutable Job updates. Change `initializationRevision` (as a string, for example `--set-string initializationRevision=2`) when an existing Secret's contents change or an explicit rerun is needed. Do not delete PVCs to retry initialization.
 
 5. Open four separate terminals for the browser-facing services. The chatcompletion port serves the CLI/API SSE endpoint. Keep these loopback-bound port-forwards private.
 
@@ -85,12 +85,22 @@ To retain an external S3-compatible backend, set `AWS_ENDPOINT_URL_S3`, bucket n
 
 Queue declarations and environment names mirror root `elasticmq.conf` and `.env.selfhost.example`; tests reject drift. Configuring a queue does not prove its consumer's outcome. The WebSocket gateway and scheduler worker remain singleton deployments with `Recreate`, since their state/leases do not justify unrestricted scaling. No ArgoCD, AWS-specific storage class, load balancer or administrative tunnel is installed.
 
+### Email
+
+By default `MAIL_HOST`, `MAIL_PORT` and `MAIL_FROM` point at the bundled Mailpit with no SMTP authentication, so sign-in codes land in its inbox (see the port-forward above). Mailpit has no persistent volume here, so a restart of its pod empties the inbox. Its pod does not roll on chart config or Secret changes.
+
+- **Real relay:** set `config.MAIL_HOST`, `config.MAIL_PORT` (465 for implicit TLS, 587 for STARTTLS) and `config.MAIL_FROM`. If the relay needs authentication, put `MAIL_USERNAME` and `MAIL_PASSWORD` in the runtime Secret; the Secret is loaded after the ConfigMap, so its values win. Set both or neither: for a relay without authentication, omit both. Setting only one is reported as a missing setting on Admin -> System Health.
+- **Mail off:** set `config.MAIL_HOST: ''`. An empty value counts as unset, so System Health reports email as not configured and sign-in codes cannot be delivered.
+- After a Secret change, pods do not restart on their own; bump `initializationRevision` with `--set-string` and rerun the upgrade, as described under [Restart and rollback](#restart-and-rollback).
+
+### Agent execution
+
 For agent execution, set `agentExecutor.enabled: true`, supply the matching source-built image, and add `AGENT_EXECUTOR_INTERNAL_SECRET` to the Secret. App and executor validate it before starting. Executor termination allows 14 minutes; chatcompletion allows 150 seconds and the background worker 30 seconds.
 
 ## Restart and rollback
 
 - Record the exact source/image references and `helm get values b4m -n bike4mind-eval` before upgrading. Never include secret values in receipts.
-- Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
+- Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command with `--set-string initializationRevision=<new value>` (the schema requires a string, so `--set initializationRevision=2` fails validation).
 - The gateway's management endpoint is `<release>-ws-management:3002`. Remove any `config.WEBSOCKET_MANAGEMENT_ENDPOINT` override that points at `<release>-ws:3001` before upgrading, and keep `images.ws` at the same revision as the other images.
 - An upgrade to a release that requires `MEMORY_KEY_SECRET` fails with `CreateContainerConfigError` if the existing runtime Secret has no such key. Add one to the Secret (a new, persistent value; never a value changed on every deploy) before running the upgrade.
 - For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery; for that, see [Backup and restore](#backup-and-restore).

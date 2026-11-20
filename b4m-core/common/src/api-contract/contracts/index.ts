@@ -15,9 +15,15 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
-import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
+import {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  replyToBriefDecisionContract,
+} from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
@@ -194,8 +200,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
+  replyToBriefDecisionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
+  listHandoffDevicesContract,
+  sendSessionHandoffContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,

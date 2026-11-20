@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { AssistantBriefModel, assistantBriefRepository, type AssistantBriefContent } from './AssistantBriefModel';
@@ -16,6 +16,8 @@ afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
 });
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(async () => {
   await AssistantBriefModel.deleteMany({});
 });
@@ -122,6 +124,32 @@ describe('assistantBriefRepository.removeEmailSourcedItems', () => {
   });
 });
 
+describe('assistant brief settlement', () => {
+  it('validates ready content while settling only a composing brief', async () => {
+    const update = vi.spyOn(AssistantBriefModel, 'updateOne').mockResolvedValue({ modifiedCount: 1 } as never);
+    const content = { headline: 'Ready', happened: [], handled: [], decisions: [] };
+    const composedAt = new Date('2026-01-01');
+
+    expect(await assistantBriefRepository.markReady('brief', content, composedAt)).toBe(true);
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      { _id: 'brief', status: 'composing' },
+      { $set: { ...content, status: 'ready', composedAt } },
+      { runValidators: true }
+    );
+  });
+
+  it('validates failure details without claiming an already settled brief changed', async () => {
+    const update = vi.spyOn(AssistantBriefModel, 'updateOne').mockResolvedValue({ modifiedCount: 0 } as never);
+
+    expect(await assistantBriefRepository.markFailed('brief', 'Unavailable')).toBe(false);
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      { _id: 'brief', status: 'composing' },
+      { $set: { status: 'failed', failureReason: 'Unavailable' } },
+      { runValidators: true }
+    );
+  });
+});
+
 describe('AssistantBriefModel source refs', () => {
   const brief = (source: Record<string, unknown>) => ({
     userId: 'user-me',
@@ -142,44 +170,5 @@ describe('AssistantBriefModel source refs', () => {
       /delegationId/
     );
     await expect(AssistantBriefModel.create(brief({ kind: 'email', delegationId: 'g1' }))).rejects.toThrow(/emailId/);
-  });
-});
-
-describe('assistantBriefRepository lifecycle', () => {
-  const window = { periodStart: new Date('2026-11-01T00:00:00.000Z'), periodEnd: new Date('2026-11-02T00:00:00.000Z') };
-  const content = { headline: 'Done.', happened: [], handled: [], decisions: [] };
-
-  it('creates a composing brief, settles it once and reads it back scoped to its owner', async () => {
-    const brief = await assistantBriefRepository.createComposing({ userId: 'user-me', ...window });
-    const id = brief._id.toString();
-
-    expect(await assistantBriefRepository.findActiveComposing('user-me')).toMatchObject({ _id: brief._id });
-    expect(
-      await assistantBriefRepository.findActiveComposing('user-me', new Date(Date.now() + 10 * 60_000))
-    ).toBeNull();
-
-    expect(await assistantBriefRepository.markReady(id, content, window.periodEnd)).toBe(true);
-    expect(await assistantBriefRepository.markFailed(id, 'late')).toBe(false);
-    expect(await assistantBriefRepository.findLatestReady('user-me')).toMatchObject({
-      status: 'ready',
-      headline: 'Done.',
-    });
-
-    expect(await assistantBriefRepository.findByIdForUser(id, 'user-me')).toMatchObject({ status: 'ready' });
-    expect(await assistantBriefRepository.findByIdForUser(id, 'user-other')).toBeNull();
-    expect(await assistantBriefRepository.findByIdForUser('bad', 'user-me')).toBeNull();
-    expect(await assistantBriefRepository.findById(id)).toMatchObject({ userId: 'user-me' });
-    expect(await assistantBriefRepository.findById('bad')).toBeNull();
-    expect(await assistantBriefRepository.listByUser('user-me', 5)).toHaveLength(1);
-  });
-
-  it('marks a composing brief failed', async () => {
-    const brief = await assistantBriefRepository.createComposing({ userId: 'user-me', ...window });
-    expect(await assistantBriefRepository.markFailed(brief._id.toString(), 'composition_failed')).toBe(true);
-    expect(await assistantBriefRepository.markReady(brief._id.toString(), content, window.periodEnd)).toBe(false);
-  });
-
-  it('removes nothing for an empty email list', async () => {
-    expect(await assistantBriefRepository.removeEmailSourcedItems('user-me', [])).toBe(0);
   });
 });

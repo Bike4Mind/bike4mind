@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefDecision, BriefItem, BriefSourceRef, BriefStatus } from '@bike4mind/common';
+import type { BriefItem, BriefSourceRef, BriefStatus, StoredBriefDecision } from '@bike4mind/common';
 
 /**
  * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
@@ -14,7 +14,7 @@ export type IAssistantBrief = {
   headline: string | null;
   happened: BriefItem[];
   handled: BriefItem[];
-  decisions: BriefDecision[];
+  decisions: StoredBriefDecision[];
   composedAt: Date | null;
   failureReason: string | null;
   createdAt: Date;
@@ -73,6 +73,18 @@ const decisionSchema = new Schema(
       ),
       required: false,
     },
+    question: {
+      type: new Schema(
+        {
+          questId: { type: String, required: true },
+          sessionId: { type: String, required: true },
+          options: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    repliedAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -151,6 +163,29 @@ export const assistantBriefRepository = {
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  },
+
+  /**
+   * Marks a question decision replied, once: only the first caller gets `true`, so a double tap or a
+   * replay sends the reply to the agent at most once. Scoped to the owner like `findByIdForUser`.
+   */
+  async claimDecisionReply(id: string, userId: string, decisionId: string, at: Date = new Date()): Promise<boolean> {
+    if (!mongoose.isValidObjectId(id)) return false;
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, question: { $exists: true }, repliedAt: null } } },
+      { $set: { 'decisions.$.repliedAt': at } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  /** Undoes a claim whose reply never reached the agent, so the user can try again. */
+  async releaseDecisionReply(id: string, userId: string, decisionId: string, at: Date): Promise<void> {
+    await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, repliedAt: at } } },
+      { $unset: { 'decisions.$.repliedAt': 1 } },
+      { runValidators: true }
+    );
   },
 
   /** Removes the items sourced from these ingested emails from every brief of the owner, so a deleted email leaves no copy behind. */

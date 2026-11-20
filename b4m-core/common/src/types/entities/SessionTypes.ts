@@ -14,6 +14,22 @@ import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
+/**
+ * How long a pending action stays answerable (ms). Shared by the web and public-API resolver, the brief
+ * composer and the brief serializer so the three agree on when an approval has lapsed.
+ */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+export const PENDING_ACTION_OUTCOMES = ['approved', 'denied', 'lapsed'] as const;
+export type PendingActionResolutionOutcome = (typeof PENDING_ACTION_OUTCOMES)[number];
+
+/** The last pending action taken off a quest, kept so a brief can report what became of it. */
+export interface IPendingActionResolution {
+  ts: number;
+  outcome: PendingActionResolutionOutcome;
+  at: Date;
+}
+
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
   tool: string;
@@ -479,6 +495,9 @@ export interface IChatHistoryItem {
    *   - other: MCP tool confirmation (params contain tool arguments)
    */
   pendingAction?: IPendingAction;
+
+  /** Written by the claim that takes `pendingAction` off the quest (pendingActionExecutor.claimPendingAction). */
+  pendingActionResolution?: IPendingActionResolution;
 
   /**
    * Slack notification info for async message editing

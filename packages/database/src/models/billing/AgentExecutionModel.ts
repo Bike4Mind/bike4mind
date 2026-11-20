@@ -1165,6 +1165,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return result?.toObject() ?? null;
   }
 
+  /** The model of the user's most recent run in a session, to continue that conversation on. */
+  async findLatestModelBySessionId(sessionId: string, userId: string): Promise<string | null> {
+    const latest = await this.model
+      .findOne({ sessionId, userId })
+      .sort({ createdAt: -1 })
+      .select('model')
+      .lean<{ model?: string }>();
+    return latest?.model ?? null;
+  }
+
   async findChildExecutions(parentExecutionId: string): Promise<IAgentExecution[]> {
     const results = await this.model.find({ parentExecutionId }).sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());

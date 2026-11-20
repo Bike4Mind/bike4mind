@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EmailJobStatus, EmailSendStatus } from '@bike4mind/common';
+import { EmailJobOverallStatus, EmailJobStatus, EmailSendStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 // Passthrough so `dispatch` is the raw (event, ctx, logger) handler - the queue is
@@ -14,11 +14,16 @@ const mockFindTemplateById = vi.fn();
 const mockFindAttemptById = vi.fn();
 const mockIncrementCountsBy = vi.fn();
 const mockUpdateJob = vi.fn();
+const mockCompleteRun = vi.fn();
+const mockUpdateCounts = vi.fn().mockResolvedValue(true);
 const mockCountAttempts = vi.fn();
 const sendMocks = vi.hoisted(() => ({
   publish: vi.fn(),
   smtpSendEmail: vi.fn(),
   updateAttemptStatus: vi.fn(),
+  markQueued: vi.fn(),
+  recordOutcome: vi.fn(),
+  markSendFailed: vi.fn(),
   findUserById: vi.fn(),
 }));
 
@@ -27,11 +32,16 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...args: unknown[]) => mockFindJobById(...args),
     incrementCountsBy: (...args: unknown[]) => mockIncrementCountsBy(...args),
     update: (...args: unknown[]) => mockUpdateJob(...args),
+    completeRun: (...args: unknown[]) => mockCompleteRun(...args),
+    updateCounts: (...args: unknown[]) => mockUpdateCounts(...args),
   },
   emailSendAttemptRepository: {
     findById: (...args: unknown[]) => mockFindAttemptById(...args),
     count: (...args: unknown[]) => mockCountAttempts(...args),
     updateStatus: sendMocks.updateAttemptStatus,
+    markQueued: sendMocks.markQueued,
+    recordDeliveryOutcome: sendMocks.recordOutcome,
+    markSendFailed: sendMocks.markSendFailed,
   },
   emailTemplateRepository: {
     findById: (...args: unknown[]) => mockFindTemplateById(...args),
@@ -154,6 +164,7 @@ describe('emailBatch delivery through the event bus', () => {
     mockFindAttemptById.mockResolvedValue(pendingAttempt());
     sendMocks.findUserById.mockResolvedValue({ name: 'Ada Lovelace' });
     sendMocks.updateAttemptStatus.mockResolvedValue(undefined);
+    sendMocks.markQueued.mockResolvedValue(true);
     sendMocks.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
   });
 
@@ -163,7 +174,14 @@ describe('emailBatch delivery through the event bus', () => {
     vi.restoreAllMocks();
   });
 
-  it('publishes the rendered mail as an email.send event and marks the attempt sent', async () => {
+  it('publishes the rendered mail with its attempt ref and marks the attempt queued', async () => {
+    mockCountAttempts.mockImplementation(async (filter: { status?: unknown }) => {
+      if (filter.status === undefined) return 1;
+      const statuses = (filter.status as { $in?: string[] }).$in ?? [filter.status];
+      return statuses.includes(EmailSendStatus.QUEUED) ? 1 : 0;
+    });
+    mockCompleteRun.mockResolvedValue(true);
+
     await expect(run()).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMocks.publish).toHaveBeenCalledExactlyOnceWith(
@@ -171,19 +189,56 @@ describe('emailBatch delivery through the event bus', () => {
         to: 'to@example.org',
         subject: 'Hi Ada Lovelace',
         body: expect.stringContaining('Hello Ada Lovelace'),
+        ref: { kind: 'emailAttempt', attemptId: 'attempt-1' },
       })
     );
     expect(sendMocks.publish.mock.calls[0][0].body).toContain('/api/email/track/open/tok-1');
     expect(sendMocks.smtpSendEmail).not.toHaveBeenCalled();
-    expect(sendMocks.updateAttemptStatus).toHaveBeenNthCalledWith(1, 'attempt-1', EmailSendStatus.PROCESSING);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenNthCalledWith(
-      2,
+    expect(sendMocks.updateAttemptStatus).toHaveBeenCalledExactlyOnceWith(
+      'attempt-1',
+      EmailSendStatus.PROCESSING,
+      expect.objectContaining({ renderedSubject: 'Hi Ada Lovelace' })
+    );
+    expect(sendMocks.updateAttemptStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMocks.publish.mock.invocationCallOrder[0]
+    );
+    expect(sendMocks.markQueued).toHaveBeenCalledWith('attempt-1', expect.objectContaining({ retryCount: 0 }));
+    expect(sendMocks.recordOutcome).not.toHaveBeenCalled();
+    expect(mockIncrementCountsBy).not.toHaveBeenCalled();
+    expect(mockCompleteRun).toHaveBeenCalledWith(
+      'job-1',
+      undefined,
+      undefined,
+      expect.objectContaining({ sentCount: 1, failedCount: 0, overallStatus: EmailJobOverallStatus.COMPLETE })
+    );
+  });
+
+  it('records a self-host send as sent, since that result is the delivery itself', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    sendMocks.smtpSendEmail.mockResolvedValue({ messageId: 'smtp-1' });
+
+    await run();
+
+    expect(sendMocks.publish).not.toHaveBeenCalled();
+    expect(sendMocks.recordOutcome).toHaveBeenCalledWith(
+      'attempt-1',
+      { ok: true, at: expect.any(Date) },
+      { retryCount: 0 }
+    );
+    expect(sendMocks.markQueued).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when the worker already wrote the outcome before the queue write', async () => {
+    sendMocks.markQueued.mockResolvedValue(false);
+
+    await expect(run()).resolves.toEqual({ batchItemFailures: [] });
+
+    expect(sendMocks.publish).toHaveBeenCalledTimes(1);
+    expect(sendMocks.updateAttemptStatus).not.toHaveBeenCalledWith(
       'attempt-1',
       EmailSendStatus.SENT,
-      expect.objectContaining({ renderedSubject: 'Hi Ada Lovelace', retryCount: 0 })
+      expect.anything()
     );
-    expect(mockIncrementCountsBy).toHaveBeenCalledWith('job-1', 'sentCount', 1);
-    expect(mockIncrementCountsBy).not.toHaveBeenCalledWith('job-1', 'failedCount', expect.anything());
   });
 
   it('prefixes the subject on a test send', async () => {
@@ -194,17 +249,13 @@ describe('emailBatch delivery through the event bus', () => {
     expect(sendMocks.publish).toHaveBeenCalledWith(expect.objectContaining({ subject: '[TEST] Hi Ada Lovelace' }));
   });
 
-  it('retries a publish that fails and marks the attempt sent once one goes through', async () => {
+  it('retries a publish that fails and marks the attempt queued once one goes through', async () => {
     sendMocks.publish.mockRejectedValueOnce(new Error('bus unreachable'));
 
     await run();
 
     expect(sendMocks.publish).toHaveBeenCalledTimes(2);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenLastCalledWith(
-      'attempt-1',
-      EmailSendStatus.SENT,
-      expect.objectContaining({ retryCount: 1 })
-    );
+    expect(sendMocks.markQueued).toHaveBeenCalledWith('attempt-1', expect.objectContaining({ retryCount: 1 }));
   });
 
   it('marks the attempt failed when every publish is rejected', async () => {
@@ -213,9 +264,8 @@ describe('emailBatch delivery through the event bus', () => {
     await expect(run()).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMocks.publish).toHaveBeenCalledTimes(3);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenLastCalledWith(
+    expect(sendMocks.markSendFailed).toHaveBeenCalledWith(
       'attempt-1',
-      EmailSendStatus.FAILED,
       expect.objectContaining({
         errorMessage: expect.stringContaining('Failed after 3 attempts'),
         retryCount: 3,
@@ -223,12 +273,16 @@ describe('emailBatch delivery through the event bus', () => {
     );
     expect(sendMocks.updateAttemptStatus).not.toHaveBeenCalledWith(
       'attempt-1',
+      EmailSendStatus.FAILED,
+      expect.anything()
+    );
+    expect(sendMocks.updateAttemptStatus).not.toHaveBeenCalledWith(
+      'attempt-1',
       EmailSendStatus.SENT,
       expect.anything()
     );
     expect(sendMocks.smtpSendEmail).not.toHaveBeenCalled();
-    expect(mockIncrementCountsBy).toHaveBeenCalledWith('job-1', 'failedCount', 1);
-    expect(mockIncrementCountsBy).not.toHaveBeenCalledWith('job-1', 'sentCount', expect.anything());
+    expect(sendMocks.markQueued).not.toHaveBeenCalled();
   });
 
   it('marks the attempt failed when the bus rejects the entry without throwing', async () => {
@@ -240,9 +294,8 @@ describe('emailBatch delivery through the event bus', () => {
     await run();
 
     expect(sendMocks.publish).toHaveBeenCalledTimes(3);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenLastCalledWith(
+    expect(sendMocks.markSendFailed).toHaveBeenCalledWith(
       'attempt-1',
-      EmailSendStatus.FAILED,
       expect.objectContaining({ errorMessage: expect.stringContaining('Failed after 3 attempts') })
     );
   });

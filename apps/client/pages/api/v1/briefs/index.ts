@@ -9,7 +9,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { startBriefComposition } from '@server/briefs/composeBrief';
-import { serializeBrief } from '@server/briefs/serializeBrief';
+import { serializeBrief, serializeBriefs } from '@server/briefs/serializeBrief';
 
 const LIST_LIMIT = 20;
 
@@ -17,7 +17,7 @@ const composeRoute = nextRouteForContract(composeBriefContract, {
   rateLimit: perUserRateLimit('POST /api/v1/briefs'),
 }).post(async (req, res) => {
   const brief = await startBriefComposition(req.user.id);
-  return res.status(202).json(serializeBrief(brief));
+  return res.status(202).json(await serializeBrief(brief));
 });
 
 const listRoute = nextRouteForContract(listBriefsContract, {
@@ -25,7 +25,7 @@ const listRoute = nextRouteForContract(listBriefsContract, {
   recordsActivity: false,
 }).get(async (req, res) => {
   const briefs = await assistantBriefRepository.listByUser(req.user.id, LIST_LIMIT);
-  return res.json({ briefs: briefs.map(serializeBrief) });
+  return res.json({ briefs: await serializeBriefs(briefs) });
 });
 
 export const config = {

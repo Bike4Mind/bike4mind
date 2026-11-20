@@ -2,17 +2,18 @@ import { z } from 'zod';
 import {
   ASSISTANT_INSTRUCTION_LIMITS,
   BRIEF_LIMITS,
-  type BriefDecision,
+  BRIEF_QUESTION_MAX_OPTIONS,
   type BriefDraftReply,
   type BriefItem,
   type DelegationStatus,
+  type StoredBriefDecision,
 } from '@bike4mind/common';
 
 /**
  * The pure half of brief composition: shaping activity into a prompt and a model reply into a brief.
- * The model writes wording only. Every id, and every approval reference, is assigned here from real
- * records, so a reply can never invent an approval a client would then offer to answer. Triaged email
- * and delegated items reach the brief from their stored records and never pass through the model.
+ * The model writes wording only. Every id, and every approval and question reference, is assigned here
+ * from real records, so a reply can never invent a decision a client would then offer to answer. Triaged
+ * email and delegated items reach the brief from their stored records and never pass through the model.
  */
 
 export type BriefRun = {
@@ -29,6 +30,14 @@ export type BriefApproval = {
   pendingActionTs: number;
   tool: string;
   summary: string;
+};
+
+/** The last turn of a session, ending on suggested choices the user has not picked. */
+export type BriefQuestion = {
+  questId: string;
+  sessionId: string;
+  reply: string;
+  options: string[];
 };
 
 /** One triaged email (EmailTriageItem in @bike4mind/database). */
@@ -52,6 +61,7 @@ export type BriefActivity = {
   periodEnd: Date;
   runs: BriefRun[];
   approvals: BriefApproval[];
+  questions: BriefQuestion[];
   emails: BriefEmail[];
   delegations: BriefDelegation[];
 };
@@ -60,7 +70,7 @@ export type ComposedBrief = {
   headline: string;
   happened: BriefItem[];
   handled: BriefItem[];
-  decisions: BriefDecision[];
+  decisions: StoredBriefDecision[];
 };
 
 const PROMPT_FIELD_LIMIT = 240;
@@ -74,6 +84,7 @@ const clip = (text: string, limit: number): string => {
 export const hasActivity = (activity: BriefActivity): boolean =>
   activity.runs.length > 0 ||
   activity.approvals.length > 0 ||
+  activity.questions.length > 0 ||
   activity.emails.length > 0 ||
   activity.delegations.length > 0;
 
@@ -90,9 +101,11 @@ const ModelReplySchema = z.object({
   happened: z.array(z.string()).default([]),
   handled: z.array(z.string()).default([]),
   decisions: z.array(z.object({ approvalId: z.string(), text: z.string() })).default([]),
+  questions: z.array(z.object({ questionId: z.string(), text: z.string() })).default([]),
 });
 
 const approvalPromptId = (index: number) => `a${index + 1}`;
+const questionPromptId = (index: number) => `q${index + 1}`;
 
 /** With no instructions the prompt is exactly the instruction-free one. */
 export function buildBriefPrompt(activity: BriefActivity, instructions: readonly string[] = []): string {
@@ -106,6 +119,11 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     approvalId: approvalPromptId(index),
     tool: approval.tool,
     details: clip(approval.summary, PROMPT_FIELD_LIMIT),
+  }));
+  const questions = activity.questions.map((question, index) => ({
+    questionId: questionPromptId(index),
+    asked: clip(question.reply, PROMPT_FIELD_LIMIT),
+    options: question.options.map(option => clip(option, PROMPT_FIELD_LIMIT)),
   }));
   const emailCounts = {
     needsDecision: activity.emails.filter(email => email.kind === 'decision').length,
@@ -142,6 +160,7 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     '',
     `Agent runs: ${JSON.stringify(runs)}`,
     `Actions waiting for the user's approval: ${JSON.stringify(approvals)}`,
+    `Questions your agents asked the user and are waiting on: ${JSON.stringify(questions)}`,
     `Emails triaged for the user (counts only): ${JSON.stringify(emailCounts)}`,
     `Items the user delegated to you (counts only): ${JSON.stringify(delegationCounts)}`,
     'The triaged emails and delegated items are listed in the brief separately: mention them in the headline if',
@@ -151,7 +170,9 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     '{"headline": string (one sentence), "happened": string[] (notable events, at most 6),',
     '"handled": string[] (things already finished or taken care of, at most 6),',
     '"decisions": [{"approvalId": string, "text": string}] (one per waiting approval, saying in a sentence what',
-    'the user is being asked to allow)}',
+    'the user is being asked to allow),',
+    '"questions": [{"questionId": string, "text": string}] (one per waiting question, restating in a sentence',
+    'what the agent needs the user to decide)}',
   ].join('\n');
 }
 
@@ -205,6 +226,8 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
   const parsed = ModelReplySchema.parse(extractJsonObject(reply));
   const wordingByApprovalId = new Map(parsed.decisions.map(decision => [decision.approvalId, decision.text]));
 
+  const wordingByQuestionId = new Map(parsed.questions.map(question => [question.questionId, question.text]));
+
   const approvalDecisions = activity.approvals.map((approval, index) => {
     const wording = wordingByApprovalId.get(approvalPromptId(index));
     return {
@@ -217,10 +240,23 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
       },
     };
   });
+  const questionDecisions = activity.questions.map((question, index) => {
+    const wording = wordingByQuestionId.get(questionPromptId(index));
+    return {
+      text: wording?.trim() || question.reply || 'Your assistant has a question for you.',
+      question: {
+        questId: question.questId,
+        sessionId: question.sessionId,
+        options: question.options.slice(0, BRIEF_QUESTION_MAX_OPTIONS),
+      },
+    };
+  });
 
-  // Email decisions carry no approval reference, so a client has nothing to execute; the draft is for review only.
-  const decisions: BriefDecision[] = [
+  // Approvals come first: they lapse, a question does not. Email decisions carry no approval or question
+  // reference, so a client has nothing to execute; the draft is for review only.
+  const decisions: StoredBriefDecision[] = [
     ...approvalDecisions,
+    ...questionDecisions,
     ...emailsOfKind(activity, 'decision').map(email => ({
       ...emailItem(email),
       ...(email.draftReply && { draftReply: email.draftReply }),
@@ -252,6 +288,15 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
   };
 }
 
+/** The kind of the brief's only decision, so the push can offer its action; none with zero or several decisions. */
+export function briefPushAction(brief: ComposedBrief): 'approval' | 'question' | undefined {
+  if (brief.decisions.length !== 1) return undefined;
+  const [decision] = brief.decisions;
+  if (decision.approval) return 'approval';
+  if (decision.question) return 'question';
+  return undefined;
+}
+
 /** The triaged emails the brief actually carries, after every section cap. */
 export const briefedEmailIds = (brief: ComposedBrief): string[] =>
   [...brief.happened, ...brief.handled, ...brief.decisions].flatMap(item =>
@@ -275,4 +320,31 @@ export function briefPushBody(brief: ComposedBrief): string {
     return brief.decisions.length === 1 ? '1 decision needs you.' : `${brief.decisions.length} decisions need you.`;
   }
   return brief.headline;
+}
+
+const PUSH_QUESTION_LIMIT = 160;
+
+/**
+ * The brief_ready push body and inline action. The action ships only beside what it acts on (the tool, named
+ * as the approval_needed push names it, or the question asked). sendPush's redaction swaps the body for generic
+ * copy but keeps the action, as it does for approval_needed.
+ */
+export function briefPushContent(
+  brief: ComposedBrief,
+  activity: BriefActivity
+): { body: string; briefAction?: 'approval' | 'question' } {
+  const action = briefPushAction(brief);
+  const [decision] = brief.decisions;
+  if (action === 'approval' && decision.approval) {
+    const { questId, pendingActionTs } = decision.approval;
+    const tool = activity.approvals.find(a => a.questId === questId && a.pendingActionTs === pendingActionTs)?.tool;
+    if (tool)
+      return { body: `An agent wants to run ${tool} and is waiting for your confirmation.`, briefAction: action };
+  }
+  if (action === 'question' && decision.question) {
+    const { questId } = decision.question;
+    const asked = clip(activity.questions.find(q => q.questId === questId)?.reply ?? '', PUSH_QUESTION_LIMIT);
+    if (asked) return { body: `Your agent asks: ${asked}`, briefAction: action };
+  }
+  return { body: briefPushBody(brief) };
 }

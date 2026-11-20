@@ -102,7 +102,10 @@ describe('executePendingAction', () => {
     expect(result.success).toBe(true);
     expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: QUEST_ID, 'pendingAction.ts': ts },
-      { $unset: { pendingAction: 1 } }
+      {
+        $unset: { pendingAction: 1 },
+        $set: { pendingActionResolution: { ts, outcome: 'approved', at: expect.any(Date) } },
+      }
     );
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
@@ -288,7 +291,10 @@ describe('executePendingAction', () => {
     expect(result.message).toContain('expired');
     expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: QUEST_ID, 'pendingAction.ts': expiredTs },
-      { $unset: { pendingAction: 1 } }
+      {
+        $unset: { pendingAction: 1 },
+        $set: { pendingActionResolution: { ts: expiredTs, outcome: 'lapsed', at: expect.any(Date) } },
+      }
     );
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
@@ -321,7 +327,10 @@ describe('cancelPendingActionOnQuest', () => {
     expect(result.success).toBe(true);
     expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: QUEST_ID, 'pendingAction.ts': ts },
-      { $unset: { pendingAction: 1 } }
+      {
+        $unset: { pendingAction: 1 },
+        $set: { pendingActionResolution: { ts, outcome: 'denied', at: expect.any(Date) } },
+      }
     );
     expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
   });
@@ -335,13 +344,28 @@ describe('cancelPendingActionOnQuest', () => {
     expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('clears whatever is pending when no expected ts is given', async () => {
-    vi.mocked(Quest.findByIdAndUpdate).mockResolvedValue({} as never);
+  it('claims whatever is pending as denied when no expected ts is given', async () => {
+    vi.mocked(Quest.findById).mockReturnValue({
+      select: vi.fn().mockResolvedValue({ pendingAction: { ts: 42 } }),
+    } as never);
+    vi.mocked(Quest.findOneAndUpdate).mockResolvedValue({} as never);
 
     const result = await cancelPendingActionOnQuest(QUEST_ID, logger);
 
     expect(result.success).toBe(true);
-    expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(QUEST_ID, { $unset: { pendingAction: 1 } });
+    expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: QUEST_ID, 'pendingAction.ts': 42 },
+      expect.objectContaining({
+        $set: { pendingActionResolution: expect.objectContaining({ ts: 42, outcome: 'denied' }) },
+      })
+    );
+    expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('succeeds without a claim when nothing is pending', async () => {
+    vi.mocked(Quest.findById).mockReturnValue({ select: vi.fn().mockResolvedValue({}) } as never);
+
+    expect(await cancelPendingActionOnQuest(QUEST_ID, logger)).toMatchObject({ success: true });
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });
@@ -436,7 +460,10 @@ describe('confirmed curated-file sharing', () => {
     expect(fabFileRepository.findByIdAndUserId).toHaveBeenCalledWith(fileId, dbUser.id);
     expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: QUEST_ID, 'pendingAction.ts': ts },
-      { $unset: { pendingAction: 1 } }
+      {
+        $unset: { pendingAction: 1 },
+        $set: { pendingActionResolution: { ts, outcome: 'approved', at: expect.any(Date) } },
+      }
     );
     expect(buildFileLinkUrl).toHaveBeenCalledWith({ kind: 'fabFile', fileId }, dbUser.id, 604800);
     expect(result.message).toContain('<https://app.example.test/api/file-links/token|');

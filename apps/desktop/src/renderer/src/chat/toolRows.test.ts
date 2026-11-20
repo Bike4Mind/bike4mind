@@ -64,6 +64,11 @@ describe('toolRowLabel', () => {
     );
   });
 
+  it('reads imported Claude Code task calls as plan updates', () => {
+    expect(toolRowLabel(call('1', 'TaskCreate', { subject: 'x' }))).toBe('Added to the plan');
+    expect(toolRowLabel(call('2', 'TaskUpdate', { taskId: '1', status: 'completed' }))).toBe('Updated the plan');
+  });
+
   it('says plainly that it does not know an unregistered tool', () => {
     expect(toolRowLabel(call('1', 'future_tool', { path: 'x.ts' }))).toBe('Ran future_tool x.ts');
   });
