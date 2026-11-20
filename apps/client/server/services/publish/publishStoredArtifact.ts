@@ -31,8 +31,7 @@ import {
 import { validateBundle } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
 import { assertPublicationPublicLink } from './organizationPolicy';
-import { checkPublishQuota } from './checkPublishQuota';
-import { planPublishVersions } from './planPublishVersions';
+import { planVersionedPublish, versionsPushUpdate } from './planPublishVersions';
 import { consumePublishAction } from './publishRateLimit';
 import { renderArtifactIndexHtml } from './renderArtifactHtml';
 import { resolveVisibility } from './resolveVisibility';
@@ -212,7 +211,7 @@ async function writePage(
   }
 
   const now = new Date();
-  const { versionsToPush, archivedBytes } = planPublishVersions({
+  const { versionsToPush, quota } = await planVersionedPublish({
     previous,
     priorIndex,
     incoming: {
@@ -222,14 +221,12 @@ async function writePage(
       size: { totalBytes: page.buffer.length, fileCount: 1 },
       indexBytes: page.buffer.length,
     },
-  });
-
-  const quota = await checkPublishQuota({
-    ownerId: user.id,
-    orgScopeId: null,
-    isAdmin: user.isAdmin,
-    incoming: { bytes: page.buffer.length, fileCount: 1, archivedBytes },
-    replacing: { tier: 'user', scopeId: user.id, slug },
+    quota: {
+      ownerId: user.id,
+      orgScopeId: null,
+      isAdmin: user.isAdmin,
+      replacing: { tier: 'user', scopeId: user.id, slug },
+    },
   });
   if (!quota.ok) {
     throw new BadRequestError(quota.error, { errorCode: 'storage_limit_exceeded' });
@@ -291,7 +288,7 @@ async function writePage(
             ...publishedContentSnapshotFilter(previous),
             revisingAt: null,
           },
-          { $set: fields, $push: { versions: { $each: versionsToPush } } },
+          { $set: fields, ...versionsPushUpdate(versionsToPush) },
           { upsert: false, new: true, runValidators: true }
         )
       : await PublishedArtifact.create({
