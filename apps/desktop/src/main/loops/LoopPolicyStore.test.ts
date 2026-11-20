@@ -52,6 +52,19 @@ describe('LoopPolicyStore', () => {
     expect(await store.worktrees()).toEqual([]);
   });
 
+  it('recovers after a failed write: the caller sees the error, later writes go through', async () => {
+    const file = memoryFile();
+    const store = new LoopPolicyStore(file);
+    const write = file.write;
+    file.write = async () => {
+      throw new Error('disk full');
+    };
+    await expect(store.approve('hosted', policy)).rejects.toThrow('disk full');
+    file.write = write;
+    await store.revoke('hosted', 'l1');
+    expect(file.text).not.toBeNull();
+  });
+
   it('treats a corrupt file as empty', async () => {
     const file = memoryFile();
     file.text = '{nope';

@@ -53,8 +53,9 @@ export class LoopPolicyStore {
     const stored = await this.load();
     change(stored);
     const text = JSON.stringify(stored, null, 2);
-    this.writing = this.writing.then(() => this.file.write(text));
-    await this.writing;
+    const write = this.writing.catch(() => undefined).then(() => this.file.write(text));
+    this.writing = write;
+    await write;
   }
 
   async settings(env: string): Promise<LoopRunnerSettings> {
