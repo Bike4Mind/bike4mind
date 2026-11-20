@@ -323,6 +323,15 @@ export function TableIcon() {
   );
 }
 
+/** The Plan view: a checked item and two pending ones. */
+export function PlanIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 4.25l1 1 1.75-2M2.5 9l1 1 1.75-2M7.5 4h6M7.5 8.75h6M2.5 13h2.75M7.5 13h6" />
+    </Glyph>
+  );
+}
+
 /** The Tile Wall view: an even grid of tiles. */
 export function TileWallIcon() {
   return (
