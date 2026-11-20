@@ -4,6 +4,7 @@ import {
   AdminAiStoredConfigSchema,
   dlqTriageEvidenceSchema,
   type AdminAiSuggestionItem,
+  type DlqTriageEvidence,
 } from '@bike4mind/common';
 import { adminAiSuggestionRepository, adminSettingsRepository, dlqFailureRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -15,6 +16,24 @@ import { DLQ_TRIAGE_POLICY_VERSION, recommendDlqAction } from './triagePolicy';
 import { buildDlqTriageEvidence, sampleDlqConsumerLogs, refreshDlqExpiry } from './triageEvidence';
 
 export const dlqTriageEntityId = (queueLabel: string, messageId: string) => `${queueLabel}:${messageId}`;
+
+function decisionHash(action: string, evidence: DlqTriageEvidence) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        action,
+        failurePresent: evidence.failureSource === 'recorded',
+        failureCategory: evidence.failureCategory,
+        consumerVersion: evidence.consumerVersion,
+        failedAt: evidence.failedAt ?? null,
+        sentTimestamp: evidence.sentTimestamp ?? null,
+        retentionSeconds: evidence.retentionSeconds ?? null,
+        entityPresent: evidence.entityContext === 'present-id-withheld',
+        owner: evidence.owner,
+      })
+    )
+    .digest('hex');
+}
 
 export async function loadDlqTriageConfig() {
   const settings = await getSettingsMap(
@@ -121,23 +140,33 @@ export async function triageDlqMessage(
     feature: 'dlqTriage' as const,
     entityId: dlqTriageEntityId(queueLabel, messageId),
     policyVersion: DLQ_TRIAGE_POLICY_VERSION,
-    inputHash: createHash('sha256')
-      .update(
-        JSON.stringify({
-          action: action.action,
-          failurePresent: Boolean(failure),
-          failureCategory: evidence.failureCategory,
-          consumerVersion: evidence.consumerVersion,
-          failedAt: evidence.failedAt,
-          sentTimestamp: facts.sentTimestamp ?? null,
-          retentionSeconds: facts.retentionSeconds ?? null,
-          entityPresent: facts.entityPresent ?? false,
-          owner: evidence.owner,
-        })
-      )
-      .digest('hex'),
+    inputHash: decisionHash(action.action, {
+      ...evidence,
+      sentTimestamp: facts.sentTimestamp ?? null,
+      retentionSeconds: facts.retentionSeconds ?? null,
+    }),
   };
-  const existing = await adminAiSuggestionRepository.findByKey(key);
+  let existing = await adminAiSuggestionRepository.findByKey(key);
+  if (!existing) {
+    const latest = await adminAiSuggestionRepository.findLatestForEntity(key.feature, key.entityId);
+    const proposed = latest?.proposedAction;
+    if (
+      latest?.policyVersion === key.policyVersion &&
+      proposed &&
+      typeof proposed === 'object' &&
+      'facts' in proposed
+    ) {
+      const previous = dlqTriageEvidenceSchema.safeParse(proposed.facts);
+      // The draft preview stored hashes containing volatile evidence. Keep its matching decisions and delivery IDs.
+      if (
+        previous.success &&
+        latest.verdict === action.action &&
+        decisionHash(latest.verdict, previous.data) === key.inputHash
+      ) {
+        existing = latest;
+      }
+    }
+  }
   const suggestion =
     existing ??
     (await adminAiSuggestionRepository.createPending({

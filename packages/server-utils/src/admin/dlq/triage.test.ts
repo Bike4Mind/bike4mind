@@ -122,6 +122,21 @@ describe('DLQ triage orchestration', () => {
       expect(h.create).toHaveBeenCalledOnce();
     }
   );
+  it.each(['pending', 'accepted', 'dismissed'] as const)(
+    'reuses %s draft-preview rows with the old hash',
+    async status => {
+      const first = await triageDlqMessage('fixture', 'm1');
+      h.latest.mockResolvedValue({ ...first, inputHash: 'old-volatile-hash', status });
+      h.find.mockResolvedValue(null);
+      expect(await triageDlqMessage('fixture', 'm1')).toMatchObject({ id: first!.id, status });
+      expect(h.create).toHaveBeenCalledOnce();
+    }
+  );
+  it('does not equate genuinely different stable inputs with an old preview row', async () => {
+    await triageDlqMessage('fixture', 'm1');
+    await triageDlqMessage('fixture', 'm1', { retentionSeconds: 86400 });
+    expect(h.create).toHaveBeenCalledTimes(2);
+  });
   it('does not mistake a failed failure-record lookup for absence', async () => {
     h.failures.mockRejectedValue(new Error('private database detail'));
     const suggestion = await triageDlqMessage('fixture', 'm1');
