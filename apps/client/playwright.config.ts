@@ -155,9 +155,9 @@ export default defineConfig({
   workers: Number(process.env.PW_WORKERS) || 3,
   timeout: TIMEOUTS.TEST,
   // Inner guard that stops the run early enough for teardown and artifacts before the GitHub
-  // Actions job is killed. 30 min by default (the reusable job's 35-min cap); the scheduled
-  // full suite passes PW_GLOBAL_TIMEOUT_MINUTES (see .github/workflows/e2e-manual.yml), since
-  // it outgrew 30 min with PW_WORKERS=3. Keep it below the caller's timeout_minutes.
+  // Actions job is killed. 30 min by default; callers of .github/workflows/e2e-run.yml raise it
+  // through the global_timeout_minutes input (PW_GLOBAL_TIMEOUT_MINUTES), as e2e-manual.yml does
+  // for the full suite. Keep it below the caller's timeout_minutes.
   globalTimeout:
     process.env.CI && process.env.AI_LATENCY_RUN !== 'true'
       ? (Number(process.env.PW_GLOBAL_TIMEOUT_MINUTES) || 30) * 60_000
