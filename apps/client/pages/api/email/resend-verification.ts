@@ -1,3 +1,4 @@
+import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -30,7 +31,9 @@ const handler = baseApi({ auth: true })
         if (req.user?.isAdmin) {
           return res.status(503).json({
             error: 'Email service not configured',
-            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. Configure these in your SST secrets.`,
+            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. ${
+              process.env.B4M_SELF_HOST === 'true' ? SELF_HOST_SETTINGS_HINT : 'Configure these in your SST secrets.'
+            }`,
             isConfigError: true,
             missingSecrets: emailConfig.missingSecrets,
           });

@@ -22,7 +22,7 @@
     <!-- Chats list -->
     <string name="sessions_title">Chats</string>
     <string name="sessions_brief">Brief</string>
-    <string name="sessions_sign_out">Sign out</string>
+    <string name="sessions_settings">Settings</string>
     <string name="sessions_new_chat">New chat</string>
     <string name="sessions_default_model">Default model: %1$s</string>
     <string name="sessions_load_failed">Could not load chats</string>
@@ -60,6 +60,84 @@
     <string name="brief_handled">Handled</string>
     <string name="brief_happened">What happened</string>
     <string name="brief_open_approval">Open approval</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_load_failed">Couldn\'t load your account.</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_intro">Choose what Bike4Mind tells you about. This applies to every device you\'re signed in on.</string>
+    <string name="settings_notifications_off">Notifications are off for Bike4Mind on this device.</string>
+    <string name="settings_notifications_open_system">Open notification settings</string>
+    <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_server">Server: %1$s</string>
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_delete_account">Delete account</string>
+    <string name="settings_delete_account_detail">Permanently deletes your account after a %1$d-day grace period.</string>
+
+    <string name="category_agent_completed_title">Agent finished</string>
+    <string name="category_agent_completed_detail">Hear when an agent wraps up the job you gave it.</string>
+    <string name="category_agent_failed_title">Agent hit a problem</string>
+    <string name="category_agent_failed_detail">Know right away when a run stops so you can step in.</string>
+    <string name="category_approval_needed_title">Needs your approval</string>
+    <string name="category_approval_needed_detail">An agent is waiting on your go-ahead before it continues.</string>
+    <string name="category_chat_completed_title">Replies ready</string>
+    <string name="category_chat_completed_detail">A long answer finished while you were away.</string>
+    <string name="category_generation_ready_title">Creations ready</string>
+    <string name="category_generation_ready_detail">Your image, video or music is done and waiting.</string>
+    <string name="category_agent_message_title">Agent messages</string>
+    <string name="category_agent_message_detail">Your agent has something to tell you.</string>
+    <string name="category_brief_ready_title">Briefs ready</string>
+    <string name="category_brief_ready_detail">Your assistant put together a summary of what needs you.</string>
+
+    <!-- Account errors -->
+    <string name="account_error_offline">You appear to be offline. Check your connection and try again.</string>
+    <string name="account_error_signed_out">Your session ended. Sign in again.</string>
+    <string name="account_error_rate_limited">Too many attempts. Try again in a few minutes.</string>
+    <string name="account_error_server">Something went wrong. Try again.</string>
+
+    <!-- Delete account -->
+    <string name="delete_title">Delete account</string>
+    <string name="delete_what_happens">What happens</string>
+    <string name="delete_body">Deleting your account removes your profile, conversations, notebooks, files and any remaining credits, and cancels active subscriptions.</string>
+    <string name="delete_grace">Your account is held for %1$d days first. Sign in again within that time to restore it; after that it is permanently deleted and cannot be recovered.</string>
+    <string name="delete_confirm_label">Type %1$s to confirm</string>
+    <string name="delete_action">Delete my account</string>
+    <string name="delete_transfer_title">Transfer ownership first</string>
+    <string name="delete_transfer_body">You own these organizations. Transfer ownership of each one to another member, then come back and delete your account.</string>
+    <string name="delete_untitled_organization">Untitled organization</string>
+    <string name="delete_not_permitted">Account deletion isn\'t available for this session.</string>
+    <string name="delete_step_up_unavailable">This sign-in can\'t confirm your identity. Sign out and sign in again, then retry. You can also delete your account from Bike4Mind on the web.</string>
+    <string name="delete_already_scheduled">This account is already scheduled for deletion.</string>
+    <string name="delete_upgrade">Update Bike4Mind to delete your account from the app.</string>
+    <string name="delete_server">Something went wrong (%1$d). Try again.</string>
+
+    <!-- Step-up -->
+    <string name="stepup_title">Confirm it\'s you</string>
+    <string name="stepup_body">Confirm it\'s you to continue. Your account is not deleted until you do.</string>
+    <string name="stepup_method_password">Password</string>
+    <string name="stepup_method_totp">Authenticator</string>
+    <string name="stepup_method_email">Email</string>
+    <string name="stepup_password">Password</string>
+    <string name="stepup_totp_code">Authenticator or backup code</string>
+    <string name="stepup_email_code">Code from your email</string>
+    <string name="stepup_send_code">Send code</string>
+    <string name="stepup_confirm">Confirm</string>
+    <string name="stepup_cancel">Cancel</string>
+    <string name="stepup_no_method">This account can\'t be confirmed in the app. Delete your account from Bike4Mind on the web.</string>
+    <string name="stepup_rejected">That didn\'t work.</string>
+    <plurals name="stepup_attempts_remaining">
+        <item quantity="one">%1$s %2$d attempt remaining.</item>
+        <item quantity="other">%1$s %2$d attempts remaining.</item>
+    </plurals>
+    <string name="stepup_session_ended">Your session has ended. Sign in again.</string>
+
+    <!-- Restore -->
+    <string name="restore_title">Your account is scheduled for deletion</string>
+    <string name="restore_scheduled_on">It will be permanently deleted on %1$s unless you restore it.</string>
+    <string name="restore_scheduled">It will be permanently deleted at the end of the %1$d-day grace period unless you restore it.</string>
+    <string name="restore_body">Restoring your account brings back your conversations and files. It does not reinstate subscriptions that were canceled; you will need to subscribe again.</string>
+    <string name="restore_action">Restore my account</string>
 
     <!-- Notifications -->
     <string name="notification_channel_default">@string/app_name</string>
