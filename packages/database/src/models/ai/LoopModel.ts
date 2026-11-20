@@ -150,8 +150,22 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     await this.loopModel.updateOne({ _id: id }, { $unset: { leaseUntil: '' } });
   }
 
-  async markDispatched(id: string, executionId: string, nextRunAt: Date | null, laneHoldAt?: Date): Promise<void> {
-    await this.loopModel.updateOne({ _id: id }, [
+  async recordDispatchFailure(id: string, statusReason: string): Promise<void> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      { $set: { statusReason }, $inc: { consecutiveFailures: 1 }, $unset: { leaseUntil: '' } }
+    );
+    if (result.matchedCount === 0) await this.releaseLease(id);
+  }
+
+  async markDispatched(
+    id: string,
+    executionId: string,
+    nextRunAt: Date | null,
+    laneHoldAt?: Date,
+    leaseUntil?: Date
+  ): Promise<boolean> {
+    const result = await this.loopModel.updateOne({ _id: id, ...(leaseUntil && { leaseUntil }) }, [
       {
         $set: {
           activeExecutionIds: {
@@ -167,6 +181,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       },
       { $unset: ['leaseUntil'] },
     ]);
+    return result.matchedCount > 0;
   }
 
   /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */

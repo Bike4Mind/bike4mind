@@ -542,12 +542,21 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   /** Atomically leases one due `live` loop with a free lane and not in `skipIds`, or returns null. */
   claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
+  /** A start that failed before any run existed: counts as a failed run on a live loop, and releases the claim. */
+  recordDispatchFailure(id: string, statusReason: string): Promise<void>;
   /**
    * Adds the run to `activeExecutionIds` and releases the claim. `laneHoldAt` marks the loop held on its own
    * lane limit from then (all lanes now busy with ready tickets waiting); without it any hold is cleared. A null
-   * `nextRunAt` unsets it (a `tickets` wake-mode loop).
+   * `nextRunAt` unsets it (a `tickets` wake-mode loop). With `leaseUntil` (the claim's), writes only while that
+   * claim is still held; false when it was not.
    */
-  markDispatched(id: string, executionId: string, nextRunAt: Date | null, laneHoldAt?: Date): Promise<void>;
+  markDispatched(
+    id: string,
+    executionId: string,
+    nextRunAt: Date | null,
+    laneHoldAt?: Date,
+    leaseUntil?: Date
+  ): Promise<boolean>;
   listInFlight(): Promise<ILoop[]>;
   /** Cloud lanes in flight across all loops, and for one user. */
   countInFlight(): Promise<number>;

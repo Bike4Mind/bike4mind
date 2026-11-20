@@ -1217,6 +1217,32 @@ async function dispatchTriage(
 }
 
 /**
+ * Adds a started run to its claimed loop, then links its ticket (after, so a failed link cannot leave the loop free
+ * for an overlapping run). False when the claim was lost meanwhile and another dispatch may hold the loop: the run
+ * is aborted and its ticket released rather than left running untracked.
+ */
+async function recordDispatch(
+  loop: ILoop,
+  ticket: IWorkItem | null,
+  executionId: string,
+  nextRunAt: Date | null,
+  laneHoldAt: Date | undefined,
+  logger: Logger
+): Promise<boolean> {
+  if (await loopRepository.markDispatched(loop.id, executionId, nextRunAt, laneHoldAt, loop.leaseUntil)) {
+    if (ticket) await workItemRepository.setExecution(ticket.id, executionId);
+    return true;
+  }
+  logger.warn(`[Loops] Loop ${loop.id} lost its claim before run ${executionId} was recorded; aborting the run`);
+  await agentExecutionRepository
+    .setAbortFlag(executionId)
+    .then(() => agentExecutionRepository.claimExecution(executionId, ['pending', 'running'], 'aborted'))
+    .catch(error => logger.warn('[Loops] Could not abort an unrecorded run', { executionId, error }));
+  if (ticket) await releaseTicket(ticket, logger);
+  return false;
+}
+
+/**
  * Records a started run on the loop (and its ticket), or acts on why it did not start. `more`: another ready ticket
  * this loop could claim after this one.
  */
@@ -1230,14 +1256,15 @@ async function settleDispatch(
 ): Promise<LaneOpened> {
   if (result.ok) {
     const free = activeLaneCount(loop) + 1 < loopMaxConcurrent(loop);
-    await loopRepository.markDispatched(
-      loop.id,
+    const recorded = await recordDispatch(
+      loop,
+      ticket,
       result.executionId,
       more && free ? now : nextIntervalRunAt(loop, now),
-      more && !free && loopMaxConcurrent(loop) > 1 ? now : undefined
+      more && !free && loopMaxConcurrent(loop) > 1 ? now : undefined,
+      logger
     );
-    // Linked after markDispatched so a failure here can't leave the loop free for an overlapping run.
-    if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
+    if (!recorded) return false;
     logger.info(`[Loops] Dispatched loop ${loop.id}`, { executionId: result.executionId });
     return more && free ? 'again' : true;
   }
@@ -1248,8 +1275,7 @@ async function settleDispatch(
     // Reconcile folds it once terminal or stale, and the loop retries right after.
     // A multi-lane loop waits an interval, so a systemic invoke failure can't fill every lane with pending runs.
     const next = loopMaxConcurrent(loop) > 1 ? new Date(now.getTime() + loop.intervalMinutes * MINUTE_MS) : now;
-    await loopRepository.markDispatched(loop.id, result.executionId, next);
-    if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
+    if (!(await recordDispatch(loop, ticket, result.executionId, next, undefined, logger))) return false;
     logger.warn(`[Loops] Dispatch of loop ${loop.id} unconfirmed; tracking ${result.executionId}`);
     return true;
   }
@@ -1261,7 +1287,10 @@ async function settleDispatch(
   }
 
   if (result.reason === 'dispatch_failed') {
-    await loopRepository.releaseLease(loop.id);
+    // A failed run, so a lasting fault (a misconfigured executor) stops the loop at `error` instead of retrying
+    // every tick.
+    await loopRepository.recordDispatchFailure(loop.id, result.message);
+    await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
     logger.info(`[Loops] Loop ${loop.id} not started (${result.reason}); retrying next tick`);
     return false;
   }

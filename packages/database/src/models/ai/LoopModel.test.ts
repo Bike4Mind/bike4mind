@@ -658,6 +658,33 @@ describe('LoopRepository', () => {
     ]);
   });
 
+  it('markDispatched with a lease writes only while that claim is held', async () => {
+    const lease = new Date(Date.now() + 60_000);
+    const loop = await create({ status: 'live', leaseUntil: lease });
+    expect(await loopRepository.markDispatched(loop.id, 'e1', null, undefined, new Date(lease.getTime() + 1))).toBe(
+      false
+    );
+    expect((await Loop.findById(loop.id))?.activeExecutionIds ?? []).toEqual([]);
+    expect(await loopRepository.markDispatched(loop.id, 'e1', null, undefined, lease)).toBe(true);
+    expect((await Loop.findById(loop.id))?.toJSON()).toMatchObject({ activeExecutionIds: ['e1'] });
+  });
+
+  it('recordDispatchFailure counts a failure on a live loop and releases the claim either way', async () => {
+    const lease = new Date(Date.now() + 60_000);
+    const live = await create({ status: 'live', leaseUntil: lease });
+    const paused = await create({ status: 'paused', leaseUntil: lease });
+    await loopRepository.recordDispatchFailure(live.id, 'not configured');
+    await loopRepository.recordDispatchFailure(paused.id, 'not configured');
+    expect((await Loop.findById(live.id))?.toJSON()).toMatchObject({
+      consecutiveFailures: 1,
+      statusReason: 'not configured',
+    });
+    expect((await Loop.findById(live.id))?.leaseUntil).toBeUndefined();
+    const after = (await Loop.findById(paused.id))?.toJSON();
+    expect(after?.consecutiveFailures ?? 0).toBe(0);
+    expect(after?.leaseUntil).toBeUndefined();
+  });
+
   it('updateForUser with oversees null unsets it', async () => {
     const loop = await create({ oversees: ['x'] });
     const updated = await loopRepository.updateForUser(loop.id, USER, { oversees: null });

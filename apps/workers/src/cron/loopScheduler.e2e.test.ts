@@ -325,6 +325,39 @@ describe('runLoopSchedulerTick', () => {
     expect((await reload(other.id)).activeExecutionIds).toEqual(['exec-1']);
   });
 
+  it('aborts a started run whose loop lost its claim before the run was recorded', async () => {
+    const flag = vi.spyOn(agentExecutionRepository, 'setAbortFlag').mockResolvedValue(undefined);
+    const claim = vi.spyOn(agentExecutionRepository, 'claimExecution').mockResolvedValue(true);
+    const loop = await createLoop();
+    h.startAgentExecution.mockImplementation(async () => {
+      // Another dispatcher took the loop over once this claim ran out.
+      await Loop.updateOne({ _id: loop.id }, { $set: { leaseUntil: new Date(NOW.getTime() + 2 * LOOP_LEASE_MS) } });
+      return { ok: true, executionId: 'exec-1' };
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).activeExecutionIds ?? []).toEqual([]);
+    expect(flag).toHaveBeenCalledWith('exec-1');
+    expect(claim).toHaveBeenCalledWith('exec-1', ['pending', 'running'], 'aborted');
+  });
+
+  it(`counts a start that failed before any run as a failure, stopping the loop after ${MAX_CONSECUTIVE_FAILURES}`, async () => {
+    const loop = await createLoop();
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'dispatch_failed', message: 'not configured' });
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await reload(loop.id)).toMatchObject({
+      status: 'live',
+      consecutiveFailures: 1,
+      statusReason: 'not configured',
+    });
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+
+    for (let i = 1; i < MAX_CONSECUTIVE_FAILURES; i++) await runLoopSchedulerTick(NOW, logger);
+    expect(await reload(loop.id)).toMatchObject({ status: 'error', consecutiveFailures: MAX_CONSECUTIVE_FAILURES });
+  });
+
   it('tracks a dispatch_failed run that already has an execution doc', async () => {
     const loop = await createLoop();
     h.startAgentExecution.mockResolvedValue({
