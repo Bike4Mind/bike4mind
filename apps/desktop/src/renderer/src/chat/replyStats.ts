@@ -152,12 +152,18 @@ export function thinkingShare(
   return { share: Math.min(1, Math.max(0, reasoningMs / outputMs)), basis: 'time', estimated: false };
 }
 
-/** The load or wait main counted, a derived one as a wait; null where under REPLY_STATS_SIGNIFICANT_WAIT_MS. */
-export function replyLoad(source: ReplyStatsSource): { ms: number; kind: 'load' | 'wait' } | null {
+const significant = (ms: number | undefined): ms is number => finite(ms) && ms >= REPLY_STATS_SIGNIFICANT_WAIT_MS;
+
+/**
+ * The model load a server reported and the wait main derived from llama-server timings, each 0
+ * where under REPLY_STATS_SIGNIFICANT_WAIT_MS; null with neither. A reply continued on another
+ * server can have both.
+ */
+export function replyLoad(source: ReplyStatsSource): { load: number; wait: number } | null {
   const { stats } = readSource(source);
-  const ms = stats?.loadMs;
-  if (!finite(ms) || ms < REPLY_STATS_SIGNIFICANT_WAIT_MS) return null;
-  return { ms, kind: stats?.derived?.includes('loadMs') ? 'wait' : 'load' };
+  const load = significant(stats?.loadMs) ? stats.loadMs : 0;
+  const wait = significant(stats?.waitMs) ? stats.waitMs : 0;
+  return load > 0 || wait > 0 ? { load, wait } : null;
 }
 
 /**
@@ -237,10 +243,10 @@ function totalNote(stats: ChatReplyStats, load: ReturnType<typeof replyLoad>): s
   if (!load && finite(stats.firstTokenMs) && stats.firstTokenMs >= REPLY_STATS_SIGNIFICANT_WAIT_MS) {
     includes.push(`${formatDuration(stats.firstTokenMs)} waiting for the first token`);
   }
-  if (load?.kind === 'wait') includes.push(`${formatDuration(load.ms)} of server wait`);
+  if (load && load.wait > 0) includes.push(`${formatDuration(load.wait)} of server wait`);
   const parts = [
     ...(includes.length > 0 ? [`includes ${includes.join(', and ')}`] : []),
-    ...(load?.kind === 'load' ? [`leaves out ${formatDuration(load.ms)} of model load`] : []),
+    ...(load && load.load > 0 ? [`leaves out ${formatDuration(load.load)} of model load`] : []),
   ];
   return parts.length > 0 ? parts.join('; ') : undefined;
 }
@@ -262,9 +268,17 @@ export function replyStats(raw: ReplyStatsSource, { live = false }: { live?: boo
   const share = live ? null : thinkingShare(source);
   const generation = live ? null : generationRate(source);
   const load = replyLoad(source);
-  const loadNotes = load ? [LOAD_KINDS[load.kind].note] : [];
-  const { firstTokenMs, firstTokenLoadMs } = stats ?? {};
-  const loadKind = LOAD_KINDS[derived.has('loadMs') ? 'wait' : 'load'];
+  // The reported load takes the row; a wait beside it is named in the row's note and the total's.
+  const loadKind = load && load.load > 0 ? LOAD_KINDS.load : LOAD_KINDS.wait;
+  const loadNotes = load
+    ? [loadKind.note, load.load > 0 && load.wait > 0 ? `plus ${formatDuration(load.wait)} of server wait` : undefined]
+    : [];
+  const { firstTokenMs, firstTokenLoadMs, firstTokenWaitMs } = stats ?? {};
+  const firstTokenWait = significant(firstTokenLoadMs)
+    ? { ms: firstTokenLoadMs, label: LOAD_KINDS.load.label }
+    : significant(firstTokenWaitMs)
+      ? { ms: firstTokenWaitMs, label: LOAD_KINDS.wait.label }
+      : null;
   const cached = cacheReadShare(usage);
   const rate = usage?.rate;
   // The server's count first: while a continued reply runs it covers every run, and the stored
@@ -275,9 +289,7 @@ export function replyStats(raw: ReplyStatsSource, { live = false }: { live?: boo
     thinking: stat('thinking', duration(stats?.reasoningMs), thinkingEstimate),
     total: stat(
       'total',
-      stats && !live && finite(stats.totalMs)
-        ? duration(Math.max(0, stats.totalMs - (load?.kind === 'load' ? load.ms : 0)))
-        : null,
+      stats && !live && finite(stats.totalMs) ? duration(Math.max(0, stats.totalMs - (load?.load ?? 0))) : null,
       false,
       stats && !live ? totalNote(stats, load) : undefined
     ),
@@ -322,13 +334,19 @@ export function replyStats(raw: ReplyStatsSource, { live = false }: { live?: boo
       'firstToken',
       finite(firstTokenMs) ? formatDuration(firstTokenMs) : null,
       false,
-      finite(firstTokenLoadMs) && firstTokenLoadMs >= REPLY_STATS_SIGNIFICANT_WAIT_MS
-        ? `includes ${formatDuration(firstTokenLoadMs)} of ${loadKind.label.toLowerCase()}`
+      firstTokenWait
+        ? `includes ${formatDuration(firstTokenWait.ms)} of ${firstTokenWait.label.toLowerCase()}`
         : undefined
     ),
     load:
       load &&
-      stat('load', formatDuration(load.ms), false, loadNotes.join('; ') || undefined, LOAD_KINDS[load.kind].label),
+      stat(
+        'load',
+        formatDuration(load.load > 0 ? load.load : load.wait),
+        false,
+        loadNotes.filter(Boolean).join('; ') || undefined,
+        loadKind.label
+      ),
     draft: stat(
       'draft',
       rate?.draftTokens && rate.draftAccepted !== undefined

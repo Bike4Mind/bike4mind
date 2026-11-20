@@ -647,14 +647,16 @@ describe('a cold-loaded self-hosted reply', () => {
     });
   });
 
-  it("marks the load it worked out from llama-server's timings", () => {
-    expect(
-      build({ evalTokens: 40, evalMs: 2_600, promptTokens: 900, promptMs: 500, loadReported: false })
-    ).toMatchObject({
-      loadMs: 28_200,
+  it("records the wait it worked out from llama-server's timings apart from a load", () => {
+    const stats = build({ evalTokens: 40, evalMs: 2_600, promptTokens: 900, promptMs: 500, loadReported: false });
+    expect(stats).toMatchObject({
+      waitMs: 28_200,
+      firstTokenWaitMs: 28_200,
       outputMs: 2_700,
-      derived: ['loadMs', 'reasoningTokens'],
+      derived: ['reasoningTokens'],
     });
+    expect(stats.loadMs).toBeUndefined();
+    expect(stats.firstTokenLoadMs).toBeUndefined();
   });
 
   it('leaves the load and prompt time out of a thinking time estimated from the wait', () => {
@@ -708,7 +710,9 @@ describe('the load of a reply of several requests', () => {
 
   it('counts a cold request among warm ones, and times the first token against its own', () => {
     const rounds = [request(0, 30_000), ...Array.from({ length: 4 }, (_, i) => request(40_000 + i * 5_000, 3_000))];
-    expect(build(rounds)).toMatchObject({ loadMs: 27_900, firstTokenLoadMs: 27_900, derived: ['loadMs'] });
+    expect(build(rounds)).toMatchObject({ waitMs: 27_900, firstTokenWaitMs: 27_900 });
+    expect(build(rounds).loadMs).toBeUndefined();
+    expect(build(rounds).derived).toBeUndefined();
     const reloaded = [ollama(0, 30_000, 27_000), ollama(40_000, 13_000, 10_000)];
     expect(build(reloaded)).toMatchObject({ loadMs: 37_000, firstTokenLoadMs: 27_000 });
     const lateLoad = [ollama(0, 3_000), ollama(10_000, 13_000, 10_000)];
@@ -723,5 +727,30 @@ describe('the load of a reply of several requests', () => {
     const loaded = { ...kept, loadMs: 28_000, firstTokenMs: 29_000, firstTokenLoadMs: 28_000 };
     expect(build(next, { earlier: loaded })).toMatchObject({ loadMs: 28_000, firstTokenLoadMs: 28_000 });
     expect(build(next, { earlier: kept }).loadMs).toBeUndefined();
+  });
+
+  it('keeps a wait and a reported load in separate fields across a Continue, in either order', () => {
+    const waited = build([request(0, 7_000)]);
+    expect(waited).toMatchObject({ waitMs: 4_900, firstTokenWaitMs: 4_900 });
+    expect(waited.loadMs).toBeUndefined();
+    expect(waited.firstTokenLoadMs).toBeUndefined();
+
+    const loaded = build([ollama(0, 32_000, 30_000)]);
+    expect(loaded).toMatchObject({ loadMs: 30_000, firstTokenLoadMs: 30_000 });
+    expect(loaded.waitMs).toBeUndefined();
+    expect(loaded.firstTokenWaitMs).toBeUndefined();
+
+    const waitThenLoad = build([ollama(100_000, 32_000, 30_000)], { earlier: waited });
+    expect(waitThenLoad).toMatchObject({ loadMs: 30_000, waitMs: 4_900, firstTokenWaitMs: 4_900 });
+    expect(waitThenLoad.firstTokenLoadMs).toBeUndefined();
+
+    const loadThenWait = build([request(100_000, 7_000)], { earlier: loaded });
+    expect(loadThenWait).toMatchObject({ loadMs: 30_000, waitMs: 4_900, firstTokenLoadMs: 30_000 });
+    expect(loadThenWait.firstTokenWaitMs).toBeUndefined();
+    expect(loadThenWait.derived).toBeUndefined();
+
+    const neither = build([request(0, 3_000)]);
+    expect(neither.loadMs).toBeUndefined();
+    expect(neither.waitMs).toBeUndefined();
   });
 });

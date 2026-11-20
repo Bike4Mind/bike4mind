@@ -14,7 +14,9 @@ describe('readReplyStats', () => {
       reasoningMs: 800,
       reasoningTokens: 40,
       generation: { tokens: 100, ms: 2000, untimedTokens: 1, outputTokens: 120 },
-      derived: ['loadMs', 'reasoningMs'],
+      waitMs: 900,
+      firstTokenWaitMs: 900,
+      derived: ['reasoningTokens', 'reasoningMs'],
     };
     expect(readReplyStats(stats)).toEqual(stats);
   });
@@ -24,11 +26,11 @@ describe('readReplyStats', () => {
     ['a number', 7],
     ['null', null],
     ['a string', 'loadMs'],
-    ['an array holding unknown names', ['nope', 3, null, 'loadMs']],
+    ['an array holding unknown names', ['nope', 3, null, 'loadMs', 'reasoningMs']],
   ])('ignores derived as %s', (_, derived) => {
     const read = readReplyStats({ ...totals, derived });
     expect(read).toMatchObject(totals);
-    if (Array.isArray(derived)) expect(read?.derived).toEqual(['loadMs']);
+    if (Array.isArray(derived)) expect(read?.derived).toEqual(['reasoningMs']);
     else expect(read).not.toHaveProperty('derived');
   });
 
@@ -36,6 +38,8 @@ describe('readReplyStats', () => {
     const read = readReplyStats({
       ...totals,
       loadMs: '5',
+      waitMs: NaN,
+      firstTokenWaitMs: '1',
       outputMs: Infinity,
       reasoningMs: NaN,
       firstTokenMs: null,

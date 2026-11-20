@@ -1,12 +1,14 @@
 import type { ChatReplyStats, ChatReplyStatsEstimate } from './chat';
 
-const ESTIMATES: ReadonlySet<string> = new Set<ChatReplyStatsEstimate>(['reasoningMs', 'reasoningTokens', 'loadMs']);
+const ESTIMATES: ReadonlySet<string> = new Set<ChatReplyStatsEstimate>(['reasoningMs', 'reasoningTokens']);
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 const OPTIONAL_NUMBERS = [
   'loadMs',
   'firstTokenLoadMs',
+  'waitMs',
+  'firstTokenWaitMs',
   'outputMs',
   'firstTokenMs',
   'reasoningMs',

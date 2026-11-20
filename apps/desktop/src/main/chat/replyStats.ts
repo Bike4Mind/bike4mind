@@ -124,7 +124,10 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   let firstTokenMs = earlier?.firstTokenMs;
   let generation = earlier?.generation;
   let loadMs = earlier?.loadMs ?? 0;
-  let firstTokenLoadMs = earlier?.firstTokenMs !== undefined ? earlier.firstTokenLoadMs : undefined;
+  let waitMs = earlier?.waitMs ?? 0;
+  const earlierFirst = earlier?.firstTokenMs !== undefined;
+  let firstTokenLoadMs = earlierFirst ? earlier?.firstTokenLoadMs : undefined;
+  let firstTokenWaitMs = earlierFirst ? earlier?.firstTokenWaitMs : undefined;
   let outputMs = earlier?.outputMs ?? 0;
   let lonelyTokens = 0;
   let ownOutputTokens = 0;
@@ -135,14 +138,13 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     const { timing } = round;
     modelMs += nonNegative(timing.endedAt - timing.startedAt);
     const load = countedLoad(round);
-    if (load) {
-      loadMs += load.ms;
-      if (load.derived) derived.add('loadMs');
-    }
+    if (load?.derived) waitMs += load.ms;
+    else if (load) loadMs += load.ms;
     if (timing.firstTokenAt !== undefined) {
       if (firstTokenMs === undefined) {
         firstTokenMs = nonNegative(timing.firstTokenAt - timing.startedAt);
-        if (load) firstTokenLoadMs = load.ms;
+        if (load?.derived) firstTokenWaitMs = load.ms;
+        else if (load) firstTokenLoadMs = load.ms;
       }
       outputMs += nonNegative(timing.endedAt - timing.firstTokenAt);
     }
@@ -189,9 +191,11 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
     modelMs,
     toolMs: (earlier?.toolMs ?? 0) + input.toolMs,
     ...(loadMs > 0 ? { loadMs } : {}),
+    ...(waitMs > 0 ? { waitMs } : {}),
     ...(modelMs > 0 ? { outputMs } : {}),
     ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
     ...(firstTokenLoadMs !== undefined ? { firstTokenLoadMs } : {}),
+    ...(firstTokenWaitMs !== undefined ? { firstTokenWaitMs } : {}),
     ...(reasoningMs !== undefined ? { reasoningMs } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(generation ? { generation } : {}),

@@ -1241,7 +1241,7 @@ export interface ChatTokenRate {
 export const REPLY_STATS_SIGNIFICANT_WAIT_MS = 1000;
 
 /** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
-export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens' | 'loadMs';
+export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
 
 /**
  * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
@@ -1257,10 +1257,14 @@ export interface ChatReplyStats {
   modelMs: number;
   /** Running tools between requests, approval waits included. */
   toolMs: number;
-  /** Of modelMs, each self-hosted request's load or wait of at least REPLY_STATS_SIGNIFICANT_WAIT_MS; see roundLoad. */
+  /** Of modelMs, each request's model load the server reported, where at least REPLY_STATS_SIGNIFICANT_WAIT_MS; left out of the displayed total. */
   loadMs?: number;
-  /** Of firstTokenMs, the counted load or wait of the request it was measured on. */
+  /** Of firstTokenMs, the reported load of the request it was measured on. */
   firstTokenLoadMs?: number;
+  /** Of modelMs, each request's wait derived from llama-server timings (load, queue or connection), where long enough; see roundLoad. Kept in the total. */
+  waitMs?: number;
+  /** Of firstTokenMs, the derived wait of the request it was measured on. */
+  firstTokenWaitMs?: number;
   /**
    * Of modelMs, from each request's first delta to its end: generation, with load, queueing and
    * prompt processing left out. The thinking share's time base.

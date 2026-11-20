@@ -3,6 +3,7 @@ import type { ChatReplyStats, ChatUsage } from '@shared/chat';
 import {
   cacheReadShare,
   describeReplyStats,
+  footerSeparator,
   formatDuration,
   formatShare,
   generationRate,
@@ -119,18 +120,17 @@ describe('stats stored in an odd shape', () => {
 describe('replyLoad', () => {
   it("takes main's counted load once it is long enough to name, and none the server reported itself", () => {
     const reported = { rate: { evalTokens: 40, evalMs: 1300, loadMs: 5000 } };
-    expect(replyLoad({ stats: { ...base, loadMs: 28_000 } })).toEqual({ ms: 28_000, kind: 'load' });
+    expect(replyLoad({ stats: { ...base, loadMs: 28_000 } })).toEqual({ load: 28_000, wait: 0 });
     expect(replyLoad({ stats: { ...base, loadMs: 40 } })).toBeNull();
     expect(replyLoad({ stats: { ...base, loadMs: Infinity } })).toBeNull();
     expect(replyLoad({ stats: base })).toBeNull();
     expect(replyLoad({ stats: { ...base, outputMs: 4_000 }, usage: reported })).toBeNull();
   });
 
-  it('names a wait main worked out as a server wait, not a model load', () => {
-    expect(replyLoad({ stats: { ...base, loadMs: 28_000, derived: ['loadMs'] } })).toEqual({
-      ms: 28_000,
-      kind: 'wait',
-    });
+  it('keeps a wait main worked out apart from a model load, and either alone or both', () => {
+    expect(replyLoad({ stats: { ...base, waitMs: 28_000 } })).toEqual({ load: 0, wait: 28_000 });
+    expect(replyLoad({ stats: { ...base, waitMs: 40 } })).toBeNull();
+    expect(replyLoad({ stats: { ...base, loadMs: 30_000, waitMs: 5_000 } })).toEqual({ load: 30_000, wait: 5_000 });
   });
 });
 
@@ -365,7 +365,7 @@ describe('replyStats', () => {
 
   it("names a wait main worked out from llama-server's timings as a server wait, and none on a warm reply", () => {
     const derived = replyStats({
-      stats: { ...base, loadMs: 9_000, firstTokenMs: 9_500, firstTokenLoadMs: 9_000, derived: ['loadMs'] },
+      stats: { ...base, waitMs: 9_000, firstTokenMs: 9_500, firstTokenWaitMs: 9_000 },
     });
     expect(derived.find(row => row.id === 'load')).toEqual({
       id: 'load',
@@ -388,6 +388,26 @@ describe('replyStats', () => {
     expect(warm.find(row => row.id === 'load')).toBeUndefined();
     expect(warm.find(row => row.id === 'total')).toMatchObject({ value: '20.0s' });
     expect(warm.find(row => row.id === 'total')?.note).toBeUndefined();
+  });
+
+  it('keeps a reported load out of the total and a derived wait in it, when a continued reply has both', () => {
+    const rows = replyStats({
+      stats: { ...base, totalMs: 40_000, loadMs: 30_000, waitMs: 5_000, firstTokenMs: 5_500, firstTokenWaitMs: 5_000 },
+    });
+    const row = (id: string) => rows.find(candidate => candidate.id === id);
+
+    expect(row('total')).toMatchObject({
+      value: '10.0s',
+      note: 'includes 5.0s of server wait; leaves out 30.0s of model load',
+    });
+    expect(row('load')).toEqual({
+      id: 'load',
+      label: 'Model load',
+      value: '30.0s',
+      note: 'plus 5.0s of server wait',
+    });
+    expect(row('firstToken')?.note).toBe('includes 5.0s of server wait');
+    expect(footerSeparator('total', 'load', 'Model load')).toBe(' + ');
   });
 
   it('keeps a long wait the server did not break down in the total, named as the wait for the first token', () => {

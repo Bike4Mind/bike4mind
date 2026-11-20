@@ -140,10 +140,9 @@ describe('the cost on a reply', () => {
             totalMs: 34_000,
             modelMs: 34_000,
             toolMs: 0,
-            loadMs: 28_000,
+            waitMs: 28_000,
             outputMs: 5200,
             firstTokenMs: 28_800,
-            derived: ['loadMs'],
           },
         }),
       ]);
