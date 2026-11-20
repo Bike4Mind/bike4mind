@@ -37,7 +37,7 @@ export function isUnsetMailValue(value: string | undefined | null): boolean {
  * A self-host SMTP relay that takes no auth: both credentials unset. Hosted stages always need the
  * credentials, and one set without the other is a mistake, so neither counts.
  */
-export function isUnauthenticatedSmtpRelay(env: Pick<MailTransportEnv, 'B4M_SELF_HOST'> = process.env): boolean {
+export function isUnauthenticatedSmtpRelay(env: MailTransportEnv = process.env): boolean {
   return env.B4M_SELF_HOST === 'true' && SMTP_CREDENTIALS.every(name => isUnsetMailValue(Config[name]));
 }
 

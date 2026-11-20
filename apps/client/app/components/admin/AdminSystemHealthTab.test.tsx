@@ -29,6 +29,7 @@ const HEALTH = {
     configured: false,
     secrets: { MAIL_HOST: true, MAIL_PASSWORD: false },
     missingSecrets: ['MAIL_PASSWORD'],
+    optionalSecrets: [],
   },
   database: { type: 'MongoDB', connected: true, readyState: 1 },
   oauth: {
@@ -127,6 +128,7 @@ describe('AdminSystemHealthTab', () => {
       transport: 'ses',
       secrets: { MAIL_FROM: false },
       missingSecrets: ['MAIL_FROM'],
+      optionalSecrets: [],
     };
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
     renderTab();
@@ -145,6 +147,7 @@ describe('AdminSystemHealthTab', () => {
       transport: 'smtp',
       secrets: { MAIL_HOST: false, MAIL_PORT: false, MAIL_USERNAME: true, MAIL_PASSWORD: false, MAIL_FROM: true },
       missingSecrets: ['MAIL_HOST', 'MAIL_PORT', 'MAIL_PASSWORD'],
+      optionalSecrets: [],
     };
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: smtpEmail } }) });
     renderTab();
