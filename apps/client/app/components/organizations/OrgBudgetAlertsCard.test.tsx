@@ -28,6 +28,11 @@ describe('OrgBudgetAlertsCard', () => {
     mocks.saved = null;
   });
 
+  it('keeps the budget alerts switch from shrinking beside the long description', () => {
+    renderCard();
+    expect(getComputedStyle(screen.getByTestId('org-alerts-enable-switch-root')).flexShrink).toBe('0');
+  });
+
   it('starts disabled with the default 50/80/100 thresholds when nothing is saved', () => {
     renderCard();
     expect(input('org-alerts-enable-switch').checked).toBe(false);

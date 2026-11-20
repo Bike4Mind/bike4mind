@@ -100,6 +100,17 @@ describe('web-owasp-ingest API', () => {
     mockSqsSend.mockResolvedValue({});
   });
 
+  it('refuses a placeholder ingest token even when the request presents it', async () => {
+    process.env.SECOPS_ZAP_INGEST_TOKEN = 'change-me-openssl-rand-hex-32';
+    const { req, res } = createMockReqRes({ counts: { critical: 0, high: 0, medium: 0, low: 0 }, alerts: [] });
+    (req.headers as Record<string, string>)['x-security-ingest-token'] = 'change-me-openssl-rand-hex-32';
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(mockSqsSend).not.toHaveBeenCalled();
+  });
+
   it('publishes findingsComplete true when the alert list matches the counts', async () => {
     const { req, res } = createMockReqRes({
       counts: { critical: 0, high: 1, medium: 0, low: 1 },

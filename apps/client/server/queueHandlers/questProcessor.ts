@@ -54,6 +54,7 @@ import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-gen
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
@@ -243,7 +244,8 @@ export const getStaticOptions = () => {
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
 
   return cachedStaticOptions;

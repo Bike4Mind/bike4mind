@@ -513,7 +513,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
     vi.mocked(isCustomToolStillOffered).mockResolvedValue(true);
   });
 
-  it('Confirm claims the action and calls the host with approved: true and the stored params', async () => {
+  it('Confirm claims the action and calls the host with approved: true, the stored params and the card connector as switched on', async () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
 
     expect(res._getJSONData()).toMatchObject({ success: true });
@@ -524,6 +524,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
       toolName: 'create',
       args: { title: 't' },
       approved: true,
+      platformConnectionIds: ['c1'],
     });
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });

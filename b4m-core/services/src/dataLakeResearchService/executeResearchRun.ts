@@ -59,6 +59,8 @@ export interface ResearchCandidate {
   publishedAt?: Date;
   authors?: string[];
   categories?: string[];
+  /** Search path only: still a provider redirect link after the resolver gave up, so its host is unknown. */
+  unresolvedRedirect?: boolean;
 }
 
 /** A feed could not be read. `message` is written for a lake manager and becomes the run's error. */
@@ -335,7 +337,8 @@ export async function executeResearchRun(
     // Rule 1: the free filter, before anything is spent.
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
-      totals.filteredBySource += 1;
+      if (candidate.unresolvedRedirect) totals.unresolvedRedirect += 1;
+      else totals.filteredBySource += 1;
       markFeedItem(candidate, 'settled');
       continue;
     }
@@ -357,8 +360,10 @@ export async function executeResearchRun(
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
-          if (!isQueueableVerdict(classifySource(unreached.url, levers))) totals.filteredBySource += 1;
-          else totals.notJudged += 1;
+          if (!isQueueableVerdict(classifySource(unreached.url, levers))) {
+            if (unreached.unresolvedRedirect) totals.unresolvedRedirect += 1;
+            else totals.filteredBySource += 1;
+          } else totals.notJudged += 1;
         }
         return settle('judge_unavailable');
       }

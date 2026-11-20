@@ -43,7 +43,11 @@ const handler = baseApi({ auth: false })
   .post(async (req, res) => {
     const parsed = BodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid request' });
+      // Issue paths and codes only, never the zod `input`, so a rejected passphrase is not echoed back.
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: parsed.error.issues.map(({ code, path, message }) => ({ code, path, message })),
+      });
     }
     const segments = segmentsFromViewerPathname(parsed.data.path);
     const resolved = segments ? parsePublishPath(segments) : null;

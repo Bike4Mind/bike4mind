@@ -15,7 +15,7 @@ import { ChatModels } from '@bike4mind/common';
 import { ReActAgent } from '@bike4mind/agents';
 import type { SessionStore, Session, Message } from '../storage';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
-import type { DecisionStore, BlockerStore, ReviewGateStore, TodoStore } from '../tools';
+import { resetTodoStore, type DecisionStore, type BlockerStore, type ReviewGateStore, type TodoStore } from '../tools';
 import { useCliStore } from '../store';
 import { logger } from '../utils/Logger';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
@@ -122,7 +122,7 @@ export async function createFreshSession(ctx: SessionLifecycleContext): Promise<
   // this reset is the only thing that clears the todo list on a session switch.
   ctx.decisionStore.decisions = [];
   ctx.blockerStore.blockers = [];
-  ctx.todoStore.todos = [];
+  resetTodoStore(ctx.todoStore);
 
   ctx.checkpointStore?.setSessionId(newSession.id);
 
@@ -172,6 +172,8 @@ export async function resumeSession(ctx: SessionLifecycleContext, selected: Sess
   logger.debug('=== Session Resumed ===');
 
   ctx.checkpointStore?.setSessionId(loadedSession.id);
+  // Todos are never persisted, so the previous session's plan must not linger.
+  resetTodoStore(ctx.todoStore);
 
   // Surface prior-session continuity into the first-turn context. A handoff, when
   // present, is the richer synthesis and wins; otherwise fall back to the raw

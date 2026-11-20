@@ -32,6 +32,7 @@ const READ_SCOPES = [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS];
 
 const READ_FORBIDDEN = 'The API key holds neither `notebooks:read` nor `notebooks:write`.';
 const WRITE_FORBIDDEN = 'The API key lacks `notebooks:write`.';
+const PUBLISH_FORBIDDEN = 'The API key lacks `artifacts:publish`.';
 const RATE_LIMITED = { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema };
 const NOT_VISIBLE =
   'No artifact with that id is visible to the caller. An artifact that does not exist, a deleted one and ' +
@@ -436,7 +437,7 @@ const PUBLISH_FAILURES = {
     description: 'Your storage quota would be exceeded by this page.',
     schema: StorageQuotaErrorSchema,
   },
-  403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+  403: { description: PUBLISH_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
   404: { description: NOT_YOURS_TO_PUBLISH, schema: ApiErrorSchema },
   422: {
     description:
@@ -460,13 +461,13 @@ export const publishArtifactContract = defineEndpoint({
     "Publishes the artifact's current version as a web page, reading the stored content on the server, and " +
     'returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page ' +
     'is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable ' +
-    'generated slug and rejects an existing page; use the returned page for subsequent updates. Concurrent ' +
-    'requests with different explicit slugs are not serialized per artifact. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, ' +
+    'generated slug and rejects an existing page; use the returned page for subsequent updates. If two ' +
+    'requests publish the same artifact at once, one succeeds and the other gets 409. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, ' +
     '`DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields ' +
     'are rejected.',
   tags: ['Artifacts'],
   auth: 'apiKeyOrJwt',
-  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  scopes: [ApiKeyScope.ARTIFACTS_PUBLISH],
   pathParams: ArtifactIdParamSchema,
   request: PublishArtifactRequestSchema,
   requestExample: PUBLISH_EXAMPLE,
@@ -476,7 +477,7 @@ export const publishArtifactContract = defineEndpoint({
     ...PUBLISH_FAILURES,
     409: {
       description:
-        'The artifact already has a page (use republish or unpublish it first), or `slug` is used by another of your pages.',
+        'The artifact already has a page (use republish or unpublish it first), `slug` is used by another of your pages, or a concurrent request published this artifact first.',
       schema: ApiErrorSchema,
     },
   },
@@ -493,7 +494,7 @@ export const republishArtifactContract = defineEndpoint({
     'gate stay as they are, and earlier versions of the page are kept.',
   tags: ['Artifacts'],
   auth: 'apiKeyOrJwt',
-  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  scopes: [ApiKeyScope.ARTIFACTS_PUBLISH],
   pathParams: ArtifactIdParamSchema,
   emitsRateLimitHeaders: true,
   responses: {
@@ -519,12 +520,12 @@ export const unpublishArtifactContract = defineEndpoint({
   description: "Takes the artifact's page down. The artifact itself is unchanged and can be published again.",
   tags: ['Artifacts'],
   auth: 'apiKeyOrJwt',
-  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  scopes: [ApiKeyScope.ARTIFACTS_PUBLISH],
   pathParams: ArtifactIdParamSchema,
   emitsRateLimitHeaders: true,
   responses: {
     204: { description: 'The page was taken down.', noBody: true },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: PUBLISH_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description: 'You have no published page for that artifact id. The artifact itself does not need to exist.',
       schema: ApiErrorSchema,
