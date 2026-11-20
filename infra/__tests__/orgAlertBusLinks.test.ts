@@ -224,8 +224,7 @@ describe('handlers that raise org alerts link the event bus', () => {
   });
 
   // Debiting a run can raise an org alert; the handler source is generated, so it is matched by name.
-  // The other premium-generated queue handlers (optihashiRunCompletion, libreoncologyAudioRender,
-  // overwatchAnalytics) were traced and debit no org holder.
+  // The other generated queue handlers were traced and debit no org holder.
   it('links the event bus on the Bob run worker', () => {
     const queues = stripComments(read('infra/queues.ts'));
     const subscribe = soleMatch(
