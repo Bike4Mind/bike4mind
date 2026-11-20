@@ -76,6 +76,14 @@ describe('verifyIngestToken', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['not-configured', 'my-secret-placeholder-value', 'change-me-openssl-rand-hex-32', ''])(
+    'refuses every request while the expected token is %j, even one presenting it',
+    expected => {
+      const { req } = request({ [HEADER]: expected });
+      expect(verifyIngestToken(req, HEADER, expected)).toBe(false);
+    }
+  );
+
   it('keeps the message the API probe detector counts', () => {
     expect(INGEST_TOKEN_REFUSED_MESSAGE).toBe('[ingest-token-refused]');
   });

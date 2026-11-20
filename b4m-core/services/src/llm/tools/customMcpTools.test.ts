@@ -263,4 +263,16 @@ describe('loadCustomMcpConnections', () => {
     const kept = await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() });
     expect(kept[0].tools.map(t => t.name)).toEqual(names.slice(0, MAX_CUSTOM_TOOLS_PER_TURN));
   });
+
+  it('asks the host for the platform connectors the user switched on, and for none by default', async () => {
+    const host = makeHost();
+    host.listConnections.mockResolvedValue([]);
+    await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() });
+    await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() }, 3, { platformConnectionIds: ['p1'] });
+
+    expect(host.listConnections.mock.calls).toEqual([
+      ['u1', {}],
+      ['u1', { platformConnectionIds: ['p1'] }],
+    ]);
+  });
 });

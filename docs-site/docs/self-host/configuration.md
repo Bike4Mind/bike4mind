@@ -30,7 +30,7 @@ Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become t
 
 If you rotate `SECRET_ENCRYPTION_KEY`, keep the old key configured permanently as `SECRET_ENCRYPTION_KEY_PREVIOUS` so existing ciphertext stays readable. Rotation is not automated.
 
-The three secrets are the **only values you must change** - everything else in the template already points at the bundled services.
+The six secrets (these three plus `CHAT_COMPLETION_INTERNAL_SECRET`, `INTERNAL_WS_SECRET` and `INTERNAL_S3_WEBHOOK_SECRET`) are the **only values you must change**, and the app refuses to run while any of them still holds its `change-me` template value - everything else in the template already points at the bundled services.
 
 ## Local infra backends (bundled services)
 

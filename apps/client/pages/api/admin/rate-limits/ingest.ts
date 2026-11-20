@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { persistRateLimitEvents } from '@bike4mind/server-utils/utils/mcpRateLimitSnapshots';
 import { Resource } from 'sst';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import type { Request } from 'express';
 import { z } from 'zod';
@@ -14,7 +15,7 @@ const IngestBodySchema = z.object({
 
 const handler = baseApi({ auth: false }).post(async (req: Request, res) => {
   const ingestToken = Resource.RATE_LIMIT_INGEST_TOKEN?.value || process.env.RATE_LIMIT_INGEST_TOKEN;
-  if (!ingestToken) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Rate limit ingest token is not configured.' });
   }
 

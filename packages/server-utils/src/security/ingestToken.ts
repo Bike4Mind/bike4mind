@@ -1,7 +1,7 @@
 import type { Request as ExpressRequest } from 'express';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
 
 /** An Express request carrying baseApi's per-request logger (apps/client/global.d.ts). */
@@ -32,7 +32,7 @@ function linkedAttackSimulationToken(): string | undefined {
 
 function attackSimulationToken(): string | undefined {
   const token = linkedAttackSimulationToken() || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
-  return token && !isPlaceholderValue(token) ? token : undefined;
+  return token && !isUnconfiguredSecret(token) ? token : undefined;
 }
 
 const firstHeader = (req: Request, header: string): string | undefined => {
@@ -48,12 +48,13 @@ function isAttackSimulation(req: Request): boolean {
 }
 
 /**
- * True when the `header` of the request carries the expected ingest token. A refusal logs one line
- * with the request metadata (client IP, path), never the token that was sent.
+ * True when the `header` of the request carries the expected ingest token. Always false while
+ * `expected` is unconfigured. A refusal logs one line with the request metadata (client IP, path),
+ * never the token that was sent.
  */
-export function verifyIngestToken(req: Request, header: string, expected: string): boolean {
+export function verifyIngestToken(req: Request, header: string, expected: string | undefined): boolean {
   const provided = firstHeader(req, header);
-  if (provided && safeCompareTokens(provided, expected)) return true;
+  if (provided && expected && !isUnconfiguredSecret(expected) && safeCompareTokens(provided, expected)) return true;
   if (isAttackSimulation(req)) {
     req.logger.info('ingest token refused for the attack simulation', { header });
   } else {
