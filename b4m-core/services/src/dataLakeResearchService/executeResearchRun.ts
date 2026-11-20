@@ -180,15 +180,15 @@ export const SETTLED_PROPOSE_OUTCOMES = {
 
 type FeedItemState = 'settled' | 'transient';
 
-/**
- * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
- * re-check, so both apply the same host-coverage rule.
- */
 /** Which totals bucket a source-rule drop lands in: the Never list (or a non-web address) vs "Other sites: Ignore". */
 const dropBucketFor = (
   verdict: Exclude<SourceVerdict, 'trusted' | 'review'>
 ): 'filteredBySource' | 'unlistedDropped' => (verdict === 'unlisted_dropped' ? 'unlistedDropped' : 'filteredBySource');
 
+/**
+ * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
+ * re-check, so both apply the same host-coverage rule.
+ */
 export function trustedEntryForUrl(url: string, rules: Parameters<typeof matchSource>[1]): string | null {
   const match = matchSource(url, rules);
   const host = sourceHostname(url);
@@ -350,7 +350,8 @@ export async function executeResearchRun(
     // Rule 1: the free filter, before anything is spent.
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
-      totals[dropBucketFor(verdict)] += 1;
+      const b = dropBucketFor(verdict);
+      totals[b] = (totals[b] ?? 0) + 1;
       markFeedItem(candidate, 'settled');
       continue;
     }
@@ -377,8 +378,10 @@ export async function executeResearchRun(
             continue;
           }
           const unreachedVerdict = classifySource(unreached.url, levers);
-          if (!isQueueableVerdict(unreachedVerdict)) totals[dropBucketFor(unreachedVerdict)] += 1;
-          else totals.notJudged += 1;
+          if (!isQueueableVerdict(unreachedVerdict)) {
+            const b = dropBucketFor(unreachedVerdict);
+            totals[b] = (totals[b] ?? 0) + 1;
+          } else totals.notJudged += 1;
         }
         return settle('judge_unavailable');
       }

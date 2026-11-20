@@ -700,7 +700,7 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
     // A run stored before the split has no unlistedDropped, and its filteredBySource counts both drops.
     const text =
       key === 'filteredBySource' && totals.unlistedDropped === undefined ? 'blocked by your site lists' : label;
-    if (count > 0) parts.push(`${count} ${text}`);
+    if ((count ?? 0) > 0) parts.push(`${count} ${text}`);
   }
   // Not a totals bucket: a waiting item has had no outcome yet.
   if (feedRun && (run.feedBacklog ?? 0) > 0) parts.push(`${run.feedBacklog} waiting`);
@@ -742,7 +742,7 @@ const JUDGED_BUCKETS: Record<
 const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
   if (!run.judgeModel) return null;
   const { totals } = run;
-  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => (totals[key as keyof ResearchRunTotals] ?? 0) > 0);
   if (judged) return `judged by ${run.judgeModel}`;
   if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
   return null;

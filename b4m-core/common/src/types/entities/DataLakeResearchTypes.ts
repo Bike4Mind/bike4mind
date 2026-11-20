@@ -459,7 +459,7 @@ export interface ResearchRunTotals {
    * Hits from sites on none of the lists while "Other sites" is set to ignore, dropped before any model or network cost.
    * Absent on a run stored before the split, which is how a reader tells `filteredBySource` is then the combined count.
    */
-  unlistedDropped: number;
+  unlistedDropped?: number;
   /** Hits still on a search provider's redirect link, so their real site is unknown. Skipped, never judged or fetched, under every site-list setting, and counted apart from `filteredBySource`: no source rule saw the real host. */
   unresolvedRedirect: number;
   /** Candidates the judge scored below `minRelevance`. */
