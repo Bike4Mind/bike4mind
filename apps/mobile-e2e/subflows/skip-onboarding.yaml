@@ -1,6 +1,6 @@
 appId: com.bike4mind.app
 ---
-# A fresh iOS install shows the two-page intro before sign-in; Android has none.
+# A fresh install shows the two-page welcome before sign-in on both platforms (absent after an upgrade or once finished).
 - runFlow:
     when:
       visible:
