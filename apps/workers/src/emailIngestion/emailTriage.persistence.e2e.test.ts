@@ -100,6 +100,7 @@ async function composeNextBrief() {
       periodEnd: end,
       runs: [],
       approvals: [],
+      questions: [],
       emails: await loadPendingBriefEmails(userId, end),
     }),
     canCompose: async () => 'ok',
@@ -298,6 +299,7 @@ it('lets handled and FYI sections progress while approvals block older email dec
       periodEnd: end,
       runs: [],
       approvals: waiting,
+      questions: [],
       emails,
     });
     await emailTriageItemRepository.markBriefed(userId, briefedEmailIds(composed), end);

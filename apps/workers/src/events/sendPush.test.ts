@@ -332,6 +332,25 @@ describe('deliverPush', () => {
     }
   });
 
+  it('selects the brief action category from briefAction and keeps it when content is redacted', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+    const brief = { ...EVENT, category: 'brief_ready' as const, briefId: 'brief-1' };
+
+    await deliverPush({ ...brief, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...brief, briefAction: 'question' }, deps, logger);
+    await deliverPush(brief, deps, logger);
+    await deliverPush({ ...brief, briefId: undefined, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, briefAction: 'approval' }, deps, logger);
+
+    expect(payloadOf(sent[0]).aps.category).toBe('brief_ready_approval');
+    expect(payloadOf(sent[1]).aps.category).toBe('brief_ready_reply');
+    for (const call of sent.slice(2)) expect(payloadOf(call).aps).not.toHaveProperty('category');
+    expect(payloadOf(sent[0])).toMatchObject({ briefId: 'brief-1' });
+    expect(payloadOf(sent[0])).not.toHaveProperty('approval');
+  });
+
   it('keeps an absolute deepLink as published', async () => {
     const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
     await deliverPush({ ...EVENT, deepLink: 'https://elsewhere.test/notebooks/s' }, deps, logger);

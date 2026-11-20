@@ -506,6 +506,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/briefs/{id}/decisions/{decisionId}/reply': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reply to a brief question
+     * @description Answers a decision item that carries a `question`: the reply is sent to the agent as your next message in that notebook, starting an agent run. A question can be answered from the brief once; a second reply, or one after the conversation moved on (`state` other than `open`), is `409` with `errorCode: "question_closed"`. A decision that is an approval is `404` here; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     */
+    post: operations['replyToBriefDecision'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/push-tokens': {
     parameters: {
       query?: never;
@@ -5376,12 +5396,31 @@ export interface components {
           /** @description The ingested email the item was triaged from. */
           emailId: string;
         };
-        /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
+        /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+          /**
+           * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+        };
+        /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+        question?: {
+          /** @description The agent turn that asked the question. */
+          questId: string;
+          /** @description The notebook the reply continues. */
+          sessionId: string;
+          /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+          options: string[];
+          /**
+           * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'open' | 'answered' | 'superseded';
         };
         /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
@@ -5442,12 +5481,31 @@ export interface components {
             /** @description The ingested email the item was triaged from. */
             emailId: string;
           };
-          /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
+          /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
           approval?: {
             questId: string;
             /** @description The notebook holding the quest, where a client shows the approval card. */
             sessionId: string;
             pendingActionTs: number;
+            /**
+             * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+             * @enum {string}
+             */
+            state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+          };
+          /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+          question?: {
+            /** @description The agent turn that asked the question. */
+            questId: string;
+            /** @description The notebook the reply continues. */
+            sessionId: string;
+            /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+            options: string[];
+            /**
+             * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+             * @enum {string}
+             */
+            state: 'open' | 'answered' | 'superseded';
           };
           /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
           draftReply?: {
@@ -5507,12 +5565,31 @@ export interface components {
           /** @description The ingested email the item was triaged from. */
           emailId: string;
         };
-        /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
+        /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+          /**
+           * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+        };
+        /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+        question?: {
+          /** @description The agent turn that asked the question. */
+          questId: string;
+          /** @description The notebook the reply continues. */
+          sessionId: string;
+          /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+          options: string[];
+          /**
+           * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'open' | 'answered' | 'superseded';
         };
         /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
@@ -5557,6 +5634,18 @@ export interface components {
     createAssistantInstructionRequest: {
       /** @description The instruction, trimmed. Whitespace-only text is rejected. */
       text: string;
+    };
+    replyToBriefDecisionResponse202: {
+      /** @description The agent run continuing the conversation with your reply. */
+      executionId: string;
+      /** @description The notebook the run belongs to. */
+      sessionId: string;
+    };
+    replyToBriefDecisionRequest: {
+      /** @description The reply, sent to the agent as your next message. */
+      text: string;
+      /** @description Index into the question `options` when the reply picks one of them; recorded on the question. */
+      choiceIndex?: number;
     };
     /**
      * @example {
@@ -17022,6 +17111,149 @@ export interface operations {
       };
       /** @description Per-user rate limit exceeded. */
       429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  replyToBriefDecision: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The brief id. */
+        id: string;
+        /** @description The decision item id within the brief. */
+        decisionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['replyToBriefDecisionRequest'];
+      };
+    };
+    responses: {
+      /** @description The reply was sent and the agent run started. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['replyToBriefDecisionResponse202'];
+        };
+      };
+      /** @description `choiceIndex` is not one of the question options, or the billing key needs re-checking. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description AI access is held on the account. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description No such brief or question, or it is not yours. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The question is closed, or too many agent runs are already in flight. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The agent run could not be started. When the dispatch could not be confirmed either way the question stays answered so the reply can never run twice; open the conversation to see whether it went through. Otherwise nothing was sent and the question stays open for another reply. */
+      502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

@@ -563,6 +563,7 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
   const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
   // Identifiers only, so redaction leaves them: the server re-authorizes the user on every answer.
   const approval = approvalActionsFor(event);
+  const briefCategory = briefCategoryFor(event);
   return {
     aps: {
       alert: {
@@ -573,6 +574,7 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
       ...(event.sessionId && { 'thread-id': event.sessionId }),
       // Selects the client's registered notification category, whose buttons are PENDING_ACTION_DECISIONS.
       ...(approval && { category: event.category }),
+      ...(briefCategory && { category: briefCategory }),
     },
     category: event.category,
     deepLink: resolveDeepLink(event.deepLink, appUrl),
@@ -615,6 +617,14 @@ function buildFcmMessage(
 function approvalActionsFor(event: PushNotificationEvent) {
   if (event.category !== 'approval_needed' || !event.questId || !event.pendingActionTs) return undefined;
   return { questId: event.questId, pendingActionTs: event.pendingActionTs, actions: PENDING_ACTION_DECISIONS };
+}
+
+// Must stay in sync with BriefNotificationCategory in apps/ios B4MKit Briefs/BriefNotificationAction.swift.
+const BRIEF_ACTION_CATEGORIES = { approval: 'brief_ready_approval', question: 'brief_ready_reply' } as const;
+
+function briefCategoryFor(event: PushNotificationEvent): string | undefined {
+  if (event.category !== 'brief_ready' || !event.briefId || !event.briefAction) return undefined;
+  return BRIEF_ACTION_CATEGORIES[event.briefAction];
 }
 
 function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {

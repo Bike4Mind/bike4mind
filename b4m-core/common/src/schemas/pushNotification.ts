@@ -39,6 +39,11 @@ export const PushNotificationEventSchema = z.object({
    * approve/deny action identifiers so a client can answer from the notification itself.
    */
   pendingActionTs: z.number().int().positive().optional(),
+  /**
+   * `brief_ready` only, set when the brief holds exactly one decision: its kind, so the push selects a
+   * notification category with approve/deny or reply actions. The client re-fetches the brief before acting.
+   */
+  briefAction: z.enum(['approval', 'question']).optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;
