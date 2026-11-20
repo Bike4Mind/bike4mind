@@ -82,6 +82,7 @@ const executions = vi.hoisted(() => ({
   sumCreditsByLoop: vi.fn(),
   sumLoopCreditsForUser: vi.fn(),
   listLoopRunsSince: vi.fn(),
+  find: vi.fn(),
 }));
 const users = vi.hoisted(() => ({ findById: vi.fn(), setLoopsDailyCredits: vi.fn() }));
 const presence = vi.hoisted(() => ({ findByUserId: vi.fn() }));
@@ -785,9 +786,33 @@ describe('/api/loops/budget', () => {
 describe('DELETE /api/loops/:id', () => {
   it('is a 409 while the loop has runs in progress', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ activeExecutionIds: ['e1'] }));
+    executions.find.mockResolvedValue([{ id: 'e1', status: 'running', updatedAt: new Date() }]);
     tickets.listForLoop.mockResolvedValue([]);
     await expect(call('item', 'delete', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
     expect(repo.deleteForUser).not.toHaveBeenCalled();
+  });
+
+  it('deletes a loop with a lane in progress while EnableLoops is off', async () => {
+    settings.EnableLoops = false;
+    repo.findByIdAndUserId.mockResolvedValue(loop({ activeExecutionIds: ['e1'] }));
+    tickets.listForLoop.mockResolvedValue([{ id: 't1', status: 'in_progress', executionId: 'e1' }]);
+    repo.deleteForUser.mockResolvedValue(true);
+    const { res, result } = call('item', 'delete', { query: { id: OID } });
+    await result;
+    expect(res._getStatusCode()).toBe(204);
+  });
+
+  it('deletes a loop whose lanes are all finished or stale', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ activeExecutionIds: ['e1', 'e2', 'e3'] }));
+    executions.find.mockResolvedValue([
+      { id: 'e1', status: 'completed', updatedAt: new Date() },
+      { id: 'e2', status: 'running', updatedAt: new Date(Date.now() - 60 * 60 * 1000) },
+    ]);
+    tickets.listForLoop.mockResolvedValue([{ id: 't1', status: 'in_progress', executionId: 'e2' }]);
+    repo.deleteForUser.mockResolvedValue(true);
+    const { res, result } = call('item', 'delete', { query: { id: OID } });
+    await result;
+    expect(res._getStatusCode()).toBe(204);
   });
 
   it('is a 409 while a ticket is in progress (a desktop run)', async () => {
