@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatAutomaticOrigin, ChatSession, ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import type { LoopStageGuards } from '@shared/loopRunner';
+import type { PrSnapshot } from '@shared/pullRequest';
 import { check, snapshot } from '../pr/prTestSupport';
 import type { MachineSample } from './budget';
 import { LoopPolicyStore } from './LoopPolicyStore';
@@ -111,7 +112,9 @@ function harness(
   const killed: string[] = [];
   const blocker = { start: vi.fn(() => 7), stop: vi.fn() };
   let labels: string[] = [];
-  let pr = snapshot({ reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', checks: [check('Build', 'pass')] });
+  // The run's own PR: its head is the first runner session's worktree branch.
+  const own = (next: PrSnapshot): PrSnapshot => ({ ...next, headRefName: 'b4m/s1' });
+  let pr = own(snapshot({ reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', checks: [check('Build', 'pass')] }));
   const github = {
     snapshot: vi.fn(async () => pr),
     merge: vi.fn(async () => undefined),
@@ -129,6 +132,7 @@ function harness(
     return '{}';
   });
   let smokeStatus = 200;
+  const smokeRun = vi.fn(async () => undefined);
   let clock = 1_000_000;
   const deps: LoopRunnerDeps = {
     client,
@@ -140,7 +144,7 @@ function harness(
     gh,
     github,
     powerSaveBlocker: blocker,
-    smoke: { fetch: async () => ({ status: smokeStatus }), run: async () => undefined },
+    smoke: { fetch: async () => ({ status: smokeStatus }), run: smokeRun },
     focused: () => false,
     onChange: () => undefined,
     logger: { warn: () => undefined },
@@ -181,10 +185,11 @@ function harness(
     done,
     settled,
     setLabels: (next: string[]) => void (labels = next),
-    setPr: (next: typeof pr) => void (pr = next),
+    setPr: (next: typeof pr) => void (pr = own(next)),
     setDeploy: (next: string) => void (deployConclusion = next),
     setQueued: (next: string) => void (queuedState = next),
     setSmoke: (next: number) => void (smokeStatus = next),
+    smokeRun,
   };
 }
 
@@ -604,6 +609,17 @@ describe('LoopRunner merges', () => {
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked' });
   });
 
+  it("blocks another green PR in the loop's repository: only the run's own PR merges", async () => {
+    await started({ mergePolicy: 'green-ci' });
+    h.github.snapshot.mockResolvedValueOnce(
+      snapshot({ headRefName: 'someone/else', mergeStateStatus: 'CLEAN', checks: [check('Build', 'pass')] })
+    );
+    await expect(h.runner.merge('s1', PR)).rejects.toThrow(/not this run's PR/);
+    expect(h.github.merge).not.toHaveBeenCalled();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked' });
+  });
+
   it('blocks rather than letting the turn finish unmerged when the PR cannot be read', async () => {
     await started();
     h.github.snapshot.mockRejectedValueOnce(new Error('gh: rate limited'));
@@ -656,17 +672,28 @@ describe('LoopRunner merges', () => {
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'advanced' });
   });
 
+  it('never runs a smoke command from the web claim; the merged ticket goes to the user', async () => {
+    await started({ guards: { smoke: { command: 'curl -sf https://app.example.com/health' } } });
+    await h.runner.merge('s1', PR);
+    h.done();
+    await h.settled();
+    expect(h.smokeRun).not.toHaveBeenCalled();
+    expect(h.completed[0].outcome).toMatchObject({
+      outcome: 'blocked',
+      reason: expect.stringMatching(/smoke command is set on the web.*curl -sf/),
+    });
+  });
+
   it('advances a merge-queue merge only once the PR has merged', async () => {
     await started();
-    h.setPr(
-      snapshot({
-        reviewDecision: 'APPROVED',
-        mergeStateStatus: 'CLEAN',
-        checks: [check('Build', 'pass')],
-        nodeId: 'PR_1',
-        mergeQueue: { enabled: true },
-      })
-    );
+    const queued = snapshot({
+      reviewDecision: 'APPROVED',
+      mergeStateStatus: 'CLEAN',
+      checks: [check('Build', 'pass')],
+      nodeId: 'PR_1',
+      mergeQueue: { enabled: true },
+    });
+    h.setPr(queued);
     expect(await h.runner.merge('s1', PR)).toMatch(/merge queue/);
     h.setQueued('OPEN');
     h.done();
@@ -677,6 +704,7 @@ describe('LoopRunner merges', () => {
     });
 
     await h.runner.tick();
+    h.github.snapshot.mockResolvedValueOnce({ ...queued, headRefName: 'b4m/s2' });
     expect(await h.runner.merge('s2', PR)).toMatch(/merge queue/);
     h.setQueued('MERGED');
     h.done('s2');

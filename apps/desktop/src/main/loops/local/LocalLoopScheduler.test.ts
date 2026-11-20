@@ -432,9 +432,27 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(1);
   });
 
+  // prTestSupport's snapshot() heads the PR at feat/widget-ladder.
+  const onBranch = (branch: string) =>
+    (async (id: string) => ({ id, project: { workspace: true, workspaceBranch: branch } })) as never;
+
+  it("refuses to merge a green PR in the loop's repository that is not the run's own", async () => {
+    make({ repo: `${REF.owner}/${REF.repo}` });
+    ticket('a');
+    chat.getSession = onBranch('b-other');
+    gh.mockImplementation(async () => '{"labels":[]}');
+    github.snapshot.mockResolvedValue(snapshot({ reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN' }));
+    scheduler.start();
+    await settle();
+    await expect(scheduler.merge(chat.turns[0].sessionId, REF.url)).rejects.toThrow(/not this run's PR/);
+    expect(github.merge).not.toHaveBeenCalled();
+    expect(github.enqueue).not.toHaveBeenCalled();
+  });
+
   it('refuses ticket writes once the run is finished and waiting on its merge to land', async () => {
     make({ repo: `${REF.owner}/${REF.repo}` });
     const t = ticket('a');
+    chat.getSession = onBranch('feat/widget-ladder');
     gh.mockImplementation(async args => (args.includes('labels') ? '{"labels":[]}' : '{"state":"OPEN"}'));
     github.snapshot.mockResolvedValue(
       snapshot({

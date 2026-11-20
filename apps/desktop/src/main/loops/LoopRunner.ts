@@ -11,7 +11,7 @@ import { parsePullRequestUrl, type PrRef } from '@shared/pullRequest';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import type { GhRunner } from '../pr/gh';
 import { admit, hardFloorBreached, laneCapFor, nextIdleDelay, type MachineSample } from './budget';
-import type { SmokeDeps } from './guards';
+import { localSmokeOnly, type SmokeDeps } from './guards';
 import {
   LeaseLost,
   USER_WIDE_REFUSALS,
@@ -411,14 +411,25 @@ export class LoopRunner {
 
   /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
   private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
+    const { guards, webSmokeCommand } = localSmokeOnly(
+      lane.claim.stage.guards ?? lane.policy.guards,
+      lane.policy.guards
+    );
     const checked = await afterMergeChecks(
       { gh: this.deps.gh, smoke: this.deps.smoke, now: this.now, sleep: this.sleep },
       lane.merged,
-      lane.claim.stage.guards ?? lane.policy.guards,
+      guards,
       lane.policy.directory,
       async () => (await this.deps.chat.getSession(lane.sessionId))?.project?.workingDirectory ?? lane.policy.directory
     );
-    return checked.ok ? { outcome: 'advanced', answer } : { outcome: 'blocked', reason: checked.reason, answer };
+    if (!checked.ok) return { outcome: 'blocked', reason: checked.reason, answer };
+    if (lane.merged && webSmokeCommand)
+      return {
+        outcome: 'blocked',
+        reason: `Merged, but the stage's smoke command is set on the web and is not run on this Mac; run it yourself: ${webSmokeCommand}`,
+        answer,
+      };
+    return { outcome: 'advanced', answer };
   }
 
   private creditStopped(): boolean {
@@ -444,8 +455,10 @@ export class LoopRunner {
     };
 
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
+    const session = await this.deps.chat.getSession(sessionId);
     const result = await mergeLoopPr({ github: this.deps.github, gh: this.deps.gh }, ref, {
       repo: lane.policy.repo ?? lane.policy.repoHint?.toLowerCase(),
+      headBranch: session?.project?.workspaceBranch,
       mergePolicy: lane.claim.stage.mergePolicy,
       ...(guards?.holdLabels ? { holdLabels: guards.holdLabels } : {}),
     });

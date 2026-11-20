@@ -1,6 +1,11 @@
 import { exec } from 'node:child_process';
 import type { PrMergeMethod, PrRef, PrSnapshot } from '@shared/pullRequest';
-import { DEFAULT_HOLD_LABELS, type LoopMergePolicy, type LoopSmokeCheck } from '@shared/loopRunner';
+import {
+  DEFAULT_HOLD_LABELS,
+  type LoopMergePolicy,
+  type LoopSmokeCheck,
+  type LoopStageGuards,
+} from '@shared/loopRunner';
 import { SET_SESSION_PULL_REQUEST_TOOL_NAME } from '../chat/tools/pullRequestTool';
 import { desktopMergeReadiness } from '../pr/autoMerge';
 import { SHELL_TOOLS, shellGuardViolation } from '../pr/autoFix';
@@ -10,10 +15,12 @@ export const LOOP_MERGE_TOOL_NAME = 'loop_merge_pr';
 
 /**
  * Why a tool call is refused in a loop runner session, or null. Like auto-fix's guard, minus the
- * ban on session_spawn/session_send: a spawned child inherits the runner marking (and this guard)
- * in ChatService, so delegating cannot get around it.
+ * ban on session_spawn: a spawned child inherits the runner marking (and this guard) in ChatService.
+ * session_send stays banned: the session it reaches has none of these guards nor the run's budget.
  */
 export function loopRunnerToolRefusal(name: string, input: Record<string, unknown>): string | null {
+  if (name === 'session_send')
+    return 'A loop runner turn may not message another conversation; do the work here or with session_spawn.';
   if (name === SET_SESSION_PULL_REQUEST_TOOL_NAME)
     return 'A loop runner turn may not change which PR this session follows.';
   if (!SHELL_TOOLS.has(name)) return null;
@@ -22,6 +29,23 @@ export function loopRunnerToolRefusal(name: string, input: Record<string, unknow
   if (violation === 'merge') return `A loop runner turn may not merge from the shell; call ${LOOP_MERGE_TOOL_NAME}.`;
   if (violation === 'default-branch-push') return 'A loop runner turn may not push to the default branch.';
   return null;
+}
+
+/**
+ * A web loop's guards with any smoke command not named by this Mac's own policy taken out (returned as
+ * `webSmokeCommand`). runSmoke exec()s a command outside the approval mode, and a claim's stage guards stay
+ * editable on the web after the user approved the loop here. URL smokes pass through.
+ */
+export function localSmokeOnly(
+  claimed: LoopStageGuards | undefined,
+  local: LoopStageGuards | undefined
+): { guards: LoopStageGuards | undefined; webSmokeCommand?: string } {
+  const smoke = claimed?.smoke;
+  if (!claimed || !smoke || !('command' in smoke)) return { guards: claimed };
+  const localSmoke = local?.smoke;
+  if (localSmoke && 'command' in localSmoke && localSmoke.command === smoke.command) return { guards: claimed };
+  const { smoke: _web, ...rest } = claimed;
+  return { guards: rest, webSmokeCommand: smoke.command };
 }
 
 /** `owner/name` from an origin URL (https or ssh), lower-cased, or null. */

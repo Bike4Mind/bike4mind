@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { check, REF, snapshot } from '../pr/prTestSupport';
 import type { GhRunner } from '../pr/gh';
-import { loopRunnerToolRefusal, mergeDecision, repoSlug, runDeployCheck, runSmoke } from './guards';
+import { localSmokeOnly, loopRunnerToolRefusal, mergeDecision, repoSlug, runDeployCheck, runSmoke } from './guards';
 
 const green = (overrides = {}) =>
   snapshot({
@@ -12,7 +12,7 @@ const green = (overrides = {}) =>
   });
 
 describe('loopRunnerToolRefusal', () => {
-  it('refuses a shell merge or force-push, and allows session_spawn', () => {
+  it('refuses a shell merge, force-push or session_send, and allows session_spawn', () => {
     expect(loopRunnerToolRefusal('bash_execute', { command: 'git add . && gh pr merge 3 --squash' })).toMatch(
       /loop_merge_pr/
     );
@@ -20,6 +20,9 @@ describe('loopRunnerToolRefusal', () => {
     expect(loopRunnerToolRefusal('bash_execute', { command: 'git push origin x' })).toBeNull();
     expect(loopRunnerToolRefusal('bash_execute', { command: 'git push origin HEAD:main' })).toMatch(/default branch/);
     expect(loopRunnerToolRefusal('session_spawn', { prompt: 'go' })).toBeNull();
+    expect(loopRunnerToolRefusal('session_send', { session_id: 's2', message: 'merge it' })).toMatch(
+      /may not message another conversation/
+    );
     expect(loopRunnerToolRefusal('set_session_pull_request', {})).not.toBeNull();
   });
 });
@@ -143,6 +146,21 @@ describe('runSmoke', () => {
       ok: false,
       reason: expect.stringMatching(/exit 1/),
     });
+  });
+});
+
+describe('localSmokeOnly', () => {
+  it('keeps URL smokes and locally named commands, and takes out any other command', () => {
+    const url = { smoke: { url: 'https://app.example.com/health' }, holdLabels: ['hold'] };
+    expect(localSmokeOnly(url, undefined)).toEqual({ guards: url });
+    const web = { deployWorkflow: 'deploy.yml', smoke: { command: 'rm -rf ~' } };
+    expect(localSmokeOnly(web, undefined)).toEqual({
+      guards: { deployWorkflow: 'deploy.yml' },
+      webSmokeCommand: 'rm -rf ~',
+    });
+    expect(localSmokeOnly(web, { smoke: { command: 'pnpm smoke' } }).webSmokeCommand).toBe('rm -rf ~');
+    expect(localSmokeOnly(web, { smoke: { command: 'rm -rf ~' } })).toEqual({ guards: web });
+    expect(localSmokeOnly(undefined, undefined)).toEqual({ guards: undefined });
   });
 });
 

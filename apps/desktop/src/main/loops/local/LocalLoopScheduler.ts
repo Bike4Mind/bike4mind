@@ -766,8 +766,10 @@ export class LocalLoopScheduler {
     const loop = this.deps.store.loop(lane.run.loopId);
     const ticket = this.deps.store.ticket(lane.run.ticketId);
     const stage = loop?.stageConfig.find(entry => entry.stage === ticket?.stage);
+    const session = await this.deps.chat.getSession(sessionId);
     const result = await mergeLoopPr({ github: this.deps.github, gh: this.deps.gh }, ref, {
       ...(loop?.repo ? { repo: loop.repo } : {}),
+      headBranch: session?.project?.workspaceBranch,
       mergePolicy: effectiveMergePolicy(stage?.mergePolicy),
       ...(stage?.holdLabels ? { holdLabels: stage.holdLabels } : {}),
     });

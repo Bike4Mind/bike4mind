@@ -97,12 +97,19 @@ export type LoopMerged = { pr: PrRef; mergeSha?: string };
 
 /**
  * loop_merge_pr's merge: only in the loop's own repository (the user's gh could merge a green PR anywhere it has
- * rights), only as the stage's policy and hold labels allow. A refusal's reason blocks the ticket.
+ * rights), only the run's own PR (its head is the run session's worktree branch), and only as the stage's policy
+ * and hold labels allow. A refusal's reason blocks the ticket.
  */
 export async function mergeLoopPr(
   deps: { github: LoopMergeGithub; gh: GhRunner },
   ref: PrRef,
-  options: { repo?: string; mergePolicy: LoopMergePolicy; holdLabels?: readonly string[] }
+  options: {
+    repo?: string;
+    /** The run session's worktree branch; undefined (no worktree) refuses every merge. */
+    headBranch: string | undefined;
+    mergePolicy: LoopMergePolicy;
+    holdLabels?: readonly string[];
+  }
 ): Promise<{ ok: true; message: string; merged: LoopMerged } | { ok: false; reason: string }> {
   const { repo } = options;
   if (`${ref.owner}/${ref.repo}`.toLowerCase() !== repo)
@@ -119,6 +126,11 @@ export async function mergeLoopPr(
     // Not a tool error the model could finish past: an unreadable PR is not merged, so the ticket waits.
     return { ok: false, reason: `Could not read ${ref.url}: ${err instanceof Error ? err.message : String(err)}` };
   }
+  if (!options.headBranch || snapshot.headRefName !== options.headBranch)
+    return {
+      ok: false,
+      reason: `${ref.url} is not this run's PR (its branch is ${snapshot.headRefName}, this run works on ${options.headBranch ?? 'no branch'}).`,
+    };
   const decision = mergeDecision(snapshot, labels, options.mergePolicy, options.holdLabels ?? DEFAULT_HOLD_LABELS);
   if (!decision.merge) return { ok: false, reason: decision.reason };
   try {
