@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   smtpSendEmail: vi.fn(),
   queueFailureLog: vi.fn(),
-  recordDeliveryOutcome: vi.fn(),
+  voidAlertRound: vi.fn(),
   logger: { warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -37,7 +37,7 @@ vi.mock('../utils/mailer/queuedMailer', () => ({
 }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
 vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.smtpSendEmail } }));
-vi.mock('../utils/mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: mocks.recordDeliveryOutcome }));
+vi.mock('../utils/mailer/deliveryOutcome', () => ({ voidIncidentAlertRound: mocks.voidAlertRound }));
 
 import {
   createReviewerAlertDelivery,
@@ -171,10 +171,7 @@ describe('imageModerationIncidents', () => {
       expect(mocks.queueFailureLog.mock.calls[0][0]).not.toContain('reviewer@example.com');
       expect(mocks.markAlerted).not.toHaveBeenCalled();
       expect(mocks.markAlertQueued).not.toHaveBeenCalled();
-      expect(mocks.recordDeliveryOutcome).toHaveBeenCalledExactlyOnceWith(
-        REVIEW_REF,
-        expect.objectContaining({ ok: false })
-      );
+      expect(mocks.voidAlertRound).toHaveBeenCalledExactlyOnceWith(REVIEW_REF);
     });
   });
 

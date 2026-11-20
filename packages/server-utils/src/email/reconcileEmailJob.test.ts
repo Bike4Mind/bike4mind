@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmailJobOverallStatus, EmailJobStatus, EmailSendStatus } from '@bike4mind/common';
 
-const mocks = vi.hoisted(() => ({ findJob: vi.fn(), updateJob: vi.fn(), completeRun: vi.fn(), count: vi.fn() }));
+const mocks = vi.hoisted(() => ({ findJob: vi.fn(), updateCounts: vi.fn(), completeRun: vi.fn(), count: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  emailJobRepository: { findById: mocks.findJob, update: mocks.updateJob, completeRun: mocks.completeRun },
+  emailJobRepository: { findById: mocks.findJob, updateCounts: mocks.updateCounts, completeRun: mocks.completeRun },
   emailSendAttemptRepository: { count: mocks.count },
 }));
 
@@ -24,6 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.findJob.mockResolvedValue({ id: 'job-1', status: EmailJobStatus.PROCESSING });
   mocks.completeRun.mockResolvedValue(true);
+  mocks.updateCounts.mockResolvedValue(true);
 });
 
 describe('reconcileEmailJob', () => {
@@ -33,9 +34,10 @@ describe('reconcileEmailJob', () => {
     expect(mocks.completeRun).toHaveBeenCalledWith(
       'job-1',
       undefined,
+      undefined,
       expect.objectContaining({ sentCount: 2, failedCount: 0, overallStatus: EmailJobOverallStatus.COMPLETE })
     );
-    expect(mocks.updateJob).not.toHaveBeenCalled();
+    expect(mocks.updateCounts).not.toHaveBeenCalled();
   });
 
   it('turns a completed job PARTIAL when a late worker result fails one attempt, keeping its completedAt', async () => {
@@ -45,6 +47,7 @@ describe('reconcileEmailJob', () => {
     await reconcileEmailJob('job-1');
     expect(mocks.completeRun).toHaveBeenCalledWith(
       'job-1',
+      undefined,
       undefined,
       expect.objectContaining({
         sentCount: 1,
@@ -60,7 +63,7 @@ describe('reconcileEmailJob', () => {
     mocks.findJob.mockResolvedValue({ id: 'job-1', status: EmailJobStatus.PROCESSING, completedAt });
     withAttempts([EmailSendStatus.SENT]);
     await reconcileEmailJob('job-1');
-    expect(mocks.completeRun.mock.calls[0][2].completedAt).not.toBe(completedAt);
+    expect(mocks.completeRun.mock.calls[0][3].completedAt).not.toBe(completedAt);
   });
 
   it('marks the job FAILED when nothing was sent', async () => {
@@ -68,6 +71,7 @@ describe('reconcileEmailJob', () => {
     await reconcileEmailJob('job-1');
     expect(mocks.completeRun).toHaveBeenCalledWith(
       'job-1',
+      undefined,
       undefined,
       expect.objectContaining({ overallStatus: EmailJobOverallStatus.FAILED })
     );
@@ -77,7 +81,11 @@ describe('reconcileEmailJob', () => {
     withAttempts([EmailSendStatus.SENT, EmailSendStatus.PENDING]);
     await reconcileEmailJob('job-1');
     expect(mocks.completeRun).not.toHaveBeenCalled();
-    expect(mocks.updateJob).toHaveBeenCalledWith({ id: 'job-1', sentCount: 1, failedCount: 0, cancelledCount: 0 });
+    expect(mocks.updateCounts).toHaveBeenCalledWith('job-1', undefined, {
+      sentCount: 1,
+      failedCount: 0,
+      cancelledCount: 0,
+    });
   });
 
   it('never moves a cancelled job back to completed', async () => {
@@ -85,14 +93,22 @@ describe('reconcileEmailJob', () => {
     withAttempts([EmailSendStatus.SENT, EmailSendStatus.CANCELLED]);
     await reconcileEmailJob('job-1');
     expect(mocks.completeRun).not.toHaveBeenCalled();
-    expect(mocks.updateJob).toHaveBeenCalledWith({ id: 'job-1', sentCount: 1, failedCount: 0, cancelledCount: 1 });
+    expect(mocks.updateCounts).toHaveBeenCalledWith('job-1', undefined, {
+      sentCount: 1,
+      failedCount: 0,
+      cancelledCount: 1,
+    });
   });
 
   it('falls back to a counts-only write when the conditional completion does not match', async () => {
     mocks.completeRun.mockResolvedValue(false);
     withAttempts([EmailSendStatus.SENT]);
     await reconcileEmailJob('job-1');
-    expect(mocks.updateJob).toHaveBeenCalledWith({ id: 'job-1', sentCount: 1, failedCount: 0, cancelledCount: 0 });
+    expect(mocks.updateCounts).toHaveBeenCalledWith('job-1', undefined, {
+      sentCount: 1,
+      failedCount: 0,
+      cancelledCount: 0,
+    });
   });
 
   it('does not close a newer send that has no attempts yet', async () => {
@@ -104,27 +120,38 @@ describe('reconcileEmailJob', () => {
     expect(mocks.count).toHaveBeenCalledWith({ jobId: 'job-1', createdAt: { $gte: lastSentAt } });
   });
 
-  it('writes again when the attempts changed while it was writing a stale snapshot', async () => {
+  it('reads and writes again when another recount advanced the job version first', async () => {
     let statuses = [EmailSendStatus.SENT, EmailSendStatus.PROCESSING];
     mocks.count.mockImplementation(async ({ status }: CountFilter) => {
       if (!status) return statuses.length;
       const wanted = typeof status === 'string' ? [status] : status.$in;
       return statuses.filter(s => wanted.includes(s)).length;
     });
-    mocks.updateJob.mockImplementationOnce(async () => {
+    mocks.findJob
+      .mockResolvedValueOnce({ id: 'job-1', status: EmailJobStatus.PROCESSING, __v: 4 })
+      .mockResolvedValue({ id: 'job-1', status: EmailJobStatus.PROCESSING, __v: 5 });
+    mocks.updateCounts.mockImplementationOnce(async () => {
       statuses = [EmailSendStatus.SENT, EmailSendStatus.FAILED];
+      return false;
     });
     await reconcileEmailJob('job-1');
-    expect(mocks.completeRun).toHaveBeenLastCalledWith(
+    expect(mocks.updateCounts).toHaveBeenCalledExactlyOnceWith('job-1', 4, {
+      sentCount: 1,
+      failedCount: 0,
+      cancelledCount: 0,
+    });
+    expect(mocks.completeRun).toHaveBeenCalledExactlyOnceWith(
       'job-1',
       undefined,
+      5,
       expect.objectContaining({ sentCount: 1, failedCount: 1, overallStatus: EmailJobOverallStatus.PARTIAL })
     );
   });
 
-  it('stops after one pass when nothing changed', async () => {
+  it('writes once when no other recount raced it', async () => {
     withAttempts([EmailSendStatus.SENT, EmailSendStatus.FAILED]);
     await reconcileEmailJob('job-1');
     expect(mocks.completeRun).toHaveBeenCalledTimes(1);
+    expect(mocks.findJob).toHaveBeenCalledTimes(1);
   });
 });

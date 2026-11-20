@@ -192,17 +192,33 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
   }
 
   /**
-   * Completes a send run from a recount. Matches only while the job is not cancelled and has not been
-   * re-claimed for a newer send since `runStartedAt` (its lastSentAt) was read; returns whether it matched.
+   * Completes a send run from a recount. Matches only while the job is not cancelled, has not been
+   * re-claimed for a newer send since `runStartedAt` (its lastSentAt) was read, and is still at
+   * `version` (no other recount wrote since); returns whether it matched.
    */
   async completeRun(
     id: string,
     runStartedAt: Date | undefined,
+    version: number | undefined,
     updates: Pick<IEmailJob, 'sentCount' | 'failedCount' | 'cancelledCount' | 'overallStatus' | 'completedAt'>
   ): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, status: { $ne: EmailJobStatus.CANCELLED }, lastSentAt: runStartedAt ?? null },
-      { $set: { ...updates, status: EmailJobStatus.COMPLETED } },
+      { _id: id, status: { $ne: EmailJobStatus.CANCELLED }, lastSentAt: runStartedAt ?? null, __v: version ?? null },
+      { $set: { ...updates, status: EmailJobStatus.COMPLETED }, $inc: { __v: 1 } },
+      { runValidators: true }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /** Writes a recount's totals only while the job is still at `version`; returns whether it matched. */
+  async updateCounts(
+    id: string,
+    version: number | undefined,
+    counts: Pick<IEmailJob, 'sentCount' | 'failedCount' | 'cancelledCount'>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, __v: version ?? null },
+      { $set: counts, $inc: { __v: 1 } },
       { runValidators: true }
     );
     return result.matchedCount > 0;

@@ -198,9 +198,9 @@ async function deliverToReviewers(
     }
     if (results.some(result => result === false)) {
       deps.logger.error(`[ImageModeration] reviewer ${what} failed to send`, meta);
-      // The copies that were queued still report back; this failure stamp keeps their delivery from
-      // closing the round, so the sweep resends to every reviewer.
-      if (ref) await recordPublishFailure(ref, meta, deps);
+      // The copies that were queued still report back; voiding the round keeps their delivery from
+      // closing it, so the sweep resends to every reviewer.
+      if (ref) await voidRound(ref, meta, deps);
       return 'failed';
     }
     return results.every(isQueued) ? 'queued' : 'delivered';
@@ -209,16 +209,16 @@ async function deliverToReviewers(
   }
 }
 
-async function recordPublishFailure(
+async function voidRound(
   ref: EmailDeliveryRef,
   meta: Record<string, string>,
   deps: IncidentReviewDelivery
 ): Promise<void> {
   try {
-    const { recordEmailDeliveryOutcome } = await import('../utils/mailer/deliveryOutcome');
-    await recordEmailDeliveryOutcome(ref, { ok: false, error: 'The alert could not be queued for every reviewer' });
+    const { voidIncidentAlertRound } = await import('../utils/mailer/deliveryOutcome');
+    await voidIncidentAlertRound(ref);
   } catch (error) {
-    deps.logger.error('[ImageModeration] could not record a failed reviewer alert', {
+    deps.logger.error('[ImageModeration] could not void a failed reviewer alert round', {
       ...meta,
       errorName: error instanceof Error ? error.name : typeof error,
     });

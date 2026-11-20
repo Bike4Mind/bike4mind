@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const outcome = vi.hoisted(() => ({ record: vi.fn() }));
-vi.mock('../utils/mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: outcome.record }));
+vi.mock('../utils/mailer/deliveryOutcome', () => ({ voidIncidentAlertRound: outcome.record }));
 beforeEach(() => outcome.record.mockReset());
 import type { ImageModerationIncident } from '@bike4mind/common';
 import {
@@ -113,11 +113,12 @@ describe('withReviewerAlerts', () => {
 
     expect(deps.incidents.markAlertQueued).not.toHaveBeenCalled();
     expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
-    // The failure stamp keeps the queued copy's delivery from closing the round.
-    expect(outcome.record).toHaveBeenCalledExactlyOnceWith(
-      { kind: 'incidentAlert', incidentId: 'incident-123', alert: 'review' },
-      { ok: false, error: expect.any(String) }
-    );
+    // Voiding the round keeps the queued copy's delivery from closing it.
+    expect(outcome.record).toHaveBeenCalledExactlyOnceWith({
+      kind: 'incidentAlert',
+      incidentId: 'incident-123',
+      alert: 'review',
+    });
   });
 
   it('leaves alertedAt unset when only some reviewers were reached', async () => {

@@ -71,7 +71,7 @@ describe('EmailJobRepository.completeRun', () => {
     const job = await createJob(EmailJobStatus.PROCESSING);
     await EmailJob.updateOne({ _id: job.id }, { $set: { lastSentAt } });
 
-    expect(await emailJobRepository.completeRun(job.id, lastSentAt, recount)).toBe(true);
+    expect(await emailJobRepository.completeRun(job.id, lastSentAt, 0, recount)).toBe(true);
     const stored = await EmailJob.findById(job.id);
     expect(stored?.status).toBe(EmailJobStatus.COMPLETED);
     expect(stored?.sentCount).toBe(2);
@@ -79,12 +79,12 @@ describe('EmailJobRepository.completeRun', () => {
 
   it('completes a job that was never claimed through a send (no lastSentAt)', async () => {
     const job = await createJob(EmailJobStatus.PROCESSING);
-    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(true);
+    expect(await emailJobRepository.completeRun(job.id, undefined, 0, recount)).toBe(true);
   });
 
   it('leaves a cancelled job cancelled', async () => {
     const job = await createJob(EmailJobStatus.CANCELLED);
-    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(false);
+    expect(await emailJobRepository.completeRun(job.id, undefined, 0, recount)).toBe(false);
     expect((await EmailJob.findById(job.id))?.status).toBe(EmailJobStatus.CANCELLED);
   });
 
@@ -95,7 +95,28 @@ describe('EmailJobRepository.completeRun', () => {
       { $set: { lastSentAt: new Date('2026-01-03T00:00:00Z'), overallStatus: EmailJobOverallStatus.SENDING } }
     );
 
-    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(false);
+    expect(await emailJobRepository.completeRun(job.id, undefined, 0, recount)).toBe(false);
     expect((await EmailJob.findById(job.id))?.overallStatus).toBe(EmailJobOverallStatus.SENDING);
+  });
+
+  it('refuses a recount write from a version another recount already advanced', async () => {
+    const job = await createJob(EmailJobStatus.PROCESSING);
+    const read = await emailJobRepository.findById(job.id);
+    const version = (read as { __v?: number } | null)?.__v;
+    expect(version).toBe(0);
+
+    expect(
+      await emailJobRepository.updateCounts(job.id, version, { sentCount: 1, failedCount: 1, cancelledCount: 0 })
+    ).toBe(true);
+    expect(
+      await emailJobRepository.updateCounts(job.id, version, { sentCount: 2, failedCount: 0, cancelledCount: 0 })
+    ).toBe(false);
+    expect(await emailJobRepository.completeRun(job.id, undefined, version, recount)).toBe(false);
+
+    const stored = await EmailJob.findById(job.id);
+    expect(stored?.status).toBe(EmailJobStatus.PROCESSING);
+    expect(stored?.sentCount).toBe(1);
+    expect(stored?.failedCount).toBe(1);
+    expect(await emailJobRepository.completeRun(job.id, undefined, 1, recount)).toBe(true);
   });
 });

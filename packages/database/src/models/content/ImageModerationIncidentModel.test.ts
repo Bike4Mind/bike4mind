@@ -94,27 +94,39 @@ describe('ImageModerationIncidentRepository', () => {
       expect((await read(inc._id))?.escalationAlertedAt).toEqual(delivered);
     });
 
-    it('does not let a delivered copy close a round in which another copy already failed', async () => {
+    it('does not let a delivered copy close a voided round, and a requeued round closes normally', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
-      await imageModerationIncidentRepository.markAlertQueued(inc.id, new Date('2026-10-19T12:00:00.000Z'));
-      const failedAt = new Date('2026-10-19T12:01:00.000Z');
+      await imageModerationIncidentRepository.markAlertQueued(inc.id, new Date('2026-10-19T11:00:00.000Z'));
+      const voidedAt = new Date('2026-10-19T12:01:00.000Z');
 
-      await imageModerationIncidentRepository.recordAlertDelivery(
-        inc.id,
-        'review',
-        { ok: false, error: 'x' },
-        failedAt
-      );
+      await imageModerationIncidentRepository.voidAlertRound(inc.id, 'review', voidedAt);
       await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', {
         ok: true,
         at: new Date('2026-10-19T12:02:00.000Z'),
       });
-      expect((await read(inc._id))?.alertedAt).toBeUndefined();
+      const voided = await read(inc._id);
+      expect(voided?.alertedAt).toBeUndefined();
+      expect(voided?.alertQueuedAt).toBeUndefined();
+      expect(voided?.alertFailedAt).toEqual(voidedAt);
 
       const resent = new Date('2026-10-19T13:00:00.000Z');
       await imageModerationIncidentRepository.markAlertQueued(inc.id, resent);
       await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: resent });
       expect((await read(inc._id))?.alertedAt).toEqual(resent);
+    });
+
+    it('lets a delivered copy close a queued round even after another copy failed at the worker', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.markAlertQueued(inc.id, new Date('2026-10-19T12:00:00.000Z'));
+      await imageModerationIncidentRepository.recordAlertDelivery(
+        inc.id,
+        'review',
+        { ok: false, error: 'x' },
+        new Date('2026-10-19T12:01:00.000Z')
+      );
+      const delivered = new Date('2026-10-19T12:02:00.000Z');
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: delivered });
+      expect((await read(inc._id))?.alertedAt).toEqual(delivered);
     });
   });
 

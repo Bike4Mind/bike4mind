@@ -15,6 +15,7 @@ const mockFindAttemptById = vi.fn();
 const mockIncrementCountsBy = vi.fn();
 const mockUpdateJob = vi.fn();
 const mockCompleteRun = vi.fn();
+const mockUpdateCounts = vi.fn().mockResolvedValue(true);
 const mockCountAttempts = vi.fn();
 const sendMocks = vi.hoisted(() => ({
   publish: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
     incrementCountsBy: (...args: unknown[]) => mockIncrementCountsBy(...args),
     update: (...args: unknown[]) => mockUpdateJob(...args),
     completeRun: (...args: unknown[]) => mockCompleteRun(...args),
+    updateCounts: (...args: unknown[]) => mockUpdateCounts(...args),
   },
   emailSendAttemptRepository: {
     findById: (...args: unknown[]) => mockFindAttemptById(...args),
@@ -205,6 +207,7 @@ describe('emailBatch delivery through the event bus', () => {
     expect(mockIncrementCountsBy).not.toHaveBeenCalled();
     expect(mockCompleteRun).toHaveBeenCalledWith(
       'job-1',
+      undefined,
       undefined,
       expect.objectContaining({ sentCount: 1, failedCount: 0, overallStatus: EmailJobOverallStatus.COMPLETE })
     );

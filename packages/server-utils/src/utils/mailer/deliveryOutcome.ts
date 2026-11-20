@@ -21,3 +21,15 @@ export async function recordEmailDeliveryOutcome(ref: EmailDeliveryRef, outcome:
     Logger.error(`Delivery outcome not recorded for ${ref.kind} ${id}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
+
+/** Voids an incident alert round that could not be queued for every reviewer. Never throws. */
+export async function voidIncidentAlertRound(ref: EmailDeliveryRef): Promise<void> {
+  if (ref.kind !== 'incidentAlert') return;
+  try {
+    await imageModerationIncidentRepository.voidAlertRound(ref.incidentId, ref.alert);
+  } catch (e: unknown) {
+    Logger.error(
+      `Alert round not voided for incident ${ref.incidentId}: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+}

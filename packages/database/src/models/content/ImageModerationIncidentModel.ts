@@ -165,10 +165,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
-   * Records the outcome for one reviewer's copy of an alert. The first delivered copy stamps the
-   * delivery time and later ones (other reviewers, replays) leave it. A failure stamps the failure
-   * time, and a failure newer than the last queue stamp voids that round: a later delivered copy does
-   * not stamp it, so the sweep resends to every reviewer rather than leaving the failed one untold.
+   * Records the email-send worker's outcome for one reviewer's copy of an alert. The first delivered
+   * copy stamps the delivery time and later ones (other reviewers, replays) leave it, unless the round
+   * was voided (voidAlertRound). A failure only stamps the failure time: a reviewer whose copy always
+   * fails (a rejected or sink address) must not make every round resend to all reviewers.
    */
   async recordAlertDelivery(
     id: string,
@@ -185,7 +185,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
         {
           _id: id,
           [delivered]: null,
-          $expr: { $not: [{ $gt: [`$${failed}`, { $ifNull: [`$${queued}`, new Date(0)] }] }] },
+          $nor: [{ [queued]: null, [failed]: { $ne: null } }],
         },
         { $set: { [delivered]: outcome.at } },
         { runValidators: true }
@@ -193,6 +193,21 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     } else {
       await this.model.updateOne({ _id: id }, { $set: { [failed]: now } }, { runValidators: true });
     }
+  }
+
+  /**
+   * Voids a round in which some reviewer's copy could not be queued. The copies that were queued still
+   * report back; with the queue stamp cleared their delivery cannot close the round (recordAlertDelivery),
+   * so the sweep resends to every reviewer.
+   */
+  async voidAlertRound(id: string, alert: 'review' | 'escalation', now = new Date()): Promise<void> {
+    const [queued, failed] =
+      alert === 'review' ? ['alertQueuedAt', 'alertFailedAt'] : ['escalationAlertQueuedAt', 'escalationAlertFailedAt'];
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { [failed]: now }, $unset: { [queued]: 1 } },
+      { runValidators: true }
+    );
   }
 
   /** Stamps the time a reminder digest covered these still-unreviewed incidents. */
