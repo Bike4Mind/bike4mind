@@ -52,6 +52,7 @@ import {
   dispatchLoopNow,
   LOOP_LEASE_MS,
   MAX_CONSECUTIVE_FAILURES,
+  MEMBER_CAP_PAUSE_REASON,
   runLoopSchedulerTick,
   USER_BUDGET_PAUSE_REASON,
 } from './loopScheduler';
@@ -186,6 +187,23 @@ describe('runLoopSchedulerTick', () => {
     const after = await reload(loop.id);
     expect(after).toMatchObject({ status: 'paused', statusReason: 'Out of credits', autoResume: 'credits' });
     expect(after.activeExecutionIds ?? []).toEqual([]);
+  });
+
+  it("labels a pause for the org member's credit limit as that, not out of credits", async () => {
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
+    executions['exec-0'] = {
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      error: { message: 'Organization member credit limit reached' },
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await reload(loop.id)).toMatchObject({
+      status: 'paused',
+      statusReason: MEMBER_CAP_PAUSE_REASON,
+      autoResume: 'credits',
+    });
   });
 
   it('keeps a failing loop live until the failure limit, then moves it to error', async () => {

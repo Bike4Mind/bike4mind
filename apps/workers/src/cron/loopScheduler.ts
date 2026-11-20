@@ -28,6 +28,7 @@ import {
   type IPendingGate,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { creditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
@@ -671,11 +672,14 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
       $set: { lastRunAt: execution.completedAt ?? now },
     });
     // Conditional on 'live' so an owner's pause during the run stays an owner pause (no autoResume).
+    // The credit auto-resume also waits for an org member's cap to clear, so only the label differs.
+    const statusReason =
+      execution.error?.message === creditService.MEMBER_CREDIT_CAP_MESSAGE ? MEMBER_CAP_PAUSE_REASON : 'Out of credits';
     if (folded) {
       await loopRepository.updateForUser(
         loop.id,
         loop.userId,
-        { status: 'paused', statusReason: 'Out of credits', autoResume: 'credits' },
+        { status: 'paused', statusReason, autoResume: 'credits' },
         'live'
       );
     }
@@ -695,6 +699,8 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
   if (folded) await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
   if (ticket) await makeDueIfReady(loop, now);
 }
+
+export const MEMBER_CAP_PAUSE_REASON = 'Reached your organization credit limit';
 
 function failureReason(execution: IAgentExecution | null): string {
   return !execution
