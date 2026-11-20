@@ -97,6 +97,9 @@ public final class VoiceConversationModel {
   private var chunkSink: AsyncStream<String>.Continuation?
   private var replyFinished = false
   private var frameCount = 0
+  /// Reply text played since the transcript was last cleared (a commit, a stop, a pause, the reply ending), so its
+  /// echo in the mic is not taken as the user.
+  private var echoSpoken: [String] = []
 
   public init(
     target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient, listener: any SpeechListening,
@@ -160,18 +163,24 @@ public final class VoiceConversationModel {
     chunkSink?.finish()
     chunkSink = nil
     liveTranscript = ""
+    echoSpoken = []
     phase = final
     await listener.stop()
     await speaker.stop()
     await audioSession.deactivate()
   }
 
-  /// Tap to interrupt: stops the reply and goes back to listening.
+  /// Tap to interrupt: stops the reply and goes back to listening with a fresh recognizer.
   public func interrupt() async {
     switch phase {
-    case .sending, .streaming, .speaking: await abandonTurn()
-    default: break
+    case .sending, .streaming, .speaking: break
+    default: return
     }
+    await abandonTurn()
+    // Unlike a spoken barge-in, nothing heard so far is the user's next utterance; it is the reply's echo.
+    dropTranscript()
+    await listener.stop()
+    await beginListening()
   }
 
   public func setMuted(_ muted: Bool) async {
@@ -232,22 +241,26 @@ public final class VoiceConversationModel {
     guard !text.isEmpty else { return }
     fruitlessRestarts = 0
 
+    let heard =
+      echoSpoken.isEmpty
+      ? text : SpeechEchoFilter.residual(recognized: text, spoken: echoSpoken, gapTolerance: bargeInMinimumWords)
+
     switch phase {
     case .listening:
-      break
+      guard !heard.isEmpty else { return }
     case .sending, .streaming, .speaking:
-      // Echo of the reply and room noise produce short fragments; real interruption takes a few words.
-      guard text.split(separator: " ").count >= bargeInMinimumWords else { return }
+      // Room noise and leftover echo produce short fragments; real interruption takes a few words.
+      guard heard.split(separator: " ").count >= bargeInMinimumWords else { return }
       await abandonTurn()
     default:
       return
     }
 
-    liveTranscript = text
+    liveTranscript = heard
     if event.isFinal {
-      await commit(text)
+      await commit(heard)
     } else {
-      armSilenceTimer(for: text)
+      armSilenceTimer(for: heard)
     }
   }
 
@@ -278,6 +291,7 @@ public final class VoiceConversationModel {
     guard phase == .listening, !text.isEmpty else { return }
     silenceTask?.cancel()
     liveTranscript = ""
+    echoSpoken = []
     notice = nil
     // Invalidates the recognizer this utterance came from, so its ending is not mistaken for a restart.
     listenGeneration += 1
@@ -371,6 +385,7 @@ public final class VoiceConversationModel {
       for await chunk in chunks {
         guard let self, self.turnIsCurrent(token) else { return }
         self.speakingBegan()
+        self.echoSpoken.append(chunk)
         await speaker.speak(chunk)
         self.speakingEnded(token: token)
       }
@@ -393,8 +408,24 @@ public final class VoiceConversationModel {
     watchdogTask?.cancel()
     switch phase {
     case .sending, .streaming, .speaking: phase = .listening
-    default: break
+    default: return
     }
+    // The recognizer heard the whole reply; a fresh one keeps that transcript out of the next utterance.
+    dropTranscript()
+    Task { [weak self] in
+      guard let self, self.turnIsCurrent(token), self.phase == .listening else { return }
+      await self.listener.stop()
+      await self.beginListening()
+    }
+  }
+
+  /// Forgets what the current recognizer heard and ignores the rest of its results.
+  private func dropTranscript() {
+    silenceTask?.cancel()
+    liveTranscript = ""
+    echoSpoken = []
+    listenGeneration += 1
+    listenTask?.cancel()
   }
 
   /// Speaks a short notice and ends the turn: refusals and approvals are heard, not just seen.
@@ -477,10 +508,7 @@ public final class VoiceConversationModel {
     default: break
     }
     await abandonTurn()
-    silenceTask?.cancel()
-    liveTranscript = ""
-    listenGeneration += 1
-    listenTask?.cancel()
+    dropTranscript()
     phase = .paused(reason)
     await listener.stop()
   }
