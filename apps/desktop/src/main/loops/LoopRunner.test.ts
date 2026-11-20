@@ -65,13 +65,14 @@ function harness(
   // A user's own session lives alongside the runner's; nothing may ever touch it.
   const runOf = new Map<string, string>();
   const sessions = new Map<string, ChatSession>();
-  sessions.set('user-session', { id: 'user-session' } as ChatSession);
+  sessions.set('user-session', { id: 'user-session', messages: [] } as unknown as ChatSession);
   let created = 0;
   const chat = {
     createCodeSession: vi.fn(async () => {
       const id = `s${++created}`;
       sessions.set(id, {
         id,
+        messages: [],
         project: {
           directory: '/repo',
           name: 'repo',
@@ -782,5 +783,26 @@ describe('LoopRunner worktree collection', () => {
     ]);
     expect((await h.store.worktrees()).map(entry => entry.sessionId)).toEqual(['b']);
     expect(h.chat.deleteSession).not.toHaveBeenCalledWith('user-session', expect.anything());
+  });
+
+  it('leaves a session the user typed into, and forgets its record', async () => {
+    h = harness();
+    await h.store.recordWorktree({
+      directory: '/repo',
+      ticketId: 't',
+      sessionId: 'typed',
+      path: '/w/typed',
+      branch: 'b4m/typed',
+      createdAt: new Date(1_000_000).toISOString(),
+      finishedAt: 'x',
+    });
+    h.sessions.set('typed', {
+      id: 'typed',
+      messages: [{ id: 'm', role: 'user', content: 'hold on', createdAt: 'x' }],
+    } as unknown as ChatSession);
+    await h.runner.collectWorktrees();
+    expect(h.chat.deleteSession).not.toHaveBeenCalled();
+    expect(h.chat.removeWorktrees).not.toHaveBeenCalled();
+    expect(await h.store.worktrees()).toEqual([]);
   });
 });

@@ -609,8 +609,13 @@ export class LoopRunner {
       }
       try {
         await this.waitIdle(worktree.sessionId);
-        if (await this.deps.chat.getSession(worktree.sessionId))
-          await this.deps.chat.deleteSession(worktree.sessionId, true);
+        const session = await this.deps.chat.getSession(worktree.sessionId);
+        if (session?.messages.some(message => message.role === 'user' && !message.system && !message.seed)) {
+          // The user took this conversation over: its history and uncommitted changes are theirs now.
+          await this.deps.store.forgetWorktree(worktree.sessionId);
+          continue;
+        }
+        if (session) await this.deps.chat.deleteSession(worktree.sessionId, true);
         else await this.deps.chat.removeWorktrees(worktree.directory, [worktree.path]);
         await this.deps.store.forgetWorktree(worktree.sessionId);
       } catch (err) {
