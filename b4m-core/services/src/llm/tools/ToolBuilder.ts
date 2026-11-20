@@ -902,11 +902,12 @@ export class ToolBuilder {
         const userId = this.deps.user.id;
         const switchedOff = new Set(disabledMcpConnections ?? []);
         const platformConnectionIds = enabledPlatformMcpConnections ?? [];
-        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, {
+        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, undefined, {
           platformConnectionIds,
         });
         for (const connection of connections) {
-          if (switchedOff.has(connection.slug)) continue;
+          // The slug opt-out list is for the user's own connectors; a platform one is switched on by id.
+          if (switchedOff.has(connection.slug) && !platformConnectionIds.includes(connection.connectionId)) continue;
           const tools = generateCustomMcpTools(connection, {
             userId,
             host: this.deps.customMcp,

@@ -172,6 +172,16 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
         expect(Object.keys(off.mcpToolsByServer)).toEqual(['acme']);
       }
     });
+
+    it('keeps a switched-on platform connector whose slug is left in the slug opt-out list', async () => {
+      const host = optInHost();
+      const { mcpToolsByServer } = await run(builderWith(host as never), undefined, {
+        enabledPlatformMcpConnections: ['p1'],
+        disabledMcpConnections: ['shared', 'acme'],
+      });
+
+      expect(Object.keys(mcpToolsByServer)).toEqual(['shared']);
+    });
   });
 
   it('adds the connector-output-is-data notice to the tool prompt only when custom tools are offered', async () => {

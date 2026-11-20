@@ -11641,9 +11641,12 @@ describe('ChatCompletionProcess', () => {
         .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
       buildMcpToolsSpy.mockClear();
       try {
-        await runWithBuildToolsSpy({ message: 'Compare the smartphones', enabledPlatformMcpConnections: ['p1'] });
+        await runWithBuildToolsSpy({
+          message: 'Compare the smartphones',
+          enabledPlatformMcpConnections: ['b'.repeat(24)],
+        });
         expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
-          expect.objectContaining({ enabledPlatformMcpConnections: ['p1'] })
+          expect.objectContaining({ enabledPlatformMcpConnections: ['b'.repeat(24)] })
         );
         await runWithBuildToolsSpy({ message: 'Compare the smartphones' });
         expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(

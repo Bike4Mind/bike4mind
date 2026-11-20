@@ -92,7 +92,8 @@ export async function loadCustomMcpConnections(
   host: CustomMcpToolHost,
   userId: string,
   logger: Pick<Logger, 'warn'>,
-  { maxTools = MAX_CUSTOM_TOOLS_PER_TURN, ...listOptions }: CustomMcpListOptions & { maxTools?: number } = {}
+  maxTools = MAX_CUSTOM_TOOLS_PER_TURN,
+  listOptions: CustomMcpListOptions = {}
 ): Promise<CustomMcpConnectionOffer[]> {
   let remaining = maxTools;
   const kept: CustomMcpConnectionOffer[] = [];

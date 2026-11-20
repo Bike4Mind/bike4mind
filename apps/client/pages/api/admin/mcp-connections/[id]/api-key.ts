@@ -22,7 +22,8 @@ const handler = adminApi({
       req,
       'settings.mcp_connector.api_key_rotated',
       connection,
-      'rotated the key of'
+      'rotated the key of',
+      { details: { status: connection.status } }
     );
     res.json(connection);
   }

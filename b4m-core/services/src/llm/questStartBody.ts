@@ -27,6 +27,7 @@ import {
   type AuthOrigin,
   DEEP_RESEARCH_MAX_DEPTH,
   DEEP_RESEARCH_MAX_DURATION_MIN,
+  EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z
@@ -96,8 +97,7 @@ export const QuestStartBodySchema = z
     mcpServers: z.array(z.string()).optional(),
     /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
     disabledMcpConnections: z.array(z.string()).optional(),
-    /** See ChatCompletionInvokeParamsSchema.enabledPlatformMcpConnections - must stay in sync with it. */
-    enabledPlatformMcpConnections: z.array(z.string()).optional(),
+    enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
     questMaster: QuestMasterParamsSchema.optional(),
