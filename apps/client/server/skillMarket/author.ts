@@ -154,7 +154,7 @@ export async function publishListing(
   return { listing: fresh!, version };
 }
 
-async function requireAudienceMembership(userId: string, listing: ISkillListing): Promise<void> {
+export async function requireAudienceMembership(userId: string, listing: ISkillListing): Promise<void> {
   if (listing.visibility !== 'organization' && listing.visibility !== 'space') return;
   const audience = await audienceIdsFor(userId);
   if (listing.visibility === 'organization' && !audience.orgIds.includes(listing.organizationId ?? '')) {

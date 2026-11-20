@@ -1,5 +1,4 @@
 import {
-  SkillListing,
   SkillListingTemplate,
   SkillListingVersion,
   claimSkillTemplateScan,
@@ -29,8 +28,9 @@ import {
   type MarketActor,
   type MarketSettings,
 } from '@bike4mind/server-utils/skillMarket/market';
+import { requireAudienceMembership } from './author';
 import { reviewStatusFor, scanPublicText } from './scanRules';
-import { scanSkillSnapshot, type ScanDeps, type SnapshotScan } from './submitVersion';
+import { SCAN_STALE_MS, scanSkillSnapshot, type ScanDeps, type SnapshotScan } from './submitVersion';
 import { firstFreeTemplateSlug, templateSlugBase, validateTemplateSlug } from './templateSlug';
 
 /**
@@ -44,8 +44,6 @@ export type TemplateScanDeps = ScanDeps & {
   beforeScan?: () => Promise<void>;
 };
 
-/** A publish scan whose request died is released after this long, like a version rescan. */
-const SCAN_STALE_MS = 5 * 60_000;
 const SLUG_CREATE_ATTEMPTS = 5;
 
 const staleBefore = () => new Date(Date.now() - SCAN_STALE_MS);
@@ -179,6 +177,9 @@ export async function saveOwnTemplate(
   }
 
   if (existing.status === 'published' && copyChanged(existing, patch)) {
+    await requireAudienceMembership(user.id, listing);
+    if (!(patch.headline ?? existing.headline).trim())
+      throw new BadRequestError('A published template needs a headline');
     await deps.beforeScan?.();
     const claimedAt = new Date();
     const claimed = await claimSkillTemplateScan(id, claimedAt, ['published'], patch);
@@ -186,12 +187,19 @@ export async function saveOwnTemplate(
     return runTemplateScan(listing, plainTemplate(claimed), claimedAt, deps);
   }
 
+  // A published template's copy is unchanged on this path; a change takes the scan branch above.
+  const set: SkillTemplateCopyPatch =
+    existing.status === 'published'
+      ? patch.generatedFromVersionId !== undefined
+        ? { generatedFromVersionId: patch.generatedFromVersionId, stale: false }
+        : {}
+      : patch;
   let updated: ISkillListingTemplateDocument | null;
   try {
     updated = await SkillListingTemplate.findOneAndUpdate(
       // The `firstPublishedAt` guard keeps a concurrent first publish from letting a rename through.
       { listingId: id, status: existing.status, ...(slugChange ? { firstPublishedAt: { $exists: false } } : {}) },
-      { $set: { ...patch, ...(slugChange ? { slug: input.slug } : {}) } },
+      { $set: { ...set, ...(slugChange ? { slug: input.slug } : {}) } },
       { new: true, runValidators: true }
     );
   } catch (error) {
@@ -216,6 +224,7 @@ export async function publishOwnTemplate(
 ): Promise<ISkillListingTemplate> {
   const listing = await requireOwnListing(user, listingId);
   requireLiveListing(listing);
+  await requireAudienceMembership(user.id, listing);
   const id = String(listing.id);
   await releaseStaleSkillTemplateScan(id, staleBefore());
   const doc = await SkillListingTemplate.findOne({ listingId: id });
@@ -315,12 +324,8 @@ async function runTemplateScan(
 
   const passed = scan.tier !== 'failed' && reviewStatusFor(scan.tier, listing.visibility) === 'auto_approved';
   // The listing can be withdrawn or delisted while the scan runs.
-  const live = await SkillListing.exists({
-    _id: id,
-    status: 'approved',
-    deletedAt: null,
-    hiddenByReports: { $ne: true },
-  });
+  const current = await findListing(id);
+  const live = current !== null && isLive(current);
   await writeSkillTemplateScanVerdict(
     id,
     claimedAt,
@@ -330,7 +335,7 @@ async function runTemplateScan(
       ...(scan.tier !== 'failed' ? { riskTier: scan.tier } : {}),
       ...(scan.classifier ? { scanModel: scan.classifier.model } : {}),
     },
-    passed && Boolean(live)
+    passed && live
   );
   if (passed && !live) throw new ConflictError('The listing is no longer live, so the template was not published');
   return reload(id);
