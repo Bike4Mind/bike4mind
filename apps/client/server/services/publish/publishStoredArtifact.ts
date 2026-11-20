@@ -310,6 +310,7 @@ async function writePage(
         )
       : await PublishedArtifact.create({
           ...fields,
+          v1ArtifactId: artifact.id,
           tier: 'user',
           scopeId: user.id,
           slug,
@@ -365,7 +366,7 @@ async function writePage(
       // A lost acknowledgement can follow a committed write; its payload and counted action must survive.
       logger.warn(`[PUBLISH] ${publicId} metadata write is unconfirmed; retaining its payload and counted action`);
     }
-    if (isDuplicateKeyError(error)) throw new ConflictError('This slug was published by another request');
+    if (isDuplicateKeyError(error)) throw new ConflictError('This artifact or slug was published by another request');
     throw error;
   }
 }

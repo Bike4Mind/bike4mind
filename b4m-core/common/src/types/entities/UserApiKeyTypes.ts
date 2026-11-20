@@ -223,6 +223,13 @@ export enum ApiKeyScope {
    * needs `ai:chat`/`ai:generate`.
    */
   AI_END_USER_ID = 'ai:end-user-id',
+  /**
+   * Publish, republish and unpublish the key owner's own artifacts as web pages
+   * (`/api/v1/artifacts/{id}/publish`, `/republish`). Publishing creates a public URL, so it is
+   * unsuffixed to stay out of the Read-only and Read & write presets; only Full access or ticking it
+   * grants it. Holding it does not let the key read artifacts; that stays `notebooks:read`. Not confined.
+   */
+  ARTIFACTS_PUBLISH = 'artifacts:publish',
 }
 
 /**

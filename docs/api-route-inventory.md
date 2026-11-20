@@ -1846,8 +1846,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/agents/from-context` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
 | `/api/v1/artifacts` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PATCH, DELETE: `notebooks:write` | - | yes | - | 0 |
-| `/api/v1/artifacts/[id]/publish` | POST, DELETE | jwt+key | `notebooks:write` | - | yes | - | 0 |
-| `/api/v1/artifacts/[id]/republish` | POST | jwt+key | `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/publish` | POST, DELETE | jwt+key | `artifacts:publish` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/republish` | POST | jwt+key | `artifacts:publish` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]/versions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
