@@ -12,6 +12,8 @@ import { User } from '../auth/UserModel';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const countByUser = (userId: string) => AssistantInstructionModel.countDocuments({ userId });
+const seed = async (input: { userId: string; text: string }) =>
+  (await AssistantInstructionModel.create(input)).toObject();
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 
@@ -44,9 +46,9 @@ afterEach(async () => {
 
 describe('assistantInstructionRepository', () => {
   it('lists only the owner instructions, oldest first, and counts them', async () => {
-    await repo.create({ userId, text: 'first' });
-    await repo.create({ userId: otherUserId, text: 'someone else' });
-    await repo.create({ userId, text: 'second' });
+    await seed({ userId, text: 'first' });
+    await seed({ userId: otherUserId, text: 'someone else' });
+    await seed({ userId, text: 'second' });
 
     const listed = await repo.listByUser(userId);
     expect(listed.map(i => i.text)).toEqual(['first', 'second']);
@@ -55,13 +57,13 @@ describe('assistantInstructionRepository', () => {
   });
 
   it('deletes an owned instruction and reports it', async () => {
-    const created = await repo.create({ userId, text: 'drop me' });
-    expect(await repo.deleteOwned(userId, created._id.toString())).toBe(true);
+    const created = await seed({ userId, text: 'drop me' });
+    expect(await repo.deleteOwned(userId.toUpperCase(), created._id.toString())).toBe(true);
     expect(await countByUser(userId)).toBe(0);
   });
 
   it('leaves another user instruction in place and reports it missing', async () => {
-    const created = await repo.create({ userId, text: 'mine' });
+    const created = await seed({ userId, text: 'mine' });
     expect(await repo.deleteOwned(otherUserId, created._id.toString())).toBe(false);
     expect(await countByUser(userId)).toBe(1);
   });
@@ -79,7 +81,7 @@ describe('assistantInstructionRepository', () => {
   });
 
   it('gives the last slot to exactly one of several racing saves', async () => {
-    for (let i = 0; i < 19; i++) await repo.create({ userId, text: `rule-${i}` });
+    for (let i = 0; i < 19; i++) await seed({ userId, text: `rule-${i}` });
     const results = await Promise.all(
       Array.from({ length: 8 }, (_, i) => repo.createWithinCap({ userId, text: `race-${i}` }, 20))
     );
@@ -89,13 +91,14 @@ describe('assistantInstructionRepository', () => {
   });
 
   it('rejects text over the length cap at the model', async () => {
-    await expect(repo.create({ userId, text: 'x'.repeat(281) })).rejects.toThrow();
+    await expect(seed({ userId, text: 'x'.repeat(281) })).rejects.toThrow();
   });
 
   it('canonicalizes the owner before cap counting and insertion', async () => {
     expect(await repo.createWithinCap({ userId: userId.toUpperCase(), text: 'first' }, 1)).not.toBeNull();
     expect(await repo.createWithinCap({ userId, text: 'second' }, 1)).toBeNull();
     expect((await repo.listByUser(userId)).map(row => row.text)).toEqual(['first']);
+    expect((await repo.listByUser(userId.toUpperCase())).map(row => row.text)).toEqual(['first']);
     expect(await countByUser(userId.toUpperCase())).toBe(0);
   });
 
