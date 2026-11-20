@@ -289,7 +289,7 @@ describe('PermissionsSettings collapsing', () => {
     expect(all('permissions-rule-row')[0].textContent).toContain('Bash(gh pr view:*)');
   });
 
-  it('bounds long rule lists and resets pagination when filtering', async () => {
+  it('lists every rule without pagination and still filters', async () => {
     await act(async () =>
       root.render(
         <CssVarsProvider>
@@ -306,14 +306,11 @@ describe('PermissionsSettings collapsing', () => {
         </CssVarsProvider>
       )
     );
-    expect(all('permissions-rule-row')).toHaveLength(6);
-    expect(all('permissions-pagination')[0].textContent).toContain('1-6 of 20');
-    click(all('permissions-next-btn')[0]);
-    expect(all('permissions-pagination')[0].textContent).toContain('7-12 of 20');
+    expect(all('permissions-rule-row')).toHaveLength(20);
+    expect(all('permissions-pagination')).toHaveLength(0);
     click(all('permissions-filter-deny')[0]);
     expect(all('permissions-rule-row')).toHaveLength(1);
     expect(all('permissions-rule-row')[0].textContent).toContain('command-19');
-    expect(all('permissions-pagination')).toHaveLength(0);
   });
 
   it('opens a Claude Code file read-only, dims an unmapped entry and offers copy only for mapped ones', () => {

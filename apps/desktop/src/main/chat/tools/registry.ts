@@ -65,7 +65,6 @@ const localTools = (patch: boolean): readonly ToolDefinition[] => [
   bashOutput,
   bashList,
   bashKill,
-  todoWrite,
 ];
 
 /**
@@ -144,6 +143,7 @@ const SKILL_TOOLS: readonly ToolDefinition[] = [skillTool];
 const BY_NAME = new Map(
   [
     ...localTools(false),
+    todoWrite,
     applyPatch,
     exploreTool,
     ...MEDIA_TOOLS,
@@ -195,6 +195,9 @@ export function offeredMediaToolNames(options: { media: boolean; video?: readonl
  * so they are offered to a user who has shared nothing. The host tools need a project, which
  * is what makes them Code-only. MCP tools are passed in rather than declared here because they
  * only exist once a server the user configured is connected.
+ *
+ * todo_write is declared in every conversation: the plan is the call's own input and lives in
+ * the transcript (see todoTool.ts), so it touches nothing and needs nothing granted.
  *
  * Two families need neither a folder nor a project nor a sign-in. The skill tool reads the
  * user's own skill files, so it is offered wherever a catalog exists. The browser tools drive
@@ -282,6 +285,7 @@ export function toolsForRequest(options: {
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
+    todoWrite,
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     // Writes into the project, so it needs a granted folder as well as a session that generated something.

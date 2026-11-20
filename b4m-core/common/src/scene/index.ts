@@ -15,7 +15,10 @@ export const SCENE_DEFAULT_FADE_IN_SECONDS = 0;
 export const SCENE_DEFAULT_FADE_OUT_SECONDS = 1.5;
 /** The Scene runs as long as its video, so this also bounds the output length. */
 export const SCENE_MAX_VIDEO_SECONDS = 5 * 60;
-/** Sum of the input files' sizes; the worker downloads all of them to local disk. */
+/**
+ * Sum of the input files' sizes; the worker downloads all of them to local disk. It bounds the worker, not what
+ * Files keeps: a Scene over the per-file size limit is stored outside Files (ComposeJobOutput.filesSkipReason).
+ */
 export const SCENE_MAX_INPUT_BYTES = 200 * 1024 * 1024;
 export const SCENE_TITLE_MAX_LENGTH = 200;
 

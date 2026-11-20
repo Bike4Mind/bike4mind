@@ -554,7 +554,7 @@ describe('ORG_TAB_AUDIENCE', () => {
       [OrganizationTabs.Domains]: 'managers',
       [OrganizationTabs.ApiKeys]: 'managers',
       [OrganizationTabs.Audit]: 'managers',
-      [OrganizationTabs.Settings]: 'settings',
+      [OrganizationTabs.Settings]: 'managers',
       [OrganizationTabs.Billing]: 'owner',
     });
     for (const open of [OrganizationTabs.Overview, OrganizationTabs.Library, OrganizationTabs.Members]) {

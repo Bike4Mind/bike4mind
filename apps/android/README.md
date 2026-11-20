@@ -53,6 +53,10 @@ project-specific is committed. Take the four values from the Firebase console (P
 
 With any of them unset the app builds and runs normally and simply never gets a push token (CI builds this way).
 
+Tapping a push routes by its `data` (`kit/push/NotificationRoute`): a `brief_ready` push opens that brief. Other
+categories just open the app. Which categories a user receives is a server-side preference
+(`preferences.pushNotifications`); the app has no settings screen for it yet.
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to

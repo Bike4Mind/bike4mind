@@ -362,7 +362,7 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // Single source for the gate defaults: the schema defaults in common.
 const CONFIDENCE_GATE_FALLBACK = OrchestrationDefaultsSchema.parse({});
 
-// `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
+// `persistRunAsQuest` lives in `@bike4mind/server-utils/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
 // write contract - both code paths produce identical Quest docs.
 
@@ -3824,7 +3824,7 @@ async function runExecution(
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
     // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
     // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
-    // apps/client/server/websocket/agentExecute.ts).
+    // packages/server-utils/src/agentExecution/gateResponse.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';

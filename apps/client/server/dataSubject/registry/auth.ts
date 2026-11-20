@@ -370,8 +370,11 @@ export const authHolders = {
       { path: 'metadata.createdByUserId', matchBy: 'userId', action: 'anonymize' },
       // An org-owned key outlives its creator, so only the creator link goes.
       { path: 'orgOwned.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      // The admin who set the exception; the key and the exception stay with the key's owner.
+      { path: 'moderationException.setBy', matchBy: 'userId', action: 'anonymize' },
     ],
-    secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret'],
+    // `moderationException` is admin-only, as on every key response (USER_API_KEY_WITHHELD_FIELDS).
+    secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret', 'moderationException'],
   },
   UserApiKeyAuditLog: {
     kind: 'holder',

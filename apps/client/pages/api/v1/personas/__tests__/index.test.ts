@@ -65,9 +65,9 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
-vi.mock('@server/personas/personaAccounts', async () => {
-  const actual = await vi.importActual<typeof import('@server/personas/personaAccounts')>(
-    '@server/personas/personaAccounts'
+vi.mock('@bike4mind/server-utils/personas/personaAccounts', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/personas/personaAccounts')>(
+    '@bike4mind/server-utils/personas/personaAccounts'
   );
   return {
     ...actual,

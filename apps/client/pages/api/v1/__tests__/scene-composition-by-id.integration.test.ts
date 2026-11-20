@@ -127,8 +127,30 @@ describe('GET /api/v1/scene-compositions/{id}', () => {
       url: 'https://signed.example/k.mp4',
       content_type: 'video/mp4',
       duration_seconds: 12.5,
+      files_skip_reason: null,
       file_id: 'f1',
     });
+  });
+
+  it('says why a Scene stored outside Files has no file', async () => {
+    const job = succeededJob();
+    h.findById.mockResolvedValue({
+      ...job,
+      payload: {
+        ...job.payload,
+        output: {
+          location: 'generated',
+          s3Key: 'k.mp4',
+          contentType: 'video/mp4',
+          bytes: 1,
+          durationSeconds: 12.5,
+          filesSkipReason: 'file_too_large',
+        },
+      },
+    });
+    const { req, res } = get(JOB_ID);
+    await getHandler(req, res);
+    expect(res._getJSONData().output).toMatchObject({ files_skip_reason: 'file_too_large', file_id: null });
   });
 
   it('renders a failure with the fixed Scene copy, never the stored message', async () => {

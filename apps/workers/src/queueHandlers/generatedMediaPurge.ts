@@ -5,8 +5,11 @@ import {
   MAX_PURGE_OWNER_IDS,
   MAX_PURGE_SESSION_IDS,
   enqueueGeneratedMediaPurge,
-} from '@server/sessions/generatedMediaPurgeQueue';
-import { GENERATED_MEDIA_KEY_RE, runGeneratedMediaPurge } from '@server/sessions/purgeDeletedNotebookMedia';
+} from '@bike4mind/server-utils/sessions/generatedMediaPurgeQueue';
+import {
+  GENERATED_MEDIA_KEY_RE,
+  runGeneratedMediaPurge,
+} from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 import { z, ZodError } from 'zod';
 
 // Under the 5-minute Lambda timeout (infra/queues.ts), leaving room for the CDN flush.
@@ -29,7 +32,7 @@ const Payload = z.discriminatedUnion('kind', [
 
 /**
  * Finishes a generated media purge a notebook or message delete handed off (producer:
- * apps/client/server/sessions/generatedMediaPurgeQueue.ts). Only notebooks that are soft-deleted are
+ * packages/server-utils/src/sessions/generatedMediaPurgeQueue.ts). Only notebooks that are soft-deleted are
  * looked up; a live id is dropped. Keys are re-checked against live references and their owners
  * before any delete. What this run does not reach is re-enqueued when it made progress; otherwise,
  * and when storage or the re-enqueue fails, it throws so SQS retries and then dead-letters it.

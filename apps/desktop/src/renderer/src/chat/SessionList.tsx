@@ -45,7 +45,14 @@ import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
-import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import {
+  descendantsOf,
+  groupSessions,
+  orderedSessions,
+  parentHints,
+  type CustomGroup,
+  type ProjectGroup,
+} from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
@@ -147,7 +154,9 @@ export function NavItem({
  * px each level of sub-session steps in. With the list's 8px inset and a 14px badge, a parent's
  * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
  */
-const NEST_INDENT = 18;
+const NEST_INDENT = 14;
+/** Levels that still step right; a deeper session stays at this indent and wears a "level N" chip. */
+const MAX_NEST_DEPTH = 3;
 const BADGE_CENTER = 15;
 /** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
 const ROW_GAP = 2;
@@ -174,6 +183,8 @@ interface NestProps {
    * siblings below, so its rail runs straight through this row.
    */
   nestGuides?: string;
+  /** The real spawn depth when it is past MAX_NEST_DEPTH, so the row can say how deep it sits. */
+  nestDeeper?: number;
   /** Sessions anywhere under this one; 0 or absent on a row with none. */
   subCount?: number;
   /** The loudest state among them, which the fold pill wears while they are folded away. */
@@ -181,6 +192,8 @@ interface NestProps {
   subFolded?: boolean;
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
+  /** Title of the parent a spawned session is drawn away from, shown as "from X". */
+  hintTitle?: string;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -190,11 +203,19 @@ type SubActivity = 'needs-action' | 'processing' | undefined;
  * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
  * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
  */
-function railSx(depth: number, first: boolean, last: boolean, guides: string) {
+function railSx(depth: number, first: boolean, last: boolean, guides: string, heat: SubActivity, elbow: boolean) {
   const indent = depth * NEST_INDENT;
   const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
-  if (!last) straight.push(depth - 1);
+  if (!last && elbow) straight.push(depth - 1);
   const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
+  // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
+  // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
+  const elbowColor =
+    heat === 'needs-action'
+      ? 'var(--joy-palette-warning-400)'
+      : heat === 'processing'
+        ? 'var(--joy-palette-primary-400)'
+        : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -213,7 +234,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       backgroundPosition: straight.map(level => `${level * NEST_INDENT + BADGE_CENTER}px 0`).join(', '),
     },
     // The first child reaches on up through the parent row to just under the parent's badge.
-    '&::after': {
+    '&::after': elbow && {
       content: '""',
       position: 'absolute',
       zIndex: 1,
@@ -222,9 +243,13 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       height: `calc(50% + ${first ? FIRST_RAIL_REACH : ROW_GAP}px)`,
       left: BADGE_CENTER - NEST_INDENT,
       width: NEST_INDENT - BADGE_CENTER + ELBOW_END,
-      borderLeft: `1px solid ${RAIL_COLOR}`,
-      borderBottom: `1px solid ${RAIL_COLOR}`,
+      borderLeft: `1px solid ${elbowColor}`,
+      borderBottom: `1px solid ${elbowColor}`,
       borderBottomLeftRadius: '7px',
+      ...(heat === 'processing' && {
+        animation: `${pulse} 1.2s ease-in-out infinite`,
+        '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+      }),
     },
   };
 }
@@ -494,15 +519,23 @@ const SessionRow = memo(function SessionRow({
   nestFirst = false,
   nestLast = false,
   nestGuides = '',
+  nestDeeper = 0,
   subCount = 0,
   subActivity,
   subFolded = false,
   subFoldable = true,
+  hintTitle,
   refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
+  const nestHeat: SubActivity =
+    status === 'needs-action' || subActivity === 'needs-action'
+      ? 'needs-action'
+      : status === 'processing' || subActivity === 'processing'
+        ? 'processing'
+        : undefined;
   const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
@@ -516,8 +549,10 @@ const SessionRow = memo(function SessionRow({
   return (
     <ListItem
       data-nest-depth={nestDepth || undefined}
+      data-nest-guides={nestGuides || undefined}
+      data-nest-heat={nestDepth > 0 ? nestHeat : undefined}
       sx={{
-        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides)),
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, nestHeat, nestDeeper === 0)),
         ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
@@ -660,7 +695,7 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }),
+          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
@@ -693,6 +728,30 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {!editing && hintTitle && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
+              title={`from ${hintTitle}`}
+              data-testid="chat-session-parent-hint"
+            >
+              from {hintTitle}
+            </Typography>
+          )}
+          {!editing && nestDeeper > 0 && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem' }}
+              title={`level ${nestDeeper + 1} of the tree`}
+              data-testid="chat-session-depth-chip"
+            >
+              level {nestDeeper + 1}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1092,10 +1151,18 @@ export function SessionList({
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested);
+    // A search lists matches flat: a tree would hide a match inside a parent that did not match.
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
   }, [matching, mode, userSections, searching, importedInline, nested]);
+
+  // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
+  // No hints with nesting off: the setting brings back the plain flat list.
+  const hints = useMemo(
+    () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
+    [nested, sessions, sections.children]
+  );
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1278,7 +1345,7 @@ export function SessionList({
     const children = sections.children.get(session.id) ?? [];
     const under = descendants(session);
     const folded = isFolded(session.id);
-    const childGuides = depth > 0 ? guides + (last ? '0' : '1') : '';
+    const childGuides = depth > 0 && depth <= MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
     return [
       <SessionRow
         key={session.id}
@@ -1289,7 +1356,8 @@ export function SessionList({
         userSections={userSections.sections}
         sectionId={sectionOf(userSections, session.id)}
         actions={actions}
-        nestDepth={depth}
+        nestDepth={Math.min(depth, MAX_NEST_DEPTH)}
+        nestDeeper={depth > MAX_NEST_DEPTH ? depth : 0}
         nestFirst={first}
         nestLast={last}
         nestGuides={guides}
@@ -1297,6 +1365,7 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
+        hintTitle={hints.get(session.id)}
       />,
       ...(folded
         ? []
@@ -1317,6 +1386,7 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
+      hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
     />
   );

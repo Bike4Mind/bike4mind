@@ -21,8 +21,8 @@ import {
   orgSlackWorkspaceRepository,
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '../security/tokenEncryption';
-import { decryptSecret, isEncrypted } from '../security/secretEncryption';
+import { decryptStoredSecret, decryptToken } from '../security/tokenEncryption';
+import { isEncrypted } from '../security/secretEncryption';
 import { Config } from '../utils/config';
 
 /**
@@ -120,7 +120,7 @@ export async function resolveJiraConfig(
   let accessToken = connection.accessToken;
   if (isEncrypted(accessToken)) {
     try {
-      accessToken = decryptSecret(accessToken, encryptionKey);
+      accessToken = decryptStoredSecret(accessToken);
     } catch {
       // Never expose decryption errors - they may reveal encryption structure
       throw new Error('Failed to decrypt Jira credentials. Key may need rotation.');

@@ -523,7 +523,21 @@ export async function runLakeResearch(
           });
           throw error;
         }
-        const { results: hits, servedBy } = outcome;
+        const { results: rawHits, servedBy } = outcome;
+        // Classification reads the stored URL, so a provider redirect must be resolved here.
+        // Sequential: concurrent requests to the redirect host may be refused. The log records why each one fails.
+        const resolution = { decoded: 0, followed: 0, unresolved: 0 };
+        const unresolvedDetails: Array<dataLakeResearchService.UnresolvedDetail | { reason: 'unknown' }> = [];
+        const seenUrls = new Set<string>();
+        const hits: typeof rawHits = [];
+        for (const hit of rawHits) {
+          const { url, resolved, detail } = await dataLakeResearchService.resolveSearchRedirect(hit.url);
+          if (resolved !== 'not_redirect') resolution[resolved] += 1;
+          if (resolved === 'unresolved') unresolvedDetails.push(detail ?? { reason: 'unknown' });
+          if (seenUrls.has(url)) continue;
+          seenUrls.add(url);
+          hits.push({ ...hit, url });
+        }
         // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
         // otherwise invisible after the fact.
         logger.log('[lakeResearch] search', {
@@ -533,6 +547,8 @@ export async function runLakeResearch(
           maxResults,
           recencyDays,
           hits: hits.length,
+          redirects: resolution,
+          unresolvedDetails,
           hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
         });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));

@@ -123,7 +123,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/sideAppHealthAlerts.ts:sideAppHealthAlerts',
-    '38ed4dcf02cdb3fbb4562be4a387be0bc349129eeeeee84c405d00a2505e2924',
+    '18f792d2b462b13828669cb6c228fc81357bd0fd1e8942de644488d1ddd60401',
     'Hosted operator alerting on connected-app traffic; not applicable to a portable deployment.'
   ),
   wired(
@@ -247,7 +247,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   gap(
     'schedule:infra/imageModerationReviewSweep.ts:imageModerationReviewSweep',
-    '569003b9ffd16f37eaccf17a98cb33a5fcfb2a8bbd1bfae56f83160efc9e6798',
+    'ee4df8ef74f20d14e3149da5fafab7378aa3e9cb2f3039d275015d23b84de33d',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
@@ -336,7 +336,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.notebookImportCompleted',
-    '10c12e2ca242b238692422efdec75956518f41a011790a494ae053166d7ad7c7'
+    '915d33d4d95ca45b942a73ea833760cec26fb9b0873f96bcbe7dc21a6d574387'
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.uploadComplete',
@@ -348,7 +348,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/queues.ts:fabFileBucket.uploadComplete',
-    'ff40f8f4a4fe713d167b5ac7effedde8d28ea1c423883b73116070145968a506'
+    '18d275f333afadfb9d41008e86077fc36b3db77b80a074c491e3db51993fc241'
   ),
   broker(
     'queue:infra/dlqAlarmHandlerDeadLetter.ts:DlqAlarmHandlerDlq',
@@ -479,7 +479,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:deepAgentWakeQueue',
-    '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1',
+    'a18a5cf42eb55b925825c5583498e9b4c6445772b99c52fac46286ac7a0ccbc6',
     'Deep agent enrollment (/api/deep-agent/spin) enqueues wakes, and self-host runs neither this consumer nor the wake cron, so an enrolled agent never wakes. The handler is in open core: candidate to wire.',
     ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
   ),
@@ -533,7 +533,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:fabFileVectorizeQueue',
-    '30aa1c30861a66d83dfa7caeac58138a628d46d7b42f5c9f29ee552cd0b88250',
+    'ee89a03747e3ea209940bcdc059af736dd28a534a8f509c84e38ae9460974d18',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
@@ -562,7 +562,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '6f1c037210641aa0733f7b07b7c1c47c7520e464d14954c6085b2866707daaf9',
+    '3058d2e339306ed4b569f8cc5d086a74e200e59d4225e1ac922df019a136ecfb',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
@@ -758,6 +758,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
     'queue:infra/queues.ts:questExportQueueDLQ',
     '25de3f067cc3dbb3aa93798220af65df41849f0baad7ef6cd008e56706335966'
+  ),
+  broker('queue:infra/queues.ts:renderJobDLQ', 'e1f19aaf06fd6c17528906c2932480b7f10810779ba40ac2bad84885cd2c40f6'),
+  gapBecause(
+    'queue:infra/queues.ts:renderJobQueue',
+    '7c16ef5e8436376ea6e5b246f1965979fe7c60e0034b0d5db07c7cb0a4093e41',
+    'Drained by the render worker (apps/workers/src/render/main.ts) as its own process: the hosted RenderWorker Fargate service, the render-worker compose profile or the chart renderWorker Deployment, not the self-host worker.'
   ),
   wired(
     'queue:infra/queues.ts:researchEngineQueue',
@@ -965,7 +971,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:dataLakeBatchReconcile',
-    '706dfa0607f18134ffa39ab86fb730bff74b6dbf6d90abb0cc430b9d02ef50cc',
+    '2f6fe6a849e0c78b4d2d4f7457d7afb554004c2c0273064c071ab25328a45550',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeBatchReconcile',
@@ -1188,7 +1194,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    'fc238dab90c68e25fefacf618a2f11bd489455fbb3955154e1243e487179c07a',
+    '3bf52bda8493e26b32d58d6ed7c9f9d3a124df74619ac992cbbce4695186f2f3',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
@@ -1287,6 +1293,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'service:infra/chatCompletion.ts:ChatCompletion',
     'cf34cc039fc0de71bf1daaabf43f40deef92126f55e00be9c3025645c1769cfb',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
+  ),
+  gapBecause(
+    'service:infra/renderWorker.ts:RenderWorker',
+    '3013b63c8a3de2e2b75d3656319eb3e0d86de76a5013a88260f16b2c81466316',
+    'Hosted Fargate twin of the render worker; self-host runs the same image through the chart renderWorker Deployment or the render-worker compose profile (both opt-in).'
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(

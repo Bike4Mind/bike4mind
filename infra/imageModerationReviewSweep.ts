@@ -1,6 +1,7 @@
 import { REVIEW_SWEEP_INTERVAL_MINUTES } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { allSecrets } from './secrets';
+import { eventBus } from './bus';
 import { lambdaVpc } from './vpc';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
@@ -18,7 +19,8 @@ const imageModerationReviewSweep =
           timeout: '5 minutes',
           // The next run is the retry; Lambda's async retries would only delay the dead-letter message.
           retries: 0,
-          link: [...allSecrets],
+          // eventBus: the reviewer alerts and reminders are queued as email.send events.
+          link: [...allSecrets, eventBus],
           environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
           permissions: [
             imageModerationReviewSweepDeadLetter.sendPermission,

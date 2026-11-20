@@ -26,6 +26,7 @@ import { musicJob, musicOutput } from '@client/app/hooks/data/__test__/musicGene
 import { chatImageJobKeys, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
 import { studioImageJobKeys, type StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
+import { studioRenderKeys } from '@client/app/hooks/data/studioRenders';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 import GenerationUpdatesListener from './GenerationUpdatesListener';
 
@@ -168,11 +169,12 @@ describe('GenerationUpdatesListener', () => {
       refetchType: 'all',
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
-    // The two video details plus the video, music and Studio image gallery lists.
-    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioRenderKeys.all });
+    // The two video details plus the video, music, Studio image and export lists.
+    expect(invalidate).toHaveBeenCalledTimes(6);
 
     rerender(tree());
-    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -430,5 +432,16 @@ describe('GenerationUpdatesListener chat image jobs', () => {
         refetchType: 'all',
       });
     }
+  });
+});
+
+describe('GenerationUpdatesListener render jobs', () => {
+  it('invalidates the export lists on a render frame', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+
+    await send(frame({ id: 'r1', kind: 'render', state: 'running', progress: 0.5 }));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioRenderKeys.all });
   });
 });

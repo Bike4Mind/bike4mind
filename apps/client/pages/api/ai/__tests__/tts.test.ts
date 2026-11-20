@@ -438,6 +438,20 @@ describe('POST /api/ai/tts', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  it.each([
+    ['warn', { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true }],
+    ['error', { code: 'orphaned_submit', message: 'unknown outcome' }],
+    ['error', { code: 'provider_error', message: 'x' }],
+  ] as const)('logs a 502 failure at %s by its error', async (level, error) => {
+    mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+    const { res, logger, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    const other = level === 'warn' ? 'error' : 'warn';
+    expect(logger[level]).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+    expect(logger[other]).not.toHaveBeenCalledWith('TTS synthesis failed', expect.anything());
+  });
+
   it('answers 202 with the job resource when the job does not finish in time', async () => {
     mocks.runAudioJobInline.mockResolvedValue(null);
     mocks.generationJobFindById.mockResolvedValue(

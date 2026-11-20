@@ -33,6 +33,7 @@ import {
   isOAuthClientScope,
   isOptInScope,
   type CreateOAuthClientInput,
+  type OAuthClientUnpaidAccountLimits,
   type OAuthClientView,
   type OAuthClientWithSecret,
   type OAuthFederatedIdpInput,
@@ -47,6 +48,7 @@ import {
 import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
+import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { AdminTab } from './adminSidebarConfig';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { useAdminModal } from './useAdminModal';
@@ -126,7 +128,117 @@ type EditForm = {
   federated: FederatedForm;
   overwatchProductId: string;
   unpaidAccountsAllowed: boolean;
+  unpaidLimits: UnpaidLimitsForm;
 };
+
+type UnpaidLimitsForm = { enabled: boolean; rpm: string; rpd: string; tpm: string; concurrent: string };
+type UnpaidLimitFormKey = Exclude<keyof UnpaidLimitsForm, 'enabled'>;
+
+type UnpaidLimitField = {
+  formKey: UnpaidLimitFormKey;
+  key: keyof OAuthClientUnpaidAccountLimits;
+  label: string;
+  unit: string;
+  min: number;
+  max: number;
+  testid: string;
+  settingKey: string;
+  settingDefault: number;
+};
+
+// Bounds keep in sync with oauthClientUnpaidAccountLimitsSchema in oauthClient.ts.
+const UNPAID_LIMIT_FIELDS: UnpaidLimitField[] = [
+  {
+    formKey: 'rpm',
+    key: 'requestsPerMinute',
+    label: 'Requests per minute',
+    unit: '/min',
+    min: 1,
+    max: 10000,
+    testid: 'rpm',
+    settingKey: 'apiKeyUntrustedRateLimitPerMin',
+    settingDefault: 20,
+  },
+  {
+    formKey: 'rpd',
+    key: 'requestsPerDay',
+    label: 'Requests per day',
+    unit: '/day',
+    min: 0,
+    max: 1000000,
+    testid: 'rpd',
+    settingKey: 'apiKeyUntrustedRequestsPerDay',
+    settingDefault: 0,
+  },
+  {
+    formKey: 'tpm',
+    key: 'tokensPerMinute',
+    label: 'Tokens per minute',
+    unit: 'tokens/min',
+    min: 0,
+    max: 100000000,
+    testid: 'tpm',
+    settingKey: 'apiKeyUntrustedTokensPerMin',
+    settingDefault: 0,
+  },
+  {
+    formKey: 'concurrent',
+    key: 'maxConcurrent',
+    label: 'Concurrent completions',
+    unit: 'at once',
+    min: 0,
+    max: 1000,
+    testid: 'concurrent',
+    settingKey: 'apiKeyUntrustedMaxConcurrent',
+    settingDefault: 0,
+  },
+];
+
+const DEFAULT_UNPAID_LIMITS: OAuthClientUnpaidAccountLimits = {
+  requestsPerMinute: 20,
+  requestsPerDay: 0,
+  tokensPerMinute: 0,
+  maxConcurrent: 0,
+};
+
+const formatCount = (n: number) => n.toLocaleString('en-US');
+
+const parseLimitText = (text: string): number | null => {
+  const digits = text.trim().replace(/,/g, '');
+  return /^\d+$/.test(digits) ? Number(digits) : null;
+};
+
+export const validateUnpaidLimit = (field: UnpaidLimitField, text: string): string | null => {
+  const n = parseLimitText(text);
+  if (n === null) return 'Enter a whole number';
+  if (n < field.min || n > field.max) return `Must be between ${formatCount(field.min)} and ${formatCount(field.max)}`;
+  return null;
+};
+
+const unpaidLimitsFromForm = (form: UnpaidLimitsForm): OAuthClientUnpaidAccountLimits | null => {
+  const limits: Partial<OAuthClientUnpaidAccountLimits> = {};
+  for (const field of UNPAID_LIMIT_FIELDS) {
+    if (validateUnpaidLimit(field, form[field.formKey])) return null;
+    limits[field.key] = parseLimitText(form[field.formKey]) ?? 0;
+  }
+  return limits as OAuthClientUnpaidAccountLimits;
+};
+
+const unpaidLimitsToForm = (limits: OAuthClientUnpaidAccountLimits, enabled: boolean): UnpaidLimitsForm => ({
+  enabled,
+  rpm: formatCount(limits.requestsPerMinute),
+  rpd: formatCount(limits.requestsPerDay),
+  tpm: formatCount(limits.tokensPerMinute),
+  concurrent: formatCount(limits.maxConcurrent),
+});
+
+const describeUnpaidLimits = (l: OAuthClientUnpaidAccountLimits): string =>
+  [
+    l.requestsPerMinute ? `${formatCount(l.requestsPerMinute)}/min` : 'no per-minute limit',
+    l.requestsPerDay ? `${formatCount(l.requestsPerDay)}/day` : 'no daily limit',
+    l.tokensPerMinute ? `${formatCount(l.tokensPerMinute)} tokens/min` : 'no token limit',
+    l.maxConcurrent ? `${formatCount(l.maxConcurrent)} at once` : 'no concurrency limit',
+  ].join(', ');
 
 // A stored trust config without subjectSource is the 'identities' shape (see resolveOAuthFederatedIdp).
 export function federatedFormFromClient(client: OAuthClientView): FederatedForm {
@@ -148,6 +260,7 @@ export const editFormFromClient = (client: OAuthClientView): EditForm => ({
   federated: federatedFormFromClient(client),
   overwatchProductId: client.overwatchProductId ?? '',
   unpaidAccountsAllowed: client.unpaidAccountsAllowed !== false,
+  unpaidLimits: unpaidLimitsToForm(client.unpaidAccountLimits ?? DEFAULT_UNPAID_LIMITS, !!client.unpaidAccountLimits),
 });
 
 /** Only the fields the admin changed, so an unrelated save never trips the server's concurrent-edit guards. */
@@ -180,6 +293,17 @@ export function buildEditPayload(client: OAuthClientView, form: EditForm): Updat
   if (product !== (client.overwatchProductId ?? '')) payload.overwatchProductId = product || null;
   if (form.unpaidAccountsAllowed !== (client.unpaidAccountsAllowed !== false)) {
     payload.unpaidAccountsAllowed = form.unpaidAccountsAllowed;
+  }
+
+  const storedLimits = client.unpaidAccountLimits;
+  // The server refuses unpaid limits on a non-federated client, so dropping federation drops them too.
+  if (form.federated.enabled && form.unpaidLimits.enabled) {
+    const wanted = unpaidLimitsFromForm(form.unpaidLimits);
+    if (wanted && (!storedLimits || UNPAID_LIMIT_FIELDS.some(f => wanted[f.key] !== storedLimits[f.key]))) {
+      payload.unpaidAccountLimits = wanted;
+    }
+  } else if (storedLimits) {
+    payload.unpaidAccountLimits = null;
   }
   return payload;
 }
@@ -255,6 +379,8 @@ function FederatedTrustFields({
   );
 }
 
+const UNPAID_ACCOUNTS_LABEL = 'Starter and free accounts may use this app';
+
 function UnpaidAccountsToggle({
   checked,
   onChange,
@@ -267,7 +393,7 @@ function UnpaidAccountsToggle({
   return (
     <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <Box>
-        <FormLabel>Starter and free accounts may use this app</FormLabel>
+        <FormLabel>{UNPAID_ACCOUNTS_LABEL}</FormLabel>
         <FormHelperText sx={{ mt: 0 }}>
           Under the paid-only API key switch, keys from this app&apos;s AI-token exchange work for accounts without a
           paid plan. Off keeps this app paid-only.
@@ -279,6 +405,142 @@ function UnpaidAccountsToggle({
         slotProps={{ input: { 'data-testid': testid } }}
       />
     </FormControl>
+  );
+}
+
+function UnpaidAccountLimitsFields({
+  value,
+  onChange,
+  stored,
+  unpaidAllowed,
+}: {
+  value: UnpaidLimitsForm;
+  onChange: (patch: Partial<UnpaidLimitsForm>) => void;
+  stored: OAuthClientUnpaidAccountLimits | undefined;
+  unpaidAllowed: boolean;
+}) {
+  const { authedSettingsLoaded, getSettingNumber, getSettingBoolean } = useAdminSettings();
+  const globals: OAuthClientUnpaidAccountLimits | null = authedSettingsLoaded
+    ? {
+        requestsPerMinute: getSettingNumber('apiKeyUntrustedRateLimitPerMin', 20),
+        requestsPerDay: getSettingNumber('apiKeyUntrustedRequestsPerDay', 0),
+        tokensPerMinute: getSettingNumber('apiKeyUntrustedTokensPerMin', 0),
+        maxConcurrent: getSettingNumber('apiKeyUntrustedMaxConcurrent', 0),
+      }
+    : null;
+  const trustGateOff = authedSettingsLoaded && !getSettingBoolean('apiKeyTrustGateEnabled', true);
+
+  const toggle = (enabled: boolean) =>
+    onChange(enabled ? unpaidLimitsToForm(stored ?? globals ?? DEFAULT_UNPAID_LIMITS, true) : { enabled: false });
+
+  return (
+    <Stack spacing={1.25} data-testid="oauth-client-edit-unpaid-limits-section">
+      <Box>
+        <Typography level="title-md">Unpaid account limits</Typography>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+          Limits for keys this app mints for accounts without a plan or approval. Paid and approved accounts are not
+          affected.
+        </Typography>
+      </Box>
+
+      {trustGateOff && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-trust-gate-text"
+        >
+          The API key trust gate is off, so no account is limited as unpaid.
+        </Typography>
+      )}
+
+      {!unpaidAllowed && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-disabled-hint"
+        >
+          {`Unpaid accounts cannot use this app. Turn on "${UNPAID_ACCOUNTS_LABEL}" for these limits to apply.`}
+        </Typography>
+      )}
+
+      <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <FormLabel>Use custom limits for unpaid accounts</FormLabel>
+        <Switch
+          checked={value.enabled}
+          disabled={!unpaidAllowed}
+          onChange={e => toggle(e.target.checked)}
+          slotProps={{ input: { 'data-testid': 'oauth-client-edit-unpaid-limits-switch' } }}
+        />
+      </FormControl>
+
+      {!value.enabled && globals && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-global-text"
+        >
+          {`Using global limits: ${describeUnpaidLimits(globals)}.`}
+        </Typography>
+      )}
+
+      {value.enabled && (
+        <>
+          <Stack direction="row" gap={1.5} flexWrap="wrap" useFlexGap>
+            {UNPAID_LIMIT_FIELDS.map(field => {
+              const text = value[field.formKey];
+              const error = validateUnpaidLimit(field, text);
+              const globalValue = globals?.[field.key];
+              return (
+                <FormControl
+                  key={field.formKey}
+                  error={!!error}
+                  disabled={!unpaidAllowed}
+                  sx={{ flex: '1 1 12rem', minWidth: 0 }}
+                >
+                  <FormLabel>{field.label}</FormLabel>
+                  <Input
+                    value={text}
+                    placeholder={globalValue === undefined ? undefined : formatCount(globalValue)}
+                    onChange={e => onChange({ [field.formKey]: e.target.value })}
+                    onBlur={() => {
+                      const n = parseLimitText(text);
+                      if (n !== null) onChange({ [field.formKey]: formatCount(n) });
+                    }}
+                    slotProps={{
+                      input: {
+                        inputMode: 'numeric',
+                        'data-testid': `oauth-client-edit-unpaid-limits-${field.testid}-input`,
+                        style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
+                      },
+                    }}
+                    endDecorator={
+                      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                        {field.unit}
+                      </Typography>
+                    }
+                  />
+                  {(error || globalValue !== undefined) && (
+                    <FormHelperText>
+                      {error ?? (globalValue === 0 ? 'Global: no limit' : `Global: ${formatCount(globalValue ?? 0)}`)}
+                    </FormHelperText>
+                  )}
+                  {field.formKey === 'tpm' && (
+                    <FormHelperText>
+                      Counts every token in a request, cache reads included. Size it from full counted tokens, not
+                      billed input.
+                    </FormHelperText>
+                  )}
+                </FormControl>
+              );
+            })}
+          </Stack>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            0 means no limit of that kind. Each key&apos;s own rate limit still applies. Changes take up to a minute to
+            apply.
+          </Typography>
+        </>
+      )}
+    </Stack>
   );
 }
 
@@ -519,6 +781,14 @@ export default function OAuthClientsTab() {
   const toggleEditScope = (scope: string, checked: boolean) =>
     setEditForm(f => f && { ...f, scopes: checked ? [...f.scopes, scope] : f.scopes.filter(s => s !== scope) });
 
+  const setEditUnpaidLimits = (patch: Partial<UnpaidLimitsForm>) =>
+    setEditForm(f => f && { ...f, unpaidLimits: { ...f.unpaidLimits, ...patch } });
+
+  const unpaidLimitsInvalid =
+    !!editForm?.federated.enabled &&
+    editForm.unpaidLimits.enabled &&
+    UNPAID_LIMIT_FIELDS.some(f => validateUnpaidLimit(f, editForm.unpaidLimits[f.formKey]));
+
   const saveEdit = () => {
     if (!editTarget || !editForm) return;
     setFormError(null);
@@ -551,6 +821,17 @@ export default function OAuthClientsTab() {
           {client.federatedIdp && (
             <Chip size="sm" variant="soft" color="neutral">
               federated
+            </Chip>
+          )}
+          {client.unpaidAccountLimits && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              title={describeUnpaidLimits(client.unpaidAccountLimits)}
+              data-testid={`oauth-client-unpaid-limits-chip-${client.clientId}`}
+            >
+              custom unpaid limits
             </Chip>
           )}
         </Stack>
@@ -912,6 +1193,15 @@ export default function OAuthClientsTab() {
                 />
               )}
 
+              {editForm.federated.enabled && (
+                <UnpaidAccountLimitsFields
+                  value={editForm.unpaidLimits}
+                  onChange={setEditUnpaidLimits}
+                  stored={editTarget.unpaidAccountLimits}
+                  unpaidAllowed={editForm.unpaidAccountsAllowed}
+                />
+              )}
+
               <FormControl>
                 <FormLabel>Overwatch product</FormLabel>
                 <Input
@@ -936,7 +1226,12 @@ export default function OAuthClientsTab() {
             <Button variant="plain" color="neutral" onClick={() => setEditTarget(null)}>
               Cancel
             </Button>
-            <Button loading={editMutation.isPending} onClick={saveEdit} data-testid="oauth-client-edit-save-btn">
+            <Button
+              loading={editMutation.isPending}
+              disabled={unpaidLimitsInvalid}
+              onClick={saveEdit}
+              data-testid="oauth-client-edit-save-btn"
+            >
               Save changes
             </Button>
           </Stack>
