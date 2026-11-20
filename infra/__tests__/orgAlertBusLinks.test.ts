@@ -1,14 +1,8 @@
 /**
  * @vitest-environment node
  *
- * A handler that registers the org alert observer turns an org credit debit (subtractCredits) or
- * member-cap check into an org alert, and orgAlertDispatcher in packages/server-utils/src/organizations
- * queues its email as an email.send event on the bus. Without eventBus in the Lambda's link the
- * publish throws, notifyOrgEvent swallows it, and the alert is lost on every deployed stage.
- *
- * Rule: every infra handler whose local import graph reaches a registerOrgAlertObserver() call links
- * eventBus, unless it is listed in NOT_TRACED_TO_AN_ORG_EVENT. Text-matched, not executed: infra/ is an SST
- * program and does not load outside `sst`.
+ * An org alert raised in a Lambda without eventBus in its link loses its email.send publish silently
+ * (notifyOrgEvent swallows the error). Text-matched: infra/ is an SST program and does not load outside `sst`.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
@@ -147,6 +141,21 @@ function reachesObserver(entry: string): boolean {
   return found;
 }
 
+/** The `link` array of the props object itself, not one nested in `transform` or similar; '' when absent. */
+function topLevelLink(props: string): string {
+  const key = /\blink:\s*\[/y;
+  let depth = 0;
+  for (let i = 0; i < props.length; i++) {
+    if ('{[('.includes(props[i])) depth++;
+    else if ('}])'.includes(props[i])) depth--;
+    else if (depth === 1) {
+      key.lastIndex = i;
+      if (key.test(props)) return balanced(props, i, '[', ']');
+    }
+  }
+  return '';
+}
+
 type Site = { file: string; module: string; registers: boolean; link: string };
 
 const HANDLER = new RegExp(`handler:\\s*['"\`]((?:${WORKERS}|${CLIENT_SERVER})/[^'"\`]+)\\.\\w+['"\`]`, 'g');
@@ -181,7 +190,7 @@ function scanSites(): Site[] {
         file,
         module,
         registers: reachesObserver(sourceFile),
-        link: /\blink:\s*(\[[^\]]*\])/.exec(props)?.[1] ?? '',
+        link: topLevelLink(props),
       });
     }
   }
@@ -215,6 +224,8 @@ describe('handlers that raise org alerts link the event bus', () => {
   });
 
   // Debiting a run can raise an org alert; the handler source is generated, so it is matched by name.
+  // The other premium-generated queue handlers (optihashiRunCompletion, libreoncologyAudioRender,
+  // overwatchAnalytics) were traced and debit no org holder.
   it('links the event bus on the Bob run worker', () => {
     const queues = stripComments(read('infra/queues.ts'));
     const subscribe = soleMatch(
