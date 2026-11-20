@@ -462,7 +462,7 @@ async function evaluateSecretsManagerRotation(): Promise<CloudRuleResult> {
   }
 }
 
-export const handler = async (): Promise<void> => {
+export const handler = async (): Promise<ISecurityDashboardSnapshotDocument> => {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
   try {
@@ -531,7 +531,7 @@ export const handler = async (): Promise<void> => {
       checkedAt,
     };
 
-    await securityDashboardSnapshotRepository.create(snapshotInput);
+    return await securityDashboardSnapshotRepository.create(snapshotInput);
   } catch (error) {
     Logger.error('Cloud security scan failed', {
       error: error instanceof Error ? error.message : 'Unknown error',

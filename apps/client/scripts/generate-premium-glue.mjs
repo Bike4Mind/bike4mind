@@ -32,6 +32,7 @@
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   premiumTutorialOwners.generated.ts - tutorial owner contributions
+ *   premiumSlackInteractiveActions.generated.ts - Slack interactive action handlers
  *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
@@ -1680,6 +1681,50 @@ function generateTutorialOwners(packages) {
   );
 }
 
+// --- Generate Slack interactive action contributions ---
+//
+// A premium package can handle Slack interactive action ids (b4mContributions.slackInteractiveActionsExport ->
+// a module exporting `slackInteractiveActions: SlackInteractiveActionHandler[]`). Only the Slack interactive API
+// route imports the generated file, so it must exist in BOTH forms; it is server-only and never reachable from
+// apps/client/app. The registry validates each entry at load, so the file carries no checks of its own.
+function generateSlackInteractiveActions(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSlackInteractiveActions.generated.ts');
+  const typeImport = `import type { SlackInteractiveActionHandler } from '../integrations/slack/interactiveActionRegistry';`;
+
+  const contributors = packages.filter(p => p.contributions.slackInteractiveActionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.slackInteractiveActionsExport, p.name, 'slackInteractiveActionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.slackInteractiveActionsExport,
+        'slackInteractiveActionsExport',
+        outPath
+      );
+      return `import { slackInteractiveActions as actions${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...actions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [\n${items}\n];\n`
+  );
+}
+
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Session fields a workspace owns, resolved at read time. Each id must name an open
@@ -2252,6 +2297,7 @@ generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
 generateDataSubjectRegistry(linkedPackages);
 generateTutorialOwners(linkedPackages);
+generateSlackInteractiveActions(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
 // the full list. Any NEW generator goes in whichever group matches how it imports the overlay.
