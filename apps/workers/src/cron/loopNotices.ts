@@ -17,6 +17,9 @@ const TITLE_CHARS = 120;
 const MESSAGE_CHARS = 1000;
 /** ponytail: p0/p1 loop tickets the service-level check reads per tick across all users; past it some go unflagged. */
 export const MAX_URGENT_TICKETS_READ = 500;
+/** Loops needing their owner, and blocked loop tickets, the sweep reads per tick across all users. */
+export const MAX_NOTICE_LOOPS_READ = 1000;
+export const MAX_BLOCKED_TICKETS_READ = 1000;
 
 const STATUS_TITLES: Partial<Record<LoopStatus, string>> = {
   needs_you: 'needs you',
@@ -153,8 +156,8 @@ export function desiredLoopNotices(
  * key (so is not re-sent) until its cause clears.
  *
  * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
- * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}), blocked loop
- * tickets (the partial {status, loopId} index, entered at status 'blocked'), p0/p1 loop tickets not closed (the
+ * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}, bounded by MAX_NOTICE_LOOPS_READ), blocked loop
+ * tickets (the partial {status, loopId} index, entered at status 'blocked'), p0/p1  loop tickets not closed (the
  * partial {priority, status} index, bounded by MAX_URGENT_TICKETS_READ), alarmed loops (the partial
  * {alarm.kind} index) and held `loop:` notices (the partial
  * unique sourceKey index, which `listKeyed` states `$exists` for). Live loops and open or closed tickets
@@ -162,13 +165,16 @@ export function desiredLoopNotices(
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
   const [statusLoops, tickets, held, alarmed, urgent] = await Promise.all([
-    loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
-    workItemRepository.find({
-      loopId: { $exists: true },
-      deletedAt: null,
-      status: 'blocked',
-      blockedOn: { $exists: false },
-    }),
+    loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }, { limit: MAX_NOTICE_LOOPS_READ }),
+    workItemRepository.find(
+      {
+        loopId: { $exists: true },
+        deletedAt: null,
+        status: 'blocked',
+        blockedOn: { $exists: false },
+      },
+      { limit: MAX_BLOCKED_TICKETS_READ }
+    ),
     inboxRepository.listKeyed(KEY_PREFIX),
     loopRepository.listAlarmed(),
     workItemRepository.listUrgentForLoops(MAX_URGENT_TICKETS_READ),
@@ -190,12 +196,18 @@ export async function syncLoopNotices(logger: Logger): Promise<void> {
     if (heldKeys.has(notice.sourceKey)) continue;
     if (await inboxRepository.createKeyedNotice({ ...notice, userId: 'SYSTEM', type: InboxType.LOOP })) created++;
   }
-  // A full urgent read may have left a breaching ticket out; its overdue notice then waits for a later sweep
-  // rather than flapping resolved and re-opened.
+  // A full read may have left a loop or ticket out; its notice then waits for a later sweep rather than
+  // flapping resolved and re-opened.
   const urgentTruncated = urgent.length >= MAX_URGENT_TICKETS_READ;
+  const loopsTruncated = statusLoops.length >= MAX_NOTICE_LOOPS_READ;
+  const ticketsTruncated = tickets.length >= MAX_BLOCKED_TICKETS_READ;
+  const keepUnread = (key: string) =>
+    (urgentTruncated && key.endsWith(':stale')) ||
+    (loopsTruncated && (key.includes(':status:') || key.startsWith(`${KEY_PREFIX}user:`))) ||
+    (ticketsTruncated && /:ticket:[^:]+$/.test(key));
   const stale = held
     .filter(notice => !desiredKeys.has(notice.sourceKey))
-    .filter(notice => !(urgentTruncated && notice.sourceKey.endsWith(':stale')))
+    .filter(notice => !keepUnread(notice.sourceKey))
     .map(notice => notice.id);
   await inboxRepository.resolveKeyed(stale);
 

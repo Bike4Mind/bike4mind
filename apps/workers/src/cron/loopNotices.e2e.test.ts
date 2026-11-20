@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: vi.fn() }));
 
 import { runLoopSchedulerTick, USER_BUDGET_PAUSE_REASON } from './loopScheduler';
-import { MAX_URGENT_TICKETS_READ } from './loopNotices';
+import { MAX_BLOCKED_TICKETS_READ, MAX_URGENT_TICKETS_READ } from './loopNotices';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -332,6 +332,25 @@ describe('loop notices', () => {
       await tick();
       expect(await keys()).toEqual([staleKey(loop.id, late.id)]);
     });
+  });
+
+  it('keeps a blocked-ticket notice while the blocked read is full, instead of resolving it', async () => {
+    const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const first = await blockedTicket(loop.id);
+    await tick();
+    expect((await openNotices()).map(n => n.sourceKey)).toEqual([`loop:${loop.id}:ticket:${first.id}`]);
+
+    const other = await blockedTicket(loop.id, { title: 'Other' });
+    const find = workItemRepository.find.bind(workItemRepository);
+    vi.spyOn(workItemRepository, 'find').mockImplementation(async (filter, options) =>
+      filter.status === 'blocked' && options?.limit === MAX_BLOCKED_TICKETS_READ
+        ? Array.from({ length: MAX_BLOCKED_TICKETS_READ }, () => other)
+        : find(filter, options)
+    );
+    await tick();
+    expect((await openNotices()).map(n => n.sourceKey).sort()).toEqual(
+      [`loop:${loop.id}:ticket:${first.id}`, `loop:${loop.id}:ticket:${other.id}`].sort()
+    );
   });
 
   it('a failed sync is logged and does not fail the tick', async () => {
