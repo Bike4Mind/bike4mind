@@ -8,7 +8,7 @@ struct MediaGalleryView: View {
   var body: some View {
     GalleryContent(
       api: services.media, onLatestImage: services.latestGeneration, studio: services.studio,
-      tracker: services.studioTracker)
+      tracker: services.studioTracker, models: services.studioModels)
   }
 }
 
@@ -27,11 +27,11 @@ private struct GalleryContent: View {
 
   init(
     api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
-    tracker: GenerationTracker
+    tracker: GenerationTracker, models: StudioModelCatalog
   ) {
     _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
     _exporter = State(initialValue: MediaExportPresenter(media: api))
-    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
+    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker, catalog: models))
     self.tracker = tracker
   }
 

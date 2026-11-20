@@ -142,6 +142,8 @@ struct RootView: View {
     services.accountStatus.reset()
     // The profile belongs to the account that fetched it; the next sign-in must not see it.
     services.accountProfiles.invalidate()
+    // The model lists depend on the account's plan, so they go with it.
+    services.studioModels.invalidate()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }
