@@ -73,10 +73,12 @@ describe('email-send worker mail transport wiring', () => {
     const call = sstConfig.indexOf('await applyPersonalMailDefaults(');
     expect(call).toBeGreaterThan(-1);
     expect(call).toBeLessThan(sstConfig.indexOf("await import('./infra')"));
-    expect(sstConfig).toContain('appName: $app.name,');
+    // Scoped to the call: sst.config.ts passes the same stage/appName literals to another helper.
+    const callArgs = sstConfig.slice(call, sstConfig.indexOf('});', call));
+    expect(callArgs).toContain('appName: $app.name,');
     // A copy of process.env would leave the module-top reads in mailTransport.ts on the unfilled env.
-    expect(sstConfig).toContain('env: process.env,');
-    expect(sstConfig).toContain('stage: $app.stage,');
+    expect(callArgs).toContain('env: process.env,');
+    expect(callArgs).toContain('stage: $app.stage,');
   });
 
   it('builds the personal-stage parameter paths from the app name, never a literal account id or ARN', () => {
