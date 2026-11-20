@@ -64,6 +64,13 @@ export function parsePythonDataOrigin(raw: unknown, reservedHosts: readonly stri
   // check sees every spelling of an IPv4 literal.
   if (host.startsWith('[') || /^\d+(\.\d+){3}$/.test(host)) return { problem: 'IP addresses are not allowed' };
 
+  // Wildcard-DNS names (127.0.0.1.nip.io) resolve to the address they spell, so they are IP literals too.
+  if (host.length > 253) return { problem: 'must name a public hostname such as data.example.com' };
+  if (/(^|\.)\d{1,3}[.-]\d{1,3}[.-]\d{1,3}[.-]\d{1,3}(\.|$)/.test(host)) {
+    return { problem: 'IP addresses are not allowed' };
+  }
+  if (url.port === '0') return { problem: 'port 0 is not allowed' };
+
   const labels = host.split('.');
   const tld = labels[labels.length - 1]!;
   if (NON_PUBLIC_TLDS.has(tld)) return { problem: 'local and private hostnames are not allowed' };
