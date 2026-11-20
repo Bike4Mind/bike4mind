@@ -175,6 +175,25 @@ describe('IterationStream — render', () => {
     expect(screen.queryByText('Completed')).not.toBeInTheDocument();
   });
 
+  it('strips reasoning from the final answer, but shows it when the answer is nothing else', () => {
+    mocks.execution = makeExecution({ status: 'completed', answer: '<think>plan</think>Done.' });
+    const { unmount } = render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}-final-answer`)).toHaveTextContent(/^Done\.$/);
+    unmount();
+
+    mocks.execution = makeExecution({ status: 'completed', answer: '<think>only reasoning</think>' });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}-final-answer`)).toHaveTextContent('only reasoning');
+  });
+
   it('does not mount the PermissionCard when pendingPermission is undefined', () => {
     mocks.execution = makeExecution({ status: 'running' });
     render(

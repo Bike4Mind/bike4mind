@@ -228,8 +228,12 @@ const IterationStream: FC<IterationStreamProps> = ({
   // generic spinner. Cleared per-iteration when the terminal step lands (store side).
   const pendingText = isActive ? execution.pendingTextByIteration?.[execution.lastKnownIteration] : undefined;
   const hasPendingText = !!pendingText && pendingText.length > 0;
-  // Reasoning-model answers can carry `<think>` blocks (often empty); show only the visible text.
-  const finalAnswer = execution.status === 'completed' ? visibleReplyText(execution.answer).trim() : '';
+  // Reasoning-model answers can carry `<think>` blocks (often empty); show only the visible text, or the reasoning
+  // itself when that is all the answer holds.
+  const finalAnswer =
+    execution.status === 'completed'
+      ? visibleReplyText(execution.answer).trim() || (execution.answer ?? '').replace(/<\/?think>/g, '').trim()
+      : '';
 
   return (
     <Box
