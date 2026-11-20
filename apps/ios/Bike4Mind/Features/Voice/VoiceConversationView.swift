@@ -173,7 +173,10 @@ struct VoiceConversationView: View {
 
   private func run() async {
     guard model == nil else { return }
-    let model = Self.makeModel(request: request, services: services)
+    let voiceID = await services.voiceCatalog.premiumVoice()
+    // Done may have been tapped during the lookup; onDisappear then had no model to stop.
+    guard !Task.isCancelled, model == nil else { return }
+    let model = Self.makeModel(request: request, services: services, voiceID: voiceID)
     self.model = model
     await model.start()
   }
@@ -202,7 +205,9 @@ struct VoiceConversationView: View {
     }
   }
 
-  private static func makeModel(request: VoiceRequest, services: AppServices) -> VoiceConversationModel {
+  private static func makeModel(
+    request: VoiceRequest, services: AppServices, voiceID: String?
+  ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
       // The Simulator has no usable speech input: B4M_VOICE_SCRIPTED_SPEECH=1 scripts the utterance while the
@@ -214,8 +219,15 @@ struct VoiceConversationView: View {
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession())
+      speaker: makeSpeaker(services: services, voiceID: voiceID), audioSession: AVVoiceAudioSession())
     return model
+  }
+
+  /// The picked premium voice when there is one, else on-device speech; the premium one falls back on its own.
+  private static func makeSpeaker(services: AppServices, voiceID: String?) -> any SpeechSpeaking {
+    guard let voiceID else { return AVSpeechSpeaker() }
+    return ServerSpeechSpeaker(
+      wire: services.voiceAPI, voiceID: voiceID, fallback: AVSpeechSpeaker(), player: AVAudioClipPlayer())
   }
 
   private static func label(for phase: VoiceConversationModel.Phase) -> String {
