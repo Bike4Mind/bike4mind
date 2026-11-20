@@ -67,12 +67,15 @@ describe('signing keys', () => {
       }
     });
 
-    it.each(['not-configured', ''])('treats %j as unset for the dedicated secret', placeholder => {
-      const encryptionKey = hex();
-      configure({ HMAC_SIGNING_SECRET: placeholder, SECRET_ENCRYPTION_KEY: encryptionKey });
-      expect(signingKey('search-image-url')).toBe(encryptionKey);
-      expect(verificationKeys('search-image-url')).toEqual([encryptionKey]);
-    });
+    it.each(['not-configured', '', 'change-me-openssl-rand-hex-32', 'replace-with-generated-secret'])(
+      'treats %j as unset for the dedicated secret',
+      placeholder => {
+        const encryptionKey = hex();
+        configure({ HMAC_SIGNING_SECRET: placeholder, SECRET_ENCRYPTION_KEY: encryptionKey });
+        expect(signingKey('search-image-url')).toBe(encryptionKey);
+        expect(verificationKeys('search-image-url')).toEqual([encryptionKey]);
+      }
+    );
 
     it('returns an empty key and no verification keys when nothing is configured', () => {
       configure({});
@@ -80,7 +83,7 @@ describe('signing keys', () => {
       expect(verificationKeys('search-image-url')).toEqual([]);
     });
 
-    it.each(['my-secret-placeholder-value', 'not-configured', ''])(
+    it.each(['my-secret-placeholder-value', 'not-configured', '', 'change-me-openssl-rand-hex-32'])(
       'signs with a %j encryption key as before but does not accept it for verification',
       placeholder => {
         configure({ SECRET_ENCRYPTION_KEY: placeholder });
@@ -125,7 +128,7 @@ describe('signing keys', () => {
       }
     });
 
-    it.each(['not-configured', 'my-secret-placeholder-value', ''])(
+    it.each(['not-configured', 'my-secret-placeholder-value', '', 'change-me-openssl-rand-hex-32'])(
       'does not accept a %j previous slot',
       placeholder => {
         const root = hex();
