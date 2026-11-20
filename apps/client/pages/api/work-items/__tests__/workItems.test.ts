@@ -591,6 +591,15 @@ describe('loop tickets through the work-items routes', () => {
     });
   });
 
+  it('with EnableLoops off, GET of a loop ticket is a 404 while DELETE still works', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    repo.softDeleteForUser.mockResolvedValue(true);
+    settings.EnableLoops = false;
+    await expect(call('item', 'get', { query: { id: OID_A } }).result).rejects.toMatchObject({ statusCode: 404 });
+    await call('item', 'delete', { query: { id: OID_A } }).result;
+    expect(repo.softDeleteForUser).toHaveBeenCalledWith(OID_A, 'u1');
+  });
+
   it('a loop ticket does not exist to an API key', async () => {
     repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
     for (const method of ['get', 'patch', 'delete'] as const) {

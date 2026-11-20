@@ -6,6 +6,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
+import { assertLoopsEnabled } from '@server/utils/loopValidation';
 import {
   assertBlockedOnSatisfiable,
   assertLoopTicketAccess,
@@ -41,6 +42,7 @@ const handler = baseApi()
     if (!item) {
       throw new NotFoundError('Work item not found for id: ' + id);
     }
+    if (item.loopId) await assertLoopsEnabled();
     res.json(item);
   })
   .patch(async (req, res) => {
@@ -171,6 +173,7 @@ const handler = baseApi()
     }
     res.json(updated);
   })
+  // Not gated on EnableLoops: as with deleting a loop, owners can always clean up its tickets.
   .delete(async (req, res) => {
     const id = String(req.query.id);
     if (req.apiKeyInfo && !(await findVisible(req, id))) {
