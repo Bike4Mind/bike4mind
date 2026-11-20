@@ -48,8 +48,6 @@ describe('contributeInfra context', () => {
     soleMatch(config, /\bcontribute\w*Infra\(infrastructureContext\);/g, 'context contribution');
   });
 
-  // Passed as a variable so the excess-property check cannot reject the key on an overlay whose
-  // params type has not declared it yet.
   it('hands the bus to the heartbeat contributeInfra call through a variable', () => {
     const declaration = soleMatch(config, /const tavernInfraContext = /g, 'heartbeat infra context');
     expect(balanced(config, declaration.index, '{', '}')).toMatch(/\beventBus\b/);
