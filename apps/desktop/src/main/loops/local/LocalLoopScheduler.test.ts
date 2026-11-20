@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { SERVER_UNREACHABLE_STOP, type ChatAutomaticOrigin, type ChatStreamEvent } from '@shared/chat';
 import type { LocalLoop, LocalRun } from '@shared/localLoops';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { REF, snapshot } from '../../pr/prTestSupport';
 import type { MachineSample } from '../budget';
 import { LocalLoopScheduler, SCHEDULER_MS } from './LocalLoopScheduler';
 import { LocalLoopStore } from './LocalLoopStore';
@@ -65,6 +66,12 @@ describe('LocalLoopScheduler', () => {
   let otherLanes: number;
   let cloudSpent: number;
   let alerts: string[];
+  let gh: ReturnType<typeof vi.fn<(args: string[]) => Promise<string>>>;
+  let github: {
+    snapshot: ReturnType<typeof vi.fn>;
+    merge: ReturnType<typeof vi.fn>;
+    enqueue: ReturnType<typeof vi.fn>;
+  };
   const blocker = { start: vi.fn(() => 7), stop: vi.fn() };
 
   const make = (loop: Partial<LocalLoop> = {}) => store.putLoop(testLoop(loop));
@@ -95,6 +102,8 @@ describe('LocalLoopScheduler', () => {
     alerts = [];
     blocker.start.mockClear();
     blocker.stop.mockClear();
+    gh = vi.fn<(args: string[]) => Promise<string>>();
+    github = { snapshot: vi.fn(), merge: vi.fn(), enqueue: vi.fn() };
     scheduler = new LocalLoopScheduler({
       store,
       chat,
@@ -103,8 +112,8 @@ describe('LocalLoopScheduler', () => {
       otherLanes: () => otherLanes,
       allLoopsCap: () => undefined,
       cloudLoopsSpentToday: () => cloudSpent,
-      gh: vi.fn(),
-      github: { snapshot: vi.fn(), merge: vi.fn(), enqueue: vi.fn() },
+      gh,
+      github,
       powerSaveBlocker: blocker,
       alert: (_loop, event) => alerts.push(`${event.kind}: ${event.reason}`),
       onChange: () => undefined,
@@ -419,6 +428,31 @@ describe('LocalLoopScheduler', () => {
     expect(store.ticket(t.id)).toMatchObject({ status: 'blocked', statusReason: 'Unsure: Which color?' });
     expect(alerts).toEqual(['asked: Which color?']);
     expect(chat.turns).toHaveLength(1);
+  });
+
+  it('refuses ticket writes once the run is finished and waiting on its merge to land', async () => {
+    make({ repo: `${REF.owner}/${REF.repo}` });
+    const t = ticket('a');
+    gh.mockImplementation(async args => (args.includes('labels') ? '{"labels":[]}' : '{"state":"OPEN"}'));
+    github.snapshot.mockResolvedValue(
+      snapshot({
+        reviewDecision: 'APPROVED',
+        mergeStateStatus: 'CLEAN',
+        nodeId: 'PR_node',
+        mergeQueue: { enabled: true },
+      })
+    );
+    github.enqueue.mockResolvedValue(1);
+    scheduler.start();
+    await settle();
+    const sessionId = chat.turns[0].sessionId;
+    await scheduler.merge(sessionId, REF.url);
+    done(sessionId);
+    await settle();
+    expect(scheduler.busy).toBe(1);
+    expect(() => scheduler.ticketTool(sessionId, 'loop_ticket_unsure', { id: t.id, question: 'Late?' })).toThrow(
+      /has finished/
+    );
   });
 
   it('waits before re-running a loop whose run stopped at its credit cap', async () => {

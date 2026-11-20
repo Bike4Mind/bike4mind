@@ -709,6 +709,8 @@ export class LocalLoopScheduler {
   ticketTool(sessionId: string, tool: string, input: Record<string, unknown>): string {
     const lane = this.laneOf(sessionId);
     if (!lane) throw new Error('This session is not working for a loop.');
+    // Finished covers the post-merge deploy wait too: the run's outcome is being decided, not its tickets.
+    if (lane.finished) throw new Error("This loop run has finished; it can no longer change the loop's tickets.");
     const result = runTicketTool(
       this.deps.store,
       lane.tool,
