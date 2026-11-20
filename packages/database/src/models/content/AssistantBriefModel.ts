@@ -136,6 +136,16 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
   },
 
+  /** The latest ready brief's id and decision approval refs only: what the pending-decisions count reads. */
+  async findLatestReadyDecisionRefs(
+    userId: string
+  ): Promise<{ _id: mongoose.Types.ObjectId; decisions: Array<Pick<BriefDecision, 'approval'>> } | null> {
+    return AssistantBriefModel.findOne({ userId, status: 'ready' })
+      .sort({ createdAt: -1 })
+      .select('_id decisions.approval')
+      .lean();
+  },
+
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(

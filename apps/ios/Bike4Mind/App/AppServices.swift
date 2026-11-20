@@ -51,6 +51,8 @@ final class AppServices {
   let briefSchedule: any BriefScheduleAPI
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
+  /// How many decisions wait on the user, for the lock-screen widget.
+  let pendingDecisions: any PendingDecisionAPI
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
@@ -182,6 +184,9 @@ final class AppServices {
         #endif
         return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
       })
+    pendingDecisions = ForwardingPendingDecisionAPI {
+      PendingDecisionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -195,6 +200,11 @@ final class AppServices {
       isShellReady: { auth.state == .signedIn },
       isAppActive: { UIApplication.shared.applicationState == .active }
     )
+
+    LiveActivityApprovals.answer = { [weak self] target, decision in
+      await self?.approvalNotifications.answer(target, decision: decision)
+      self?.refreshWidgetPendingDecisions()
+    }
   }
 
   var api: any B4MAPI {
@@ -338,6 +348,25 @@ final class AppServices {
     Task { await credits.load(force: true) }
   }
 
+  /// Re-reads the decisions-waiting count for the lock-screen widget: on foreground, when a turn settles, after
+  /// the brief loads and after an approval is answered. Fixture runs keep the canned snapshot.
+  func refreshWidgetPendingDecisions() {
+    #if DEBUG
+      if FixtureServices.isEnabled { return }
+    #endif
+    let api = pendingDecisions
+    let widgets = widgets
+    Task {
+      do {
+        await widgets.recordPendingDecisions(try await api.pendingDecisionCount())
+      } catch {
+        // The widget keeps its last count; approvals in it still lapse on the widget's own clock.
+        AppServices.logger.error(
+          "Decisions widget refresh failed: \(String(describing: error), privacy: .public)")
+      }
+    }
+  }
+
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
 
   /// A fresh launch or sign-in knows of no running agent, and fixture runs seed the widgets with canned data.
@@ -451,6 +480,15 @@ struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
 
   func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
     try await provider().save(schedule)
+  }
+}
+
+/// Routes the decisions-waiting count to whichever server the app currently points at.
+struct ForwardingPendingDecisionAPI: PendingDecisionAPI {
+  let provider: @MainActor @Sendable () -> any PendingDecisionAPI
+
+  func pendingDecisionCount() async throws -> PendingDecisionCount {
+    try await provider().pendingDecisionCount()
   }
 }
 

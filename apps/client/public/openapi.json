@@ -9124,6 +9124,39 @@
           "text"
         ]
       },
+      "getPendingDecisionCountResponse200": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice."
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered."
+          },
+          "briefDecisions": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed."
+          },
+          "briefId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The latest ready brief `briefDecisions` comes from; null when there is none."
+          }
+        },
+        "required": [
+          "count",
+          "approvals",
+          "briefDecisions",
+          "briefId"
+        ]
+      },
       "registerPushTokenRequest": {
         "type": "object",
         "properties": {
@@ -44696,6 +44729,154 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/reply\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"text\": \"Go with the second option.\",\n        \"choiceIndex\": 1\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/pending-decisions": {
+      "get": {
+        "operationId": "getPendingDecisionCount",
+        "summary": "Count decisions waiting on you",
+        "description": "The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks and briefs are counted.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getPendingDecisionCountResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/pending-decisions\" \\\n  -H \"Authorization: Bearer <access_token>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/pending-decisions\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/pending-decisions\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
           }
         ]
       }

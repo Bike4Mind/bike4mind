@@ -111,6 +111,7 @@ struct RootView: View {
       let realtime = services.realtime
       Task { await realtime.resume() }
       services.refreshWidgetCredits()
+      services.refreshWidgetPendingDecisions()
     }
   }
 

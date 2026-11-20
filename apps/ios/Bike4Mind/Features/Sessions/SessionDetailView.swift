@@ -75,7 +75,10 @@ private struct ChatScreen: View {
       .onChange(of: model.turns) { _, turns in
         services.chatTurnsChanged(sessionID: session.id, title: title, turns: turns)
       }
-      .onChange(of: settledLiveTurnCount) { _, _ in services.refreshWidgetCredits() }
+      .onChange(of: settledLiveTurnCount) { _, _ in
+        services.refreshWidgetCredits()
+        services.refreshWidgetPendingDecisions()
+      }
       .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
       .refreshable { await model.refresh() }
       .sensoryFeedback(trigger: model.hapticTrigger) { _, trigger in

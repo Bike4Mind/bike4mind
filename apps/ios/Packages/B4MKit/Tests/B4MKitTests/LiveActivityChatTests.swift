@@ -93,7 +93,9 @@ final class LiveActivityChatTests: XCTestCase {
       tracker.changes.map(\.state),
       [
         QuestActivityContentState(phase: .running, stageLabel: "Searching your notes"),
-        QuestActivityContentState(phase: .approvalNeeded, stageLabel: "Waiting for your approval"),
+        QuestActivityContentState(
+          phase: .approvalNeeded, stageLabel: "Waiting for your approval",
+          pendingActionTs: PendingAction(tool: "web_browse", parameters: [:], requestedAt: clock.now).timestampMillis),
         QuestActivityContentState(phase: .completed),
       ])
     XCTAssertEqual(Set(tracker.changes.map(\.questID)), ["quest-1"])
