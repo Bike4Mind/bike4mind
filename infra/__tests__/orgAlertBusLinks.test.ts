@@ -6,8 +6,8 @@
  * queues its email as an email.send event on the bus. Without eventBus in the Lambda's link the
  * publish throws, notifyOrgEvent swallows it, and the alert is lost on every deployed stage.
  *
- * Rule: every infra handler whose source imports an observer-registering module links eventBus,
- * unless it is listed in NOT_TRACED_TO_AN_ORG_EVENT. Text-matched, not executed: infra/ is an SST
+ * Rule: every infra handler whose local import graph reaches a registerOrgAlertObserver() call links
+ * eventBus, unless it is listed in NOT_TRACED_TO_AN_ORG_EVENT. Text-matched, not executed: infra/ is an SST
  * program and does not load outside `sst`.
  */
 import { describe, it, expect } from 'vitest';
@@ -31,8 +31,6 @@ const REGISTERING_MODULES = [
   'packages/server-utils/src/websocket/utils.ts',
   'apps/workers/src/utils/eventContext.ts',
 ];
-const REGISTERS_OBSERVER =
-  /registerOrgAlertObserver|queueHandlers\/utils['"]|s3\/utils['"]|websocket\/utils['"]|utils\/eventContext['"]/;
 
 // Built from parts so the infra handler scan in packages/scripts does not read these as handler paths.
 const WORKERS = ['apps', 'workers', 'src'].join('/');
@@ -43,7 +41,8 @@ const CLIENT_SERVER = ['apps', 'client', 'server'].join('/');
  * org event was found. Trace a handler before adding it here; once it can raise one, link eventBus.
  */
 const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
-  // Socket handlers. Voice settlement only refunds the unused hold.
+  // Socket handlers; $default only routes to the keep command handlers. Voice settlement only refunds
+  // the unused hold.
   ...[
     'agentExecute',
     'ccAgentDisconnect',
@@ -57,16 +56,18 @@ const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
     'jupyterNotebookProgress',
     'keepCommandRequest',
     'keepCommandResponse',
+    'default',
     'reauthConnection',
     'voiceSessionEnded',
     'voiceSessionSendTranscript',
   ].map(name => `${CLIENT_SERVER}/websocket/${name}`),
-  // Hold sweeps refund; grant releases pay users from platform pools.
+  // Hold sweeps refund; grant releases pay users from platform pools; the risk sweep only queues refreshes.
   ...[
     'creditHoldSweep',
     'voiceHoldSweep',
     'signupGrantHeldRelease',
     'signupDomainHoldTriage',
+    'signupRiskSweep',
     'secopsTriageWorker',
   ].map(name => `${WORKERS}/cron/${name}`),
   // Runs on the lake owner's own provider keys, unmetered.
@@ -78,6 +79,7 @@ const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
   `${WORKERS}/events/sendPush`,
   `${WORKERS}/events/studioJobCompleted`,
   `${WORKERS}/s3/appFileUploadComplete`,
+  `${WORKERS}/s3/historyUploadComplete`,
   ...[
     'dataLakeCleanup',
     'driveDisconnectPurge',
@@ -97,11 +99,59 @@ const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
   ].map(name => `${WORKERS}/queueHandlers/${name}`),
 ]);
 
+// Import specifiers resolved to repo files; anything else (b4m-core packages, npm) never registers.
+const IMPORT_ALIASES: [string, string][] = [
+  ['@bike4mind/server-utils/', 'packages/server-utils/src/'],
+  ['@workers/', `${WORKERS}/`],
+  ['@server/', `${CLIENT_SERVER}/`],
+  ['@client/', 'apps/client/'],
+  ['@/', 'apps/client/'],
+];
+const IMPORT =
+  /(?:^|[\s;])(?:import|export)\s[^;]*?from\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s*['"]([^'"]+)['"]/gm;
+
+function resolveImport(fromFile: string, specifier: string): string | undefined {
+  let target: string | undefined;
+  if (specifier.startsWith('.')) target = path.posix.join(path.posix.dirname(fromFile), specifier);
+  else {
+    const alias = IMPORT_ALIASES.find(([prefix]) => specifier.startsWith(prefix));
+    if (alias) target = alias[1] + specifier.slice(alias[0].length);
+  }
+  if (target === undefined) return undefined;
+  return [`${target}.ts`, `${target}.tsx`, `${target}/index.ts`, target].find(
+    candidate => /\.tsx?$/.test(candidate) && existsSync(path.join(REPO_ROOT, candidate))
+  );
+}
+
+const registersCache = new Map<string, boolean>();
+/** Whether loading `entry` runs registerOrgAlertObserver(), directly or through any local import. */
+function reachesObserver(entry: string): boolean {
+  const cached = registersCache.get(entry);
+  if (cached !== undefined) return cached;
+  const seen = new Set([entry]);
+  const queue = [entry];
+  let found = false;
+  while (queue.length && !found) {
+    const file = queue.shift() as string;
+    const source = stripComments(read(file));
+    if (/\bregisterOrgAlertObserver\(\)/.test(source)) found = true;
+    for (const match of source.matchAll(IMPORT)) {
+      const next = resolveImport(file, match[1] ?? match[2] ?? match[3]);
+      if (next && !seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  registersCache.set(entry, found);
+  return found;
+}
+
 type Site = { file: string; module: string; registers: boolean; link: string };
 
 const HANDLER = new RegExp(`handler:\\s*['"\`]((?:${WORKERS}|${CLIENT_SERVER})/[^'"\`]+)\\.\\w+['"\`]`, 'g');
 
-/** Every handler declared in infra/*.ts, with whether its source registers and the link of its props object. */
+/** Every handler declared in infra/*.ts, with whether it reaches the observer and the link of its props object. */
 function scanSites(): Site[] {
   const sites: Site[] = [];
   const infraFiles = readdirSync(path.join(REPO_ROOT, 'infra')).filter(name => name.endsWith('.ts'));
@@ -130,7 +180,7 @@ function scanSites(): Site[] {
       sites.push({
         file,
         module,
-        registers: REGISTERS_OBSERVER.test(stripComments(read(sourceFile))),
+        registers: reachesObserver(sourceFile),
         link: /\blink:\s*(\[[^\]]*\])/.exec(props)?.[1] ?? '',
       });
     }
