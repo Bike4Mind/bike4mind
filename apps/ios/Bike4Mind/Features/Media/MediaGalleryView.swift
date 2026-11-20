@@ -7,8 +7,8 @@ struct MediaGalleryView: View {
 
   var body: some View {
     GalleryContent(
-      api: services.media, onLatestImage: services.latestGeneration, studio: services.studio,
-      tracker: services.studioTracker, models: services.studioModels)
+      api: services.media, firstPages: services.mediaFirstPages, onLatestImage: services.latestGeneration,
+      studio: services.studio, tracker: services.studioTracker, models: services.studioModels)
   }
 }
 
@@ -26,10 +26,12 @@ private struct GalleryContent: View {
   private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
   init(
-    api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
+    api: any MediaAPI, firstPages: MediaFirstPageStore,
+    onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
     tracker: GenerationTracker, models: StudioModelCatalog
   ) {
-    _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
+    _model = State(
+      initialValue: MediaGalleryViewModel(api: api, firstPages: firstPages, onLatestImage: onLatestImage))
     _exporter = State(initialValue: MediaExportPresenter(media: api))
     _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker, catalog: models))
     self.tracker = tracker
@@ -61,7 +63,8 @@ private struct GalleryContent: View {
 
   private var editContext: StudioEditContext {
     StudioEditContext(
-      api: services.studio, media: services.media, tracker: tracker, frames: services.frameUploader,
+      api: services.studio, media: services.media, firstPages: services.mediaFirstPages, tracker: tracker,
+      frames: services.frameUploader,
       currentInputs: { create.videoInputs },
       apply: { seed in
         openItem = nil
