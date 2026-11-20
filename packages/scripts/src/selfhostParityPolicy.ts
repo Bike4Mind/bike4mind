@@ -271,7 +271,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   gapBecause(
     'event:infra/llm.ts:slack-quick-ask',
-    '78381adcd54c420003bf4b9b50b370afdb0df4bb44b63833b71c6d26f911c977',
+    '3a3ab851f4ede38eb1aedf370bb55bc9a291a32ac2f974e94bd7c1d3d2086cbe',
     'Slack DM completions are not wired on self-host; see slack-completion-start.'
   ),
   gap(
@@ -298,7 +298,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    'b9c96fd03e444f9befda13c3abdfb321e5a886f78ef414f0847acf71d71ee4a2',
+    '89b4bbd52fd1f8726e61167217f9272dda0d5c46a3ba6e1566fdd31d6c5b4523',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
@@ -416,7 +416,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '6e8d22079bef812a91114fbb2e7edc1fd769c3076d7a35c88cb667d957089373',
+    '58c4b31086617bc476b3f315e3b8d6b44e295380f6153eedb92308f0c40fca3c',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -664,7 +664,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:liveOpsTriageQueue',
-    'd91c007aa45bb18a7da975b5f9555df2bc73ebcc3eca39b258fe26ee3fc696d2',
+    '3175abe05a4ee7afd9983e57d988509958e3ffd679ab4ad391bbe258ef94fd7e',
     'The admin live-ops trigger route enqueues here and no self-host consumer drains it. The hosted handler uses the CloudWatch client, so wiring needs a local metrics decision first.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
@@ -1295,7 +1295,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'adf42ee11875ca579a7fea87054fbfae596caabd3ed8f57f5edef2b8951e6243',
+    '98eae670a8f69a60f54797abd5ee7384acb4737a789c0f31a5751db9b0292090',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(
