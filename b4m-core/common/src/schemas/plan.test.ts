@@ -174,6 +174,42 @@ describe('plan adapters', () => {
     expect(fromCliTodos(todos).plan.items[0]).toMatchObject({ content: 'Skip', status: 'cancelled' });
   });
 
+  it('prefers content over the deprecated description alias and warns once', () => {
+    const result = fromCliTodos([
+      { content: 'New', description: 'Old', status: 'pending' },
+      { description: 'Alias only', status: 'pending' },
+      { description: 'Another alias', status: 'pending' },
+    ]);
+    expect(result.plan.items.map(i => i.content)).toEqual(['New', 'Alias only', 'Another alias']);
+    expect(result.warnings.filter(w => w.includes('deprecated'))).toHaveLength(1);
+    expect(fromCliTodos([{ content: 'Only', status: 'pending' }]).warnings).toEqual([]);
+  });
+
+  it('falls back to a string description only, and warns only for one', () => {
+    const empty = fromCliTodos([{ content: '', description: 'Kept', status: 'pending' }]);
+    expect(empty.plan.items.map(i => i.content)).toEqual(['Kept']);
+    expect(empty.warnings).toEqual(["description is deprecated; use 'content'."]);
+    const nulled = fromCliTodos([{ content: 'Real', description: null, status: 'pending' }]);
+    expect(nulled.plan.items.map(i => i.content)).toEqual(['Real']);
+    expect(nulled.warnings).toEqual([]);
+  });
+
+  it('keeps activeForm and demotes extra in_progress CLI todos without throwing', () => {
+    const result = fromCliTodos([
+      { content: 'A', activeForm: 'Doing A', status: 'in_progress' },
+      { content: 'B', status: 'in_progress' },
+    ]);
+    expect(result.plan.items.map(i => i.status)).toEqual(['in_progress', 'pending']);
+    expect(result.plan.items[0].activeForm).toBe('Doing A');
+    expect(result.warnings).toHaveLength(1);
+  });
+
+  it('gives same-text CLI todos distinct ids without an id warning', () => {
+    const result = fromCliTodos([item('Run tests', 'completed'), item('Run tests')]);
+    expect(new Set(result.plan.items.map(i => i.id)).size).toBe(2);
+    expect(result.warnings).toEqual([]);
+  });
+
   it('folds task creates, partial updates and deletions in creation order', () => {
     const calls = [
       { name: 'TaskCreate', input: { subject: 'First', activeForm: 'Doing first', description: 'Details' } },

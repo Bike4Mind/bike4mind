@@ -117,6 +117,12 @@ export interface LLMContextProps {
    */
   disabledMcpConnections: string[];
   /**
+   * Platform connector ids switched on in the Tools menu. Opt-in, unlike `disabledMcpConnections`:
+   * a platform connector stays out of every chat until the user switches it on (see
+   * ChatCompletionInvokeParamsSchema.enabledPlatformMcpConnections).
+   */
+  enabledPlatformMcpConnections: string[];
+  /**
    * Agent-mode composer toggle state.
    *
    * `enabled`: when true, `routeQuery()` is forced to `agent_executor` via
@@ -205,6 +211,7 @@ const DEFAULTS = {
   lastUsedImageEditModel: null,
   enabledMcpServers: null,
   disabledMcpConnections: [] as string[],
+  enabledPlatformMcpConnections: [] as string[],
   agentMode: { enabled: false, source: 'toggle' as const },
   disableAutoRouteForThisSession: false,
 };
