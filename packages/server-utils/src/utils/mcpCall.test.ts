@@ -98,7 +98,9 @@ describe('mcpCall rate-limit ingest', () => {
 
   it('hands the events back without posting while the ingest token is a placeholder', async () => {
     h.ingestToken = 'not-configured';
-    vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    // spyOn reuses an existing spy, so drop calls left by earlier tests in this file.
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    errorSpy.mockClear();
 
     const result = await handler({
       name: 'github',
@@ -109,6 +111,7 @@ describe('mcpCall rate-limit ingest', () => {
     });
 
     expect(h.fetch).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
   });
 

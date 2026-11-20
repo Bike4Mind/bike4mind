@@ -91,27 +91,33 @@ export const handler = async (params: any) => {
       if (rateLimitEvents.length > 0) {
         const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
         const ingestUrl = `${baseUrl}/api/admin/rate-limits/ingest`;
-        const ingestToken = Resource.RATE_LIMIT_INGEST_TOKEN?.value || process.env.RATE_LIMIT_INGEST_TOKEN;
-        try {
-          // The ingest route refuses every request without a configured token; go straight to the fallback.
-          if (isUnconfiguredSecret(ingestToken)) throw new Error('RATE_LIMIT_INGEST_TOKEN is not configured');
-          const resp = await fetch(ingestUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-rate-limit-ingest-token': ingestToken as string,
-            },
-            body: JSON.stringify({ events: rateLimitEvents, tenantKey: resolveMcpTenantKey(userId) }),
-          });
-          if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status}`);
-          }
-          const result = (await resp.json()) as { persisted?: number };
-          Logger.info(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);
-        } catch (err) {
-          Logger.error(`[RateLimit] Failed to persist events for ${name}`, { error: err });
-          // Fallback: attach events to payload for upstream persistence via invokeMcpHandler
+        const rawIngestToken = Resource.RATE_LIMIT_INGEST_TOKEN?.value || process.env.RATE_LIMIT_INGEST_TOKEN;
+        const ingestToken = isUnconfiguredSecret(rawIngestToken) ? undefined : rawIngestToken;
+        // The ingest route refuses every request without a configured token (previews run without one
+        // by design), so skip the doomed POST and hand the events upstream without an error log.
+        if (!ingestToken) {
+          Logger.info(`[RateLimit] Ingest token not configured; returning events for ${name} upstream`);
           payload = { ...payload, _rateLimitEvents: rateLimitEvents };
+        } else {
+          try {
+            const resp = await fetch(ingestUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-rate-limit-ingest-token': ingestToken,
+              },
+              body: JSON.stringify({ events: rateLimitEvents, tenantKey: resolveMcpTenantKey(userId) }),
+            });
+            if (!resp.ok) {
+              throw new Error(`HTTP ${resp.status}`);
+            }
+            const result = (await resp.json()) as { persisted?: number };
+            Logger.info(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);
+          } catch (err) {
+            Logger.error(`[RateLimit] Failed to persist events for ${name}`, { error: err });
+            // Fallback: attach events to payload for upstream persistence via invokeMcpHandler
+            payload = { ...payload, _rateLimitEvents: rateLimitEvents };
+          }
         }
       }
 
