@@ -1320,12 +1320,14 @@ const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...mailBodyEnvironment(appFilesBucket),
     },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      mailBodyPutPermission(appFilesBucket),
     ],
   },
   SINGLE_RECORD_BATCH

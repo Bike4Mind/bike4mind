@@ -63,6 +63,9 @@ const MAIL_SENDING_COMPUTE: { file: string; marker: string; sends: string }[] = 
   { file: 'infra/functions.ts', marker: worker('queueHandlers/slackQuestProcessor.handler'), sends: 'alerts' },
   { file: 'infra/agentExecutor.ts', marker: worker('queueHandlers/agentExecutor.handler'), sends: 'alerts' },
   { file: 'infra/chatCompletion.ts', marker: "new sst.aws.Service('ChatCompletion'", sends: 'alerts' },
+  // These two run chat completions through the Slack package, whose defaults record incidents.
+  { file: 'infra/queues.ts', marker: worker('cron/liveopsTriageWorker.handler'), sends: 'alerts' },
+  { file: 'infra/llm.ts', marker: worker('events/slackQuickAsk.handler'), sends: 'alerts' },
 ];
 
 describe('computes that queue mail link the event bus', () => {

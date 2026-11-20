@@ -121,6 +121,43 @@ describe('queuedMailer on a hosted stage', () => {
     expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
   });
 
+  describe('inline limit edge', () => {
+    // Bytes of the serialized event properties around an empty body, so html fills the rest exactly.
+    const envelope = Buffer.byteLength(JSON.stringify({ to: 'a@example.org', subject: 'Edge', body: '' }));
+
+    it('keeps mail whose serialized properties are exactly the inline limit inline', async () => {
+      const html = 'x'.repeat(MAX_INLINE_MAIL_BYTES - envelope);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(mocks.publish).toHaveBeenCalledWith(expect.objectContaining({ body: html }));
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    });
+
+    it('offloads mail one byte over the inline limit', async () => {
+      const html = 'x'.repeat(MAX_INLINE_MAIL_BYTES - envelope + 1);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
+      expect(mocks.publish).toHaveBeenCalledWith(expect.not.objectContaining({ body: expect.anything() }));
+    });
+
+    it('sets the inline limit at 200 KB', () => {
+      expect(MAX_INLINE_MAIL_BYTES).toBe(200 * 1024);
+    });
+
+    it('measures UTF-8 bytes, not characters', async () => {
+      // Two bytes per character: under the limit in characters, over it in bytes.
+      const html = '\u00e9'.repeat(Math.ceil(MAX_INLINE_MAIL_BYTES / 2) + 1);
+      expect(html.length).toBeLessThan(MAX_INLINE_MAIL_BYTES - envelope);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
+    });
+  });
+
   it('stores an over-limit body under the prefix and publishes a reference to it', async () => {
     const html = 'x'.repeat(300 * 1024);
     await expect(
@@ -147,6 +184,21 @@ describe('queuedMailer on a hosted stage', () => {
     expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
     expect(mocks.publish).not.toHaveBeenCalled();
     expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('over the 10485760-byte message limit'));
+  });
+
+  it('counts the text part toward the message limit', async () => {
+    const html = 'x'.repeat(MAX_OFFLOADED_MAIL_BYTES - 10);
+    const result = await queuedMailer.sendEmail('a@example.org', { subject: 'Huge', html, text: 'y'.repeat(11) });
+    expect(result).toBe(false);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('mail body is 10485761 bytes'));
+  });
+
+  it('stores a body of html plus text exactly at the message limit', async () => {
+    const html = 'x'.repeat(MAX_OFFLOADED_MAIL_BYTES - 10);
+    const result = await queuedMailer.sendEmail('a@example.org', { subject: 'Huge', html, text: '\u00e9'.repeat(5) });
+    expect(result).toEqual({ queued: true });
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
   });
 
   it('resolves false without publishing when the body bucket is not configured', async () => {
