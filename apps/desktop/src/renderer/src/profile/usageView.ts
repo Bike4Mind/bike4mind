@@ -23,14 +23,17 @@ const stampFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute
 export function bucketLabel(startsAt: string, granularity: UsageGranularity): string {
   const at = new Date(startsAt);
   if (granularity === 'day') return dayFormat.format(at);
-  return String(at.getHours()).padStart(2, '0');
+  const hours = String(at.getHours()).padStart(2, '0');
+  // Local-start buckets are on the hour, but a UTC-hour bucket starts at :30 or :45 in some zones.
+  return at.getMinutes() === 0 ? hours : `${hours}:${String(at.getMinutes()).padStart(2, '0')}`;
 }
 
 /** The full bucket description, for the hover. */
 export function bucketTitle(startsAt: string, granularity: UsageGranularity): string {
   const at = new Date(startsAt);
   if (granularity === 'day') return dayFormat.format(at);
-  return `${bucketLabel(startsAt, 'hour')}:00`;
+  const label = bucketLabel(startsAt, 'hour');
+  return label.includes(':') ? label : `${label}:00`;
 }
 
 /** Axis labels any window gets, whatever its bar count. A bar is narrower than its own label. */
@@ -44,10 +47,13 @@ const MAX_TICKS = 7;
  * from the NEWEST bar - today is the label a reader looks for first, and anchoring at the other
  * end is what leaves it missing.
  */
-export function tickIndices(bars: readonly UsageBar[], granularity: UsageGranularity): number[] {
+export function tickIndices(bars: readonly Pick<UsageBar, 'startsAt'>[], granularity: UsageGranularity): number[] {
   if (granularity === 'hour') {
     return bars.reduce<number[]>((ticks, bar, index) => {
-      if (new Date(bar.startsAt).getHours() % 6 === 0) ticks.push(index);
+      const at = new Date(bar.startsAt);
+      const start = at.getHours() * 60 + at.getMinutes();
+      // Labelled where a quarter-day mark falls within the bar, so a half-hour zone still gets marks.
+      if (Math.ceil(start / 360) * 360 < start + 60) ticks.push(index);
       return ticks;
     }, []);
   }

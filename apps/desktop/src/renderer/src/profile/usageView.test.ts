@@ -1,6 +1,6 @@
 import type { UsageBar } from '@shared/usage';
-import { describe, expect, it } from 'vitest';
-import { barPercent, bucketLabel, formatCredits, runwayDays, tickIndices } from './usageView';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { barPercent, bucketLabel, bucketTitle, formatCredits, runwayDays, tickIndices } from './usageView';
 
 function hours(count: number, from = '2026-10-07T00:00:00.000Z'): UsageBar[] {
   const start = Date.parse(from);
@@ -21,6 +21,8 @@ function days(count: number): UsageBar[] {
 }
 
 describe('bucketLabel', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   // The day buckets ARE UTC days, so formatting them locally would slide every label.
   it('names a day bucket by its UTC date', () => {
     expect(bucketLabel('2026-10-07T00:00:00.000Z', 'day')).toBe(
@@ -31,17 +33,44 @@ describe('bucketLabel', () => {
   });
 
   it('names an hour bucket by the local clock, zero padded', () => {
+    vi.stubEnv('TZ', 'UTC');
     const at = '2026-10-07T05:00:00.000Z';
     expect(bucketLabel(at, 'hour')).toBe(String(new Date(at).getHours()).padStart(2, '0'));
   });
 });
 
-describe('tickIndices', () => {
-  it('puts the hour ticks on the quarter-day marks', () => {
+describe('hour buckets in a zone off the hour', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ['Asia/Kolkata', '2026-10-07T00:00:00.000Z', '05:30', '05:30'],
+    ['Asia/Kolkata', '2026-10-07T00:30:00.000Z', '06', '06:00'],
+    ['Asia/Kathmandu', '2026-10-07T00:00:00.000Z', '05:45', '05:45'],
+    ['UTC', '2026-10-07T05:00:00.000Z', '05', '05:00'],
+  ])('labels a %s bar starting %s with its real local start', (zone, startsAt, label, title) => {
+    vi.stubEnv('TZ', zone);
+    expect(bucketLabel(startsAt, 'hour')).toBe(label);
+    expect(bucketTitle(startsAt, 'hour')).toBe(title);
+  });
+
+  it('still marks the quarter-day hours on UTC-hour bars in UTC+5:30', () => {
+    vi.stubEnv('TZ', 'Asia/Kolkata');
     const bars = hours(24);
-    const labelled = tickIndices(bars, 'hour').map(index => Number(bucketLabel(bars[index].startsAt, 'hour')));
-    expect(labelled).toHaveLength(4);
-    expect(labelled.every(hour => hour % 6 === 0)).toBe(true);
+    const marked = tickIndices(bars, 'hour').map(index => bucketLabel(bars[index].startsAt, 'hour'));
+    expect(marked).toHaveLength(4);
+    expect(marked.every(label => ['05:30', '11:30', '17:30', '23:30'].includes(label))).toBe(true);
+  });
+});
+
+describe('tickIndices', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('puts the hour ticks on the quarter-day marks', () => {
+    vi.stubEnv('TZ', 'UTC');
+    const bars = hours(24);
+    const marked = tickIndices(bars, 'hour').map(index => new Date(bars[index].startsAt).getHours());
+    expect(marked).toHaveLength(4);
+    expect(marked.every(hour => hour % 6 === 0)).toBe(true);
   });
 
   // Today is the label a reader looks for first, so it is the one the spacing is anchored to.

@@ -126,6 +126,7 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  platformMcpConnectorRemove: ['No longer needed', 'Server retired', 'Replaced by another connector', 'Added in error'],
   partnerSignupRule: ['Partner agreement ended', 'Created in error', 'Replaced by another rule', 'Account cleanup'],
   partnerBackfill: ['Partner onboarding', 'Organization request', 'Rule added after signups', 'Internal testing'],
   signupDomainHoldRelease: ['Reviewed, domain is legitimate', 'Known customer or partner', 'Domain has aged'],
