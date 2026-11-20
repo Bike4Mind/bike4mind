@@ -93,6 +93,33 @@ describe('DataLakeResearchRunRepository', () => {
     });
   });
 
+  it('round-trips the drop buckets, and reads unlistedDropped as undefined when it was never saved', async () => {
+    const created = await repo.createRun(input());
+    await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 1,
+      totals: { ...emptyResearchRunTotals(), filteredBySource: 3, unresolvedRedirect: 2, unlistedDropped: 4 },
+    });
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals).toMatchObject({
+      filteredBySource: 3,
+      unresolvedRedirect: 2,
+      unlistedDropped: 4,
+    });
+
+    const legacy = await repo.createRun(input());
+    const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(legacy.id) },
+        { $set: { totals: { ...legacyTotals, filteredBySource: 5 } } }
+      );
+    const reread = await repo.findByIdInLake(legacy.id, LAKE);
+    expect(reread?.totals.filteredBySource).toBe(5);
+    expect(reread?.totals.unlistedDropped).toBeUndefined();
+  });
+
   it('lists one lake newest first, honoring a limit, and never another lake', async () => {
     // Spaced out: `createdAt` has millisecond resolution, and three inserts inside one millisecond
     // would make the sort this test is about unordered.

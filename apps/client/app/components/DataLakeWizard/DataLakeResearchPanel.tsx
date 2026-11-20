@@ -654,8 +654,9 @@ const DROP_REASON_LABEL: Record<
   Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'>,
   string
 > = {
-  filteredBySource: 'blocked by source rules',
-  unresolvedRedirect: 'search link could not be resolved',
+  filteredBySource: 'on your Never these sites list',
+  unlistedDropped: 'from sites not on your lists (Other sites: Ignore)',
+  unresolvedRedirect: 'search link never revealed its site (skipped; usually clears on the next run)',
   blockedByRule: 'blocked by an item rule',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
@@ -696,7 +697,10 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   if (totals.reviewedByRule > 0) parts.push(`${totals.reviewedByRule} sent to review by a rule`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
-    if (count > 0) parts.push(`${count} ${label}`);
+    // A run stored before the split has no unlistedDropped, and its filteredBySource counts both drops.
+    const text =
+      key === 'filteredBySource' && totals.unlistedDropped === undefined ? 'blocked by your site lists' : label;
+    if ((count ?? 0) > 0) parts.push(`${count} ${text}`);
   }
   // Not a totals bucket: a waiting item has had no outcome yet.
   if (feedRun && (run.feedBacklog ?? 0) > 0) parts.push(`${run.feedBacklog} waiting`);
@@ -714,6 +718,7 @@ const JUDGED_BUCKETS: Record<
     keyof ResearchRunTotals,
     | 'searchHits'
     | 'filteredBySource'
+    | 'unlistedDropped'
     | 'unresolvedRedirect'
     | 'judgeFailed'
     | 'notJudged'
@@ -737,7 +742,7 @@ const JUDGED_BUCKETS: Record<
 const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
   if (!run.judgeModel) return null;
   const { totals } = run;
-  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => (totals[key as keyof ResearchRunTotals] ?? 0) > 0);
   if (judged) return `judged by ${run.judgeModel}`;
   if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
   return null;
