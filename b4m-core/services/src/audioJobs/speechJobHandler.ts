@@ -124,7 +124,15 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
       context,
       deps
     );
-    return { next: 'succeeded', payload: { ...job.payload, producedBy: { provider: vendor, model }, output } };
+    return {
+      next: 'succeeded',
+      payload: {
+        ...job.payload,
+        producedBy: { provider: vendor, model },
+        output,
+        ...(result.wordTimings && { wordTimings: result.wordTimings }),
+      },
+    };
   };
 
   const settle = async (job: SpeechJob) => {

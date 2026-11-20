@@ -27,6 +27,30 @@ export function isPlaceholderValue(value: string | undefined | null): boolean {
   return normalized === SST_PLACEHOLDER_VALUE.toLowerCase() || normalized === NOT_CONFIGURED_PLACEHOLDER.toLowerCase();
 }
 
+// Values shipped in example env files (.env.selfhost.example, selfhost/kubernetes/runtime.env.example)
+// and the generic literals @bike4mind/infra tier1Secrets also rejects.
+const EXAMPLE_SECRET_PREFIXES = ['change-me', 'change_me', 'changeme', 'replace-with', 'replace-me', 'replace_me'];
+const EXAMPLE_SECRET_VALUES = new Set(['your_secret_here', 'your-secret-key', 'xxx', 'todo', 'fixme']);
+
+/** True for an empty, SST-placeholder or example-env-file secret: each is public, so it counts as unset. */
+export function isUnconfiguredSecret(value: string | undefined | null): boolean {
+  if (isPlaceholderValue(value)) return true;
+  const normalized = (value ?? '').trim().toLowerCase();
+  return (
+    normalized === '' ||
+    EXAMPLE_SECRET_VALUES.has(normalized) ||
+    EXAMPLE_SECRET_PREFIXES.some(prefix => normalized.startsWith(prefix))
+  );
+}
+
+/** Returns `value`, or throws naming only `name` when isUnconfiguredSecret(value). */
+export function requireConfiguredSecret(name: string, value: string | undefined | null): string {
+  if (isUnconfiguredSecret(value)) {
+    throw new Error(`${name} is not configured: refusing to use an empty or placeholder value.`);
+  }
+  return value as string;
+}
+
 /**
  * Distinctive dummy tokens that mark an API-key value as a placeholder rather than a real
  * credential. Matched only as a whole hyphen-delimited segment (see PLACEHOLDER_API_KEY_REGEX).

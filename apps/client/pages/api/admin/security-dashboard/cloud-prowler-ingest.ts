@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -47,7 +47,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
 
   const ingestToken = prowlerResource.SECOPS_PROWLER_INGEST_TOKEN?.value || process.env.SECOPS_PROWLER_INGEST_TOKEN;
 
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Prowler ingest token is not configured.' });
   }
 

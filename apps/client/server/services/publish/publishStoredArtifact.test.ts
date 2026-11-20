@@ -125,6 +125,11 @@ describe('publishStoredArtifact', () => {
     expect(m.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
+  it('marks the new page with the artifact id that its unique index keys on', async () => {
+    await publishStoredArtifact({ ...base, visibility: 'public' });
+    expect(m.create.mock.calls[0][0]).toMatchObject({ v1ArtifactId: artifact.id });
+  });
+
   it('writes the access gate in the same record write as the visibility', async () => {
     const page = await publishStoredArtifact({
       ...base,
@@ -259,6 +264,7 @@ describe('republishStoredArtifact', () => {
     const set = m.findOneAndUpdate.mock.calls[0][1].$set;
     expect(set).not.toHaveProperty('visibility');
     expect(set).not.toHaveProperty('accessGate');
+    expect(set).not.toHaveProperty('v1ArtifactId');
     expect(set.previousVersionMeta.sha256Index).toBe(oldSha);
     expect(page.slug).toBe('signup-flow');
   });

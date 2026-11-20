@@ -169,6 +169,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         sessionId,
         organizationId: effectiveOrgId,
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
+        // Platform connectors are switched on in the composer only; an API-key turn gets none.
+        ...(req.apiKeyInfo ? { enabledPlatformMcpConnections: undefined } : {}),
       },
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.

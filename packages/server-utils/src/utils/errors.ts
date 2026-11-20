@@ -53,7 +53,7 @@ export function ensureAdmin(isAdmin?: boolean | null): void {
 }
 
 /**
- * Ensure the current user may access the Tavern (admin or 'tavern'-tagged).
+ * Ensure the current user may access the Tavern (admin, developer, or 'tavern'-tagged).
  * Throws ForbiddenError if not. Shares the `canAccessTavern` predicate with the
  * client route/tab guard so server and UI authorization can never diverge.
  *

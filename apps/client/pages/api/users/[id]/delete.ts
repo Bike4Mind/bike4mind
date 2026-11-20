@@ -1,7 +1,14 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { userRepository } from '@bike4mind/database';
-import { assertCanActOnAdminTarget, canAccessAdmin, isFullAdmin, toSafeUser } from '@bike4mind/common';
+import {
+  ACCOUNT_DELETION_ORG_OWNER_CODE,
+  assertCanActOnAdminTarget,
+  canAccessAdmin,
+  ConflictError,
+  isFullAdmin,
+  toSafeUser,
+} from '@bike4mind/common';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -9,6 +16,7 @@ import {
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionCancellationResponse } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
+import { readAdminErasureState } from '@server/dataSubject/adminErasure';
 import { deleteUserAsAdmin, deletedUserTarget } from '@server/admin/deleteUserAsAdmin';
 
 const handler = adminApi({ adminPermissions: { DELETE: 'users:delete' } }).delete(
@@ -29,6 +37,14 @@ const handler = adminApi({ adminPermissions: { DELETE: 'users:delete' } }).delet
     const policy = await getApprovalPolicy();
     if (policy.enabled) {
       if (canAccessAdmin(target)) {
+        const current = await readAdminErasureState(target!.id);
+        if (current.state !== 'none') throw new ConflictError('This account already has a deletion pending.');
+        if (current.ownedOrganizations.length > 0) {
+          throw new ConflictError('Transfer or delete the organizations this user owns first.', {
+            code: ACCOUNT_DELETION_ORG_OWNER_CODE,
+            organizations: current.ownedOrganizations,
+          });
+        }
         const pending = await requestApproval(
           req,
           {
@@ -45,12 +61,20 @@ const handler = adminApi({ adminPermissions: { DELETE: 'users:delete' } }).delet
       }
     }
 
-    const { result: deletedUser, subscriptionCancellation } = await deleteUserAsAdmin(req, userId, reason, undefined, {
+    const {
+      user: deletedUser,
+      subscriptionCancellation,
+      queued,
+    } = await deleteUserAsAdmin(req, userId, reason, undefined, {
       // A delegate's target is re-checked too, in case it gained admin access since the check above.
       requireNonAdmin: policy.enabled || !isFullAdmin(req.user),
     });
 
-    return res.json({ ...toSafeUser(deletedUser), ...subscriptionCancellationResponse(subscriptionCancellation) });
+    return res.json({
+      ...toSafeUser(deletedUser),
+      ...subscriptionCancellationResponse(subscriptionCancellation),
+      queued,
+    });
   })
 );
 

@@ -2,6 +2,7 @@
   import AVFoundation
   import Foundation
   import Speech
+  import os
 
   /// `SpeechSpeaking` over `AVSpeechSynthesizer`, which plays through the app's active audio session.
   @MainActor
@@ -16,6 +17,7 @@
 
     public func speak(_ text: String) async {
       await withCheckedContinuation { continuation in
+        complete()
         finished = continuation
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
@@ -45,6 +47,7 @@
   /// `SpeechListening` over `SFSpeechRecognizer` fed by an `AVAudioEngine` input tap. Recognition stays on
   /// the device when the locale supports it, so nothing is sent to Apple unless it has to be.
   public final class SFSpeechListener: SpeechListening, @unchecked Sendable {
+    private static let logger = Logger(subsystem: "com.bike4mind.app", category: "voice")
     private let lock = NSLock()
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -68,8 +71,14 @@
       return await AVAudioApplication.requestRecordPermission()
     }
 
+    // Start and stop run whole under the lock: the model can restart the listener from two tasks at once, and
+    // overlapping starts would install a second tap on bus 0, which throws.
     public func start() async throws -> AsyncStream<SpeechRecognitionEvent> {
-      await stop()
+      try lock.withLock { try startLocked() }
+    }
+
+    private func startLocked() throws -> AsyncStream<SpeechRecognitionEvent> {
+      stopLocked()
       guard let recognizer = SFSpeechRecognizer(locale: .current), recognizer.isAvailable else {
         throw VoiceConversationError.recognizerUnavailable
       }
@@ -78,7 +87,11 @@
       request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
 
       let input = engine.inputNode
-      input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
+      enableVoiceProcessing(on: input)
+      // The input format changes when voice processing turns on, so it is read after.
+      let format = input.outputFormat(forBus: 0)
+      guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceConversationError.audioSessionUnavailable }
+      input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
         request.append(buffer)
       }
       engine.prepare()
@@ -96,27 +109,38 @@
         }
         if error != nil { continuation.finish() }
       }
-      lock.withLock {
-        self.request = request
-        self.task = task
-        self.continuation = continuation
-      }
+      self.request = request
+      self.task = task
+      self.continuation = continuation
       return stream
     }
 
-    public func stop() async {
-      let (request, task, continuation) = lock.withLock {
-        () -> (
-          SFSpeechAudioBufferRecognitionRequest?, SFSpeechRecognitionTask?,
-          AsyncStream<SpeechRecognitionEvent>.Continuation?
-        ) in
-        defer {
-          self.request = nil
-          self.task = nil
-          self.continuation = nil
-        }
-        return (self.request, self.task, self.continuation)
+    /// Reduces the reply's echo in the mic where the route supports it. The reply plays through `AVSpeechSynthesizer`,
+    /// outside this engine, so this is best effort; `SpeechEchoFilter` is what keeps the echo out of the transcript.
+    private func enableVoiceProcessing(on input: AVAudioInputNode) {
+      guard !input.isVoiceProcessingEnabled else { return }
+      // The engine will not start with voice processing unless the output side is in the graph too.
+      _ = engine.mainMixerNode
+      do {
+        try input.setVoiceProcessingEnabled(true)
+      } catch {
+        // The simulator and some routes do not support it; listening still works without it.
+        Self.logger.error("Voice processing unavailable: \(error.localizedDescription, privacy: .public)")
+        return
       }
+      // The spoken reply is "other audio" to voice processing, which would otherwise duck it to near silence.
+      input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min)
+    }
+
+    public func stop() async {
+      lock.withLock { stopLocked() }
+    }
+
+    private func stopLocked() {
+      let (request, task, continuation) = (self.request, self.task, self.continuation)
+      self.request = nil
+      self.task = nil
+      self.continuation = nil
       guard request != nil || task != nil else { return }
       engine.inputNode.removeTap(onBus: 0)
       engine.stop()
@@ -126,8 +150,9 @@
     }
   }
 
-  /// The audio session for a conversation: play and record together in `voiceChat` mode (echo cancellation),
-  /// speaker by default, Bluetooth headsets allowed, other audio ducked and restored on exit.
+  /// The audio session for a conversation: play and record together in `voiceChat` mode, speaker by default,
+  /// Bluetooth headsets allowed, other audio ducked and restored on exit. The reply's echo is kept out of the
+  /// transcript by `SpeechEchoFilter`; voice processing on `SFSpeechListener`'s input node only reduces it.
   public final class AVVoiceAudioSession: VoiceAudioSessionControlling {
     public init() {}
 

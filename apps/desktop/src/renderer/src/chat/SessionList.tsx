@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -362,6 +363,28 @@ interface RowProps extends NestProps {
   refChip?: string;
 }
 
+/** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
+function MenuShortcut({ letter }: { letter: string }) {
+  return (
+    <Typography aria-hidden level="body-xs" textColor="text.tertiary" sx={{ ml: 3, fontFamily: 'monospace' }}>
+      {letter}
+    </Typography>
+  );
+}
+
+/**
+ * A bare letter runs the item whose data-shortcut it is, by clicking it so the item's own handler
+ * decides what happens (closing, switching view). Marked handled so Joy's type-to-focus stays out.
+ */
+function onRowMenuKeyDown(event: ReactKeyboardEvent<HTMLElement> & { defaultMuiPrevented?: boolean }) {
+  if (event.metaKey || event.ctrlKey || event.altKey || !/^[a-z]$/i.test(event.key)) return;
+  const item = event.currentTarget.querySelector<HTMLElement>(`[data-shortcut="${event.key.toUpperCase()}"]`);
+  if (!item || item.getAttribute('aria-disabled') === 'true') return;
+  event.preventDefault();
+  event.defaultMuiPrevented = true;
+  item.click();
+}
+
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
   session,
@@ -383,7 +406,7 @@ function MoveToItems({
         <ListItemDecorator>
           <ArrowLeftIcon />
         </ListItemDecorator>
-        Move to
+        Move to section
       </MenuItem>
       <ListDivider />
       {userSections.map(section => (
@@ -450,6 +473,10 @@ const isolate = (event: SyntheticEvent) => event.stopPropagation();
  *
  * Keydown stops here, which is also what keeps SessionList's window-level Cmd shortcuts away
  * while typing: React's handler runs at the root, before the event reaches window.
+ *
+ * Focus and blur stop here too: the input sits inside the row's ListItemButton, which would take
+ * the input's focus as its own keyboard focus and keep its focus ring once the input unmounts,
+ * since an unmounted node sends no blur.
  */
 function RenameInput({ title, onDone }: { title: string; onDone: (next: string | null) => void }) {
   const [draft, setDraft] = useState(title);
@@ -477,7 +504,11 @@ function RenameInput({ title, onDone }: { title: string; onDone: (next: string |
       size="sm"
       value={draft}
       onChange={event => setDraft(event.target.value)}
-      onBlur={save}
+      onFocus={isolate}
+      onBlur={event => {
+        event.stopPropagation();
+        save();
+      }}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Enter') save();
@@ -598,7 +629,7 @@ const SessionRow = memo(function SessionRow({
               >
                 <MoreIcon />
               </MenuButton>
-              <Menu size="sm" placement="bottom-end">
+              <Menu size="sm" placement="bottom-end" onKeyDown={onRowMenuKeyDown} sx={{ minWidth: 200 }}>
                 {menuView === 'move' ? (
                   <MoveToItems
                     session={session}
@@ -612,8 +643,14 @@ const SessionRow = memo(function SessionRow({
                   />
                 ) : (
                   <>
-                    <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
-                      {session.pinned ? 'Unpin' : 'Pin'}
+                    <MenuItem
+                      onClick={() => actions.togglePin(session)}
+                      data-testid="chat-pin-session-btn"
+                      data-shortcut="P"
+                      aria-keyshortcuts="P"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
+                      <MenuShortcut letter="P" />
                     </MenuItem>
                     <MenuItem
                       onClick={() => {
@@ -623,40 +660,65 @@ const SessionRow = memo(function SessionRow({
                         setEditing(true);
                       }}
                       data-testid="chat-rename-session-btn"
+                      data-shortcut="R"
+                      aria-keyshortcuts="R"
                     >
-                      Rename
+                      <Box sx={{ flex: 1 }}>Rename</Box>
+                      <MenuShortcut letter="R" />
                     </MenuItem>
                     <MenuItem
                       disabled={!!session.archived}
                       onClick={() => actions.message(session)}
                       data-testid="session-row-message-action"
+                      data-shortcut="M"
+                      aria-keyshortcuts="M"
                     >
-                      Message session...
+                      <Box sx={{ flex: 1 }}>Message session...</Box>
+                      <MenuShortcut letter="M" />
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => actions.download(session)}
+                      data-testid="chat-download-session-btn"
+                      data-shortcut="L"
+                      aria-keyshortcuts="L"
+                    >
+                      <Box sx={{ flex: 1 }}>Download</Box>
+                      <MenuShortcut letter="L" />
                     </MenuItem>
                     {!session.pinned && !session.archived && (
-                      <MenuItem
-                        onClick={event => {
-                          keepMenuOpen(event);
-                          setMenuView('move');
-                        }}
-                        data-testid="chat-move-session-btn"
-                      >
-                        <Box sx={{ flex: 1 }}>Move to</Box>
-                        <ChevronIcon open={false} />
-                      </MenuItem>
+                      <>
+                        <ListDivider />
+                        <MenuItem
+                          onClick={event => {
+                            keepMenuOpen(event);
+                            setMenuView('move');
+                          }}
+                          data-testid="chat-move-session-btn"
+                        >
+                          <Box sx={{ flex: 1 }}>Move to section</Box>
+                          <ChevronIcon open={false} />
+                        </MenuItem>
+                      </>
                     )}
-                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
-                      Download
-                    </MenuItem>
-                    <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
-                      {session.archived ? 'Unarchive' : 'Archive'}
+                    <ListDivider />
+                    <MenuItem
+                      onClick={() => actions.toggleArchived(session)}
+                      data-testid="chat-archive-session-btn"
+                      data-shortcut="A"
+                      aria-keyshortcuts="A"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.archived ? 'Unarchive' : 'Archive'}</Box>
+                      <MenuShortcut letter="A" />
                     </MenuItem>
                     <MenuItem
                       color="danger"
                       onClick={() => actions.remove(session.id)}
                       data-testid="chat-delete-session-btn"
+                      data-shortcut="D"
+                      aria-keyshortcuts="D"
                     >
-                      Delete
+                      <Box sx={{ flex: 1 }}>Delete</Box>
+                      <MenuShortcut letter="D" />
                     </MenuItem>
                   </>
                 )}

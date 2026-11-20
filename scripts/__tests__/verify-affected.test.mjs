@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   needsFullRun,
+  packageOfFile,
   packagesReachedByForeignInputs,
   parseArgs,
   planLint,
   readTurboJson,
   resolveForeignInput,
+  selectAffected,
+  turboFilters,
 } from '../verify-affected.mjs';
 
 const turbo = readTurboJson();
@@ -59,6 +62,42 @@ describe('needsFullRun', () => {
 
   it('leaves package changes to the filter', () => {
     expect(needsFullRun(['apps/client/package.json', 'b4m-core/common/src/a.ts'], turbo)).toBe(false);
+  });
+});
+
+describe('selectAffected', () => {
+  it('maps files to their deepest owning package', () => {
+    const dirs = { '@b/premium': 'packages/premium/x', '@b/engine': 'packages/premium/x/engine' };
+    expect(packageOfFile('packages/premium/x/engine/src/a.ts', dirs)).toBe('@b/engine');
+    expect(packageOfFile('packages/premium/x/a.ts', dirs)).toBe('@b/premium');
+    expect(packageOfFile('packages/premium/xy/a.ts', dirs)).toBeNull();
+    expect(packageOfFile('docs-site/a.md', dirs)).toBeNull();
+  });
+
+  it('runs changed packages with dependents and foreign-input readers without', () => {
+    const selection = selectAffected({
+      changedFiles: ['apps/client/server/a.ts', 'docs-site/a.md'],
+      turbo,
+      packageDirs,
+      tasks: ['test'],
+    });
+    expect(selection.changed).toEqual(['@bike4mind/client']);
+    expect(selection.extra).toContain('@bike4mind/workers');
+    expect(turboFilters(selection)).toEqual(
+      expect.arrayContaining(['--filter=...@bike4mind/client', '--filter=@bike4mind/workers'])
+    );
+  });
+
+  it('selects only the root package when no package file changed', () => {
+    const selection = selectAffected({ changedFiles: ['docs-site/a.md'], turbo, packageDirs, tasks: ['test'] });
+    expect(turboFilters(selection)).toEqual(['--filter=//']);
+    expect(turboFilters({ changed: [], extra: [] })).toEqual([]);
+  });
+
+  it('runs everything for a lockfile change', () => {
+    expect(selectAffected({ changedFiles: ['pnpm-lock.yaml'], turbo, packageDirs, tasks: ['test'] })).toEqual({
+      full: true,
+    });
   });
 });
 

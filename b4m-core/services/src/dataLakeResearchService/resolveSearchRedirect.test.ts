@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveSearchRedirect } from './resolveSearchRedirect';
+import { isRetryableUnresolved, resolveSearchRedirect, type UnresolvedDetail } from './resolveSearchRedirect';
 
 const GOTO = 'https://www.google.com/goto?url=opaque-token';
 
@@ -36,6 +36,7 @@ describe('resolveSearchRedirect', () => {
     expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({
       url: 'https://en.wikipedia.org/wiki/Qubit',
       resolved: 'followed',
+      via: 'location',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(GOTO, expect.objectContaining({ redirect: 'manual', credentials: 'omit' }));
@@ -65,6 +66,152 @@ describe('resolveSearchRedirect', () => {
     expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({
       url: 'https://arxiv.org/abs/1?a=1&b=2',
       resolved: 'followed',
+      via: 'meta_refresh',
+    });
+  });
+
+  describe('200 page mechanisms', () => {
+    const pageWith = (body: string, headers: Record<string, string> = {}) =>
+      new Response(body, { status: 200, headers: { 'content-type': 'text/html', ...headers } });
+    const run = (response: Response) => resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => response) });
+
+    it('follows a Refresh header', async () => {
+      const result = await run(pageWith('<html></html>', { refresh: '0; URL="https://example.com/r?a=1"' }));
+      expect(result).toEqual({ url: 'https://example.com/r?a=1', resolved: 'followed', via: 'refresh_header' });
+    });
+
+    it('reports via meta_refresh for a meta refresh', async () => {
+      const result = await run(pageWith('<meta http-equiv="refresh" content="0;url=https://example.com/m">'));
+      expect(result).toMatchObject({ url: 'https://example.com/m', via: 'meta_refresh' });
+    });
+
+    it('follows location.replace with escaped literal', async () => {
+      const result = await run(
+        pageWith(String.raw`<script>location.replace("https:\/\/example.com\/a?b\x3dc\u0026d\u003de");</script>`)
+      );
+      expect(result).toEqual({ url: 'https://example.com/a?b=c&d=e', resolved: 'followed', via: 'script' });
+    });
+
+    it('follows window.location.href assignment', async () => {
+      const result = await run(pageWith("<script>window.location.href='https://example.com/h';</script>"));
+      expect(result).toEqual({ url: 'https://example.com/h', resolved: 'followed', via: 'script' });
+    });
+
+    it('skips a non-validating script literal and uses a later valid one', async () => {
+      const result = await run(
+        pageWith(
+          '<script>top.location = "https://www.google.com/x"; self.location.assign("https://example.com/ok")</script>'
+        )
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/ok', via: 'script' });
+    });
+
+    it('follows a lone anchor, decoding entities', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.google.com/x">back</a><a href="https://example.com/p?a=1&amp;b=2&#39;">go</a>')
+      );
+      expect(result).toEqual({ url: 'https://example.com/p?a=1&b=2%27', resolved: 'followed', via: 'anchor' });
+    });
+
+    it('dedupes repeated anchors to the same url', async () => {
+      const result = await run(pageWith('<a href="https://example.com/a">1</a><a href="https://example.com/a">2</a>'));
+      expect(result).toMatchObject({ url: 'https://example.com/a', via: 'anchor' });
+    });
+
+    it('prefers the Refresh header over a body script', async () => {
+      const result = await run(
+        pageWith('<script>location.replace("https://example.com/script")</script>', {
+          refresh: '0;url=https://example.com/header',
+        })
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/header', via: 'refresh_header' });
+    });
+
+    it.each([
+      ['a google url', '<script>location.replace("https://www.google.com/x")</script>'],
+      ['javascript:', '<script>location.href = "javascript:void(0)"</script>'],
+      ['a relative url', '<script>window.location = "/relative"</script>'],
+    ])('does not follow a script pointing at %s', async (_label, body) => {
+      const result = await run(pageWith(body));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ scriptRedirect: true, externalLinks: 0 });
+    });
+
+    it('does not follow a lone anchor on a captcha page', async () => {
+      const result = await run(pageWith('<p>unusual traffic</p><a href="https://example.com/a">a</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'captcha' });
+    });
+
+    it('does not follow a script redirect on a consent page', async () => {
+      const result = await run(
+        pageWith('<p>Before you continue</p><script>location.replace("https://example.com/s")</script>')
+      );
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'consent', scriptRedirect: true });
+    });
+
+    it('still follows a meta refresh on a captcha page', async () => {
+      const result = await run(
+        pageWith('unusual traffic<meta http-equiv="refresh" content="0;url=https://example.com/m">')
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/m', via: 'meta_refresh' });
+    });
+
+    it('ignores a lone youtube.com anchor', async () => {
+      const result = await run(pageWith('<a href="https://www.youtube.com/watch?v=1">v</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ bodyHint: 'other', externalLinks: 0 });
+    });
+
+    it('follows the real link when a youtube.com link sits beside it', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.youtube.com/watch?v=1">v</a><a href="https://example.com/real">r</a>')
+      );
+      expect(result).toEqual({ url: 'https://example.com/real', resolved: 'followed', via: 'anchor' });
+    });
+
+    it.each([
+      'https://www.google.co.uk/x',
+      'https://google.de/x',
+      'https://news.google.com.au/x',
+      'https://fonts.gstatic.com/x',
+    ])('does not follow a script redirect to %s', async target => {
+      const result = await run(pageWith(`<script>location.replace("${target}")</script>`));
+      expect(result.resolved).toBe('unresolved');
+    });
+
+    it.each(['https://notyoutube.com/a', 'https://google.example.com/a'])(
+      'still follows an anchor to %s',
+      async target => {
+        const result = await run(pageWith(`<a href="${target}">a</a>`));
+        expect(result).toMatchObject({ url: target, via: 'anchor' });
+      }
+    );
+
+    it('is unresolved for two distinct external anchors', async () => {
+      const result = await run(pageWith('<a href="https://example.com/a">a</a><a href="https://example.org/b">b</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ externalLinks: 2, scriptRedirect: false, hasRefreshHeader: false });
+    });
+
+    it('counts no external links when anchors only point at google hosts', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.google.com/a">a</a><a href="https://accounts.google.com/b">b</a>')
+      );
+      expect(result.detail).toMatchObject({ externalLinks: 0 });
+    });
+
+    it('flags a refresh header that does not validate', async () => {
+      const result = await run(pageWith('x', { refresh: '0;url=https://www.google.com/x' }));
+      expect(result.detail).toMatchObject({ hasRefreshHeader: true, bodyLength: 1 });
+    });
+
+    it('stays fast on a pathological body', async () => {
+      const started = Date.now();
+      await run(pageWith(`<a ${'href='.repeat(8000)}`));
+      await run(pageWith(`location.href="${'\\'.repeat(30000)}`));
+      expect(Date.now() - started).toBeLessThan(1000);
     });
   });
 
@@ -119,6 +266,19 @@ describe('resolveSearchRedirect', () => {
       noToken(result);
     });
 
+    it('keeps URLs and page text out of the 200 structure markers', async () => {
+      const result = await run(
+        vi.fn(async () =>
+          page(
+            '<a href="https://a.example/opaque-token">x</a><a href="https://b.example/y">y</a>location.href="/opaque-token"'
+          )
+        )
+      );
+      expect(result.detail).toMatchObject({ externalLinks: 2, scriptRedirect: true });
+      noToken(result);
+      expect(JSON.stringify(result.detail)).not.toContain('example');
+    });
+
     it('reports a 302 back to Google with the location host only', async () => {
       const result = await run(vi.fn(async () => redirect(302, 'https://consent.google.com/m?continue=opaque-token')));
       expect(result.detail).toEqual({ reason: 'google_location', status: 302, locationHost: 'consent.google.com' });
@@ -142,12 +302,45 @@ describe('resolveSearchRedirect', () => {
         status: 200,
         contentType: 'text/html',
         bodyHint: 'consent',
+        bodyLength: 'Before you continue to Google'.length + '<html></html>'.length,
+        hasRefreshHeader: false,
+        scriptRedirect: false,
+        externalLinks: 0,
       });
     });
 
     it('reports a redirect notice page', async () => {
       const result = await run(vi.fn(async () => page('<title>Redirect Notice</title>')));
       expect(result.detail?.bodyHint).toBe('redirect_notice');
+    });
+
+    it('extracts a decoded, collapsed, capped title and flags a verifying page', async () => {
+      const long = 'x'.repeat(200);
+      const titled = await run(vi.fn(async () => page('<title>\n Verifying  &amp; wait \n</title>')));
+      expect(titled.detail).toMatchObject({ bodyTitle: 'Verifying & wait', bodyHint: 'verifying' });
+      const capped = await run(vi.fn(async () => page(`<title>${long}</title>`)));
+      expect(capped.detail?.bodyTitle).toHaveLength(80);
+    });
+
+    it('omits bodyTitle when the page has no title', async () => {
+      const result = await run(vi.fn(async () => page('<html>nothing</html>')));
+      expect(result.detail).not.toHaveProperty('bodyTitle');
+      expect(result.detail?.bodyHint).toBe('other');
+    });
+
+    it.each([
+      ['English', '<title>Verifying your request</title>'],
+      ['German', '<title>Verifizierung Ihrer Anfrage</title>'],
+    ])('hints verifying for a %s title', async (_label, html) => {
+      const result = await run(vi.fn(async () => page(html)));
+      expect(result.detail?.bodyHint).toBe('verifying');
+    });
+
+    it('lets captcha and consent take precedence over verifying', async () => {
+      const captcha = await run(vi.fn(async () => page('<title>Verifying</title> unusual traffic')));
+      expect(captcha.detail?.bodyHint).toBe('captcha');
+      const consent = await run(vi.fn(async () => page('<title>Verifying</title> before you continue')));
+      expect(consent.detail?.bodyHint).toBe('consent');
     });
 
     it('reports a 5xx without reading a body', async () => {
@@ -187,5 +380,68 @@ describe('resolveSearchRedirect', () => {
       expect(result.detail).toEqual({ reason: 'network_error' });
       noToken(result);
     });
+  });
+});
+
+describe('isRetryableUnresolved', () => {
+  const waiting: UnresolvedDetail = { reason: 'no_meta_refresh', status: 200, bodyHint: 'verifying' };
+  it.each<[string, UnresolvedDetail | undefined, boolean]>([
+    ['a 200 waiting page', waiting, true],
+    ['a 200 other page', { ...waiting, bodyHint: 'other' }, true],
+    ['a timeout', { reason: 'timeout' }, true],
+    ['captcha', { ...waiting, bodyHint: 'captcha' }, false],
+    ['consent', { ...waiting, bodyHint: 'consent' }, false],
+    ['a 4xx', { reason: 'status', status: 429 }, false],
+    ['a 5xx', { reason: 'status', status: 503 }, false],
+    ['a google location', { reason: 'google_location', status: 302 }, false],
+    ['a bad location', { reason: 'bad_location', status: 302 }, false],
+    ['a network error', { reason: 'network_error' }, false],
+    ['no detail', undefined, false],
+  ])('is %s -> %s', (_label, detail, expected) => {
+    expect(isRetryableUnresolved(detail)).toBe(expected);
+  });
+});
+
+describe('resolveSearchRedirect cookies', () => {
+  const waitingPage = (cookies: string[]) => {
+    const headers = new Headers({ 'content-type': 'text/html' });
+    for (const cookie of cookies) headers.append('set-cookie', cookie);
+    return new Response('<title>Google</title>', { status: 200, headers });
+  };
+
+  it('returns name=value pairs from multiple Set-Cookie headers without attributes', async () => {
+    const result = await resolveSearchRedirect(GOTO, {
+      fetchImpl: vi.fn(async () =>
+        waitingPage(['NID=abc; Path=/; HttpOnly', '__Secure-STRP=def; Secure; SameSite=Lax'])
+      ),
+    });
+    expect(result.retryCookies).toEqual(['NID=abc', '__Secure-STRP=def']);
+    expect(JSON.stringify(result.detail)).not.toMatch(/NID|abc|def/);
+  });
+
+  it('caps the pair count and the total size', async () => {
+    const many = Array.from({ length: 30 }, (_v, i) => `c${i}=v`);
+    const counted = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage(many)) });
+    expect(counted.retryCookies).toHaveLength(10);
+    const big = Array.from({ length: 5 }, (_v, i) => `c${i}=${'x'.repeat(1500)}`);
+    const sized = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage(big)) });
+    expect(sized.retryCookies).toHaveLength(2);
+  });
+
+  it('has no retryCookies when none were set', async () => {
+    const result = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage([])) });
+    expect(result).not.toHaveProperty('retryCookies');
+  });
+
+  it('sends the cookies option as a Cookie header', async () => {
+    const fetchImpl = vi.fn(async () => redirect(302, 'https://example.org/a'));
+    await resolveSearchRedirect(GOTO, { fetchImpl, cookies: ['NID=abc', 'B=c'] });
+    expect(fetchImpl).toHaveBeenCalledWith(GOTO, expect.objectContaining({ headers: { Cookie: 'NID=abc; B=c' } }));
+  });
+
+  it('sends no Cookie header without the option', async () => {
+    const fetchImpl = vi.fn(async () => redirect(302, 'https://example.org/a'));
+    await resolveSearchRedirect(GOTO, { fetchImpl });
+    expect(fetchImpl.mock.calls[0][1]).not.toHaveProperty('headers');
   });
 });
