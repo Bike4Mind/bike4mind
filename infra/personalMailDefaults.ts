@@ -4,7 +4,7 @@
  * A personal stage deployed from a clean shell would otherwise fall back to SMTP. When the deploy
  * account holds the two shared SSM parameters below, their values become SES_CONFIGURATION_SET and
  * SES_IDENTITY and MAIL_TRANSPORT becomes `ses`; infra/mailTransport.ts then reads the filled env as
- * it would an exported one. The names live only in SSM, never in this repo.
+ * it would an exported one. The names are read from SSM rather than written into this repo.
  *
  * Production, dev, previews and self-host keep whatever the deployer exports. Any explicit
  * MAIL_TRANSPORT / SES_* value wins, so MAIL_TRANSPORT=smtp is the opt-out.
