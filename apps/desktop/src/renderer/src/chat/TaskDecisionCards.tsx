@@ -111,6 +111,15 @@ export function TaskDecisionCard({
  */
 export const TASK_DECISION_LIST_MAX_HEIGHT = '40vh';
 
+/** The decisions shown above a conversation's composer: asked by agents under it, and by it itself. */
+export function decisionsFor(
+  sessionId: string | null,
+  decisions: readonly PendingTaskDecision[],
+): readonly PendingTaskDecision[] {
+  if (!sessionId) return [];
+  return decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
+}
+
 /** Above the composer: decisions asked by agents under this conversation, and by this conversation itself. */
 export function TaskDecisionCards({
   sessionId,
@@ -121,8 +130,7 @@ export function TaskDecisionCards({
   decisions: readonly PendingTaskDecision[];
   onOpenSession: (sessionId: string) => void;
 }) {
-  if (!sessionId) return null;
-  const shown = decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
+  const shown = decisionsFor(sessionId, decisions);
   if (shown.length === 0) return null;
   return (
     <Box

@@ -99,7 +99,7 @@ import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
-import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
@@ -2049,7 +2049,7 @@ export function ChatShell({
 
               {presentingStage && (
                 <PresenterPendingNotice
-                  count={heldRelays.held.length + taskDecisions.length}
+                  count={heldRelays.held.length + decisionsFor(persistedId, taskDecisions).length}
                   onTurnOff={() => orchestratorPrefs.setPresenter(false)}
                 />
               )}
