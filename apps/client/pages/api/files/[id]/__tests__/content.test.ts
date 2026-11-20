@@ -101,7 +101,11 @@ describe('GET /api/files/[id]/content', () => {
   it('redirects to a freshly signed S3 link with a bounded private cache', async () => {
     const { res, error } = await call(validQuery());
     expect(error).toBeUndefined();
-    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 3000, audience: 'browser' });
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', {
+      expiresIn: 3000,
+      audience: 'browser',
+      ResponseContentType: 'image/png',
+    });
     expect(res.redirect).toHaveBeenCalledWith(302, s3Url(3600));
     // Signed for the 3000s left until token exp 04:00 (now 03:10), not the full hour.
     // min(token exp 04:00, S3 04:10) - now 03:10 - 60s margin = 2940s, capped at 1800.
@@ -119,7 +123,11 @@ describe('GET /api/files/[id]/content', () => {
   it('caches no longer than the link token lives', async () => {
     vi.setSystemTime((exp - 600) * 1000);
     const { res } = await call(validQuery());
-    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 600, audience: 'browser' });
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', {
+      expiresIn: 600,
+      audience: 'browser',
+      ResponseContentType: 'image/png',
+    });
     expect(res.headers['Cache-Control']).toBe('private, max-age=540');
   });
 
@@ -159,5 +167,30 @@ describe('GET /api/files/[id]/content', () => {
   it('does not query by a malformed id', async () => {
     await call(validQuery({ id: { $ne: null } }));
     expect(h.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/files/[id]/content - response disposition', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now });
+    h.getSignedUrl.mockReset().mockResolvedValue(s3Url(3600));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['text/html', 'image/svg+xml', 'text/plain', undefined])('signs %s as an attachment', async mimeType => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'page.html' }));
+    const { error } = await call(validQuery());
+    expect(error).toBeUndefined();
+    const options = h.getSignedUrl.mock.calls[0][2];
+    expect(options.ResponseContentDisposition).toBe('attachment; filename="page.html"');
+    expect(options.ResponseContentType).toBeUndefined();
+  });
+
+  it.each(['image/png', 'application/pdf', 'video/mp4'])('signs %s inline with a pinned type', async mimeType => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'media' }));
+    await call(validQuery());
+    const options = h.getSignedUrl.mock.calls[0][2];
+    expect(options.ResponseContentDisposition).toBeUndefined();
+    expect(options.ResponseContentType).toBe(mimeType);
   });
 });

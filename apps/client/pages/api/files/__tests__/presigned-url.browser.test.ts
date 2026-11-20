@@ -127,3 +127,28 @@ describe('generic file browser download signing', () => {
     }
   );
 });
+
+describe('response disposition on signed reads', () => {
+  const disposition = (url: string | null) => new URL(url!).searchParams.get('response-content-disposition');
+  const contentType = (url: string | null) => new URL(url!).searchParams.get('response-content-type');
+
+  it.each(['browser', 'server'])('downloads html and serves png inline for %s', async audience => {
+    h.findOne.mockImplementation(async ({ filePath }: { filePath: string }) => ({
+      _id: filePath,
+      moderationStatus: 'clean',
+      fileName: filePath === 'owned/page.html' ? 'page.html' : 'photo.png',
+      mimeType: filePath === 'owned/page.html' ? 'text/html' : 'image/png',
+    }));
+    const [html, png] = await urls(['owned/page.html', 'owned/photo.png'], '600', audience);
+    expect(disposition(html)).toBe('attachment; filename="page.html"');
+    expect(contentType(html)).toBeNull();
+    expect(disposition(png)).toBeNull();
+    expect(contentType(png)).toBe('image/png');
+  });
+
+  it('downloads an untracked modal key under its key name', async () => {
+    h.findOne.mockResolvedValue(null);
+    const [url] = await urls(['modals/banner.html']);
+    expect(disposition(url)).toBe('attachment; filename="banner.html"');
+  });
+});

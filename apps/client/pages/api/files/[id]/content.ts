@@ -7,6 +7,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { baseApi } from '@server/middlewares/baseApi';
 import { fileContentKey } from '@bike4mind/server-utils/files/browserFileSigner';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // Seconds. The redirect must go stale before the S3 link it points at does.
 const REDIRECT_SAFETY_MARGIN_SECONDS = 60;
@@ -45,6 +46,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const signed = await getFilesStorage().getSignedUrl(fabFile.filePath, 'get', {
       expiresIn: Math.max(60, Math.min(FILE_URL_TTL_SECONDS, check.exp - nowSeconds)),
       audience: 'browser',
+      ...storageReadOverrides({ mimeType: fabFile.mimeType, fileName: fabFile.fileName, key: fabFile.filePath }),
     });
     const s3ExpirySeconds = signedUrlExpiresAt(signed, FILE_URL_TTL_SECONDS).getTime() / 1000;
     const maxAge = Math.max(
