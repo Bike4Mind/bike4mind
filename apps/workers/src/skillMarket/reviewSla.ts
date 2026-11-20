@@ -1,5 +1,11 @@
 import { canAdministerOrganization } from '@bike4mind/common';
-import { SkillListing, SkillListingVersion, User, type ISkillListingVersionDocument } from '@bike4mind/database';
+import {
+  SkillListing,
+  SkillListingVersion,
+  User,
+  spaceRepository,
+  type ISkillListingVersionDocument,
+} from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
 import { loadMarketSettings, notifyUser } from '@bike4mind/server-utils/skillMarket/market';
@@ -89,6 +95,12 @@ async function remindOne(
     reviewers = org
       ? [org.userId, ...(org.adminUserIds ?? [])].filter(id => Boolean(id) && canAdministerOrganization({ id }, org))
       : [];
+  } else if (listing.visibility === 'space' && listing.spaceId) {
+    const space = await spaceRepository.findLiveById(listing.spaceId);
+    // The Space's reviewers are its owner and admin members; super-admins cover a Space that is gone.
+    reviewers = space
+      ? [space.ownerUserId, ...space.members.filter(m => m.role === 'admin').map(m => m.userId)]
+      : await superAdminIds();
   } else {
     reviewers = await superAdminIds();
   }

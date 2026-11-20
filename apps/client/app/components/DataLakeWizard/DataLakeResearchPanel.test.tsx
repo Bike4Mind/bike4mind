@@ -922,6 +922,15 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
     });
 
+    it('labels hits whose search link could not be resolved', () => {
+      renderPanel({
+        runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4, unresolvedRedirect: 3, proposed: 1 } })],
+      });
+      expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(
+        /3 search link could not be resolved/
+      );
+    });
+
     it('names the model that judged a run', () => {
       renderPanel({
         runs: [run({ judgeModel: 'gpt-4.1-mini', totals: { ...emptyResearchRunTotals(), proposed: 1 } })],

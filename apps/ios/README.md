@@ -120,6 +120,14 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
   no team. Nothing is gated. Once an Apple Developer team id is configured: set `DEVELOPMENT_TEAM`, enable the Push
   Notifications and Associated Domains capabilities on the App ID, and publish the AASA file on app.bike4mind.com.
   Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
+- **Signing config**: `Config/Signing.xcconfig` supplies the team, the three bundle ids and the three entitlements paths to every
+  target, with defaults equal to the team/CI values. It ends with an optional `#include? "Local.xcconfig"`; that file is gitignored,
+  so a developer overrides the values in it without touching the project. To build to a personal device, copy
+  `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, `B4M_APP_BUNDLE_ID` and the personal
+  entitlements (`Config/Entitlements/*.personal.entitlements`, empty because a free team signs none of these capabilities); see
+  [DEVICE_TESTING.md](DEVICE_TESTING.md). `Tools/check-entitlements-parity.sh` checks the team entitlements against `B4MKit`, requires the
+  personal variants to declare nothing, and checks the xcconfig defaults point at the committed files. CI's `fastlane` passes
+  `DEVELOPMENT_TEAM` on the command line, which overrides the xcconfig.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
   opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).
 

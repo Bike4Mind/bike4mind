@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
-import { AssistantBriefModel, assistantBriefRepository } from './AssistantBriefModel';
+import { AssistantBriefModel, assistantBriefRepository, type AssistantBriefContent } from './AssistantBriefModel';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -10,13 +10,75 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  await AssistantBriefModel.init();
 });
 afterAll(async () => {
   await mongoose.disconnect();
-  await server.stop();
+  await server?.stop();
 });
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(async () => {
   await AssistantBriefModel.deleteMany({});
+});
+
+const NOW = new Date('2026-11-18T00:00:00.000Z');
+const createComposingBrief = () =>
+  assistantBriefRepository.createComposing({ userId: 'owner', periodStart: NOW, periodEnd: NOW });
+const content: AssistantBriefContent = {
+  headline: 'Daily brief',
+  happened: [{ id: 'item', text: 'Completed work' }],
+  handled: [],
+  decisions: [],
+};
+
+describe('assistant brief terminal updates', () => {
+  it('settles valid content once and keeps the original owner', async () => {
+    const brief = await createComposingBrief();
+    const id = String(brief._id);
+
+    await expect(assistantBriefRepository.markReady(id, content, NOW)).resolves.toBe(true);
+    await expect(assistantBriefRepository.markFailed(id, 'late failure')).resolves.toBe(false);
+    expect(await assistantBriefRepository.findByIdForUser(id, 'owner')).toMatchObject({
+      status: 'ready',
+      happened: content.happened,
+      composedAt: NOW,
+    });
+    expect(await assistantBriefRepository.findByIdForUser(id, 'another-owner')).toBeNull();
+  });
+
+  it('rejects empty item text without partially settling the composing row', async () => {
+    const brief = await createComposingBrief();
+    const id = String(brief._id);
+
+    await expect(
+      assistantBriefRepository.markReady(
+        id,
+        {
+          ...content,
+          happened: [{ id: 'item', text: '' }],
+        },
+        NOW
+      )
+    ).rejects.toMatchObject({ name: 'ValidationError' });
+    expect(await assistantBriefRepository.findById(id)).toMatchObject({
+      status: 'composing',
+      headline: null,
+      happened: [],
+    });
+  });
+
+  it('settles a failed brief once without allowing a later ready overwrite', async () => {
+    const brief = await createComposingBrief();
+    const id = String(brief._id);
+
+    await expect(assistantBriefRepository.markFailed(id, 'provider unavailable')).resolves.toBe(true);
+    await expect(assistantBriefRepository.markReady(id, content, NOW)).resolves.toBe(false);
+    expect(await assistantBriefRepository.findById(id)).toMatchObject({
+      status: 'failed',
+      failureReason: 'provider unavailable',
+    });
+  });
 });
 
 const fromEmail = (emailId: string) => ({ kind: 'email' as const, emailId });
@@ -59,5 +121,31 @@ describe('assistantBriefRepository.removeEmailSourcedItems', () => {
 
     const untouched = await AssistantBriefModel.findById(theirs._id).lean();
     expect(untouched?.decisions).toHaveLength(2);
+  });
+});
+
+describe('assistant brief settlement', () => {
+  it('validates ready content while settling only a composing brief', async () => {
+    const update = vi.spyOn(AssistantBriefModel, 'updateOne').mockResolvedValue({ modifiedCount: 1 } as never);
+    const content = { headline: 'Ready', happened: [], handled: [], decisions: [] };
+    const composedAt = new Date('2026-01-01');
+
+    expect(await assistantBriefRepository.markReady('brief', content, composedAt)).toBe(true);
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      { _id: 'brief', status: 'composing' },
+      { $set: { ...content, status: 'ready', composedAt } },
+      { runValidators: true }
+    );
+  });
+
+  it('validates failure details without claiming an already settled brief changed', async () => {
+    const update = vi.spyOn(AssistantBriefModel, 'updateOne').mockResolvedValue({ modifiedCount: 0 } as never);
+
+    expect(await assistantBriefRepository.markFailed('brief', 'Unavailable')).toBe(false);
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      { _id: 'brief', status: 'composing' },
+      { $set: { status: 'failed', failureReason: 'Unavailable' } },
+      { runValidators: true }
+    );
   });
 });

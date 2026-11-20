@@ -743,7 +743,7 @@ export const useSubscribeToSession = (sessionId?: string) => {
     [queryClient, endJob, isJobRunning]
   );
 
-  const query = useMemo(() => (sessionId ? { _id: sessionId } : null), [sessionId]);
+  const query = useMemo(() => (sessionId && !isOptimisticId(sessionId) ? { _id: sessionId } : null), [sessionId]);
 
   useSubscribeCollection('sessionmodels', query, callback);
 };

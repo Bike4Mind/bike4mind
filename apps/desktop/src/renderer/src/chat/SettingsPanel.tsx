@@ -46,6 +46,8 @@ import {
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { useMenuBarSetting } from './menuBarSetting';
+import type { NotifyScope } from '@shared/attention';
+import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
@@ -57,6 +59,13 @@ import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
+
+const settingsColumnSx = {
+  ...contentColumnSx,
+  maxWidth: 1040,
+  boxSizing: 'border-box',
+  px: { xs: 3, md: 5 },
+} as const;
 
 /** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
@@ -214,6 +223,43 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
           input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
       />
+    ),
+  };
+}
+
+const NOTIFY_SCOPE_LABEL: Record<NotifyScope, string> = { agents: 'Agents only', all: 'All sessions' };
+
+function notifyScopeEntry(scope: NotifyScope, setScope: (scope: NotifyScope) => void): ConfigEntry {
+  return {
+    id: 'notify-scope',
+    icon: null,
+    label: 'Notify me about',
+    summary: notifyScopeSummary(scope),
+    description:
+      'Which sessions send a notification, count on the dock badge and play the chime when they need your approval or answer.',
+    control: (
+      <ToggleButtonGroup
+        size="sm"
+        value={scope}
+        onChange={(_event, next) => {
+          if (next) setScope(next as NotifyScope);
+        }}
+        aria-label="Notify me about"
+        data-testid="settings-notify-scope-group"
+        sx={{
+          bgcolor: 'background.level1',
+          borderRadius: 'md',
+          p: 0.5,
+          gap: 0.5,
+          '& .MuiButton-root': { border: 0, borderRadius: 'sm' },
+        }}
+      >
+        {(['agents', 'all'] as const).map(option => (
+          <Button key={option} value={option} data-testid={`settings-notify-scope-${option}-btn`}>
+            {NOTIFY_SCOPE_LABEL[option]}
+          </Button>
+        ))}
+      </ToggleButtonGroup>
     ),
   };
 }
@@ -550,6 +596,7 @@ function useSettingsEntries(
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
+  const [notifyScope, setNotifyScope] = useNotifyScope();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -562,6 +609,7 @@ function useSettingsEntries(
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      notifyScopeEntry(notifyScope, setNotifyScope),
       menuBarEntry(menuBar, toggleMenuBar),
       {
         id: 'orchestration-policy',
@@ -625,7 +673,7 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+    entries: ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
   },
   {
     id: 'conversations',
@@ -710,15 +758,21 @@ export function SettingsScreen({
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
-          whole window, so the back button and title line up with the page below them. */}
+          whole window, so the back button lines up with the page below it: shares settingsColumnSx with the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ ...settingsColumnSx, py: 1.25 }}
+        >
           <IconButton
             size="sm"
             variant="plain"
             color="neutral"
             aria-label="Back to conversations"
             onClick={onClose}
+            sx={{ ml: -0.75 }}
             data-testid="settings-close-btn"
           >
             <ArrowLeftIcon />
@@ -762,7 +816,7 @@ export function SettingsScreen({
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
           <Box
-            sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 4 }}
+            sx={{ ...settingsColumnSx, py: 4 }}
             data-testid={`settings-page-${section}`}
           >
             <SectionPage section={section} entries={entries[section]} />

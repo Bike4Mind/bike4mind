@@ -137,6 +137,33 @@ describe('Config eager-read hardening', () => {
   });
 });
 
+describe('Config placeholder secrets', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it.each(['my-secret-placeholder-value', 'change-me-openssl-rand-hex-32', ''])(
+    'refuses JWT_SECRET and SESSION_SECRET of %j on use, naming only the secret',
+    async value => {
+      mockResourceWithUnlinked({ JWT_SECRET: { value }, SESSION_SECRET: { value } });
+
+      const { Config } = await import('./config');
+
+      expect(() => Config.JWT_SECRET).toThrow(/^JWT_SECRET is not configured/);
+      expect(() => Config.SESSION_SECRET).toThrow(/^SESSION_SECRET is not configured/);
+      expect(Config.MONGODB_URI).toBe('mongodb://localhost/test');
+    }
+  );
+
+  it('reads a placeholder SECRET_ENCRYPTION_KEY as unset', async () => {
+    mockResourceWithUnlinked({ SECRET_ENCRYPTION_KEY: { value: 'my-secret-placeholder-value' } });
+
+    const { Config } = await import('./config');
+
+    expect(Config.SECRET_ENCRYPTION_KEY).toBeUndefined();
+  });
+});
+
 describe('isE2EEnabled', () => {
   const ENV_KEYS = ['E2E_ENDPOINTS_ENABLED', 'IS_LOCAL', 'NODE_ENV'] as const;
   let savedEnv: Record<string, string | undefined>;

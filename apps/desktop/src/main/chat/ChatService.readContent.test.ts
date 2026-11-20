@@ -33,6 +33,7 @@ function allowRules(rules: readonly string[]): PermissionRuleSet {
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
 }));
 

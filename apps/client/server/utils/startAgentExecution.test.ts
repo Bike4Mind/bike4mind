@@ -60,7 +60,9 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitApiKeyCompletion: mockAdmitApiKeyCompletion }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+}));
 
 vi.mock('@bike4mind/server-utils/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
@@ -68,7 +70,7 @@ vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
 }));
 
-vi.mock('@server/utils/agentExecutorFunctionName', () => ({
+vi.mock('@bike4mind/server-utils/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
@@ -843,6 +845,7 @@ describe('startAgentExecution', () => {
     const result = await startAgentExecution(input({ userId: 'invoke-fails' }), logger);
 
     expect(result).toMatchObject({ ok: false, reason: 'dispatch_failed', executionId: 'exec1' });
+    expect(result).not.toHaveProperty('dispatchUnconfirmed');
     expect(mockQuestDeleteOne).toHaveBeenCalledWith({ _id: 'quest1' });
   });
 
@@ -876,7 +879,9 @@ describe('container startup transport', () => {
       const result = await startAgentExecution(input({ userId: 'lost-ack' }), logger);
       expect(result).toMatchObject({
         ok: false,
+        reason: 'dispatch_failed',
         executionId: 'exec1',
+        dispatchUnconfirmed: true,
         message: expect.stringContaining('could not be confirmed'),
       });
       expect(result).toMatchObject({ message: expect.stringContaining('exec1') });

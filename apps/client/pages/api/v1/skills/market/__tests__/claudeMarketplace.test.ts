@@ -75,9 +75,15 @@ vi.mock('@bike4mind/database', () => ({
   assignClaudePluginName: mockAssignName,
   SkillBundle: { find: mockFindBundles, findById: mockFindBundle },
   SkillListingVersion: { findById: mockFindVersion, findOne: mockFindPinnedVersion, find: mockFindVersions },
+  spaceRepository: {
+    findIdsForUser: async () => [],
+    findIdsAdministeredBy: async () => [],
+    findLiveById: async () => null,
+  },
   adminSettingsRepository: {},
   inboxRepository: {},
 }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: async () => false }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {
     findMembershipOrgIds: mockMemberOrgs,

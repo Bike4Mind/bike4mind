@@ -282,6 +282,7 @@ import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { createSpendFreezeDenialReader, type SpendFreezeDenialDeps } from './agentExecutor.spendFreeze';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
@@ -362,7 +363,7 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // Single source for the gate defaults: the schema defaults in common.
 const CONFIDENCE_GATE_FALLBACK = OrchestrationDefaultsSchema.parse({});
 
-// `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
+// `persistRunAsQuest` lives in `@bike4mind/server-utils/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
 // write contract - both code paths produce identical Quest docs.
 
@@ -2458,7 +2459,7 @@ async function runExecution(
         },
         getAgentMusicToolConfigDeps(logger)
       ),
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+      imageUrlSigningSecret: signingKey('search-image-url'),
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -2586,6 +2587,7 @@ async function runExecution(
       artifactsEnabled: enableArtifacts,
       isNewExecution,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     // Each agent round's output is capped at what the payer can afford; the loop below turns the
@@ -3824,7 +3826,7 @@ async function runExecution(
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
     // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
     // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
-    // apps/client/server/websocket/agentExecute.ts).
+    // packages/server-utils/src/agentExecution/gateResponse.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';
@@ -4932,7 +4934,7 @@ async function processSubagentDispatch(
         { ...mediaCaller, toolEnabled: mediaToolNames.includes('music_generation') },
         getAgentMusicToolConfigDeps(logger)
       ),
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+      imageUrlSigningSecret: signingKey('search-image-url'),
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates
@@ -5100,6 +5102,7 @@ async function processSubagentDispatch(
     const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
       artifactsEnabled: childArtifactsEnabled,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {

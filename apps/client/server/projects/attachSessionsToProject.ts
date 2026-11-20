@@ -13,7 +13,7 @@ import { NotFoundError, ProjectEvents, type ISessionDocument } from '@bike4mind/
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@bike4mind/server-utils/utils/sessionOperationCounts';
 
 export interface ProjectMutationContext {
   user: { id: string } & AiAccessStateFields;

@@ -165,6 +165,13 @@ export const providerStatusOf = (job: IGenerationJobDocument): number | undefine
 export const isRateLimitedFailure = (job: IGenerationJobDocument): boolean =>
   job.state === 'failed' && providerStatusOf(job) === 429;
 
+/**
+ * The level a route logs a failed job at. A submit our own step deadline cut off is an expected, handled outcome
+ * (no audio, hold refunded), so it is a warning; every other failure stays an error.
+ */
+export const failureLogLevelOf = (job: IGenerationJobDocument): 'warn' | 'error' =>
+  job.error?.code === 'orphaned_submit' && job.error.cutOffByStepDeadline ? 'warn' : 'error';
+
 // For a rate-limited failure recorded without a hint of its own.
 const DEFAULT_RETRY_AFTER_SECONDS = 30;
 

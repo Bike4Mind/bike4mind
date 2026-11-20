@@ -9,6 +9,11 @@ vi.mock('@bike4mind/database', async () => ({
       '../../../../../packages/database/src/utils/ability'
     )
   ).applySharedShareableRules,
+  applyOrganizationShareableRules: (
+    await vi.importActual<typeof import('../../../../../packages/database/src/utils/ability')>(
+      '../../../../../packages/database/src/utils/ability'
+    )
+  ).applyOrganizationShareableRules,
   AdminSettings: class AdminSettings {},
   CounterLog: class CounterLog {},
   Session: class Session {

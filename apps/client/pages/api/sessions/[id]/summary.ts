@@ -8,7 +8,7 @@ import { Request } from 'express';
 import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { assertSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@bike4mind/server-utils/utils/sessionOperationCounts';
 
 const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
   const sessionId = req.query.id;

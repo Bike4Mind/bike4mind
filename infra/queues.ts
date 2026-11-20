@@ -157,6 +157,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     vpc: lambdaVpc,
     // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
     // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    // eventBus: the data lake spend notice is queued as an email.send event.
     link: [
       ...allSecrets,
       websocketApi,
@@ -165,6 +166,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       appFilesBucket,
       dataLakeTaxonomyQueue,
       lakeMemoryQueue,
+      eventBus,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -278,7 +280,8 @@ const fabFileBucketNotification = fabFileBucket.notify({
         // Animated images are moderated frame by frame (up to 60 frames), which can exceed the default 20s/1024 MB.
         timeout: '2 minutes',
         memory: '2048 MB',
-        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         permissions: [
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
           // Required for Lambda's async-invoke failure mechanism to deliver the failed
@@ -463,7 +466,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
-    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
+    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -989,7 +992,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    link: [...allSecrets, websocketApi, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1011,7 +1014,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
-    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    link: [...allSecrets, websocketApi, lakeMemoryQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1074,7 +1077,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    link: [...allSecrets, fabFileBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Research runs resolve the web-search provider like ChatCompletion does; same wiring
@@ -1162,7 +1165,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // Generated media a notebook or message delete could not purge within its request budget
-// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
+// (packages/server-utils/src/sessions/purgeDeletedNotebookMedia.ts,
+// apps/client/server/sessions/purgeDeletedMessageMedia.ts) finishes here.
 const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
 const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
   visibilityTimeout: '6 minutes',
@@ -1395,7 +1399,8 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+    link: [...allSecrets, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1715,7 +1720,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     memory: '1024 MB',
     vpc: lambdaVpc,
     // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
-    link: [...allSecrets, websocketApi, appFilesBucket],
+    // eventBus: the org credit alert email from a run's debit is queued as an email.send event.
+    link: [...allSecrets, websocketApi, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1771,10 +1777,9 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
 );
 
 // Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
-// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
-// these queues, so a pair has no consumer until that wiring exists. Without core names
-// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
-// deploy here.
+// (web.ts) but subscribes no consumer: sst.config.ts hands the pairs to a package's
+// contributeInfra, which subscribes its own. Without core names nothing stops a pair from
+// reusing a core logical name, so codegen without infra/ fails the deploy here.
 const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
 const { contributedInfraResources } = generatedInfraResources;
 if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {

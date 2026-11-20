@@ -31,6 +31,7 @@ import { appWindows } from './windows';
 import { registerOrchestrateMini } from './orchestrateMini';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
+import { registerSessionHandoff } from './handoff';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -153,7 +154,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const attention = registerAttention({ openWindow: createWindow });
+  registerSessionHandoff(auth);
+  const attention = registerAttention({
+    openWindow: createWindow,
+    notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
+  });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();

@@ -75,7 +75,10 @@ vi.mock('@server/auth/auth', async orig => ({
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', async orig => ({
   ...(await orig<Record<string, unknown>>()),
-  memberOrgIdsFor: (...a: unknown[]) => h.memberOrgs(...a),
+  audienceIdsFor: async (...a: unknown[]) => ({
+    orgIds: (await h.memberOrgs(...a)) as string[],
+    spaceIds: [] as string[],
+  }),
   findListing: (...a: unknown[]) => h.findListing(...a),
   enforceSubmitRateLimits: async () => undefined,
 }));
@@ -353,6 +356,7 @@ describe('/api/v1/skills/market wire shapes', () => {
       created_at: CREATED.toISOString(),
       updated_at: CREATED.toISOString(),
       source_skill_id: 'skill-1',
+      space_id: null,
       share_token: 'secret-share-token',
       latest_version: 1,
       pending_version: null,
@@ -431,7 +435,7 @@ describe('/api/v1/skills/market wire shapes', () => {
     expect(page1.data[0]).not.toHaveProperty('share_token');
     expect(page1.data[0]).not.toHaveProperty('source_skill_id');
     expect(h.search).toHaveBeenLastCalledWith(
-      [ORG_ID],
+      { orgIds: [ORG_ID], spaceIds: [] },
       expect.objectContaining({ page: 1, limit: 10, sort: 'relevance', tags: ['review', 'ci'] })
     );
     expect(page1.next_cursor).toEqual(expect.any(String));
@@ -442,7 +446,10 @@ describe('/api/v1/skills/market wire shapes', () => {
       query: { q: 'review', limit: '10', cursor: page1.next_cursor },
     });
     expect(second._getJSONData().next_cursor).toBeNull();
-    expect(h.search).toHaveBeenLastCalledWith([ORG_ID], expect.objectContaining({ page: 2, limit: 10 }));
+    expect(h.search).toHaveBeenLastCalledWith(
+      { orgIds: [ORG_ID], spaceIds: [] },
+      expect.objectContaining({ page: 2, limit: 10 })
+    );
   });
 
   it('browse rejects a malformed cursor and an over-cap limit (422)', async () => {

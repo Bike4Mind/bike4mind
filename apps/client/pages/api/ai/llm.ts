@@ -31,7 +31,7 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -169,6 +169,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         sessionId,
         organizationId: effectiveOrgId,
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
+        // Platform connectors are switched on in the composer only; an API-key turn gets none.
+        ...(req.apiKeyInfo ? { enabledPlatformMcpConnections: undefined } : {}),
       },
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.

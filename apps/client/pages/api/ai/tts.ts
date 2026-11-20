@@ -22,6 +22,7 @@ import {
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
+  failureLogLevelOf,
   isRateLimitedFailure,
   prefersRespondAsync,
   providerStatusOf,
@@ -183,7 +184,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     case 'failed': {
       const failure = failedResponse(job, vendor);
       if (failure.status === 502) {
-        req.logger.error('TTS synthesis failed', { jobId: job.id, error: job.error, provider: vendor });
+        req.logger[failureLogLevelOf(job)]('TTS synthesis failed', {
+          jobId: job.id,
+          error: job.error,
+          provider: vendor,
+        });
       }
       if (failure.status === 429) res.setHeader('Retry-After', String(retryAfterSecondsOf(job)));
       return res.status(failure.status).json(failure.body);

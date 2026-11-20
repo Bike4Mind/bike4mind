@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { IUserDocument, isImageServeable } from '@bike4mind/common';
+import { IUserDocument, isImageServeable, type PendingActionResolutionOutcome } from '@bike4mind/common';
 import { Quest, Session, fabFileRepository } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { isValidObjectId } from './objectId';
@@ -21,12 +21,20 @@ const CURATED_FILE_SHARE_EXPIRATION_SECONDS = 7 * 24 * 60 * 60;
  * concurrent clicks (or a click racing a retry) both read the action, but only one claim matches.
  * Matching on `ts` binds the claim to the action the caller read, not a newer one that replaced it.
  * Callers claim after their pre-execution checks and immediately before executing; the action is
- * consumed even if execution then fails.
+ * consumed even if execution then fails. `outcome` is recorded with the claim so a brief that cited the
+ * action can show whether it was approved, denied or lapsed.
  */
-export async function claimPendingAction(questId: string, pendingActionTs: number): Promise<boolean> {
+export async function claimPendingAction(
+  questId: string,
+  pendingActionTs: number,
+  outcome: PendingActionResolutionOutcome
+): Promise<boolean> {
   const claimed = await Quest.findOneAndUpdate(
     { _id: questId, 'pendingAction.ts': pendingActionTs },
-    { $unset: { pendingAction: 1 } }
+    {
+      $unset: { pendingAction: 1 },
+      $set: { pendingActionResolution: { ts: pendingActionTs, outcome, at: new Date() } },
+    }
   );
   return claimed !== null;
 }
@@ -106,7 +114,7 @@ export async function executePendingAction(
       tokenAgeMs: Date.now() - pendingAction.ts,
       maxAgeMs: TOKEN_EXPIRATION_MS,
     });
-    await claimPendingAction(questId, pendingAction.ts);
+    await claimPendingAction(questId, pendingAction.ts, 'lapsed');
     return { success: false, message: 'This action has expired. Please start the request again.' };
   }
 
@@ -140,7 +148,7 @@ export async function executePendingAction(
     ) {
       return { success: false, message: 'This file is unavailable.' };
     }
-    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    if (!(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
       return { success: false, message: 'This action has already been processed.' };
     }
     try {
@@ -250,7 +258,7 @@ export async function executePendingAction(
 
     // Claimed only once every pre-execution check has passed, so a fixable failure above leaves the
     // action in place for another click.
-    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    if (!(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
       return { success: false, message: 'No pending action found \u2014 it may have already been processed.' };
     }
 
@@ -333,7 +341,7 @@ export async function cancelPendingActionOnQuest(
   expectedTs?: number
 ): Promise<PendingActionResult> {
   if (expectedTs !== undefined) {
-    if (!(await claimPendingAction(questId, expectedTs))) {
+    if (!(await claimPendingAction(questId, expectedTs, 'denied'))) {
       return { success: false, message: 'This action was already processed or replaced by a newer one.' };
     }
     logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', { questId, cleared: true });
@@ -341,11 +349,9 @@ export async function cancelPendingActionOnQuest(
   }
 
   try {
-    const result = await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
-    logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', {
-      questId,
-      cleared: !!result,
-    });
+    const pendingTs = (await Quest.findById(questId).select('pendingAction.ts'))?.pendingAction?.ts;
+    const cleared = pendingTs !== undefined && (await claimPendingAction(questId, pendingTs, 'denied'));
+    logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', { questId, cleared });
   } catch (error) {
     logger.error('[PendingActionExecutor] Failed to clear pendingAction on cancel', {
       error: error instanceof Error ? error.message : String(error),

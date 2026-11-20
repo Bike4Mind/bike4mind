@@ -353,6 +353,30 @@ describe('createRenderJobs', () => {
     expect(deps.findReadableFiles).toHaveBeenCalledWith([FILE_A], 'u1');
   });
 
+  it('admits captions synced to a voice clip on a disabled track', async () => {
+    const timeline = timelineInput({
+      tracks: [
+        { id: 'video-1', kind: 'video', clips: [{ id: 'v1', fileId: FILE_A, startMs: 0, durationMs: 5000 }] },
+        {
+          id: 'voice-1',
+          kind: 'voice',
+          enabled: false,
+          clips: [{ id: 'vo1', fileId: FILE_B, startMs: 0, durationMs: 5000 }],
+        },
+        {
+          id: 'captions-1',
+          kind: 'captions',
+          clips: [{ id: 'c1', text: 'Hello', startMs: 0, durationMs: 1000, syncedVoiceClipId: 'vo1' }],
+        },
+      ],
+    });
+    const { deps } = setup({
+      findComposition: vi.fn(async () => compositionWith(timeline)),
+      findReadableFiles: vi.fn(async () => new Map([[FILE_A, 'video/mp4']])),
+    });
+    expect(await run(deps)).toMatchObject({ ok: true });
+  });
+
   it.each(['image/svg+xml', 'image/heic', 'image/avif'])(
     'refuses a %s image clip as invalid_timeline before any credit hold',
     async mimeType => {

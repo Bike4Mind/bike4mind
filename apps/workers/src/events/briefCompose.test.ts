@@ -17,6 +17,7 @@ const activeActivity = {
   periodEnd: new Date('2026-11-17T00:00:00Z'),
   runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
   approvals: [{ questId: 'q1', sessionId: 's1', pendingActionTs: 5, tool: 'send_reply', summary: '{}' }],
+  questions: [],
   emails: [],
 };
 
@@ -33,6 +34,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
     complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
+    loadInstructions: vi.fn().mockResolvedValue([]),
     push: vi.fn().mockResolvedValue(undefined),
     emails: {
       markBriefed: vi.fn().mockResolvedValue(0),
@@ -63,8 +65,52 @@ describe('composeBrief', () => {
     const stored = deps.briefs.markReady.mock.calls[0][1];
     expect(stored.decisions[0].approval).toEqual({ questId: 'q1', sessionId: 's1', pendingActionTs: 5 });
     expect(deps.push).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', category: 'brief_ready', briefId: 'b1', body: '1 decision needs you.' })
+      expect.objectContaining({
+        userId: 'u1',
+        category: 'brief_ready',
+        briefId: 'b1',
+        body: 'An agent wants to run send_reply and is waiting for your confirmation.',
+        briefAction: 'approval',
+      })
     );
+  });
+
+  it('names the action kind on the push only when the brief holds exactly one decision', async () => {
+    const approval = (n: number) => ({ ...activeActivity.approvals[0], questId: `q${n}`, pendingActionTs: n });
+    const question = { questId: 'qq1', sessionId: 's1', reply: 'Which venue?', options: ['Hall', 'Garden'] };
+    const cases = [
+      { approvals: [], questions: [], expected: undefined },
+      { approvals: [approval(1)], questions: [], expected: 'approval' },
+      { approvals: [], questions: [question], expected: 'question' },
+      { approvals: [approval(1), approval(2)], questions: [], expected: undefined },
+      { approvals: [approval(1)], questions: [question], expected: undefined },
+    ];
+    for (const { approvals, questions, expected } of cases) {
+      const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, approvals, questions }) });
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+      expect(deps.push.mock.calls[0][0].briefAction).toBe(expected);
+    }
+  });
+
+  it('shows what the inline action answers, and drops the action when it cannot', async () => {
+    const question = { questId: 'qq1', sessionId: 's1', reply: 'Which   venue\nfor Friday?', options: ['Hall'] };
+    const asked = makeDeps({
+      loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, approvals: [], questions: [question] }),
+    });
+    await composeBrief(asked, { briefId: 'b1', userId: 'u1' });
+    expect(asked.push.mock.calls[0][0]).toMatchObject({
+      body: 'Your agent asks: Which venue for Friday?',
+      briefAction: 'question',
+    });
+
+    const silent = makeDeps({
+      loadActivity: vi
+        .fn()
+        .mockResolvedValue({ ...activeActivity, approvals: [], questions: [{ ...question, reply: ' ' }] }),
+    });
+    await composeBrief(silent, { briefId: 'b1', userId: 'u1' });
+    expect(silent.push.mock.calls[0][0].body).toBe('1 decision needs you.');
+    expect(silent.push.mock.calls[0][0]).not.toHaveProperty('briefAction');
   });
 
   it('stores a triaged email decision with its draft reply and no approval reference', async () => {

@@ -38,6 +38,8 @@ export const DEFAULT_MANIFEST = {
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET_PREVIOUS: { kind: 'secret', optional: true },
   JWT_SECRET: { kind: 'secret' },
   MAIL_FROM: { kind: 'secret', optional: true },
   MAIL_HOST: { kind: 'secret', optional: true },

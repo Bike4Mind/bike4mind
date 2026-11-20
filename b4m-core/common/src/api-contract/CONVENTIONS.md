@@ -169,9 +169,12 @@ re-deciding per endpoint:
 | Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
+| Standing assistant instruction cap reached | `400` | `instruction_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
+| Key requests-per-minute allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_rate_limit_exceeded` |
+| Key requests-per-day allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_daily_limit_exceeded` |
 | Rate limit exceeded | `429` | - |
 | Account tokens-per-minute allowance used up (`Retry-After`) | `429` | `token_rate_limit_exceeded` |
 | Account already has its allowed number of completions in flight | `429` | `concurrency_limit_exceeded` |

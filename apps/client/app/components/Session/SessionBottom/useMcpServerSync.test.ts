@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for the Zustand hook (selector + setState)
   const useLLM: any = (selector: (s: Record<string, unknown>) => unknown) => selector(state);
   useLLM.setState = vi.fn();
-  const connections = { value: { all: [] as Array<{ slug: string }>, offered: [], loaded: true } };
+  const connections = { value: { all: [] as Array<{ slug: string; ownerType?: string }>, offered: [], loaded: true } };
   return { state, useLLM, connections };
 });
 
@@ -23,6 +23,7 @@ import { useMcpServerSync } from './useMcpServerSync';
 beforeEach(() => {
   mocks.useLLM.setState.mockClear();
   mocks.state.disabledMcpConnections = ['acme', 'gone'];
+  mocks.state.enabledPlatformMcpConnections = [];
   mocks.connections.value = { all: [{ slug: 'acme' }, { slug: 'docs' }], offered: [], loaded: true };
 });
 
@@ -41,6 +42,23 @@ describe('useMcpServerSync - custom connector opt-outs', () => {
   });
 
   it('writes nothing when every switched-off slug still has its connector', () => {
+    mocks.state.disabledMcpConnections = ['acme'];
+    renderHook(() => useMcpServerSync());
+    expect(mocks.useLLM.setState).not.toHaveBeenCalled();
+  });
+
+  it('drops a slug a platform connector holds, which only its id switches', () => {
+    mocks.connections.value = {
+      all: [{ slug: 'acme' }, { slug: 'gone', ownerType: 'platform' }],
+      offered: [],
+      loaded: true,
+    };
+    renderHook(() => useMcpServerSync());
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ disabledMcpConnections: ['acme'] });
+  });
+
+  it('keeps the platform connectors a user switched on while one is missing from the list', () => {
+    mocks.state.enabledPlatformMcpConnections = ['p-switched-off-by-admin'];
     mocks.state.disabledMcpConnections = ['acme'];
     renderHook(() => useMcpServerSync());
     expect(mocks.useLLM.setState).not.toHaveBeenCalled();

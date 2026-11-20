@@ -16,6 +16,7 @@ import {
   type RolePolicy,
   type RootPolicy,
   type SpawnOptions,
+  type TaskContract,
   type TaskAction,
   type TaskReport,
   type DecisionRecord,
@@ -204,6 +205,7 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
+import { PrefixWarmGate, prefixKey, sharesSiblingPrefix } from './prefixWarmGate';
 import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
@@ -654,6 +656,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Folders within protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
   /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
@@ -1124,6 +1128,7 @@ export class ChatService {
    * round trip, and the next turn is coming anyway. Consumed once, never stored on a message.
    */
   private readonly pendingPlanReminder = new Map<string, string>();
+  private readonly prefixWarm = new PrefixWarmGate();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -1295,6 +1300,41 @@ export class ChatService {
       await this.announceSuggestions(sessionId);
     }
     return updated;
+  }
+
+  childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
+    const status = this.deps.activity?.statusOf(session.id);
+    if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
+    if (
+      status === 'processing' ||
+      this.hasTurnInFlight(session.id) ||
+      this.launching.has(session.id) ||
+      (this.deps.queue?.list(session.id).length ?? 0) > 0 ||
+      this.deps.background?.list(session.id).some(process => process.status === 'running')
+    )
+      return 'running';
+    return 'finished';
+  }
+
+  async archiveFinishedChildren(parentId: string, childIds: readonly string[], scope: string | null): Promise<void> {
+    for (const id of childIds) {
+      // Recheck inside the serialized mutation: a child can resume while the dialog is open.
+      const updated = await this.deps.store.setArchived(
+        id,
+        true,
+        session =>
+          this.deps.store.scopeKey() === scope &&
+          session.origin?.parentSessionId === parentId &&
+          !session.archived &&
+          this.childArchiveStatus(session) === 'finished'
+      );
+      if (!updated) continue;
+      this.archiveCleanup(id);
+      for (const entry of this.heldRelaysFor(id)) await this.resolveHeldRelay(id, entry.id, true);
+      this.dropHeldFrom(id);
+      await this.announceSuggestions(id);
+      this.deps.summaryChanged?.(updated);
+    }
   }
 
   private archiveCleanup(sessionId: string): void {
@@ -1762,24 +1802,31 @@ export class ChatService {
    * empty root set makes each tool refuse (paths.resolveWithinRoots and shellTools.resolveCwd
    * both reject one). `send` already refuses its turn outright; this is the second lock.
    */
-  private async resolveToolScope(
-    session: ChatSession
-  ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
+  private async resolveToolScope(session: ChatSession): Promise<{
+    roots: readonly string[];
+    /** `roots` less the worktrees of agents this session started; see AGENT_WORKTREE_LINES. */
+    listedRoots: readonly string[];
+    workingDirectory?: string;
+  }> {
     // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
     // takes these too: unlike the global grants, nobody shared them for some other conversation.
     const own = session.grantedDirectories ?? [];
     const project = await this.repairBareWorkingDirectory(session);
     if (!project) {
       const global = session.mode === 'code' ? [] : await this.deps.access.list();
-      return { roots: union(global, own) };
+      const roots = union(global, own);
+      return { roots, listedRoots: roots };
     }
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
     const agents = this.mayHaveAgentWorktrees(session) ? await this.agentWorktrees(session.id, project.directory) : [];
     const scratch = await ensureScratchDirectory(session.id);
+    const roots = union(union(union(owned, agents), granted), scratch ? [scratch] : []);
+    const listed = new Set(union(union(owned, granted), scratch ? [scratch] : []));
     return {
-      roots: union(union(union(owned, agents), granted), scratch ? [scratch] : []),
+      roots,
+      listedRoots: roots.filter(root => listed.has(root)),
       workingDirectory: project.workingDirectory,
     };
   }
@@ -2580,6 +2627,7 @@ export class ChatService {
       roots: scope.roots,
       ...(scope.workingDirectory ? { workingDirectory: scope.workingDirectory } : {}),
       ...(this.deps.protectedPaths ? { protectedPaths: this.deps.protectedPaths } : {}),
+      ...(this.deps.shareableUnderProtected ? { shareableUnderProtected: this.deps.shareableUnderProtected } : {}),
       declined: [],
     });
     if (inspection.kind === 'refused') return { status: 'refused', error: inspection.message };
@@ -3930,6 +3978,23 @@ export class ChatService {
     });
   }
 
+  /** Runs `send` through the prefix gate when `key` names a cacheable prefix; see PrefixWarmGate. */
+  private async withPrefixWarm<T>(
+    key: string | null,
+    signal: AbortSignal,
+    hold: (release: () => void) => void,
+    send: () => Promise<T>
+  ): Promise<T> {
+    if (key === null) return send();
+    const release = await this.prefixWarm.enter(key, signal);
+    hold(release);
+    try {
+      return await send();
+    } finally {
+      release();
+    }
+  }
+
   /** Only reached with `turnTiming` on; see createRoundProbe. */
   private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
     const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
@@ -4012,7 +4077,7 @@ export class ChatService {
       const attended = this.attendedTurns.has(sessionId);
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
-      let { roots, workingDirectory } = await this.resolveToolScope(session);
+      let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
       const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
       const web = api
@@ -4047,6 +4112,7 @@ export class ChatService {
             }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
+      const warmsWithSiblings = cacheable && sharesSiblingPrefix(session);
       const modelOption = findModelOption(catalog?.models, session.model);
       if (localTurn && modelOption?.unavailable !== undefined) {
         if (modelOption.wantsCredentials && modelOption.server) {
@@ -4149,7 +4215,10 @@ export class ChatService {
       const skillRoot = session.project?.workingDirectory ?? null;
       const skillCatalog = this.deps.skills;
       const skills: SkillContext | undefined = skillCatalog
-        ? { available: () => skillCatalog.forModel(skillRoot) }
+        ? {
+            available: () => skillCatalog.forModel(skillRoot),
+            isUserOnly: async name => (await skillCatalog.get(skillRoot, name))?.disableModelInvocation === true,
+          }
         : undefined;
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
@@ -4182,7 +4251,7 @@ export class ChatService {
                 : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
-              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
+              pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
@@ -4291,7 +4360,7 @@ export class ChatService {
       }
       const systemMessage = () =>
         buildSystemMessage(
-          toolsSupported ? roots : [],
+          toolsSupported ? listedRoots : [],
           toolsSupported && !!media,
           toolsSupported && !!host,
           toolsSupported && !!explore,
@@ -4308,7 +4377,8 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen,
           toolsSupported && !!simulator,
-          orchestrating
+          orchestrating,
+          toolsSupported
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -4471,6 +4541,7 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
+        let releasePrefix: (() => void) | undefined;
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
           // `error` never reaches here (the transport throws on it); `meta` and `settled` carry no reply.
           if (event.type === 'meta') {
@@ -4488,7 +4559,10 @@ export class ChatService {
             return;
           }
           if (event.type === 'error') return;
-          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text || event.type === 'tool_use') {
+            timer.firstToken();
+            releasePrefix?.();
+          }
           if (event.text) {
             const split = splitThinking.push(event.text);
             // An empty split is either a bare thinking marker or text the filter is holding
@@ -4500,6 +4574,8 @@ export class ChatService {
             append(split);
           }
           if (event.toolStarted) {
+            // The response has begun, so its cache entry is readable: a tool-first reply has no text.
+            releasePrefix?.();
             probe?.frame('toolStart');
             setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
           }
@@ -4532,31 +4608,37 @@ export class ChatService {
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
-          : await streamRound(() =>
-              withRunFallback(
-                run,
-                attribution =>
-                  streamCompletion(
-                    api!.getAxiosInstance(),
-                    serverConfig.endpoint,
-                    {
-                      model: session.model,
-                      messages: cacheable ? withCacheBreakpoints(wire) : wire,
-                      tools,
-                      thinking: askForThinking,
-                      // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
-                      sessionId,
-                      ...(attribution ? { run: attribution } : {}),
-                      ...effortField,
-                      ...generationField,
-                      ...cacheTtlField,
-                      ...(maxTokens ? { maxTokens } : {}),
-                    },
-                    onCompletionEvent,
-                    controller.signal
-                  ),
-                dropRun
-              )
+          : await this.withPrefixWarm(
+              warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
+              controller.signal,
+              release => (releasePrefix = release),
+              () =>
+                streamRound(() =>
+                  withRunFallback(
+                    run,
+                    attribution =>
+                      streamCompletion(
+                        api!.getAxiosInstance(),
+                        serverConfig.endpoint,
+                        {
+                          model: session.model,
+                          messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                          tools,
+                          thinking: askForThinking,
+                          // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
+                          sessionId,
+                          ...(attribution ? { run: attribution } : {}),
+                          ...effortField,
+                          ...generationField,
+                          ...cacheTtlField,
+                          ...(maxTokens ? { maxTokens } : {}),
+                        },
+                        onCompletionEvent,
+                        controller.signal
+                      ),
+                    dropRun
+                  )
+                )
             );
         append(splitThinking.flush());
         const timing = timer.end();
@@ -4634,7 +4716,7 @@ export class ChatService {
           if (!current) return [];
           scopeVersion = version;
           const before = roots;
-          ({ roots, workingDirectory } = await this.resolveToolScope(current));
+          ({ roots, listedRoots, workingDirectory } = await this.resolveToolScope(current));
           explore = exploreFor(roots);
           tools = requestTools();
           return describeRootChange(before, roots);
@@ -5537,6 +5619,7 @@ export class ChatService {
           },
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
+          shareableUnderProtected: this.deps.shareableUnderProtected,
           protectedPaths: this.deps.protectedPaths,
           uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
@@ -5778,7 +5861,9 @@ export class ChatService {
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
       ...(orchestratesAgents(session)
         ? {
-            delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
+            delegates: {
+              placement: (title, prompt, isolate) => this.delegatedPlacement(project, title, prompt, isolate),
+            },
             quest: { readiness: () => this.questReadiness(session.id) },
           }
         : session.origin
@@ -6665,7 +6750,7 @@ export class ChatService {
           const { models } = await this.listModels();
           const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
           const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
-          const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
+          const briefTokens = Math.ceil(contractBrief(seed, validated.contract).length / 3);
           validateWorkerModel(resolved.effectiveModel, models, {
             localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
@@ -6687,7 +6772,7 @@ export class ChatService {
           reason: 'model-policy',
           message: 'Account changed before launch. Try again in the intended account.',
         };
-      const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
+      const brief = contractBrief(seed, validated.contract);
       const named = title?.trim();
       const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
       if (this.deps.store.scopeKey() !== scope)
@@ -6796,6 +6881,12 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
+      } else if (
+        child.orchestrationPolicy &&
+        child.project &&
+        (await isGitRepository(child.project.workingDirectory))
+      ) {
+        text = `${SHARED_CHECKOUT_PREAMBLE}\n\n${seed}`;
       }
       // The dependency install keeps running in the background: the turn starts now, and its
       // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
@@ -7042,8 +7133,12 @@ export class ChatService {
   private async delegatedPlacement(
     project: ChatProject,
     title: string | undefined,
-    prompt: string
+    prompt: string,
+    isolate: boolean
   ): Promise<SpawnPlacement> {
+    // The parent's checkout by default, as a subagent works: the agent's edits are already in
+    // place when it finishes, with nothing to merge and one system prompt shared by every sibling.
+    if (!isolate) return { kind: 'local' };
     const repository = await isGitRepository(project.workingDirectory);
     if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
     const base = await spawnBaseFor(project);
@@ -7853,6 +7948,7 @@ export class ChatService {
       roots: context.roots,
       ...(context.workingDirectory ? { workingDirectory: context.workingDirectory } : {}),
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
+      ...(context.shareableUnderProtected ? { shareableUnderProtected: context.shareableUnderProtected } : {}),
       declined: turn.declined,
     });
     if (inspection.kind === 'refused') {
@@ -8503,8 +8599,8 @@ function heldElsewhereMessage(branch: string, holder: BranchCheckout): string {
 function projectPreamble(project: ChatProject): string[] {
   const lines = [
     `This conversation is about the project ${project.name}, at ${project.directory}.`,
-    `Commands run in ${project.workingDirectory} unless you name another folder, and a relative`,
-    'path resolves against it.',
+    `Commands run in ${project.workingDirectory} (the working directory) unless you name another`,
+    'folder, and a relative path resolves against it.',
   ];
   if (project.workspace && project.workingDirectory !== project.directory) {
     // The branch the app cut, not the base the user picked: a model told the base would propose
@@ -8582,7 +8678,9 @@ export function buildSystemMessage(
   screen = false,
   simulator = false,
   /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
-  orchestrate = false
+  orchestrate = false,
+  /** todo_write is declared; false for a model without tools, or once they are shed to fit its context. */
+  plan = false
 ): CompletionMessage {
   const orchestrating = host && orchestrate;
   if (roots.length === 0) {
@@ -8590,6 +8688,7 @@ export function buildSystemMessage(
       role: 'system',
       content: [
         ...noAccessLines(ask),
+        ...(plan ? PLAN_GUIDANCE : []),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -8606,41 +8705,58 @@ export function buildSystemMessage(
         '',
         DESKTOP_ARTIFACT_PROMPT,
         ...(projectContext ? ['', projectContext] : []),
+        // The project context names its files relative to the working directory; with no access
+        // there is no project preamble to say which directory that is.
+        ...(projectContext && project ? [`The working directory is ${project.workingDirectory}.`] : []),
         ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
       ].join('\n'),
     };
   }
 
-  return {
-    role: 'system',
-    content: [
-      'You can read and change files on the user machine, and run bash commands on it, with the',
-      'provided tools.',
-      ...(project ? projectPreamble(project) : []),
-      ...dependencyLines,
-      ...sharedRootLines(roots),
-      ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
-      ...(browser ? BROWSER_GUIDANCE : []),
-      ...(screen ? SCREEN_GUIDANCE : []),
-      ...(simulator ? SIMULATOR_GUIDANCE : []),
-      ...(web ? WEB_GUIDANCE : []),
-      ...HONESTY_LINES,
-      ...(media ? MEDIA_GUIDANCE : []),
-      ...(host ? HOST_GUIDANCE : []),
-      ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
-      ...(memory ? MEMORY_GUIDANCE : []),
-      ...(ask ? ASK_GUIDANCE : []),
-      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
-      ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
-      ...(skillsSection ? [skillsSection] : []),
-      '',
-      DESKTOP_ARTIFACT_PROMPT,
-      ...(projectContext ? ['', projectContext] : []),
-      // Last, after everything stable: see mcpServerLines for when it changes.
-      ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
-    ].join('\n'),
-  };
+  const shared = [
+    'You can read and change files on the user machine, and run bash commands on it, with the',
+    'provided tools.',
+    ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
+    ...(plan ? PLAN_GUIDANCE : []),
+    ...(browser ? BROWSER_GUIDANCE : []),
+    ...(screen ? SCREEN_GUIDANCE : []),
+    ...(simulator ? SIMULATOR_GUIDANCE : []),
+    ...(web ? WEB_GUIDANCE : []),
+    ...HONESTY_LINES,
+    ...(media ? MEDIA_GUIDANCE : []),
+    ...(host ? HOST_GUIDANCE : []),
+    ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
+    ...(memory ? MEMORY_GUIDANCE : []),
+    ...(ask ? ASK_GUIDANCE : []),
+    ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
+    ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
+    ...(skillsSection ? [skillsSection] : []),
+    '',
+    DESKTOP_ARTIFACT_PROMPT,
+    ...(projectContext ? ['', projectContext] : []),
+    '',
+  ].join('\n');
+  // Per-session lines after everything sessions share, so sibling agents in their own worktrees
+  // read the shared half from one cache entry; see ChatService.promptPrefix.test.ts.
+  const tail = [
+    ...(project ? projectPreamble(project) : []),
+    ...dependencyLines,
+    ...sharedRootLines(roots),
+    ...(host ? AGENT_WORKTREE_LINES : []),
+    // Last, after everything stable: see mcpServerLines for when it changes.
+    ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
+  ].join('\n');
+  return { role: 'system', content: `${shared}\n${tail}`, cacheSplitAt: shared.length + 1 };
 }
+
+/**
+ * Stands in for listing the agents' worktrees, which join the roots as agents start: listed, they
+ * would rewrite the parent's system prompt, and every turn after it, on the wake that follows.
+ */
+const AGENT_WORKTREE_LINES: readonly string[] = [
+  'A session you start in a worktree of its own shares that worktree with you as well; find its',
+  'folder with git worktree list, by the branch the session_spawn result names.',
+];
 
 function sharedRootLines(roots: readonly string[]): string[] {
   const scratch = roots.find(isScratchDirectory);
@@ -8691,7 +8807,7 @@ function localToolLines(
   patchEdits: boolean
 ): string[] {
   return [
-    'Always pass absolute paths. The file tools deny any path outside those folders;',
+    'Always pass absolute paths. The file tools deny any path outside the folders shared with you;',
     ...(ask
       ? [
           'if you need one, call request_directory with that folder and your reason - the user adds it',
@@ -8703,7 +8819,7 @@ function localToolLines(
           'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
           'path in this conversation. No typed message grants access on its own.',
         ]),
-    'Bash commands run as the user with their full environment, not inside those folders: git,',
+    'Bash commands run as the user with their full environment, not inside the shared folders: git,',
     'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
     'on authentication, report the command error; do not conclude the user is logged out.',
     ...(instructions
@@ -8721,14 +8837,6 @@ function localToolLines(
     'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
     'above them. One sentence per round of work, not per call, with no label in front of it, and',
     'none at all when a single call speaks for itself.',
-    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-    'things to do, or the work clearly runs to five or more steps, usually across several files.',
-    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-    'small edit: answer those directly.',
-    'When you do keep one, send the whole list each time and mark one item in_progress before',
-    'starting it. Before writing the message that ends a turn, make the plan match what actually',
-    'happened: an item whose result you are about to report as done is marked completed in that',
-    'same reply, not left for later. Never end a turn with an item still in_progress.',
     ...(patchEdits
       ? [
           'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
@@ -8803,7 +8911,6 @@ export function buildDeferredSystemMessage(
     content: [
       'Which tools you have and which folders are shared with you are stated in a system reminder on',
       'a user turn. When there are several, the latest one is current and replaces the earlier ones.',
-      ...(project ? projectPreamble(project) : []),
       ...WEB_GUIDANCE,
       ...HONESTY_LINES,
       ...desktopAppGuidance(null),
@@ -8811,6 +8918,7 @@ export function buildDeferredSystemMessage(
       '',
       DESKTOP_ARTIFACT_PROMPT,
       ...(projectContext ? ['', projectContext] : []),
+      ...(project ? ['', ...projectPreamble(project)] : []),
     ].join('\n'),
   };
 }
@@ -8845,6 +8953,7 @@ export function buildToolStateText(state: {
           ...sharedRootLines(roots),
           ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
         ]),
+    ...PLAN_GUIDANCE,
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
@@ -8927,6 +9036,18 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     };
   }
 }
+
+/** todo_write is declared in every conversation, folder or not; see toolsForRequest. */
+const PLAN_GUIDANCE: readonly string[] = [
+  'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+  'things to do, or the work clearly runs to five or more steps, usually across several files.',
+  'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+  'small edit: answer those directly.',
+  'When you do keep one, send the whole list each time and mark one item in_progress before',
+  'starting it. Before writing the message that ends a turn, make the plan match what actually',
+  'happened: an item whose result you are about to report as done is marked completed in that',
+  'same reply, not left for later. Never end a turn with an item still in_progress.',
+];
 
 const BROWSER_GUIDANCE: readonly string[] = [
   'You also have a browser (browser_navigate, browser_click, browser_type, browser_scroll,',
@@ -9102,6 +9223,11 @@ const HOST_GUIDANCE: readonly string[] = [
   'conversation to be deleted.',
 ];
 
+/** The prompt carries the task, so a contract only has to add the outcome, role and acceptance criteria. */
+function contractBrief(prompt: string, contract: TaskContract | undefined): string {
+  return contract ? `${prompt.trim()}\n\n${renderTaskBrief(contract)}` : prompt;
+}
+
 /**
  * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
  * block's suggest-only rule: in such a session session_spawn starts the child at once (see
@@ -9113,10 +9239,11 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'The user turned on Orchestrate for this conversation: you are coordinating agents for',
   'separable work with bounded tasks. Here session_spawn STARTS the session at once, with no card and nothing to',
   'approve, whatever is said above about suggesting.',
-  'Execute small or non-separable requests directly. For separable work, prefer a versioned task',
-  'contract on session_spawn: outcome, rationale, role, paths/context, ownership/coordination,',
-  'non-goals, acceptance evidence, verification, assumptions and escalation conditions. Explicit',
-  'empty lists are fine. Do not copy the transcript, load every skill or pay for spec-polishing.',
+  'Execute small or non-separable requests directly. For separable work, prefer a task contract on',
+  'session_spawn with just outcome, role and acceptanceCriteria; add owned paths, non-goals or',
+  'verification only where an agent would otherwise guess, and leave the other fields out. Keep',
+  'the prompt short when a contract carries the task. Do not copy the transcript, load every skill',
+  'or pay for spec-polishing.',
   'Use task_assess to review completion evidence or revise the same task after a disproven',
   'assumption. A stopped model turn is not accepted completion. Failed checks remain unresolved.',
   'Worker model requests are validated by runtime policy. Skills grant no permission or spend.',
@@ -9125,14 +9252,24 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'to name the files and contracts each piece touches - then start the agents. Keep each brief',
   'concise and leave the detailed reading to the agents: they read the code themselves, and a',
   "long survey here only delays them and can run out this turn's time before anything starts.",
-  'In a git repository session_spawn gives each agent its own isolated worktree and branch',
-  'automatically; its result names them. So never create worktrees or branches for agents',
-  'yourself, never point an agent at another path, and never remove an agent worktree or delete',
-  'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Choose where each agent works by how its work lands:',
+  '- Pieces of one change, landing together on this branch: leave isolation unset. Agents then work',
+  '  in this working directory, so their edits are already here when they finish, with nothing to',
+  '  merge or copy. Give each running agent different files to change, named in its contract or',
+  '  prompt so it knows which are its own, and do not edit those files yourself while it runs.',
+  '  When woken, check the combined result with git status, git diff and the tests, then commit',
+  '  it yourself if the task calls for a commit.',
+  '- Work that lands on its own, as its own branch or pull request: pass isolation "worktree", and',
+  '  say in its brief to commit, push and open its pull request. Do not merge it into this branch;',
+  '  when woken, report each agent branch or pull request.',
+  '- Pieces of one change whose files overlap another running agent, or work you may want to',
+  '  discard: also pass isolation "worktree", then combine it with git merge of its branch (commit',
+  '  its worktree first if it left changes uncommitted), never by retyping its files.',
+  'In a git repository a worktree agent gets its own worktree and a branch cut from this one, which',
+  'its result names. Never create worktrees or branches for agents yourself, never point an agent at',
+  'another path, and never remove an agent worktree or delete its branch.',
   'Never use git stash, and tell agents not to: the stash is shared by every worktree of the',
   "repository, so one agent's pop can take another's changes. Set work aside with a commit.",
-  'Outside a repository the agents share this working directory, so give each one different',
-  'files to change.',
   `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
   'the limit, wait for one to finish before starting another.',
   'Track them with session_list and session_read if you need to. Once every agent you started',
@@ -9407,6 +9544,18 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
+/**
+ * Prepended to the seed of a delegated agent in its parent's checkout: the parent and its other
+ * agents work in the same files and on the same branch, and the parent combines the result.
+ */
+export const SHARED_CHECKOUT_PREAMBLE = [
+  '[You are working in the same checkout as the conversation that started you, and other agents',
+  'may be working in it at the same time. Change only the files your task owns, and leave the',
+  'rest as you found it. Do not commit, switch or create branches, stash, reset, or check out or',
+  'restore files: the session that started you reviews and commits the combined result. Report',
+  'which files you changed.]',
+].join('\n');
+
 export function worktreePreamble(
   projectDirectory: string,
   workspace: { branch: string; base: string; workingDirectory: string }

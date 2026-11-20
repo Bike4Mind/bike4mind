@@ -155,6 +155,7 @@ export * from './utils/researchSourceTiers';
 export * from './utils/researchFeedFingerprint';
 export * from './utils/emailAlias';
 export * from './utils/emailDomain';
+export * from './utils/pythonArtifactDataOrigins';
 export * from './utils/canonicalEmail';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
