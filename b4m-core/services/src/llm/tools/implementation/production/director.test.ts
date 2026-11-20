@@ -404,6 +404,23 @@ describe('production director tools', () => {
     expect(first.prompt).toBeUndefined();
   });
 
+  it('leaves an editor-made still unanimated unless the shot is named', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    const take = harness.composition().shots[0].fileIds[0];
+    const editorId = 'shot-editor';
+    await harness.config.compositions.update(COMPOSITION_ID, {
+      shots: [{ id: editorId, title: 'Packshot', fileIds: [take], chosenFileId: take }],
+    });
+
+    const unnamed = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+    expect(unnamed.shots[0]).toMatchObject({ id: editorId, still: 'placed in the editor; left a still' });
+    expect(harness.composition().shots[0].clipFileId).toBeUndefined();
+
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, shotIds: [editorId] });
+    expect(harness.composition().shots[0].clipFileId).toBeDefined();
+  });
+
   it('gives each of two same-prompt shots its own takes when they swap places', async () => {
     await run(productionStoryboardTool, harness, {
       compositionId: COMPOSITION_ID,

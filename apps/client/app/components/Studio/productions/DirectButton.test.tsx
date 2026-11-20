@@ -89,6 +89,26 @@ describe('DirectButton', () => {
     expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).not.toContain('Product photo');
   });
 
+  it('names the brand kit product when none is picked, so a re-direct does not ask for one', async () => {
+    render(
+      wrap(
+        <DirectButton
+          composition={
+            { id: 'comp123', brief: { summary: 'Again' }, brandKit: { productFileIds: ['kit456'] } } as never
+          }
+          blocked={false}
+        />
+      )
+    );
+    fireEvent.click(screen.getByTestId('production-direct-btn'));
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain(
+      'Product photo: already in the brand kit (kit456)'
+    );
+  });
+
   it('requires a brief', () => {
     render(wrap(<DirectButton composition={{ id: 'comp123', brief: {} } as never} blocked={false} />));
     fireEvent.click(screen.getByTestId('production-direct-btn'));

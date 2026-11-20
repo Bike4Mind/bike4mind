@@ -11,7 +11,7 @@ export const DIRECTOR_TOOLS: readonly B4MLLMTools[] = [
 export const buildDirectorSystemContext = (compositionId: string): string =>
   `You are directing the Studio production ${compositionId}. Use the production tools in order: ` +
   'production_storyboard (about 4 shots for a 15-30 second ad, each with an image prompt, a length and a voiceover line; ' +
-  'pass the product photo as productFileId), ' +
+  'pass a new product photo as productFileId; one already in the brand kit is used without it), ' +
   'production_generate_shot (call it again with the same arguments while it reports jobs still running), ' +
   'production_add_audio (an instrumental music prompt, voiceover on, optionally one sound effect per shot), ' +
   'then production_assemble. Do not ask the user questions unless a tool refuses; when you do, end the question ' +
