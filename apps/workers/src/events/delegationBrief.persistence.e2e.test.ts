@@ -82,6 +82,7 @@ async function composeNextBrief(complete: BriefComposeDeps['complete'] = async (
         periodEnd: end,
         runs: [],
         approvals: [],
+        questions: [],
         emails: [],
         delegations: (await loadPendingBriefDelegations(userId, end, now)).map(item => ({
           delegationId: item._id.toString(),
