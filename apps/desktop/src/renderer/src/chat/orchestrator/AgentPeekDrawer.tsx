@@ -28,6 +28,8 @@ const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current 
 export interface AgentDetailsSkin {
   light: { background: string; border: string };
   dark: { background: string; border: string };
+  /** The window's corner radius, for a scene whose own chrome is square. */
+  radius?: string;
 }
 
 interface AgentPeekDrawerProps {
@@ -243,7 +245,8 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-cancel-btn"
               onClick={() => void settleQueued('cancelQueuedMessage')}
             >
@@ -251,7 +254,8 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
             </Button>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-send-now-btn"
               onClick={() => void settleQueued('sendQueuedMessageNow')}
             >
@@ -337,7 +341,7 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
         gap: 1,
         p: 1.25,
         border: '1px solid',
-        borderRadius: 'md',
+        borderRadius: skin?.radius ?? 'md',
         borderColor: palette?.border ?? 'divider',
         bgcolor: palette?.background ?? 'background.surface',
         boxShadow: 'md',

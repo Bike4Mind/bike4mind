@@ -51,7 +51,7 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon, StatsIcon } from './icons';
+import { ConversationIcon, PanelRightIcon, StatsIcon } from './icons';
 import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
@@ -1909,7 +1909,7 @@ export function ChatShell({
                           }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
-                          <PanelRightIcon />
+                          <ConversationIcon />
                         </IconButton>
                       </Tooltip>
                     }
