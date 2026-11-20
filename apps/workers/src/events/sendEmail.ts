@@ -17,8 +17,8 @@ export class MailBodyMissingError extends Error {
   constructor(key: string, s3Error: string) {
     super(
       `mail body ${key} could not be read (S3 ${s3Error}): it has expired (the bucket lifecycle removes it 1-3 days ` +
-        'after queueing, so a later DLQ redrive cannot be delivered), or this worker lacks MAIL_BODY_BUCKET or ' +
-        'GetObject on the queued-mail/ prefix'
+        'after queueing, so a later DLQ redrive cannot be delivered), or MAIL_BODY_BUCKET names the wrong bucket, ' +
+        'or this worker lacks GetObject on the queued-mail/ prefix'
     );
     this.name = 'MailBodyMissingError';
   }
