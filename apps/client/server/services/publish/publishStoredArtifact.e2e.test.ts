@@ -296,6 +296,52 @@ describe('one live v1 page per artifact', () => {
     expect(await PublishedArtifact.countDocuments({ 'source.artifactId': 'artifact-a', deletedAt: null })).toBe(1);
   });
 
+  it('keeps the marker through a republish', async () => {
+    await publishStoredArtifact(input('artifact-a', 'FIRST_BODY'));
+    await republishStoredArtifact(input('artifact-a', 'SECOND_BODY'));
+    const { page } = await currentPage();
+    expect(page.v1ArtifactId).toBe('artifact-a');
+  });
+
+  it('does not mark an unmarked page when it is republished', async () => {
+    await publishStoredArtifact(input('artifact-a', 'FIRST_BODY'));
+    await PublishedArtifact.updateOne({ slug: 'same-page' }, { $unset: { v1ArtifactId: 1 } });
+    await republishStoredArtifact(input('artifact-a', 'SECOND_BODY'));
+    const raw = await PublishedArtifact.collection.findOne({ slug: 'same-page' });
+    expect(raw).not.toHaveProperty('v1ArtifactId');
+  });
+
+  it('releases the artifact when a web publish replaces its page with a different artifact', async () => {
+    await publishStoredArtifact(input('artifact-a', 'API_BODY'));
+    const draftId = '22222222-2222-4222-8222-222222222222';
+    const html = '<!doctype html><html><head></head><body>WEB_BODY</body></html>';
+    h.objects.set(
+      `drafts/${draftId}/_manifest.json`,
+      Buffer.from(
+        JSON.stringify({
+          draftId,
+          createdAt: new Date().toISOString(),
+          createdBy: user.id,
+          tier: 'user',
+          scopeId: user.id,
+          slug: 'same-page',
+          title: 'Web page',
+          visibility: 'public',
+          source: { kind: 'bundle', artifactId: 'web-artifact', artifactType: 'code' },
+          files: [{ path: 'index.html', size: Buffer.byteLength(html), mimeType: 'text/html' }],
+        })
+      )
+    );
+    h.objects.set(`drafts/${draftId}/index.html`, Buffer.from(html));
+    const { req, res } = createMocks({ method: 'POST', body: { draftId } });
+    Object.assign(req, { user, logger });
+    await (finalizeHandler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(await PublishedArtifact.collection.findOne({ slug: 'same-page' })).not.toHaveProperty('v1ArtifactId');
+    await publishStoredArtifact({ ...input('artifact-a', 'AGAIN_BODY'), slug: 'other-page' });
+    expect(await PublishedArtifact.countDocuments({ 'source.artifactId': 'artifact-a', deletedAt: null })).toBe(1);
+  });
+
   it('does not constrain pages the web flow publishes, which may share an artifact across slugs', async () => {
     const webPage = (publicId: string, slug: string) => ({
       publicId,

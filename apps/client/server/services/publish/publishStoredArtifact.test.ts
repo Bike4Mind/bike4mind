@@ -264,6 +264,7 @@ describe('republishStoredArtifact', () => {
     const set = m.findOneAndUpdate.mock.calls[0][1].$set;
     expect(set).not.toHaveProperty('visibility');
     expect(set).not.toHaveProperty('accessGate');
+    expect(set).not.toHaveProperty('v1ArtifactId');
     expect(set.previousVersionMeta.sha256Index).toBe(oldSha);
     expect(page.slug).toBe('signup-flow');
   });
