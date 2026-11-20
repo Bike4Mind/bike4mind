@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   publicConfig: {
     data: { allowTrustedDevices: true } as { allowTrustedDevices: boolean; supportEmail?: string } | undefined,
     isLoading: false,
+    isPending: false,
   },
   sendOTC: vi.fn(),
   formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
@@ -135,12 +136,12 @@ vi.mock('@client/config/general', async importOriginal => ({
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <MultiStepLogin {...props} />
-    </CssVarsProvider>
-  );
+const loginTree = (props: React.ComponentProps<typeof MultiStepLogin> = {}) => (
+  <CssVarsProvider theme={appTheme}>
+    <MultiStepLogin {...props} />
+  </CssVarsProvider>
+);
+const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) => render(loginTree(props));
 
 const textboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('textbox');
 const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
@@ -557,6 +558,89 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       expect(mocks.setCurrentUser).not.toHaveBeenCalled();
     }
   );
+});
+
+// /login passes `allowOpenRegistration ?? false` before the public config loads, so on an open
+// instance the invite/waitlist line flashed before "Register now" on a cold load.
+describe('MultiStepLogin - sign-up line while the public config loads', () => {
+  const loadedConfig = { allowTrustedDevices: true };
+  // A pending query has no data yet; a settled one has the config (or none, on a failed request).
+  const setConfigState = (state: { isPending: boolean; isLoading: boolean }) =>
+    Object.assign(mocks.publicConfig, state, { data: state.isPending ? undefined : loadedConfig });
+  const expectNoSignUpLine = () => {
+    expect(screen.getByTestId('login-register-prompt')).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('signup-text')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+    expect(screen.queryByText('Have an invite code?')).not.toBeInTheDocument();
+    expect(screen.queryByText('auth.registerNow')).not.toBeInTheDocument();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+  afterEach(() => {
+    setConfigState({ isPending: false, isLoading: false });
+  });
+
+  // One 14px line at Joy body-md's 1.5 line height, so the form does not shift when the text appears.
+  const expectLineHeightHeld = () =>
+    expect(screen.getByTestId('login-register-prompt')).toHaveStyle({ minHeight: '21px' });
+
+  it.each([false, true])(
+    'shows neither sign-up line while the config is fetched (enableRegister=%s)',
+    enableRegister => {
+      setConfigState({ isPending: true, isLoading: true });
+      renderLogin({ enableRegister });
+      expectNoSignUpLine();
+      expectLineHeightHeld();
+    }
+  );
+
+  // Under PersistQueryClientProvider the query is pending but not fetching while the IndexedDB cache
+  // restores, so isLoading is false then; the line must wait on isPending.
+  it('shows neither sign-up line while the persisted cache restores', () => {
+    setConfigState({ isPending: true, isLoading: false });
+    renderLogin({ enableRegister: false });
+    expectNoSignUpLine();
+  });
+
+  it('shows "Register now" and no waitlist once an open-registration config loads', () => {
+    setConfigState({ isPending: true, isLoading: true });
+    const { rerender } = renderLogin({ enableRegister: false });
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+
+    setConfigState({ isPending: false, isLoading: false });
+    rerender(loginTree({ enableRegister: true }));
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('auth.registerNow');
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+    expectLineHeightHeld();
+  });
+
+  it('shows the invite and waitlist line once a closed-registration config loads', () => {
+    setConfigState({ isPending: true, isLoading: true });
+    const { rerender } = renderLogin({ enableRegister: false });
+    expect(screen.queryByTestId('signup-text')).not.toBeInTheDocument();
+
+    setConfigState({ isPending: false, isLoading: false });
+    rerender(loginTree({ enableRegister: false }));
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
+  });
+
+  it('falls back to the invite and waitlist line when the config request fails', () => {
+    setConfigState({ isPending: false, isLoading: false });
+    mocks.publicConfig.data = undefined;
+    renderLogin({ enableRegister: false });
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
+  });
 });
 
 describe('MultiStepLogin - OAuth sign-in start', () => {
@@ -1018,11 +1102,15 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
 
   describe('blocked-account notice', () => {
     afterEach(() => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false };
+      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false, isPending: false };
     });
 
     it('names the configured support address', async () => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: 'help@example.com' }, isLoading: false };
+      mocks.publicConfig = {
+        data: { allowTrustedDevices: true, supportEmail: 'help@example.com' },
+        isLoading: false,
+        isPending: false,
+      };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
@@ -1036,7 +1124,7 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     });
 
     it('waits for the public config before showing it', async () => {
-      mocks.publicConfig = { data: undefined, isLoading: true };
+      mocks.publicConfig = { data: undefined, isLoading: true, isPending: true };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
@@ -1045,7 +1133,11 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     });
 
     it('shows the notice without an address when none is configured', async () => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: '' }, isLoading: false };
+      mocks.publicConfig = {
+        data: { allowTrustedDevices: true, supportEmail: '' },
+        isLoading: false,
+        isPending: false,
+      };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
