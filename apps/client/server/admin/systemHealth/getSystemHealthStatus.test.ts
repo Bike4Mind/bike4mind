@@ -70,4 +70,11 @@ describe('getSystemHealthStatus email', () => {
     expect(email.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT']);
     expect(email.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
   });
+
+  it('reports selfHost from B4M_SELF_HOST', async () => {
+    expect((await getSystemHealthStatus()).selfHost).toBe(false);
+
+    process.env.B4M_SELF_HOST = 'true';
+    expect((await getSystemHealthStatus()).selfHost).toBe(true);
+  });
 });

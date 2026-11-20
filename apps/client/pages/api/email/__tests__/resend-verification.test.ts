@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
@@ -51,6 +51,10 @@ function invoke(isAdmin: boolean) {
 }
 
 describe('POST /api/email/resend-verification', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResend.mockImplementation(async (_params: unknown, adapters: Adapters) => {
@@ -67,6 +71,26 @@ describe('POST /api/email/resend-verification', () => {
     expect(res._getJSONData()).toMatchObject({ isConfigError: true, missingSecrets: ['MAIL_HOST'] });
     expect(mockResend).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('points a self-host admin at the env file and chart instead of SST secrets', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    const { res, done } = invoke(true);
+    await done;
+
+    const { message } = res._getJSONData();
+    expect(message).toContain('.env.selfhost');
+    expect(message).not.toContain('SST secrets');
+  });
+
+  it('keeps the SST hint off self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    const { res, done } = invoke(true);
+    await done;
+
+    expect(res._getJSONData().message).toContain('Configure these in your SST secrets.');
   });
 
   it('gives a non-admin a generic 503 without the secret names', async () => {

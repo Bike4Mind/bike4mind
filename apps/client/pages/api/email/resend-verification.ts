@@ -30,7 +30,11 @@ const handler = baseApi({ auth: true })
         if (req.user?.isAdmin) {
           return res.status(503).json({
             error: 'Email service not configured',
-            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. Configure these in your SST secrets.`,
+            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. ${
+              process.env.B4M_SELF_HOST === 'true'
+                ? 'Set these in .env.selfhost (Docker Compose) or the chart config values / runtime Secret (Kubernetes), then restart the app.'
+                : 'Configure these in your SST secrets.'
+            }`,
             isConfigError: true,
             missingSecrets: emailConfig.missingSecrets,
           });
