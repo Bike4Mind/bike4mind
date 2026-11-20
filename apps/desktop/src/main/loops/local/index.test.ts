@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   power: new Map<string, () => void>(),
   suspend: vi.fn(),
   resume: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -42,8 +44,8 @@ vi.mock('./LocalLoopScheduler', () => ({
     constructor(deps: LocalSchedulerDeps) {
       mocks.deps = deps;
     }
-    start() {}
-    stop() {}
+    start = mocks.start;
+    stop = mocks.stop;
     poke() {}
     releaseAll = async () => undefined;
     stopTicketRun = mocks.stopTicketRun;
@@ -58,8 +60,11 @@ const { registerLocalLoops } = await import('./index');
 const call = async <T>(channel: string, input?: unknown) =>
   (await mocks.handlers.get(channel)!({ sender: {} }, input)) as LocalLoopsResult<T>;
 
-function register(budget: { effectiveCap?: number | null; creditsToday?: number } = {}) {
-  const get = vi.fn(async () => budget);
+function register(
+  budget: { effectiveCap?: number | null; creditsToday?: number } = {},
+  settings: unknown = [{ settingName: 'EnableLoops', settingValue: true }]
+) {
+  const get = vi.fn(async (path: string) => (path === '/api/settings/fetch' ? settings : budget));
   const auth = { getState: () => ({ environment: { url: 'https://b4m.test' } }), getApiClient: () => ({ get }) };
   const registered = registerLocalLoops(auth as never, {} as never, {} as never, {} as never, {} as never);
   if (!registered) throw new Error('store did not open');
@@ -72,6 +77,21 @@ describe('registerLocalLoops handlers', () => {
     mocks.userData = mkdtempSync(join(tmpdir(), 'b4m-local-loops-'));
     mocks.stopTicketRun.mockReset().mockResolvedValue(undefined);
     mocks.pickDirectory.mockReset();
+    mocks.start.mockReset();
+    mocks.stop.mockReset();
+  });
+
+  it('schedules only once the admin EnableLoops flag is on, and reports it', async () => {
+    register({}, [{ settingName: 'EnableLoops', settingValue: false }]);
+    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalled());
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(await call<boolean>(IPC_CHANNELS.localLoopsEnabled)).toEqual({ ok: true, value: false });
+
+    mocks.handlers.clear();
+    mocks.userData = mkdtempSync(join(tmpdir(), 'b4m-local-loops-'));
+    register();
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalled());
+    expect(await call<boolean>(IPC_CHANNELS.localLoopsEnabled)).toEqual({ ok: true, value: true });
   });
 
   function runningTicket() {
@@ -227,7 +247,7 @@ describe('registerLocalLoops handlers', () => {
   it('dispose clears the timers it started', () => {
     const clear = vi.spyOn(globalThis, 'clearInterval');
     register().dispose();
-    expect(clear).toHaveBeenCalledTimes(2);
+    expect(clear).toHaveBeenCalledTimes(3);
     clear.mockRestore();
   });
 });

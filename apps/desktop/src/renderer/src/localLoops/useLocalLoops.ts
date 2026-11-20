@@ -32,6 +32,27 @@ export function useLocalLoopList() {
   return { summaries, error, reload };
 }
 
+/** The admin's EnableLoops as main last knew it; false until main answers or without the loops surface. */
+export function useLocalLoopsEnabled() {
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    const api = localLoopsApi();
+    if (!api) return;
+    let live = true;
+    const reload = () =>
+      void api.enabled().then(result => {
+        if (live) setEnabled(result.ok && result.value);
+      });
+    reload();
+    const off = api.onChanged(reload);
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  return enabled;
+}
+
 /**
  * One loop's tickets, runs and events. `moveTicket` shows the patch at once and then stores it; a refusal puts that
  * ticket back as it was and sets `error` to the reason. `act` runs any other call and surfaces its refusal the same way.

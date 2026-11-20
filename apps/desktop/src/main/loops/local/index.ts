@@ -37,6 +37,7 @@ import { repoSlug } from '../guards';
 import type { LoopPolicyStore } from '../LoopPolicyStore';
 import type { LoopRunner } from '../LoopRunner';
 import { originOf } from '../index';
+import { readLoopsEnabled, SETTINGS_PATH } from './enabled';
 import { checkedFields } from './fields';
 import { LocalLoopScheduler } from './LocalLoopScheduler';
 import { LoopMirror, MIRROR_MS } from './mirror';
@@ -47,6 +48,10 @@ import { WATCHDOG_MS } from './watchdog';
 const ALL_LOOPS_CAP = 'allLoopsCap';
 const CLOUD_SPENT = 'cloudLoopsSpent';
 const BUDGET_PATH = '/api/loops/budget';
+/** The admin's EnableLoops, last known per account so an offline launch keeps it. */
+const LOOPS_ENABLED = 'loopsEnabled';
+/** How often the EnableLoops flag is asked again (ms). */
+const ENABLED_REFRESH_MS = 10 * 60_000;
 /** How old the cached web-loop spend may get before a tick refetches it (ms). */
 const BUDGET_TTL_MS = 5 * 60_000;
 
@@ -147,13 +152,31 @@ export function registerLocalLoops(
   });
   const heartbeat = setInterval(() => void mirror.flush(), MIRROR_MS.heartbeat);
 
-  const follow = () => {
-    currentScope = scope();
-    mirror.reset();
-    if (currentScope) {
+  const loopsEnabled = () => store.setting<boolean>(LOOPS_ENABLED) === true;
+  // Scheduling follows the admin's EnableLoops: off stops new runs, and runs already going finish.
+  const schedule = () => {
+    if (currentScope && loopsEnabled()) {
       scheduler.start();
       void refreshBudget().then(() => scheduler.poke());
     } else scheduler.stop();
+  };
+  const refreshEnabled = async () => {
+    const api = auth.getApiClient();
+    if (!api || !currentScope) return;
+    const asked = currentScope;
+    const enabled = readLoopsEnabled(await api.get<unknown>(SETTINGS_PATH).catch(() => null));
+    if (enabled === undefined || currentScope !== asked || enabled === loopsEnabled()) return;
+    store.setSetting(LOOPS_ENABLED, enabled);
+    schedule();
+    push();
+  };
+  const enabledTimer = setInterval(() => void refreshEnabled(), ENABLED_REFRESH_MS);
+
+  const follow = () => {
+    currentScope = scope();
+    mirror.reset();
+    schedule();
+    void refreshEnabled();
     push();
   };
   onAuthStateChanged(() => {
@@ -213,6 +236,7 @@ export function registerLocalLoops(
     }
   );
   handle(IPC_CHANNELS.localLoopsList, () => summaries());
+  handle(IPC_CHANNELS.localLoopsEnabled, () => loopsEnabled());
   const idOf = (input: unknown) => z.string().min(1).parse(input);
   handle(IPC_CHANNELS.localLoopsGet, input => detail(idOf(input)));
   handle(IPC_CHANNELS.localLoopsCreateLoop, async input => {
@@ -401,6 +425,7 @@ export function registerLocalLoops(
     dispose: () => {
       clearInterval(heartbeat);
       clearInterval(watchdog);
+      clearInterval(enabledTimer);
       scheduler.stop();
     },
   };
@@ -408,6 +433,7 @@ export function registerLocalLoops(
 
 const LOCAL_LOOP_HANDLERS = [
   IPC_CHANNELS.localLoopsList,
+  IPC_CHANNELS.localLoopsEnabled,
   IPC_CHANNELS.localLoopsGet,
   IPC_CHANNELS.localLoopsCreateLoop,
   IPC_CHANNELS.localLoopsUpdateLoop,

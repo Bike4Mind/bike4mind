@@ -99,6 +99,7 @@ function stubBridge({
       }),
       ...(loadedState ? { models: quietBridge({ getLoadedState: async () => loadedState }) } : {}),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      localLoops: quietBridge({ enabled: async () => ({ ok: true, value: true }) }),
       // A Code session's chips shorten paths against the home directory.
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
     },

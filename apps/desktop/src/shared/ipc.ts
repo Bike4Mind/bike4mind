@@ -431,6 +431,8 @@ export const IPC_CHANNELS = {
   loopRunnerStateChanged: 'loops:state-changed',
   /** Desktop-owned loops (shared/localLoops.ts), `localloops:` (lowercase: ipc.test.ts). Every reply is a LocalLoopsResult. */
   localLoopsList: 'localloops:list',
+  /** The admin's EnableLoops, last known for this account; main pushes localLoopsChanged when it flips. */
+  localLoopsEnabled: 'localloops:enabled',
   localLoopsGet: 'localloops:get',
   localLoopsCreateLoop: 'localloops:create-loop',
   localLoopsUpdateLoop: 'localloops:update-loop',
@@ -858,6 +860,7 @@ export interface DesktopApi {
     answerEvent(request: AnswerLocalEventRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
     overrideDirective(request: OverrideLocalDirectiveRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
     getBudget(): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
+    enabled(): Promise<LocalLoopsResult<boolean>>;
     setBudget(dailyCredits: number | null): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
     /** null: the owner cancelled. */
     pickFolder(): Promise<LocalLoopsResult<{ directory: string } | null>>;

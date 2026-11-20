@@ -154,7 +154,7 @@ import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { loopNeedsYouCount } from '@shared/needsYou';
 import { LoopsScreen } from '../localLoops/LoopsScreen';
-import { localLoopsApi, useLocalLoopList } from '../localLoops/useLocalLoops';
+import { useLocalLoopList, useLocalLoopsEnabled } from '../localLoops/useLocalLoops';
 import { SidebarSyncHints } from './SyncHints';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
@@ -973,6 +973,7 @@ export function ChatShell({
     else setNoticeFocus({ rootId, agentId: sessionId });
   };
   const localLoops = useLocalLoopList();
+  const loopsEnabled = useLocalLoopsEnabled();
   const loopsNeedYou = loopNeedsYouCount(localLoops.summaries);
   useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, loopsNeedYou);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
@@ -1601,7 +1602,7 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
-        onOpenLoops={localLoopsApi() ? () => setScreen('loops') : undefined}
+        onOpenLoops={loopsEnabled ? () => setScreen('loops') : undefined}
         loopsNeedYou={loopsNeedYou}
         syncHints={
           onOpenImportSettings

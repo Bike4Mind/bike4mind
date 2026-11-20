@@ -138,6 +138,7 @@ const api: DesktopApi = {
     overrideDirective: (request: OverrideLocalDirectiveRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.localLoopsOverrideDirective, request),
     getBudget: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsGetBudget),
+    enabled: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsEnabled),
     setBudget: (dailyCredits: number | null) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsSetBudget, { dailyCredits }),
     pickFolder: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsPickFolder),
     onChanged: listener => {
