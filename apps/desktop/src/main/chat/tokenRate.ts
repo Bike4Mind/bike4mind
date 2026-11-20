@@ -17,7 +17,6 @@ export function ollamaRate(frame: {
   prompt_eval_count?: unknown;
   prompt_eval_duration?: unknown;
   load_duration?: unknown;
-  total_duration?: unknown;
 }): ChatTokenRate | undefined {
   const evalTokens = count(frame.eval_count);
   const evalNs = duration(frame.eval_duration);
@@ -25,14 +24,12 @@ export function ollamaRate(frame: {
   const promptTokens = count(frame.prompt_eval_count);
   const promptNs = duration(frame.prompt_eval_duration);
   const loadNs = duration(frame.load_duration);
-  const totalNs = duration(frame.total_duration);
   return {
     evalTokens,
     evalMs: evalNs / NS_PER_MS,
     ...(promptTokens !== undefined && promptNs !== undefined ? { promptTokens, promptMs: promptNs / NS_PER_MS } : {}),
     ...(loadNs !== undefined ? { loadMs: loadNs / NS_PER_MS } : {}),
     loadReported: true,
-    ...(totalNs !== undefined ? { totalMs: totalNs / NS_PER_MS } : {}),
   };
 }
 
@@ -96,7 +93,6 @@ const RATE_FIELDS = [
   'promptTokens',
   'promptMs',
   'loadMs',
-  'totalMs',
   'cachedPromptTokens',
   'draftTokens',
   'draftAccepted',

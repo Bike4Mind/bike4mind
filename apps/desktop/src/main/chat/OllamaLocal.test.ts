@@ -960,7 +960,6 @@ describe('OllamaLocal', () => {
         eval_count: 48,
         eval_duration: 2_000_000_000,
         load_duration: 1_200_000_000,
-        total_duration: 3_300_000_000,
       })}\n`
     );
     expect(events).toEqual([
@@ -975,7 +974,6 @@ describe('OllamaLocal', () => {
           promptMs: 60,
           loadMs: 1200,
           loadReported: true,
-          totalMs: 3300,
         },
       },
     ]);

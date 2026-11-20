@@ -25,17 +25,16 @@ describe('usage parsing', () => {
     });
   });
 
-  it('keeps the thinking tokens and the 1-hour cache writes', () => {
+  it('keeps the thinking tokens', () => {
     const event = parseStreamEvent({
       type: 'tool_use',
       tools: [],
-      usage: { outputTokens: 900, reasoningTokens: 700, cacheCreationInputTokens: 40, cacheWrite1hInputTokens: 30 },
+      usage: { outputTokens: 900, reasoningTokens: 700, cacheCreationInputTokens: 40 },
     });
     expect(foldUsage(undefined, event!)).toEqual({
       outputTokens: 900,
       reasoningTokens: 700,
       cacheCreationInputTokens: 40,
-      cacheWrite1hInputTokens: 30,
     });
   });
 });
@@ -79,13 +78,11 @@ describe('addUsage', () => {
     });
   });
 
-  it('sums thinking tokens and 1-hour cache writes, absent staying absent', () => {
-    expect(
-      addUsage(
-        { outputTokens: 10, reasoningTokens: 6, cacheWrite1hInputTokens: 4 },
-        { outputTokens: 20, reasoningTokens: 15 }
-      )
-    ).toEqual({ outputTokens: 30, reasoningTokens: 21, cacheWrite1hInputTokens: 4 });
+  it('sums thinking tokens, absent staying absent', () => {
+    expect(addUsage({ outputTokens: 10, reasoningTokens: 6 }, { outputTokens: 20, reasoningTokens: 15 })).toEqual({
+      outputTokens: 30,
+      reasoningTokens: 21,
+    });
     expect(addUsage({ outputTokens: 1 }, { outputTokens: 2 })).toEqual({ outputTokens: 3 });
   });
 

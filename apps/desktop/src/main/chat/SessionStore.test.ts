@@ -338,13 +338,13 @@ describe('SessionStore', () => {
         content: 'done',
         createdAt: '2026-01-01T00:00:00.000Z',
         stats,
-        usage: { outputTokens: 90, rate: { evalTokens: 90, evalMs: 3_000, totalMs: 4_900, cachedPromptTokens: 12 } },
+        usage: { outputTokens: 90, rate: { evalTokens: 90, evalMs: 3_000, cachedPromptTokens: 12 } },
       });
 
       const reopened = await new SessionStore(directory, MODEL).get(id);
       expect(reopened?.messages[0]).toMatchObject({
         stats,
-        usage: { rate: { totalMs: 4_900, cachedPromptTokens: 12 } },
+        usage: { rate: { cachedPromptTokens: 12 } },
       });
     });
 
