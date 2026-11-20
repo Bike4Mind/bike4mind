@@ -140,7 +140,8 @@ test.describe('Admin - User Search & Sort', () => {
 // Dependent tests - must run in order (create -> edit -> delete)
 test.describe('Admin - User CRUD', () => {
   test('should create, edit, and delete a user', async ({ adminPage }) => {
-    test.slow();
+    // The slow-test budget plus the wait for the asynchronous erasure in the delete step.
+    test.setTimeout(TIMEOUTS.TEST * 3 + TIMEOUTS.LOADER_HIDDEN);
 
     await test.step('create a new user', async () => {
       await adminPage.gotoAdmin();
@@ -201,8 +202,7 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.confirmDeleteUser();
 
       // Verify user no longer appears in search
-      await adminPage.searchUser(EDITED_NAME);
-      await expect(adminPage.getUserRow(EDITED_NAME)).toBeHidden({ timeout: TIMEOUTS.ACTION });
+      await adminPage.waitForUserErased(EDITED_NAME);
     });
   });
 });

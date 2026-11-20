@@ -285,7 +285,12 @@ export class AdminPage extends BasePage {
   }
 
   async confirmDeleteUser() {
+    const deleted = this.page.waitForResponse(
+      resp => /\/api\/users\/[^/]+\/delete/.test(resp.url()) && resp.request().method() === 'DELETE',
+      { timeout: TIMEOUTS.ACTION }
+    );
     await this.page.getByTestId('delete-user-dialog-confirm-btn').click();
+    expect((await deleted).status(), 'admin delete request').toBe(200);
     // Wait for the confirm button itself to disappear (the delete modal closed)
     await expect(this.page.getByTestId('delete-user-dialog-confirm-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
     // Dismiss any follow-up modal (e.g. "User not found" error) if it appears
@@ -294,6 +299,19 @@ export class AdminPage extends BasePage {
       await closeBtn.click();
       await expect(closeBtn).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
     }
+  }
+
+  /**
+   * Admin Delete locks the account at once and erases it from a queue (deleteUserAsAdmin.ts), so the
+   * row outlives the dialog. Reloads the list each attempt: a repeated search can be served from cache.
+   */
+  async waitForUserErased(name: string) {
+    await expect(async () => {
+      await this.gotoAdmin();
+      await this.navigateToUsersTab();
+      await this.searchUser(name);
+      await expect(this.getUserRow(name)).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
+    }).toPass({ timeout: TIMEOUTS.LOADER_HIDDEN, intervals: [TIMEOUTS.ELEMENT_STATE] });
   }
 
   // --- Invite Codes ---
