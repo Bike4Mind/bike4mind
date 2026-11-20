@@ -328,7 +328,7 @@ describe('ImageModerationIncidentRepository', () => {
       await imageModerationIncidentRepository.markEscalationAlerted(inc.id, AT);
 
       expect((await ImageModerationIncident.findById(inc._id).lean())?.escalationAlertedAt).toEqual(AT);
-      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW)).toEqual([]);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, new Date())).toEqual([]);
     });
 
     it('rejects an escalation trigger outside the enum', async () => {

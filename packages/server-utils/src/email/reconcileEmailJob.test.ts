@@ -51,6 +51,16 @@ describe('reconcileEmailJob', () => {
     );
   });
 
+  it('writes the same counts and status when run again on unchanged attempts', async () => {
+    withAttempts([EmailSendStatus.SENT, EmailSendStatus.FAILED]);
+    await reconcileEmailJob('job-1');
+    await reconcileEmailJob('job-1');
+    expect(mocks.updateJob).toHaveBeenCalledTimes(2);
+    const expected = { sentCount: 1, failedCount: 1, overallStatus: EmailJobOverallStatus.PARTIAL };
+    expect(mocks.updateJob.mock.calls[0][0]).toMatchObject(expected);
+    expect(mocks.updateJob.mock.calls[1][0]).toMatchObject(expected);
+  });
+
   it('marks the job FAILED when nothing was sent', async () => {
     withAttempts([EmailSendStatus.FAILED, EmailSendStatus.BOUNCED]);
     await reconcileEmailJob('job-1');

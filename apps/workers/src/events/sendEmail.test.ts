@@ -248,6 +248,12 @@ describe('delivery outcome write-back', () => {
     });
   });
 
+  it('routes an incident alert ref to the write-back unchanged', async () => {
+    const incidentRef = { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'escalation' };
+    await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', ref: incidentRef });
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(incidentRef, { ok: true, at: expect.any(Date) });
+  });
+
   it('writes nothing back for mail published without a ref', async () => {
     await send();
     mocks.send.mockResolvedValue(false);

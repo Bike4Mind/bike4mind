@@ -128,7 +128,8 @@ describe('imageModerationReviewSweep handler', () => {
     expect(mocks.escalate).toHaveBeenCalledExactlyOnceWith('inc-3', { trigger: 'timeout' }, expect.any(Date));
     expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
       'second-one@example.com',
-      expect.objectContaining({ subject: 'Moderation review escalated' })
+      expect.objectContaining({ subject: 'Moderation review escalated' }),
+      { kind: 'incidentAlert', incidentId: 'inc-3', alert: 'escalation' }
     );
     expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('inc-3', expect.any(Date));
     expect(result).toMatchObject({ escalated: 1, escalationAlerted: 1 });
