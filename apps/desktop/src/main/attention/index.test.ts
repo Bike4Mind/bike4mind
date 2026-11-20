@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChatSessionSummary } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,7 +76,10 @@ beforeEach(() => {
   window.isFocused.mockReturnValue(false);
   setPlatform('darwin');
   windows.open = [window];
-  attention = registerAttention({ openWindow, notifyScopePath: '/nonexistent/attention-preferences.json' });
+  attention = registerAttention({
+    openWindow,
+    notifyScopePath: join(mkdtempSync(join(tmpdir(), 'attention-')), 'attention-preferences.json'),
+  });
 });
 
 afterEach(() => setPlatform(originalPlatform));
@@ -164,6 +170,26 @@ describe('claiming an entry across windows', () => {
   it('claims nothing for a malformed request', () => {
     expect(call(IPC_CHANNELS.attentionClaim, 'a')).toEqual([]);
     expect(call(IPC_CHANNELS.attentionClaim, ['a', 7, ''])).toEqual(['a']);
+  });
+});
+
+describe('the notify scope setting', () => {
+  it('starts at the default', async () => {
+    expect(await call(IPC_CHANNELS.attentionGetNotifyScope)).toBe('agents');
+  });
+
+  it('saves a valid scope and pushes it to every window', async () => {
+    const other = { webContents: { send: vi.fn() } };
+    windows.open = [window, other];
+    expect(await call(IPC_CHANNELS.attentionSetNotifyScope, 'all')).toBe('all');
+    expect(await call(IPC_CHANNELS.attentionGetNotifyScope)).toBe('all');
+    expect(window.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.attentionNotifyScope, 'all');
+    expect(other.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.attentionNotifyScope, 'all');
+  });
+
+  it('refuses an unknown scope, keeping the current one without telling any window', async () => {
+    expect(await call(IPC_CHANNELS.attentionSetNotifyScope, 'everything')).toBe('agents');
+    expect(window.webContents.send).not.toHaveBeenCalled();
   });
 });
 
