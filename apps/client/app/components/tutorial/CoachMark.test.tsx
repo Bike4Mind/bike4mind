@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { a11yAttr } from './a11y';
 import { CoachMark, dockCard, dockPhoneCard, placeCard, type Rect } from './CoachMark';
-import { coachCover } from './coachCover';
+import { coachCover, coachTopBar } from './coachCover';
 
 const viewport = { width: 1728, height: 936 };
 const card = { width: 340, height: 170 };
@@ -128,6 +128,18 @@ describe('dockPhoneCard', () => {
     const input = { obstacles: [], card: tall, viewport: phone, current: 'top' as const };
     expect(dockPhoneCard({ ...input, target: rect(16, 300, 374, 400) })).toBe('top');
     expect(dockPhoneCard({ ...input, target: rect(16, 100, 374, 200) })).toBe('bottom');
+  });
+
+  it('counts a top-docked card from below the top bar, so it leaves the menu button clear', () => {
+    const input = {
+      obstacles: [],
+      card: tall,
+      viewport: phone,
+      current: 'top' as const,
+      target: rect(16, 250, 374, 300),
+    };
+    expect(dockPhoneCard(input)).toBe('top');
+    expect(dockPhoneCard({ ...input, topInset: 56 })).toBe('bottom');
   });
 
   it('stays put on an answer taller than the screen, so scrolling it does not flip the card', () => {
@@ -414,6 +426,38 @@ describe('CoachMark', () => {
     const cardEl = screen.getByTestId('tutorial-coach-card');
     await waitFor(() => expect(cardEl).toHaveStyle({ top: '16px', left: '16px' }));
     expect(cardEl).toHaveStyle({ width: 'calc(100vw - 32px)' });
+  });
+
+  it('docks below the top bar on a phone, leaving its menu button pressable', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
+    boxes.set('bar', rect(0, 0, 390, 56));
+    boxes.set('answer', rect(16, 480, 374, 760));
+    boxes.set('tutorial-coach-card', rect(0, 0, 358, 200));
+    stubRects();
+    render(
+      <>
+        <header data-testid="bar" {...coachTopBar} />
+        <div data-testid="answer">The plan</div>
+        <CoachMark stepKey="s" body="Read the answer." anchor="answer" onLeave={() => undefined} />
+      </>
+    );
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).toHaveStyle({ top: '72px', left: '16px' }));
+  });
+
+  it('opens a card capped at half a phone screen at its top, not scrolled to its button', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(
+      <CoachMark stepKey="s" body="b" onLeave={() => undefined}>
+        <button data-tutorial-primary="">Next</button>
+      </CoachMark>
+    );
+    const next = screen.getByRole('button', { name: 'Next' });
+    await waitFor(() => expect(next).toHaveFocus());
+    expect(focus.mock.contexts).toContain(next);
+    for (const [i, el] of focus.mock.contexts.entries())
+      if (el === next) expect(focus.mock.calls[i][0]).toEqual({ preventScroll: true });
+    focus.mockRestore();
   });
 
   it('hides under an open nav drawer, and stays up when its anchor is in the drawer', async () => {

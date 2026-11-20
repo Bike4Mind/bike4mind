@@ -13,7 +13,7 @@ import { keyframes } from '@mui/system';
 import CloseIcon from '@mui/icons-material/Close';
 import type { TutorialCardSide } from '@bike4mind/common';
 import { a11y, a11yAttr } from './a11y';
-import { COACH_COVER_ATTR, COACH_COVER_SELECTOR } from './coachCover';
+import { COACH_COVER_ATTR, COACH_COVER_SELECTOR, COACH_TOP_BAR_SELECTOR } from './coachCover';
 
 const CARD_WIDTH = 340;
 // Joy's `sm` breakpoint. Below it a card beside its anchor leaves no room for either, so it docks to an edge.
@@ -411,6 +411,8 @@ export interface DockPhoneCardInput {
   viewport: { width: number; height: number };
   /** The edge the card already sits on this step. */
   current?: PhoneEdge;
+  /** Where the screen's fixed top bar ends; a top-docked card starts below it. */
+  topInset?: number;
 }
 
 /**
@@ -418,9 +420,16 @@ export interface DockPhoneCardInput {
  * moves to a clear edge, preferring the bottom and one clear of the obstacles too. With neither edge clear (an
  * answer taller than the screen) it stays put, so it does not jump as the user scrolls the target under it.
  */
-export function dockPhoneCard({ target, obstacles, card, viewport, current }: DockPhoneCardInput): PhoneEdge {
+export function dockPhoneCard({
+  target,
+  obstacles,
+  card,
+  viewport,
+  current,
+  topInset = 0,
+}: DockPhoneCardInput): PhoneEdge {
   const at = (edge: PhoneEdge): Rect => {
-    const top = edge === 'top' ? EDGE : viewport.height - EDGE - card.height;
+    const top = edge === 'top' ? topInset + EDGE : viewport.height - EDGE - card.height;
     return { left: EDGE, top, right: viewport.width - EDGE, bottom: top + card.height };
   };
   const onTarget = (edge: PhoneEdge) => overlap(at(edge), target);
@@ -546,16 +555,17 @@ export function CoachMark({
   const toasts = useRects(rect ? TOAST_SELECTOR : undefined);
   // Measured before the card hides, so the pill's first frame already sits clear of them.
   const pillAvoided = useRects(panel ? undefined : PILL_AVOID_SELECTOR);
+  const topBars = useRects(panel ? undefined : COACH_TOP_BAR_SELECTOR);
 
   useEffect(() => {
     // A step that waits on the page has no button of its own; focus stays where the user is working.
     // A panel is modal, so focus has to enter it even when it offers no primary button. preventScroll
-    // keeps a long panel opening at its top rather than at a button low down in it. A hidden card cannot
-    // take focus, so it takes it when the drawer over it closes.
+    // keeps a long card (a panel, or one capped at half a phone screen) opening at its top rather than at
+    // a button low down in it. A hidden card cannot take focus, so it takes it when the drawer over it closes.
     if (veiled) return;
     const primary = cardRef.current?.querySelector<HTMLElement>('[data-tutorial-primary]');
     const target = primary ?? (panel ? cardRef.current : null);
-    target?.focus({ preventScroll: panel });
+    target?.focus({ preventScroll: true });
   }, [stepKey, panel, veiled]);
 
   // The ring pulses until the user presses its target; `click` also covers a keyboard press.
@@ -642,10 +652,12 @@ export function CoachMark({
   // Kept per step and anchor, so dockPhoneCard can hold the card on its edge while the user scrolls.
   const [phoneDock, setPhoneDock] = useState<{ key: string; edge: PhoneEdge } | null>(null);
   const currentEdge = phoneDock?.key === pulseKey ? phoneDock.edge : undefined;
-  const edge = phone && target ? dockPhoneCard({ target, obstacles, card, viewport, current: currentEdge }) : undefined;
+  const topInset = Math.max(0, ...topBars.filter(bar => bar.top <= 0).map(bar => bar.bottom));
+  const edge =
+    phone && target ? dockPhoneCard({ target, obstacles, card, viewport, current: currentEdge, topInset }) : undefined;
   if (edge && edge !== currentEdge) setPhoneDock({ key: pulseKey, edge });
   if (edge) {
-    position = edge === 'top' ? { left: EDGE, top: EDGE } : { left: EDGE, bottom: EDGE };
+    position = edge === 'top' ? { left: EDGE, top: topInset + EDGE } : { left: EDGE, bottom: EDGE };
   } else if (target) {
     const { left, top } = placeCard({ target, obstacles, card, viewport, prefer: placement });
     position = { left, top };
