@@ -35,12 +35,17 @@ describe('applyPersonalMailDefaults', () => {
   });
 
   it('defaults a personal stage from a clean env to ses with both names from the app-scoped params', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const env: NodeJS.ProcessEnv = {};
     const { result, lookup } = await run('alice', env);
     expect(result).toBe('applied');
     expect(lookup).toHaveBeenCalledWith(SET_PARAM);
     expect(lookup).toHaveBeenCalledWith(IDENTITY_PARAM);
     expect(env).toEqual({ MAIL_TRANSPORT: 'ses', SES_CONFIGURATION_SET: 'set-a', SES_IDENTITY: 'example.com' });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toBe(
+      '[mail] personal stage alice: defaulting to SES (identity example.com); export MAIL_TRANSPORT=smtp to opt out'
+    );
   });
 
   it.each([

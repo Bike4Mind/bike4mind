@@ -105,5 +105,8 @@ export async function applyPersonalMailDefaults({
   env.MAIL_TRANSPORT = 'ses';
   env.SES_CONFIGURATION_SET = configurationSet.value;
   env.SES_IDENTITY = identity.value;
+  console.log(
+    `[mail] personal stage ${stage}: defaulting to SES (identity ${identity.value}); export MAIL_TRANSPORT=smtp to opt out`
+  );
   return 'applied';
 }
