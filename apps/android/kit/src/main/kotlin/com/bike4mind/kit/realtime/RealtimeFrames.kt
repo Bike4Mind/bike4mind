@@ -1,6 +1,7 @@
 package com.bike4mind.kit.realtime
 
 import com.bike4mind.client.B4MClientJson
+import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 import com.bike4mind.kit.sessions.QuestStatus
 import kotlinx.serialization.json.JsonArray
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 
 /** The realtime frames the chat round trip needs. Everything else on the socket is ignored. */
@@ -46,9 +48,17 @@ object RealtimeFrames {
                 status = QuestStatus.from(quest.string("status")),
                 type = quest.string("type"),
                 errorCode = quest.string("errorCode"),
+                pendingAction = (quest["pendingAction"] as? JsonObject)?.let(::pendingAction),
             ),
             statusMessage = frame.string("statusMessage")?.ifEmpty { null },
         )
+    }
+
+    /** `{tool, params, ts}`; null when the tool or `ts` is missing, so a malformed action never shows a card. */
+    private fun pendingAction(action: JsonObject): PendingAction? {
+        val tool = action.string("tool") ?: return null
+        val ts = (action["ts"] as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.toLong() ?: return null
+        return PendingAction(tool, PendingAction.display(action["params"] as? JsonObject ?: emptyMap()), ts)
     }
 
     private fun JsonElement.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
