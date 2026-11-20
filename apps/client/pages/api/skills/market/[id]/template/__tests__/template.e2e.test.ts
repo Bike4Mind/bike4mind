@@ -456,4 +456,41 @@ describe('scan on publish', () => {
     expect(template(await call(publishHandler, 'DELETE', listingId)).status).toBe('draft');
     expect((await call(publishHandler, 'DELETE', listingId)).status).toBe(409);
   });
+
+  it('refuses an edit that would blank the headline of a published template', async () => {
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    llm.calls.length = 0;
+    expect((await call(templateHandler, 'PUT', listingId, AUTHOR, { headline: '  ' })).status).toBe(400);
+    expect(llm.calls).toEqual([]);
+    expect(await stored(listingId)).toMatchObject({ status: 'published', headline: copy.headline });
+  });
+
+  it('refuses to publish or re-scan once the author has left the listing organization', async () => {
+    const listingId = await makeListing();
+    await SkillListing.updateOne({ _id: listingId }, { $set: { visibility: 'organization', organizationId: 'org-1' } });
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(403);
+    await SkillListingTemplate.updateOne({ listingId }, { $set: { status: 'published' } });
+    expect((await call(templateHandler, 'PUT', listingId, AUTHOR, { headline: 'Edited' })).status).toBe(403);
+    expect(llm.calls).toEqual([]);
+  });
+
+  it('answers the lifecycle error cases: no template, in review, duplicate create', async () => {
+    const listingId = await makeListing();
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(404);
+    expect((await call(publishHandler, 'DELETE', listingId)).status).toBe(404);
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await SkillListingTemplate.updateOne(
+      { listingId },
+      { $set: { status: 'in_review', scanStatus: 'scanning', scanClaimedAt: new Date() } }
+    );
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(409);
+  });
+
+  it('a second template for the same listing cannot be created', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await expect(SkillListingTemplate.create({ listingId, slug: 'another' })).rejects.toMatchObject({ code: 11000 });
+  });
 });
