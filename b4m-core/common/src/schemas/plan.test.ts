@@ -204,6 +204,12 @@ describe('plan adapters', () => {
     expect(result.warnings).toHaveLength(1);
   });
 
+  it('gives same-text CLI todos distinct ids without an id warning', () => {
+    const result = fromCliTodos([item('Run tests', 'completed'), item('Run tests')]);
+    expect(new Set(result.plan.items.map(i => i.id)).size).toBe(2);
+    expect(result.warnings).toEqual([]);
+  });
+
   it('folds task creates, partial updates and deletions in creation order', () => {
     const calls = [
       { name: 'TaskCreate', input: { subject: 'First', activeForm: 'Doing first', description: 'Details' } },

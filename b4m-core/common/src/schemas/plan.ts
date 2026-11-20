@@ -94,7 +94,8 @@ export function normalizePlan(value: unknown): NormalizedPlan {
       let id = baseId;
       let suffix = 2;
       while (ids.has(id)) id = `${baseId}-${suffix++}`;
-      if (id !== baseId) warnings.push(`${itemPath}.id: replaced duplicate id.`);
+      // Derived ids are internal, so only a caller-supplied id gets a warning it can act on.
+      if (id !== baseId && suppliedId) warnings.push(`${itemPath}.id: replaced duplicate id.`);
       ids.add(id);
       const normalized: PlanItem = { id, content, status };
       if (item.activeForm !== undefined) {
