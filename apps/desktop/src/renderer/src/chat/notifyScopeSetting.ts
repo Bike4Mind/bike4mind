@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_NOTIFY_SCOPE, type NotifyScope } from '@shared/attention';
 
 /**
- * Which sessions raise needs-you alerts. Lives in main (main/attention/NotifyScopeStore.ts), since
- * main announces while no window is open; a change from any window is pushed back to every window.
+ * Which sessions raise needs-you alerts; see `NotifyScope` in shared/attention.ts for why main holds
+ * it. A change from any window is pushed back to every window. Until the stored value loads the
+ * default stands, so a plain session entering needs-action in that first moment goes unannounced.
  */
 export function useNotifyScope(): [NotifyScope, (scope: NotifyScope) => void] {
   const [scope, setScope] = useState<NotifyScope>(DEFAULT_NOTIFY_SCOPE);
@@ -30,6 +31,6 @@ export function useNotifyScope(): [NotifyScope, (scope: NotifyScope) => void] {
 
 export function notifyScopeSummary(scope: NotifyScope): string {
   return scope === 'all'
-    ? 'Any session waiting on you: notification and dock badge.'
+    ? 'Any session waiting on you: notification, chime and dock badge.'
     : 'Agents and orchestrations only. Other sessions stay quiet.';
 }
