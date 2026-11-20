@@ -245,6 +245,7 @@ import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecu
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
 import { buildAgentProductionToolConfig, getAgentProductionToolConfigDeps } from './agentExecutor.productionToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
+import { withDirectedSessionTools, withDirectedSystemContext } from './agentExecutor.directedSession';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import { resolveMediaRoot } from './agentExecutor.mediaRoot';
@@ -2387,15 +2388,21 @@ async function runExecution(
     // default `enabledTools` when the payload doesn't pin them - that's how
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
-    const profileEnabledTools = resolveInvocationEnabledTools({
-      isNewExecution,
-      persistedEnabledTools: execution.resolvedEnabledTools,
-      persistedProfileDeniedTools: execution.profileDeniedTools,
-      payloadEnabledTools: startPayload?.enabledTools,
-      payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
-      profile: orchestrationProfile,
-      hasApprover: hasApprover(execution.connectionId),
-    });
+    //
+    // A directed session (Studio Direct) gets the director tools on every turn, whatever the send picked.
+    const directedSession = { productionCompositionId: session.productionCompositionId, apiKeyId: execution.apiKeyId };
+    const profileEnabledTools = withDirectedSessionTools(
+      resolveInvocationEnabledTools({
+        isNewExecution,
+        persistedEnabledTools: execution.resolvedEnabledTools,
+        persistedProfileDeniedTools: execution.profileDeniedTools,
+        payloadEnabledTools: startPayload?.enabledTools,
+        payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
+        profile: orchestrationProfile,
+        hasApprover: hasApprover(execution.connectionId),
+      }),
+      directedSession
+    );
     if (isNewExecution) {
       await agentExecutionRepository.persistResolvedEnabledTools(executionId, profileEnabledTools);
     }
@@ -3499,7 +3506,13 @@ async function runExecution(
           });
         }
       }
-      const systemContext = withRecentImagesNote(startPayload?.systemContext, recentImagesNote);
+      const systemContext = withRecentImagesNote(
+        withDirectedSystemContext(startPayload?.systemContext, {
+          ...directedSession,
+          productionToolsReady: productionConfig !== null,
+        }),
+        recentImagesNote
+      );
 
       // Fold extracted content in last, so it sits after every preamble. Stays a plain string
       // unless an image was inlined - only then does the message become a MessageContent array,

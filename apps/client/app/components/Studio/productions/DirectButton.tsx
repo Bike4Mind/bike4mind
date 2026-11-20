@@ -3,13 +3,18 @@ import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button, FormControl, FormLabel, Modal, ModalDialog, Stack, Textarea, Tooltip, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import type { IFabFileDocument, IResolvedPromptDispatch, StudioCompositionResponse } from '@bike4mind/common';
+import {
+  DIRECTOR_TOOLS,
+  buildDirectorSystemContext,
+  type IFabFileDocument,
+  type IResolvedPromptDispatch,
+  type StudioCompositionResponse,
+} from '@bike4mind/common';
 import EmbeddedFileBrowser, { type EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { generateNewSession } from '@client/app/utils/sessionsAPICalls';
-import { DIRECTOR_TOOLS, buildDirectorSystemContext } from './directorTools';
 
 const BRIEF_MAX_LENGTH = 1000;
 const SESSION_NAME_BRIEF_LENGTH = 40;
@@ -50,8 +55,8 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
       updateSessionsQueryData(queryClient, 'write', session);
       const promptContent = [
         `Direct this production: ${trimmedBrief}`,
-        // The system context reaches only this first run, so the id also sits in the visible message where a
-        // follow-up turn (the user answering the director's question) can read it.
+        // The executor re-injects the director context on every turn of the marked session; the visible id is a
+        // second anchor the model can quote back.
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
         ...productLines(product, composition.brandKit?.productFileIds ?? []),
@@ -66,6 +71,8 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         systemContext: buildDirectorSystemContext(composition.id),
         forceAgent: true,
         sessionId: session.id,
+        // Marks the notebook as directed, so a follow-up turn stays in agent mode with the production tools.
+        productionCompositionId: composition.id,
       };
       setProgrammaticLaunch(dispatch);
       // Leaving the editor is intentional: it autosaves its local timeline draft, which would overwrite the

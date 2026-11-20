@@ -186,6 +186,20 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
     act(() => void vi.advanceTimersByTime(150));
 
     expect(props.handleSendClick.mock.calls[0][1]).not.toHaveProperty('forceAgent');
+    expect(props.handleSendClick.mock.calls[0][1]).not.toHaveProperty('productionCompositionId');
+  });
+
+  it('passes a launch productionCompositionId to the send options', () => {
+    h.store.state.programmaticLaunch = launch({ forceAgent: true, productionCompositionId: 'comp123' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick.mock.calls[0][1]).toMatchObject({
+      forceAgent: true,
+      productionCompositionId: 'comp123',
+    });
   });
 
   it('leaves trimming and the cap to the send: an over-cap value is handed over as-is, once', () => {
