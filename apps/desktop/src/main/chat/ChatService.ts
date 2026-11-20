@@ -205,7 +205,7 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
-import { PrefixWarmGate, prefixKey } from './prefixWarmGate';
+import { PrefixWarmGate, prefixKey, sharesSiblingPrefix } from './prefixWarmGate';
 import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
@@ -4112,6 +4112,7 @@ export class ChatService {
             }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
+      const warmsWithSiblings = cacheable && sharesSiblingPrefix(session);
       const modelOption = findModelOption(catalog?.models, session.model);
       if (localTurn && modelOption?.unavailable !== undefined) {
         if (modelOption.wantsCredentials && modelOption.server) {
@@ -4573,6 +4574,8 @@ export class ChatService {
             append(split);
           }
           if (event.toolStarted) {
+            // The response has begun, so its cache entry is readable: a tool-first reply has no text.
+            releasePrefix?.();
             probe?.frame('toolStart');
             setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
           }
@@ -4606,7 +4609,7 @@ export class ChatService {
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
           : await this.withPrefixWarm(
-              cacheable && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
+              warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
               controller.signal,
               release => (releasePrefix = release),
               () =>
@@ -8596,8 +8599,8 @@ function heldElsewhereMessage(branch: string, holder: BranchCheckout): string {
 function projectPreamble(project: ChatProject): string[] {
   const lines = [
     `This conversation is about the project ${project.name}, at ${project.directory}.`,
-    `Commands run in ${project.workingDirectory} unless you name another folder, and a relative`,
-    'path resolves against it.',
+    `Commands run in ${project.workingDirectory} (the working directory) unless you name another`,
+    'folder, and a relative path resolves against it.',
   ];
   if (project.workspace && project.workingDirectory !== project.directory) {
     // The branch the app cut, not the base the user picked: a model told the base would propose
@@ -8702,6 +8705,9 @@ export function buildSystemMessage(
         '',
         DESKTOP_ARTIFACT_PROMPT,
         ...(projectContext ? ['', projectContext] : []),
+        // The project context names its files relative to the working directory; with no access
+        // there is no project preamble to say which directory that is.
+        ...(projectContext && project ? [`The working directory is ${project.workingDirectory}.`] : []),
         ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
       ].join('\n'),
     };
@@ -9249,9 +9255,10 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'Choose where each agent works by how its work lands:',
   '- Pieces of one change, landing together on this branch: leave isolation unset. Agents then work',
   '  in this working directory, so their edits are already here when they finish, with nothing to',
-  '  merge or copy. Give each running agent different files to change, and do not edit those files',
-  '  yourself while it runs. When woken, check the combined result with git status, git diff and the',
-  '  tests, then commit it yourself if the task calls for a commit.',
+  '  merge or copy. Give each running agent different files to change, named in its contract or',
+  '  prompt so it knows which are its own, and do not edit those files yourself while it runs.',
+  '  When woken, check the combined result with git status, git diff and the tests, then commit',
+  '  it yourself if the task calls for a commit.',
   '- Work that lands on its own, as its own branch or pull request: pass isolation "worktree", and',
   '  say in its brief to commit, push and open its pull request. Do not merge it into this branch;',
   '  when woken, report each agent branch or pull request.',

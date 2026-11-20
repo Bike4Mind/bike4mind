@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { type ChatSessionOrigin, isAgentSession } from '@shared/chat';
 import type { CompletionMessage } from './completions';
 
 /**
@@ -33,6 +34,18 @@ export class PrefixWarmGate {
   }
 }
 
+/**
+ * Whether a session's request goes through the gate: only a spawned agent that has not answered
+ * yet, the case siblings started together share. Any other request could be held behind an
+ * unrelated conversation whose time to first token is its own long, cold history.
+ */
+export function sharesSiblingPrefix(session: {
+  readonly origin?: Pick<ChatSessionOrigin, 'kind'>;
+  readonly messages: readonly { readonly role: string }[];
+}): boolean {
+  return isAgentSession(session) && !session.messages.some(message => message.role === 'assistant');
+}
+
 /** The cached prefix a request writes: model, tools and the system prompt up to its per-session tail. */
 export function prefixKey(model: string, tools: readonly unknown[], system: CompletionMessage | undefined): string {
   const content = typeof system?.content === 'string' ? system.content : '';
@@ -48,6 +61,7 @@ export function prefixKey(model: string, tools: readonly unknown[], system: Comp
 
 function waitFor(leader: Promise<void>, maxWaitMs: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
     const timer = setTimeout(done, maxWaitMs);
     signal?.addEventListener('abort', done, { once: true });
     void leader.then(done);

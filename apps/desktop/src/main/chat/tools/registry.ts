@@ -189,6 +189,16 @@ export function offeredMediaToolNames(options: { media: boolean; video?: readonl
 }
 
 /**
+ * session_spawn for a managed worker: the delegated parameters without `isolation`, which only a
+ * session with delegates reads; a managed worker's spawn is placed by cardPlacement (hostTools.ts).
+ */
+function managedSpawnSchema(modelHint: string | null): ToolSchema {
+  const { parameters } = delegatedSpawnSchema(modelHint);
+  const properties = Object.fromEntries(Object.entries(parameters.properties).filter(([key]) => key !== 'isolation'));
+  return { ...sessionSpawn.schema, parameters: { ...parameters, properties } };
+}
+
+/**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
  * Every family is declared independently, because each becomes available for its own unrelated
@@ -323,7 +333,7 @@ export function toolsForRequest(options: {
     tool === sessionSpawn && options.delegates
       ? delegatedSpawnSchema(options.spawnModelHint ?? null)
       : tool === sessionSpawn && options.managedDelegation
-        ? { ...tool.schema, parameters: delegatedSpawnSchema(options.spawnModelHint ?? null).parameters }
+        ? managedSpawnSchema(options.spawnModelHint ?? null)
         : tool.schema;
   return [
     ...available.map(tool => ({ toolSchema: schemaOf(tool) })),

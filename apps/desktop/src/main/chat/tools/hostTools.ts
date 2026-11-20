@@ -642,7 +642,8 @@ export const taskAssess: ToolDefinition = {
       type: 'object',
       properties: {
         session_id: { type: 'string' },
-        action: z.toJSONSchema(taskActionSchema, { unrepresentable: 'any' }),
+        // Input shape, as for session_spawn's contract: a revised contract may leave defaulted fields out.
+        action: z.toJSONSchema(taskActionSchema, { unrepresentable: 'any', io: 'input' }),
       },
       required: ['session_id', 'action'],
       additionalProperties: false,

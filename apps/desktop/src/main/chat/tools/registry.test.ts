@@ -261,6 +261,36 @@ describe('toolsForRequest', () => {
         .every(tool => perSession.has(tool.toolSchema.name) || tool.toolSchema.name.startsWith('mcp_'))
     ).toBe(true);
   });
+
+  it('offers isolation on session_spawn only to a session whose spawn reads it', () => {
+    const base = { roots: ['/tmp'], media: false, host: true, explore: false, spawnModelHint: null };
+    const spawnProperties = (tools: ReturnType<typeof toolsForRequest>) =>
+      tools.find(tool => tool.toolSchema.name === 'session_spawn')?.toolSchema.parameters.properties ?? {};
+
+    expect(spawnProperties(toolsForRequest({ ...base, ask: true, delegates: true }))).toHaveProperty('isolation');
+    const managed = spawnProperties(toolsForRequest({ ...base, ask: false, managedDelegation: true }));
+    expect(managed).toHaveProperty('contract');
+    expect(managed).not.toHaveProperty('isolation');
+  });
+
+  it("lets a task_assess revision leave a contract's defaulted fields out", () => {
+    const tools = toolsForRequest({
+      roots: ['/tmp'],
+      media: false,
+      host: true,
+      explore: false,
+      ask: true,
+      delegates: true,
+    });
+    const assess = tools.find(tool => tool.toolSchema.name === 'task_assess');
+    const action = assess?.toolSchema.parameters.properties.action as { oneOf?: unknown[]; anyOf?: unknown[] };
+    const variants = (action.oneOf ?? action.anyOf ?? []) as {
+      properties: { kind: { const: string }; contract?: { required?: string[] } };
+    }[];
+    const revise = variants.find(variant => variant.properties.kind.const === 'revise');
+
+    expect(revise?.properties.contract?.required?.sort()).toEqual(['acceptanceCriteria', 'outcome', 'role']);
+  });
 });
 
 describe('offeredMediaToolNames', () => {

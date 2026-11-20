@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PrefixWarmGate, prefixKey } from './prefixWarmGate';
+import { PrefixWarmGate, prefixKey, sharesSiblingPrefix } from './prefixWarmGate';
 
 async function settled(promise: Promise<unknown>): Promise<boolean> {
   let done = false;
@@ -46,6 +46,14 @@ describe('PrefixWarmGate', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not wait on a request that was stopped before it reached the gate', async () => {
+    const gate = new PrefixWarmGate();
+    await gate.enter('k');
+    const controller = new AbortController();
+    controller.abort();
+    expect(await settled(gate.enter('k', controller.signal))).toBe(true);
+  });
 });
 
 describe('prefixKey', () => {
@@ -60,5 +68,20 @@ describe('prefixKey', () => {
     expect(prefixKey('n', [{ name: 't' }], { role: 'system', content: 'shared' })).not.toBe(base);
     expect(prefixKey('m', [{ name: 'u' }], { role: 'system', content: 'shared' })).not.toBe(base);
     expect(prefixKey('m', [{ name: 't' }], { role: 'system', content: 'other' })).not.toBe(base);
+  });
+});
+
+describe('sharesSiblingPrefix', () => {
+  const origin = {};
+  const seed = { role: 'user' };
+
+  it("gates a spawned agent's first answer", () => {
+    expect(sharesSiblingPrefix({ origin, messages: [seed] })).toBe(true);
+  });
+
+  it('never gates a conversation nobody spawned, a side chat, or an agent that has answered', () => {
+    expect(sharesSiblingPrefix({ messages: [seed] })).toBe(false);
+    expect(sharesSiblingPrefix({ origin: { kind: 'side-chat' }, messages: [seed] })).toBe(false);
+    expect(sharesSiblingPrefix({ origin, messages: [seed, { role: 'assistant' }, seed] })).toBe(false);
   });
 });
