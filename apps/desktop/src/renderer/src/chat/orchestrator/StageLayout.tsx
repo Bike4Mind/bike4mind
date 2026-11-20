@@ -1,6 +1,7 @@
 import Box from '@mui/joy/Box';
 import {
   Fragment,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -32,6 +33,9 @@ export function StageLayout({ layout, onLayoutChange, renderPane }: StageLayoutP
   // A drag redraws from this and is remembered once, on release, rather than on every pointer move.
   const [dragged, setDragged] = useState<OrchestratorLayout | null>(null);
   const shown = dragged ?? layout;
+  const cancelDrag = useRef<(() => void) | null>(null);
+  // A layout set from elsewhere mid-drag (a reset, a session switch) wins: the drag is dropped, not saved over it.
+  useEffect(() => () => cancelDrag.current?.(), [layout]);
 
   if (shown.panes.length === 1) return <>{renderPane(shown.panes[0].view)}</>;
 
@@ -49,13 +53,18 @@ export function StageLayout({ layout, onLayoutChange, renderPane }: StageLayoutP
       latest = resizePanes(from, handle, ((row ? move.clientX : move.clientY) - start) / extent);
       setDragged(latest);
     };
-    const onUp = () => {
+    const stop = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      cancelDrag.current = null;
       setDragged(null);
+    };
+    const onUp = () => {
+      stop();
       if (latest !== from) onLayoutChange(latest);
     };
+    cancelDrag.current = stop;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);

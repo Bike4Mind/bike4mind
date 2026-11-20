@@ -246,7 +246,7 @@ export function ViewSwitcher({
           size="sm"
           variant="outlined"
           color="neutral"
-          startDecorator={split ? <LayoutIcon split={layout.split} /> : current.icon}
+          startDecorator={split ? <LayoutIcon split={layout.split} panes={layout.panes.length} /> : current.icon}
           endDecorator={<CaretDownIcon />}
           aria-label={`View: ${menuLabel}${focus?.on ? ', focused' : ''}`}
           data-testid="orchestrator-view-menu-btn"

@@ -183,6 +183,25 @@ describe('StageLayout in the stage', () => {
     expect((onLayoutChange.mock.lastCall?.[0] as OrchestratorLayout).panes[0].size).toBeCloseTo(0.6);
   });
 
+  it('drops a drag in progress when the layout is changed from elsewhere', async () => {
+    await renderStage(SIDE_BY_SIDE);
+    vi.spyOn(el('orchestrator-layout'), 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1000, 600));
+    await act(async () => {
+      el('orchestrator-pane-handle-0').dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 500 })
+      );
+    });
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', { clientX: 600 }));
+    });
+    await renderStage(singlePaneLayout('board'));
+    expect(query('orchestrator-layout')).toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { clientX: 600 }));
+    });
+    expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
   it('stacks a column split', async () => {
     await renderStage({ ...SIDE_BY_SIDE, split: 'column' });
     expect(el('orchestrator-layout').dataset.split).toBe('column');
