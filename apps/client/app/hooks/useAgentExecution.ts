@@ -854,6 +854,9 @@ export function useAgentExecutionSubscriptions(): void {
  */
 export const GATE_ACK_WINDOW_MS = 10_000;
 
+/** How long an unsubscribed viewer's 'closed' tombstone drops late frames before it is forgotten. */
+export const CLOSED_VIEWER_TTL_MS = 60_000;
+
 export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
 
@@ -902,6 +905,10 @@ export function useAgentExecutionDispatch() {
       const { clear, setViewed } = useAgentExecutionStore.getState();
       clear(executionId);
       setViewed(executionId, 'closed');
+      setTimeout(() => {
+        const state = useAgentExecutionStore.getState();
+        if (state.viewedExecutionIds[executionId] === 'closed') state.setViewed(executionId, undefined);
+      }, CLOSED_VIEWER_TTL_MS);
     };
 
     return {

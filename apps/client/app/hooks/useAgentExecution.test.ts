@@ -61,6 +61,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
 import {
   useAgentExecutionSubscriptions,
   useAgentExecutionDispatch,
+  CLOSED_VIEWER_TTL_MS,
   GATE_ACK_WINDOW_MS,
   failedRunReply,
 } from './useAgentExecution';
@@ -1373,6 +1374,22 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
     expect(sent()).toEqual([{ action: 'agent_execute', command: 'unsubscribe', executionId: 'run-1' }]);
     expect(useAgentExecutionStore.getState().executions['run-1']).toBeUndefined();
     expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+  });
+
+  it("forgets a closed viewer's tombstone once in-flight frames have had time to drain", async () => {
+    vi.useFakeTimers();
+    try {
+      mountSubscriptions();
+      const dispatch = mountDispatch();
+      dispatch.subscribe('run-1');
+      dispatch.unsubscribe('run-1');
+      vi.advanceTimersByTime(CLOSED_VIEWER_TTL_MS - 1);
+      expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+      vi.advanceTimersByTime(1);
+      expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a finished run's outcome from the snapshot", async () => {
