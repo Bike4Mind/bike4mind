@@ -8,6 +8,7 @@ import {
   railFitsBesideThread,
   reloadReplyStatsPrefs,
   replyStatsSummary,
+  replyStatsToggleTitle,
   REPLY_STATS_RAIL_INSET,
   REPLY_STATS_RAIL_WIDTH,
   setReplyStatShown,
@@ -134,13 +135,48 @@ describe('the stored prefs', () => {
 
   it('summarise both in one line', () => {
     expect(replyStatsSummary({ rail: true, hidden: new Set() })).toBe(
-      'All stats, beside the conversation when the window is wide enough'
+      'All stats, beside the conversation where there is room'
     );
     expect(replyStatsSummary({ rail: false, hidden: new Set(['load', 'speed']) })).toBe(
       '9 of 11 stats, under each reply on hover'
     );
     expect(replyStatsSummary(parseReplyStatsPrefs(null, null, null))).toBe(
-      '8 of 11 stats, beside the conversation when the window is wide enough'
+      '8 of 11 stats, beside the conversation where there is room'
+    );
+  });
+});
+
+describe('replyStatsToggleTitle', () => {
+  const state = { persisted: true, orchestratorShown: false, railFits: true, railOn: true };
+
+  it('names the narrow window only where widening it brings the rail back', () => {
+    expect(replyStatsToggleTitle({ ...state, railFits: false })).toBe(
+      'Hide reply stats beside the conversation; the window is too narrow for them now'
+    );
+    expect(replyStatsToggleTitle({ ...state, railFits: false, railOn: false })).toBe(
+      'Show reply stats beside the conversation once the window is wide enough'
+    );
+  });
+
+  it('says what the toggle does in a wide chat window', () => {
+    expect(replyStatsToggleTitle(state)).toBe('Hide reply stats');
+    expect(replyStatsToggleTitle({ ...state, railOn: false })).toBe('Show reply stats');
+  });
+
+  it('says the stats show on hover while orchestrating, at any width', () => {
+    for (const railFits of [true, false]) {
+      const title = replyStatsToggleTitle({ ...state, orchestratorShown: true, railFits });
+      expect(title).toBe(
+        'Hide reply stats beside the conversation; while orchestrating they show under each reply on hover'
+      );
+      expect(title).not.toMatch(/narrow|wide enough/);
+    }
+    expect(replyStatsToggleTitle({ ...state, orchestratorShown: true, railOn: false })).toMatch(/^Show reply stats/);
+  });
+
+  it('asks for a conversation first', () => {
+    expect(replyStatsToggleTitle({ ...state, persisted: false, orchestratorShown: true })).toBe(
+      'Open a conversation to see reply stats.'
     );
   });
 });

@@ -143,7 +143,24 @@ export function replyStatsSummary({ rail, hidden }: ReplyStatsPrefs): string {
   const shown = REPLY_STATS.length - hidden.size;
   const which =
     shown === REPLY_STATS.length ? 'All stats' : shown === 0 ? 'No stats' : `${shown} of ${REPLY_STATS.length} stats`;
-  return `${which}, ${rail ? 'beside the conversation when the window is wide enough' : 'under each reply on hover'}`;
+  return `${which}, ${rail ? 'beside the conversation where there is room' : 'under each reply on hover'}`;
+}
+
+/** The header toggle's tooltip: what it does now, and where the stats show instead when the rail cannot. */
+export function replyStatsToggleTitle(state: {
+  persisted: boolean;
+  orchestratorShown: boolean;
+  railFits: boolean;
+  railOn: boolean;
+}): string {
+  if (!state.persisted) return 'Open a conversation to see reply stats.';
+  if (state.orchestratorShown) {
+    return `${state.railOn ? 'Hide' : 'Show'} reply stats beside the conversation; while orchestrating they show under each reply on hover`;
+  }
+  if (state.railFits) return state.railOn ? 'Hide reply stats' : 'Show reply stats';
+  return state.railOn
+    ? 'Hide reply stats beside the conversation; the window is too narrow for them now'
+    : 'Show reply stats beside the conversation once the window is wide enough';
 }
 
 /** Re-read storage, as a fresh launch would; also the test seam. */

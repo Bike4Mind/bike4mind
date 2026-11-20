@@ -60,7 +60,7 @@ import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
-import { railFitsBesideThread, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
+import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
   chatShellRootSx,
@@ -1799,17 +1799,12 @@ export function ChatShell({
                     size="sm"
                     variant="soft"
                     placement="bottom-end"
-                    title={
-                      !persistedId
-                        ? 'Open a conversation to see reply stats.'
-                        : statsRailFits
-                          ? statsRailOn
-                            ? 'Hide reply stats'
-                            : 'Show reply stats'
-                          : statsRailOn
-                            ? 'Hide reply stats beside the conversation; the window is too narrow for them now'
-                            : 'Show reply stats beside the conversation once the window is wide enough'
-                    }
+                    title={replyStatsToggleTitle({
+                      persisted: !!persistedId,
+                      orchestratorShown,
+                      railFits: statsRailFits,
+                      railOn: statsRailOn,
+                    })}
                   >
                     <Box component="span" sx={{ display: 'inline-flex' }}>
                       <IconButton

@@ -115,6 +115,12 @@ describe('the reply stats settings', () => {
     expect(stored()).toEqual({ speed: false, firstToken: true });
   });
 
+  it('does not make width the only condition for the hover footer, and lists the load the hover footer shows', () => {
+    const text = container.textContent ?? '';
+    expect(text).toContain('while orchestrating');
+    expect(text).toContain('the speed, total, model load and thinking time show under the reply on hover');
+  });
+
   it('turns the rail off from its switch', () => {
     act(() => input('settings-reply-stats-rail-switch').click());
 

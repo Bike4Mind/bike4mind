@@ -315,7 +315,7 @@ function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
     label: 'Reply stats',
     summary: replyStatsSummary(prefs),
     description:
-      'Timing, tokens and speed for each reply, beside it when the window is wide enough. Narrower, the speed, total and thinking time show under the reply on hover, and the rest in its tooltip. Each shows only where the model or server reports it; a figure starting with ~ is an estimate. Draft acceptance is reported by llama-server running a draft model.',
+      'Timing, tokens and speed for each reply, beside it when the window is wide enough and you are in the chat view. Otherwise, in a narrow window or while orchestrating, the speed, total, model load and thinking time show under the reply on hover, and the rest in its tooltip. Each shows only where the model or server reports it; a figure starting with ~ is an estimate. Draft acceptance is reported by llama-server running a draft model.',
     control: (
       <Stack spacing={1.25} sx={{ alignItems: { xs: 'flex-start', md: 'flex-end' } }}>
         <Switch
@@ -787,12 +787,7 @@ export function SettingsScreen({
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
           whole window, so the back button lines up with the page below it: shares settingsColumnSx with the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={1}
-          sx={{ ...settingsColumnSx, py: 1.25 }}
-        >
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...settingsColumnSx, py: 1.25 }}>
           <IconButton
             size="sm"
             variant="plain"
@@ -842,10 +837,7 @@ export function SettingsScreen({
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
-          <Box
-            sx={{ ...settingsColumnSx, py: 4 }}
-            data-testid={`settings-page-${section}`}
-          >
+          <Box sx={{ ...settingsColumnSx, py: 4 }} data-testid={`settings-page-${section}`}>
             <SectionPage section={section} entries={entries[section]} />
           </Box>
         </Box>
