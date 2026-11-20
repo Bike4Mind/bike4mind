@@ -398,7 +398,8 @@ describe('production director tools', () => {
       })
     );
     expect(result.takesDropped).toBeUndefined();
-    expect(result.shots[0]).toMatchObject({ durationMs: 4000, takesKept: true });
+    expect(result.shots[0]).toMatchObject({ id: 'shot-1', was: editorId, durationMs: 4000, takesKept: true });
+    expect(result.shots[1].was).toBeUndefined();
     const [first] = harness.composition().shots;
     expect(first.fileIds).toEqual([take]);
     expect(first.prompt).toBeUndefined();
