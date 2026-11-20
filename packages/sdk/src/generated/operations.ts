@@ -501,6 +501,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
+  replyToBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
+  },
   republishArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/republish',

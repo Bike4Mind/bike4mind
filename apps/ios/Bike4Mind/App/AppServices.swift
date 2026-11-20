@@ -47,6 +47,8 @@ final class AppServices {
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Answers a brief's single decision from a notification button.
+  let briefNotifications: BriefNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
@@ -98,12 +100,13 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
-    briefs = ForwardingBriefAPI {
+    let briefAPI = ForwardingBriefAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
       #endif
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    briefs = briefAPI
     instructions = ForwardingInstructionAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
@@ -130,6 +133,8 @@ final class AppServices {
         let client = AccountClient(baseURL: scope.environment.baseURL, tokens: auth)
         return try? await client.profile(userID: scope.userID)
       })
+    briefNotifications = BriefNotificationHandler(
+      briefs: briefAPI, pendingActions: pendingActionAPI, feedback: SystemApprovalFeedback())
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -381,6 +386,10 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func brief(id: String) async throws -> Brief {
     try await provider().brief(id: id)
+  }
+
+  func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
+    try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
   }
 }
 

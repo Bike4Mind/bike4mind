@@ -354,7 +354,16 @@ describe('buildOpenApiDocument', () => {
     // Sync audio routes whose 202 (a clip that outlasted the request, opt-in via `Prefer: respond-async`) has no poll
     // route yet; named instead, until the GET routes land in a later step.
     const unpollable = new Set(['/api/ai/tts', '/api/ai/sound-effects']);
+    // A 202 that starts work on another resource is polled there, so both routes must be named.
+    const polledElsewhere: Record<string, string> = {
+      '/api/v1/briefs/{id}/decisions/{decisionId}/reply': '/api/v1/agent-executions/{id}',
+    };
     for (const path of queued) {
+      if (path in polledElsewhere) {
+        expect(asyncJobs).toContain(`POST ${path}`);
+        expect(asyncJobs).toContain(`GET ${polledElsewhere[path]}`);
+        continue;
+      }
       expect(asyncJobs).toContain(unpollable.has(path) ? `POST ${path}` : `GET ${path}/{id}`);
     }
   });
