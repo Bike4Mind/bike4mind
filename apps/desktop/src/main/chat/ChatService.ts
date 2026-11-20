@@ -188,6 +188,7 @@ import {
 } from './agentWake';
 import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
+import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { sideChatOpening } from './sideChat';
@@ -579,6 +580,8 @@ export interface ChatServiceDeps {
   access: AccessStore;
   /** Owns attachment bytes. Absent in tests that never attach anything. */
   attachments?: AttachmentStore;
+  /** Unsent composer text; a deleted conversation's draft goes with it. Absent in tests. */
+  composerDrafts?: Pick<ComposerDraftStore, 'forget'>;
   logger: ChatServiceLogger;
   /**
    * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
@@ -3008,6 +3011,7 @@ export class ChatService {
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
+    await this.deps.composerDrafts?.forget(sessionId);
     // The generated media goes with it: nothing else references those files once the
     // conversation that displayed them is gone, and they are the largest thing this app writes.
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.

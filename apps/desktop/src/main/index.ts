@@ -167,6 +167,7 @@ void app.whenReady().then(async () => {
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -353,6 +354,7 @@ void app.whenReady().then(async () => {
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
+    composerDrafts.flushSync();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
     // grace period above must not leave a process group behind.
     background.shutdownSync();
