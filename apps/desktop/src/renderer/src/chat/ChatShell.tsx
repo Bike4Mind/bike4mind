@@ -27,6 +27,7 @@ import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
+import { alertableSessions } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
@@ -961,10 +962,12 @@ export function ChatShell({
       else writeSurface(rootId, 'orchestrate');
     }
     selectSession(rootId);
-    if (sessionId === rootId) setDockOpen(true);
-    else setNoticeFocus({ rootId, agentId: sessionId });
+    if (sessionId !== rootId) setNoticeFocus({ rootId, agentId: sessionId });
+    // The dock is a global preference, so a plain session's notice must not reopen one the user hid.
+    else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, activeId);
+  // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
