@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { DuplicateFabFileError, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { DuplicateFabFileError, FabFileSourceType, KnowledgeType, isStorageLimitError } from '@bike4mind/common';
+import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
@@ -445,5 +445,86 @@ describe('createFabFileByUrl assertFinalUrl', () => {
     await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance });
 
     expect(fabFilesCreate.mock.calls[0][0].sourceMetadata).toEqual({ proposalId: 'p-1' });
+  });
+});
+
+describe('createFabFileByUrl MaxFileSize', () => {
+  const ONE_MB = 1024 * 1024;
+
+  // MaxFileSize=1 (MB) with a storage quota well above it, so checkStorageLimitForOwner cannot
+  // refuse first and mask the file-size check.
+  function limitedAdapters() {
+    const base = adapters();
+    return {
+      ...base,
+      db: {
+        ...base.db,
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '1' }]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        } as never,
+        users: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'user-1', storageLimit: 10 * ONE_MB, currentStorageSize: 0 } as never),
+        },
+      },
+    };
+  }
+
+  // The settings cache is process-wide, so the MaxFileSize=1 this block loads must not leak.
+  beforeEach(() => invalidateSettingsCache());
+  afterEach(() => invalidateSettingsCache());
+
+  async function expectTooLarge(requestedBytes: number) {
+    const error = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters()).catch(e => e);
+    expect(isStorageLimitError(error)).toBe(true);
+    expect(error.info).toMatchObject({ errorCode: 'file_too_large', requested_bytes: requestedBytes });
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+    expect(storageUpload).not.toHaveBeenCalled();
+  }
+
+  it('refuses extracted text exactly at the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB), mimeType: 'text/plain' });
+    await expectTooLarge(ONE_MB);
+  });
+
+  it('refuses extracted text over the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB + 1), mimeType: 'text/plain' });
+    await expectTooLarge(ONE_MB + 1);
+  });
+
+  it('refuses PDF bytes exactly at the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Doc',
+      textContent: Buffer.alloc(ONE_MB, 1),
+      mimeType: 'application/pdf',
+    });
+    await expectTooLarge(ONE_MB);
+  });
+
+  it('measures multibyte text in bytes, not characters', async () => {
+    // 600k characters is under the limit; 1.2M UTF-8 bytes is not.
+    const text = '\u00e9'.repeat(600_000);
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: text, mimeType: 'text/plain' });
+    await expectTooLarge(Buffer.byteLength(text));
+  });
+
+  it('accepts extracted text one byte under the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB - 1), mimeType: 'text/plain' });
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters());
+    expect(fabFilesCreate).toHaveBeenCalledTimes(1);
+    expect(storageUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts PDF bytes one byte under the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Doc',
+      textContent: Buffer.alloc(ONE_MB - 1, 1),
+      mimeType: 'application/pdf',
+    });
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters());
+    expect(fabFilesCreate).toHaveBeenCalledTimes(1);
+    expect(storageUpload).toHaveBeenCalledTimes(1);
   });
 });
