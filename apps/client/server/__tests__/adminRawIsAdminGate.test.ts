@@ -191,6 +191,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'POST: super-admin or org admin of owning org delists/restores; org admins allowed',
   ],
   ['skills/market/[id]/report.ts', "isAdmin only makes an admin's report count toward auto-hide; any user may report"],
+  [
+    'skills/market/[id]/template/draft.ts',
+    'isAdmin only lifts the hourly draft rate limit to Infinity; listing author check is in the helper',
+  ],
   ['skills/market/bundles/[id].ts', 'bundle owner or admin edits/deletes via helper'],
   ['skills/market/bundles/index.ts', 'isAdmin forwarded as actor flag to bundle list/create helpers'],
   ['skills/market/by-token/index.ts', 'isAdmin only forwarded as actor flag when opening a listing by share token'],
