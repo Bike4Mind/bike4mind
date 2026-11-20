@@ -162,7 +162,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async recordPendingExecution(id: string, executionId: string, leaseUntil: Date): Promise<boolean> {
     const result = await this.loopModel.updateOne(
       { _id: id, leaseUntil },
-      { $addToSet: { activeExecutionIds: executionId } }
+      { $addToSet: { activeExecutionIds: executionId } },
+      { runValidators: true }
     );
     return result.matchedCount > 0;
   }
