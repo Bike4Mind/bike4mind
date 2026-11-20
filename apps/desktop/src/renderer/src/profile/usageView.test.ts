@@ -60,11 +60,14 @@ describe('hour buckets in a zone off the hour', () => {
 });
 
 describe('tickIndices', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('puts the hour ticks on the quarter-day marks', () => {
+    vi.stubEnv('TZ', 'UTC');
     const bars = hours(24);
-    const labelled = tickIndices(bars, 'hour').map(index => Number(bucketLabel(bars[index].startsAt, 'hour')));
-    expect(labelled).toHaveLength(4);
-    expect(labelled.every(hour => hour % 6 === 0)).toBe(true);
+    const marked = tickIndices(bars, 'hour').map(index => new Date(bars[index].startsAt).getHours());
+    expect(marked).toHaveLength(4);
+    expect(marked.every(hour => hour % 6 === 0)).toBe(true);
   });
 
   // Today is the label a reader looks for first, so it is the one the spacing is anchored to.

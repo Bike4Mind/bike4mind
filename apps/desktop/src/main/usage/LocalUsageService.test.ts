@@ -69,7 +69,11 @@ describe('LocalUsageService', () => {
     await usage.usage('last-24-hours', true);
     expect(buckets).toHaveBeenCalledTimes(2);
 
-    advance(60_000);
+    advance(14_999);
+    await usage.usage('last-24-hours');
+    expect(buckets).toHaveBeenCalledTimes(2);
+
+    advance(1);
     await usage.usage('last-24-hours');
     expect(buckets).toHaveBeenCalledTimes(3);
   });
