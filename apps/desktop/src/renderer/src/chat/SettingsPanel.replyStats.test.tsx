@@ -58,6 +58,11 @@ describe('the reply stats settings', () => {
         setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
         onPreferences: () => () => undefined,
       },
+      attention: {
+        getNotifyScope: async () => 'agents',
+        setNotifyScope: async () => 'agents',
+        onNotifyScope: () => () => undefined,
+      },
     });
     window.localStorage.clear();
     reloadReplyStatsPrefs();
