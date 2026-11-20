@@ -37,7 +37,10 @@ const schema = z.object({
   animate: z
     .boolean()
     .optional()
-    .describe('Animate each chosen take into a video clip. Default true; false keeps the stills.'),
+    .describe(
+      'Animate each chosen take into a video clip. Default true; false keeps the stills. A shot with no prompt ' +
+        '(made in the editor) is animated only when named in shotIds.'
+    ),
   chosenTakes: z
     .array(z.object({ shotId: z.string().min(1), fileId: StudioFileIdSchema }))
     .optional()
@@ -50,6 +53,8 @@ const description =
   'image jobs from the shot prompt with the product photo as a reference, picks the first finished take, then ' +
   'animates it into a video clip. Waits for the jobs; if some are still running when it returns, call it again with ' +
   'the same arguments to keep waiting (nothing is started twice). Then call production_add_audio.';
+
+const STILL_KEPT = 'kept as a still: it has no prompt; name it in shotIds to animate it.';
 
 type ShotReport = {
   id: string;
@@ -237,8 +242,17 @@ export const productionGenerateShotTool: ToolDefinition = {
             shots = updated.shots.filter(shot => selected.some(candidate => candidate.id === shot.id));
           }
           shots = await makeTakes(context, config, args.compositionId, shots, args.takesPerShot ?? 1, reports);
+          // A prompt-less shot is an editor-made still; animate it only when the director names it.
+          const toAnimate = shots.filter(shot => shot.prompt || args.shotIds?.includes(shot.id));
+          if (args.animate !== false) {
+            for (const shot of shots.filter(candidate => !toAnimate.includes(candidate) && !candidate.clipFileId)) {
+              reports.set(shot.id, { ...reports.get(shot.id), id: shot.id, problem: STILL_KEPT });
+            }
+          }
           const videoNote =
-            args.animate === false ? undefined : await makeClips(context, config, args.compositionId, shots, reports);
+            args.animate === false
+              ? undefined
+              : await makeClips(context, config, args.compositionId, toAnimate, reports);
 
           const final = await config.compositions.get(args.compositionId);
           const summary = final.shots
