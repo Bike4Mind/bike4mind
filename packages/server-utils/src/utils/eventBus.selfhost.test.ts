@@ -38,6 +38,27 @@ describe('EmailEvents.Send schema', () => {
     expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
   });
 
+  it('keeps an attempt or incident-alert delivery ref', () => {
+    const base = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+    const attempt = { ...base, ref: { kind: 'emailAttempt' as const, attemptId: 'att-1' } };
+    const alert = {
+      ...base,
+      ref: { kind: 'incidentAlert' as const, incidentId: 'inc-1', alert: 'escalation' as const },
+    };
+
+    expect(EmailEvents.Send.schema.parse(attempt)).toEqual(attempt);
+    expect(EmailEvents.Send.schema.parse(alert)).toEqual(alert);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'invoice', attemptId: 'att-1' }],
+    ['an empty attempt id', { kind: 'emailAttempt', attemptId: '' }],
+    ['an empty incident id', { kind: 'incidentAlert', incidentId: '', alert: 'review' }],
+    ['an unknown alert', { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'digest' }],
+  ])('rejects a ref with %s', (_label, ref) => {
+    expect(EmailEvents.Send.schema.safeParse({ to: 'a@b.com', subject: 'Hi', body: 'x', ref }).success).toBe(false);
+  });
+
   it('does not require any of the optional fields', () => {
     const detail = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
 

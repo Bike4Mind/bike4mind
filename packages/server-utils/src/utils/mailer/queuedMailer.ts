@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { EmailEvents } from '../eventBus';
+import { EmailEvents, type EmailDeliveryRef } from '../eventBus';
 import type { MailSendResult } from './transport';
 import type { SendEmailOptions } from './index';
 
@@ -17,6 +17,11 @@ export interface QueuedMail {
  * `queued` means the event bus accepted the mail, not that it was delivered: the email-send worker
  * sends it, and a failed send is retried by EventBridge and then dead-lettered.
  */
+export type QueuedMailOptions = SendEmailOptions & {
+  /** Carried on the event so the worker can record the outcome; self-host callers record it themselves. */
+  ref?: EmailDeliveryRef;
+};
+
 export type QueuedMailResult = MailSendResult | { queued: true } | false;
 
 /**
@@ -31,14 +36,15 @@ export type QueuedMailResult = MailSendResult | { queued: true } | false;
  * coming back.
  */
 export const queuedMailer = {
-  async sendEmail(to: string | string[], mail: QueuedMail, options: SendEmailOptions = {}): Promise<QueuedMailResult> {
+  async sendEmail(to: string | string[], mail: QueuedMail, options: QueuedMailOptions = {}): Promise<QueuedMailResult> {
+    const { ref, ...mailOptions } = options;
     if (process.env.B4M_SELF_HOST === 'true') {
       const { default: mailer } = await import('./index');
-      return mailer.sendEmail(to, mail, options);
+      return mailer.sendEmail(to, mail, mailOptions);
     }
 
     const recipient = Array.isArray(to) ? to.join(', ') : to;
-    const { mirror, logRecipient, category } = options;
+    const { mirror, logRecipient, category } = mailOptions;
     const properties = {
       to: recipient,
       subject: mail.subject,
@@ -47,6 +53,7 @@ export const queuedMailer = {
       ...(category && { category }),
       ...(mirror !== undefined && { mirror }),
       ...(logRecipient !== undefined && { logRecipient }),
+      ...(ref && { ref }),
     };
     try {
       const size = Buffer.byteLength(JSON.stringify(properties));

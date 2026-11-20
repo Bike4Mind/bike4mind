@@ -114,6 +114,20 @@ const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
 });
 
+/**
+ * What an email.send event delivers for, so the email-send worker can write the delivery outcome
+ * back to it (./mailer/deliveryOutcome.ts). Mail without one is fire-and-forget.
+ */
+export const EmailDeliveryRef = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('emailAttempt'), attemptId: z.string().min(1) }),
+  z.object({
+    kind: z.literal('incidentAlert'),
+    incidentId: z.string().min(1),
+    alert: z.enum(['review', 'escalation']),
+  }),
+]);
+export type EmailDeliveryRef = z.infer<typeof EmailDeliveryRef>;
+
 export const EmailEvents = {
   Send: event(
     'email.send',
@@ -127,6 +141,7 @@ export const EmailEvents = {
       /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
       mirror: z.boolean().optional(),
       logRecipient: z.boolean().optional(),
+      ref: EmailDeliveryRef.optional(),
       attachments: z
         .array(
           z.object({
