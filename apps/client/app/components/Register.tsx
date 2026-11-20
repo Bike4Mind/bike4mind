@@ -148,7 +148,6 @@ const Register: React.FC = () => {
 
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
   const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration === false;
-  const registrationOpen = !isPublicConfigLoading && publicConfig?.allowOpenRegistration !== false;
 
   useEffect(() => {
     if (currentUser && !hasRedirectedRef.current) {
@@ -631,12 +630,9 @@ const Register: React.FC = () => {
                     </Stack>
 
                     <FormControl size="sm" required={registrationClosed} sx={{ mt: '16px' }}>
-                      {/* Nothing is labelled while the public config loads; the whole form is gated then anyway. */}
-                      {(registrationClosed || registrationOpen) && (
-                        <FormLabel htmlFor="register-invite-code">
-                          {registrationClosed ? t('auth.inviteCodeLabel') : t('auth.inviteCodeOptionalLabel')}
-                        </FormLabel>
-                      )}
+                      <FormLabel htmlFor="register-invite-code">
+                        {registrationClosed ? t('auth.inviteCodeLabel') : t('auth.inviteCodeOptionalLabel')}
+                      </FormLabel>
                       <Input
                         data-testid="register-invite-input"
                         slotProps={{ input: { id: 'register-invite-code' } }}
@@ -644,7 +640,7 @@ const Register: React.FC = () => {
                         onChange={e => setInviteCode(e.target.value)}
                         sx={inputStyles}
                       />
-                      {registrationOpen && (
+                      {!registrationClosed && (
                         <Typography
                           level="body-xs"
                           data-testid="register-invite-optional-hint"
