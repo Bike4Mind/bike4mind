@@ -25,6 +25,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
   },
+  cancelImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs/{id}/cancel',
+  },
   cancelMusicGeneration: {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
@@ -88,6 +92,10 @@ export const operations = {
   createFileUpload: {
     method: 'POST',
     path: '/api/v1/files',
+  },
+  createImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs',
   },
   createMusicGeneration: {
     method: 'POST',
@@ -281,6 +289,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/by-ids',
   },
+  getImageJob: {
+    method: 'GET',
+    path: '/api/v1/image-jobs/{id}',
+  },
   getMe: {
     method: 'GET',
     path: '/api/v1/me',
@@ -380,6 +392,10 @@ export const operations = {
   listHandoffDevices: {
     method: 'GET',
     path: '/api/v1/handoff-devices',
+  },
+  listImageJobs: {
+    method: 'GET',
+    path: '/api/v1/image-jobs',
   },
   listImageModels: {
     method: 'GET',
