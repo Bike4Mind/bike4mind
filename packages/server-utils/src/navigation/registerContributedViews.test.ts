@@ -31,9 +31,14 @@ async function loadRegistrationWith(views: unknown[]) {
 }
 
 describe('contributed navigation views', () => {
-  it('no contributed view fails registration', () => {
-    expect(registerContributedViews(premiumNavigableViews).rejected).toEqual([]);
+  afterEach(() => {
     resetContributedViews();
+  });
+
+  it('no contributed view fails registration', () => {
+    const result = registerContributedViews(premiumNavigableViews);
+    expect(result.rejected).toEqual([]);
+    expect(result.registered.length + result.duplicates.length).toBe(premiumNavigableViews.length);
   });
 });
 
