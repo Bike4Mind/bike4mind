@@ -21,7 +21,7 @@ beforeEach(() => vi.clearAllMocks());
 describe('loopDispatch handler', () => {
   it('dispatches the named loop', async () => {
     await run(JSON.stringify({ loopId: 'loop-1' }));
-    expect(dispatchLoopNow).toHaveBeenCalledWith('loop-1', expect.any(Date), logger);
+    expect(dispatchLoopNow).toHaveBeenCalledWith('loop-1', expect.any(Date), logger, expect.any(Function));
   });
 
   it('drops a body that is not JSON or has no loopId, without throwing', async () => {

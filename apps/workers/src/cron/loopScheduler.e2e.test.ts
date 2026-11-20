@@ -48,6 +48,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 import {
   ABORT_GRACE_MS,
   BUDGET_PAUSE_REASON,
+  DISPATCH_TIME_MARGIN_MS,
   dispatchLoopNow,
   LOOP_LEASE_MS,
   MAX_CONSECUTIVE_FAILURES,
@@ -244,13 +245,27 @@ describe('runLoopSchedulerTick', () => {
     expect(h.startAgentExecution).not.toHaveBeenCalled();
   });
 
-  it('folds a run that went quiet past the stale threshold as a failure', async () => {
+  it('folds a run that went quiet past the stale threshold as a failure, aborting it', async () => {
+    const flag = vi.spyOn(agentExecutionRepository, 'setAbortFlag').mockResolvedValue(undefined);
+    const claim = vi.spyOn(agentExecutionRepository, 'claimExecution').mockResolvedValue(true);
     const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     executions['exec-0'] = { status: 'running', updatedAt: new Date(NOW.getTime() - 60 * 60_000) };
 
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ statusReason: 'Run stalled', consecutiveFailures: 1 });
+    expect(flag).toHaveBeenCalledWith('exec-0');
+    expect(claim).toHaveBeenCalledWith('exec-0', ['running'], 'aborted');
+  });
+
+  it('opens no lane when too little Lambda time is left to record the run', async () => {
+    const loop = await createLoop();
+    await runLoopSchedulerTick(NOW, logger, () => DISPATCH_TIME_MARGIN_MS - 1);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+
+    await runLoopSchedulerTick(NOW, logger, () => DISPATCH_TIME_MARGIN_MS + 60_000);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
   });
 
   it('aborts and folds a stopped run whose executor did not end it within the grace, and waits inside it', async () => {

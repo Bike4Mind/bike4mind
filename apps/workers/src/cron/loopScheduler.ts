@@ -135,10 +135,19 @@ export async function handler(_event: never, context: Context) {
   });
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-  await runLoopSchedulerTick(new Date(), logger);
+  await runLoopSchedulerTick(new Date(), logger, () => context.getRemainingTimeInMillis());
 }
 
-export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<void> {
+/**
+ * Lambda time left below which no further lane is opened: a timeout between startAgentExecution and markDispatched
+ * would leave a run the loop does not track, which a later dispatch duplicates.
+ */
+export const DISPATCH_TIME_MARGIN_MS = 20_000;
+
+/** Lambda time left, in ms; absent outside a Lambda (tests, scripts). */
+export type RemainingTime = () => number;
+
+export async function runLoopSchedulerTick(now: Date, logger: Logger, remainingMs?: RemainingTime): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) {
     logger.info('[Loops] EnableLoops is off; skipping tick');
     return;
@@ -191,7 +200,9 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
   const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
   const allowance = Math.min(MAX_DISPATCH_PER_TICK, maxActiveRuns - (await loopRepository.countInFlight()));
   const { skipped, capped } =
-    allowance > 0 ? await dispatchDue(now, allowance, lanesPerUser, logger) : { skipped: [], capped: true };
+    allowance > 0
+      ? await dispatchDue(now, allowance, lanesPerUser, logger, allowance, remainingMs)
+      : { skipped: [], capped: true };
   if (capped) {
     await loopRepository
       .setCapacityHolds(now, skipped)
@@ -213,7 +224,12 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
  * (its interval) does not keep this one waiting for the tick while slots are free. The claim's lease is the only
  * gate, so the tick and any number of events never start one loop twice. A no-op when nothing is due.
  */
-export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
+export async function dispatchLoopNow(
+  loopId: string,
+  now: Date,
+  logger: Logger,
+  remainingMs?: RemainingTime
+): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return;
   const loop = await loopRepository.findById(loopId);
   if (!loop) return;
@@ -244,7 +260,7 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
     }
     // The room left, as on the tick, so a multi-lane loop's budget splits across the lanes it opens.
     const room = Math.min(MAX_DISPATCH_PER_TICK, maxActiveRuns - inFlight);
-    const result = await dispatchDue(now, 1, lanesPerUser, logger, room);
+    const result = await dispatchDue(now, 1, lanesPerUser, logger, room, remainingMs);
     claimed.push(...result.claimed);
     skipped.push(...result.skipped);
     // Nothing started: nothing else is startable now.
@@ -309,7 +325,8 @@ async function dispatchDue(
   allowance: number,
   lanesPerUser: number,
   logger: Logger,
-  room = allowance
+  room = allowance,
+  remainingMs?: RemainingTime
 ): Promise<{ claimed: string[]; skipped: string[]; again: string[]; capped: boolean }> {
   const claimed: string[] = [];
   const again: string[] = [];
@@ -317,6 +334,10 @@ async function dispatchDue(
   let served: string[] = [];
   let started = 0;
   while (started < allowance && claimed.length < MAX_CLAIMS_PER_TICK) {
+    if (remainingMs && remainingMs() < DISPATCH_TIME_MARGIN_MS) {
+      logger.warn('[Loops] Stopping dispatch: too little Lambda time left to record another run');
+      break;
+    }
     const loop = await loopRepository.claimDue(now, LOOP_LEASE_MS, skip, served);
     if (!loop) {
       if (served.length === 0) break;
@@ -529,6 +550,13 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     // aborts the doc on the owner's next start. A legitimately long-quiet run is folded as failed here.
     else if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) {
       return raiseLongRun(loop, execution, executionId, now);
+    } else {
+      // Folded as stalled below; aborted first so an executor still alive stops instead of running untracked.
+      // Best effort: a failed abort must not hold the fold back.
+      await agentExecutionRepository
+        .setAbortFlag(executionId)
+        .then(() => agentExecutionRepository.claimExecution(executionId, [execution.status], 'aborted'))
+        .catch(error => new Logger().warn('[Loops] Could not abort a stalled run', { executionId, error }));
     }
   }
 

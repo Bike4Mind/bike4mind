@@ -9,7 +9,7 @@ const messageSchema = z.object({ loopId: z.string().min(1) });
  * moved, a run ended, Run now), instead of on the next scheduler tick. Senders: `requestLoopDispatch`
  * (apps/client/server/utils/loopDispatch.ts). Batch size 1 (infra/cron.ts), so a throw retries just this message.
  */
-export const handler = dispatchWithLogger(async (event, _context, logger) => {
+export const handler = dispatchWithLogger(async (event, context, logger) => {
   for (const record of event.Records) {
     let body: unknown;
     try {
@@ -22,6 +22,6 @@ export const handler = dispatchWithLogger(async (event, _context, logger) => {
       logger.warn('[Loops] Dropping a malformed loop dispatch message', { body: record.body });
       continue;
     }
-    await dispatchLoopNow(parsed.data.loopId, new Date(), logger);
+    await dispatchLoopNow(parsed.data.loopId, new Date(), logger, () => context.getRemainingTimeInMillis());
   }
 });
