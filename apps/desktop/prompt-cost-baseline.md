@@ -1,5 +1,12 @@
 # Desktop orchestration prompt baseline
 
+## Scoped delivery
+
+Live deferred tool-name changes omit a reminder only when its guidance text is
+byte-identical to the previous live state. Tool addition/removal messages, changed
+access guidance, declarations, persisted state, replay and permission checks keep
+their existing behavior. This is independently testable without provider calls.
+
 ## Evidence boundary
 
 This is an offline, sanitized request-shape baseline, not a provider-cost or
@@ -24,3 +31,11 @@ not anonymization guarantees. No production prompt capture or logging is added.
 
 With `B4M_PROMPT_BASELINE=1` the footprint test also enforces per-block token budgets
 and prints the JSON report, so intentional guidance changes can be compared by hash.
+
+## Deferred evaluation
+
+This partial delivery does not establish overall prompt-cost savings or complete
+the broader evaluation. Provider-reported usage and cache writes by TTL, realistic
+pauses and cache expiry, worker/wake request baselines, and total cost per accepted
+result remain unmeasured. Those require a separate authorized controlled evaluation;
+the offline estimates above cannot substitute for it.
