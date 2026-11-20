@@ -19,7 +19,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
-import { planPublishVersions } from '@server/services/publish/planPublishVersions';
+import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
 
 /**
  * POST /api/publish/[publicId]/restore[?sha={version}] - roll a published bundle
@@ -214,7 +214,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
         },
         // $each:[] is a harmless no-op when nothing new to record.
         $unset: { indexObjectPath: 1 },
-        $push: { versions: { $each: versionsToPush } },
+        ...versionsPushUpdate(versionsToPush),
       }
     );
 
