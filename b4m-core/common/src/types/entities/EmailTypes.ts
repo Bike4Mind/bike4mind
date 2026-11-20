@@ -241,7 +241,12 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
   ) => Promise<PaginatedResponse<IEmailSendAttemptDocument>>;
   updateStatus: (id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttempt>) => Promise<void>;
   markQueued: (id: string, updates: { sentAt: Date; retryCount: number }) => Promise<boolean>;
-  recordDeliveryOutcome: (id: string, outcome: EmailDeliveryOutcome) => Promise<string | null>;
+  recordDeliveryOutcome: (
+    id: string,
+    outcome: EmailDeliveryOutcome,
+    options?: { retryCount?: number }
+  ) => Promise<string | null>;
+  markSendFailed: (id: string, updates: { errorMessage: string; retryCount: number }) => Promise<boolean>;
   markOpened: (trackingToken: string) => Promise<IEmailSendAttemptDocument | null>;
   recordClick: (trackingToken: string, link: string) => Promise<IEmailSendAttemptDocument | null>;
   getJobSummary: (jobId: string) => Promise<{

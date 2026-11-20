@@ -21,6 +21,7 @@ const sendMocks = vi.hoisted(() => ({
   updateAttemptStatus: vi.fn(),
   markQueued: vi.fn(),
   recordOutcome: vi.fn(),
+  markSendFailed: vi.fn(),
   findUserById: vi.fn(),
 }));
 
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
     updateStatus: sendMocks.updateAttemptStatus,
     markQueued: sendMocks.markQueued,
     recordDeliveryOutcome: sendMocks.recordOutcome,
+    markSendFailed: sendMocks.markSendFailed,
   },
   emailTemplateRepository: {
     findById: (...args: unknown[]) => mockFindTemplateById(...args),
@@ -204,7 +206,11 @@ describe('emailBatch delivery through the event bus', () => {
     await run();
 
     expect(sendMocks.publish).not.toHaveBeenCalled();
-    expect(sendMocks.recordOutcome).toHaveBeenCalledWith('attempt-1', { ok: true, at: expect.any(Date) });
+    expect(sendMocks.recordOutcome).toHaveBeenCalledWith(
+      'attempt-1',
+      { ok: true, at: expect.any(Date) },
+      { retryCount: 0 }
+    );
     expect(sendMocks.markQueued).not.toHaveBeenCalled();
   });
 
@@ -244,13 +250,17 @@ describe('emailBatch delivery through the event bus', () => {
     await expect(run()).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMocks.publish).toHaveBeenCalledTimes(3);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenLastCalledWith(
+    expect(sendMocks.markSendFailed).toHaveBeenCalledWith(
       'attempt-1',
-      EmailSendStatus.FAILED,
       expect.objectContaining({
         errorMessage: expect.stringContaining('Failed after 3 attempts'),
         retryCount: 3,
       })
+    );
+    expect(sendMocks.updateAttemptStatus).not.toHaveBeenCalledWith(
+      'attempt-1',
+      EmailSendStatus.FAILED,
+      expect.anything()
     );
     expect(sendMocks.updateAttemptStatus).not.toHaveBeenCalledWith(
       'attempt-1',
@@ -270,9 +280,8 @@ describe('emailBatch delivery through the event bus', () => {
     await run();
 
     expect(sendMocks.publish).toHaveBeenCalledTimes(3);
-    expect(sendMocks.updateAttemptStatus).toHaveBeenLastCalledWith(
+    expect(sendMocks.markSendFailed).toHaveBeenCalledWith(
       'attempt-1',
-      EmailSendStatus.FAILED,
       expect.objectContaining({ errorMessage: expect.stringContaining('Failed after 3 attempts') })
     );
   });

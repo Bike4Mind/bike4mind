@@ -118,6 +118,17 @@ export interface ImageModerationIncidentSummary {
 
 const SUMMARY_MAX_TIME_MS = 2000;
 
+/**
+ * A queued alert is no longer in flight once a copy failed after it was queued and `queuedBefore`
+ * has passed (the worker's retries are spent), or once it was queued before `lostBefore` with no
+ * outcome at all.
+ */
+const notInFlight = (queued: string, failed: string, queuedBefore: Date, lostBefore: Date) => [
+  { [queued]: null },
+  { [queued]: { $lte: lostBefore } },
+  { [queued]: { $lte: queuedBefore }, $expr: { $gte: [`$${failed}`, `$${queued}`] } },
+];
+
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
     super(model);
@@ -154,9 +165,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
-   * Records the email-send worker's outcome for one reviewer's copy of an alert. The first delivered
-   * copy stamps the delivery time and later ones (other reviewers, replays) leave it; a failure only
-   * stamps the failure time, so the incident stays unalerted for the sweep when no copy landed.
+   * Records the outcome for one reviewer's copy of an alert. The first delivered copy stamps the
+   * delivery time and later ones (other reviewers, replays) leave it. A failure stamps the failure
+   * time, and a failure newer than the last queue stamp voids that round: a later delivered copy does
+   * not stamp it, so the sweep resends to every reviewer rather than leaving the failed one untold.
    */
   async recordAlertDelivery(
     id: string,
@@ -164,11 +176,17 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     outcome: EmailDeliveryOutcome,
     now = new Date()
   ): Promise<void> {
-    const [delivered, failed] =
-      alert === 'review' ? ['alertedAt', 'alertFailedAt'] : ['escalationAlertedAt', 'escalationAlertFailedAt'];
+    const [delivered, queued, failed] =
+      alert === 'review'
+        ? ['alertedAt', 'alertQueuedAt', 'alertFailedAt']
+        : ['escalationAlertedAt', 'escalationAlertQueuedAt', 'escalationAlertFailedAt'];
     if (outcome.ok) {
       await this.model.updateOne(
-        { _id: id, [delivered]: null },
+        {
+          _id: id,
+          [delivered]: null,
+          $expr: { $not: [{ $gt: [`$${failed}`, { $ifNull: [`$${queued}`, new Date(0)] }] }] },
+        },
         { $set: { [delivered]: outcome.at } },
         { runValidators: true }
       );
@@ -221,19 +239,20 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
-   * for, oldest first, skipping one whose alert was queued after `queuedBefore` (still in flight).
+   * for, oldest first, skipping one whose queued alert may still be in flight (see notInFlight).
    */
   async findUnalerted(
     createdBefore: Date,
     limit: number,
-    queuedBefore: Date
+    queuedBefore: Date,
+    lostBefore: Date
   ): Promise<IImageModerationIncidentDocument[]> {
     return this.model
       .find({
         reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
         alertedAt: null,
         createdAt: { $lte: createdBefore },
-        $or: [{ alertQueuedAt: null }, { alertQueuedAt: { $lte: queuedBefore } }],
+        $or: notInFlight('alertQueuedAt', 'alertFailedAt', queuedBefore, lostBefore),
       })
       .sort({ createdAt: 1 })
       .limit(limit)
@@ -271,15 +290,19 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Escalated incidents still awaiting a verdict with no delivered escalation email, oldest first,
-   * skipping one whose escalation email was queued after `queuedBefore` (still in flight).
+   * skipping one whose queued escalation email may still be in flight (see notInFlight).
    */
-  async findEscalationUnalerted(limit: number, queuedBefore: Date): Promise<IImageModerationIncidentDocument[]> {
+  async findEscalationUnalerted(
+    limit: number,
+    queuedBefore: Date,
+    lostBefore: Date
+  ): Promise<IImageModerationIncidentDocument[]> {
     return this.model
       .find({
         reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
         escalatedAt: { $ne: null },
         escalationAlertedAt: null,
-        $or: [{ escalationAlertQueuedAt: null }, { escalationAlertQueuedAt: { $lte: queuedBefore } }],
+        $or: notInFlight('escalationAlertQueuedAt', 'escalationAlertFailedAt', queuedBefore, lostBefore),
       })
       .sort({ createdAt: 1 })
       .limit(limit)

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
-import { EmailCategory, EmailJobStatus } from '@bike4mind/common';
+import { EmailCategory, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { EmailJob, emailJobRepository } from './EmailJobModel';
 
@@ -54,5 +54,48 @@ describe('EmailJobRepository.claimForStart', () => {
     const claimed = await emailJobRepository.claimForStart(new mongoose.Types.ObjectId().toString());
 
     expect(claimed).toBeNull();
+  });
+});
+
+describe('EmailJobRepository.completeRun', () => {
+  const recount = {
+    sentCount: 2,
+    failedCount: 0,
+    cancelledCount: 0,
+    overallStatus: EmailJobOverallStatus.COMPLETE,
+    completedAt: new Date('2026-01-02T00:00:00Z'),
+  };
+
+  it('completes the run whose lastSentAt it read', async () => {
+    const lastSentAt = new Date('2026-01-01T00:00:00Z');
+    const job = await createJob(EmailJobStatus.PROCESSING);
+    await EmailJob.updateOne({ _id: job.id }, { $set: { lastSentAt } });
+
+    expect(await emailJobRepository.completeRun(job.id, lastSentAt, recount)).toBe(true);
+    const stored = await EmailJob.findById(job.id);
+    expect(stored?.status).toBe(EmailJobStatus.COMPLETED);
+    expect(stored?.sentCount).toBe(2);
+  });
+
+  it('completes a job that was never claimed through a send (no lastSentAt)', async () => {
+    const job = await createJob(EmailJobStatus.PROCESSING);
+    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(true);
+  });
+
+  it('leaves a cancelled job cancelled', async () => {
+    const job = await createJob(EmailJobStatus.CANCELLED);
+    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(false);
+    expect((await EmailJob.findById(job.id))?.status).toBe(EmailJobStatus.CANCELLED);
+  });
+
+  it('does not complete a job re-claimed for a newer send after the recount read it', async () => {
+    const job = await createJob(EmailJobStatus.COMPLETED);
+    await EmailJob.updateOne(
+      { _id: job.id },
+      { $set: { lastSentAt: new Date('2026-01-03T00:00:00Z'), overallStatus: EmailJobOverallStatus.SENDING } }
+    );
+
+    expect(await emailJobRepository.completeRun(job.id, undefined, recount)).toBe(false);
+    expect((await EmailJob.findById(job.id))?.overallStatus).toBe(EmailJobOverallStatus.SENDING);
   });
 });

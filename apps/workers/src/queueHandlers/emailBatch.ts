@@ -169,7 +169,11 @@ async function processAttempt(
             retryCount: startRetryCount + retryAttempt,
           });
         } else {
-          await emailSendAttemptRepository.recordDeliveryOutcome(attempt.id, { ok: true, at: new Date() });
+          await emailSendAttemptRepository.recordDeliveryOutcome(
+            attempt.id,
+            { ok: true, at: new Date() },
+            { retryCount: startRetryCount + retryAttempt }
+          );
         }
         if (retryAttempt > 0) {
           logger.info(`Email to ${attempt.recipientEmail} succeeded after ${retryAttempt} retries`);
@@ -190,8 +194,7 @@ async function processAttempt(
 
   logger.error(`Failed to send to ${attempt.recipientEmail} after ${MAX_RETRY_ATTEMPTS} attempts: ${lastError}`);
 
-  // Nothing was queued, so no worker outcome can race this write.
-  await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.FAILED, {
+  await emailSendAttemptRepository.markSendFailed(attempt.id, {
     errorMessage: `Failed after ${MAX_RETRY_ATTEMPTS} attempts: ${lastError}`,
     retryCount: startRetryCount + MAX_RETRY_ATTEMPTS,
   });

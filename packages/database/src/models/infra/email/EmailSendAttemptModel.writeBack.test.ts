@@ -102,4 +102,29 @@ describe('EmailSendAttemptRepository delivery write-back', () => {
     expect(summary.sent).toBe(2);
     expect(summary.testEmails.sent).toBe(1);
   });
+
+  it('records the batch retry count with a synchronous success', async () => {
+    const id = await attemptIn(EmailSendStatus.PROCESSING);
+    await repo.recordDeliveryOutcome(id, sent, { retryCount: 2 });
+    expect(await EmailSendAttempt.findById(id).lean()).toMatchObject({ status: EmailSendStatus.SENT, retryCount: 2 });
+  });
+
+  it('marks an attempt the batch gave up on FAILED while it is still processing', async () => {
+    const id = await attemptIn(EmailSendStatus.PROCESSING);
+    await expect(repo.markSendFailed(id, { errorMessage: 'gave up', retryCount: 3 })).resolves.toBe(true);
+    expect(await EmailSendAttempt.findById(id).lean()).toMatchObject({
+      status: EmailSendStatus.FAILED,
+      errorMessage: 'gave up',
+      retryCount: 3,
+    });
+  });
+
+  it.each([EmailSendStatus.SENT, EmailSendStatus.QUEUED, EmailSendStatus.FAILED])(
+    'never lets the batch give-up overwrite a %s the worker or a retry already wrote',
+    async status => {
+      const id = await attemptIn(status, { errorMessage: 'worker error' });
+      await expect(repo.markSendFailed(id, { errorMessage: 'gave up', retryCount: 3 })).resolves.toBe(false);
+      expect(await EmailSendAttempt.findById(id).lean()).toMatchObject({ status, errorMessage: 'worker error' });
+    }
+  );
 });

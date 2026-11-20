@@ -39,6 +39,21 @@ import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
 // The id the external reporting form returns; mirrors what the verdict route accepts.
 const REPORT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+
+// A failure at or after the last queue stamp means that round did not reach every reviewer.
+function alertDeliveryText(
+  noun: string,
+  deliveredAt: string | null,
+  queuedAt: string | null,
+  failedAt: string | null | undefined
+): string {
+  if (deliveredAt) return formatUtc(new Date(deliveredAt));
+  if (failedAt && (!queuedAt || new Date(failedAt) >= new Date(queuedAt))) {
+    return `${noun} failed at ${formatUtc(new Date(failedAt))}, awaiting resend`;
+  }
+  if (queuedAt) return `${noun} queued, awaiting delivery`;
+  return `No ${noun.toLowerCase()} delivered yet`;
+}
 const REPORT_ID_MAX_LENGTH = 64;
 
 type VerdictChoice = ModerationVerdict['kind'];
@@ -258,11 +273,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                 </Fact>
               )}
               <Fact label="Reviewer alert" data-testid="moderation-incident-alerted">
-                {data.alertedAt
-                  ? formatUtc(new Date(data.alertedAt))
-                  : data.alertQueuedAt
-                    ? 'Alert queued, awaiting delivery'
-                    : 'No alert delivered yet'}
+                {alertDeliveryText('Alert', data.alertedAt, data.alertQueuedAt, data.alertFailedAt)}
               </Fact>
               {data.lastReminderAt && (
                 <Fact label="Last reminder" data-testid="moderation-incident-reminded">
@@ -280,11 +291,12 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                       : 'Manual, by a reviewer'}
                   </Fact>
                   <Fact label="Escalation email" data-testid="moderation-incident-escalation-alerted">
-                    {escalationState.escalationAlertedAt
-                      ? formatUtc(new Date(escalationState.escalationAlertedAt))
-                      : escalationState.escalationAlertQueuedAt
-                        ? 'Escalation email queued, awaiting delivery'
-                        : 'No escalation email delivered yet'}
+                    {alertDeliveryText(
+                      'Escalation email',
+                      escalationState.escalationAlertedAt,
+                      escalationState.escalationAlertQueuedAt,
+                      data.escalationAlertFailedAt
+                    )}
                   </Fact>
                 </>
               )}

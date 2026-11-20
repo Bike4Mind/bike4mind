@@ -69,11 +69,13 @@ const view = (over: Partial<ModerationIncidentView> = {}): ModerationIncidentVie
   ncmecReportId: null,
   alertedAt: null,
   alertQueuedAt: null,
+  alertFailedAt: null,
   lastReminderAt: null,
   escalatedAt: null,
   escalationTrigger: null,
   escalationAlertedAt: null,
   escalationAlertQueuedAt: null,
+  escalationAlertFailedAt: null,
   reportedAt: null,
   falsePositiveAt: null,
   noActionAt: null,
@@ -329,6 +331,16 @@ describe('ModerationIncidentDetail', () => {
     renderDetail();
     expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('No alert delivered yet');
     expect(screen.queryByTestId('moderation-incident-reminded')).toBeNull();
+  });
+
+  it('says the alert failed and awaits a resend once a copy failed after it was queued', () => {
+    m.view.mockReturnValue(
+      loaded(view({ alertQueuedAt: '2026-10-30T10:01:00.000Z', alertFailedAt: '2026-10-30T10:03:00.000Z' }))
+    );
+    renderDetail();
+    const text = screen.getByTestId('moderation-incident-alerted').textContent;
+    expect(text).toContain('Alert failed at');
+    expect(text).toContain('awaiting resend');
   });
 
   it('says the alert is awaiting delivery while it is queued, and shows the time once delivered', () => {

@@ -147,6 +147,8 @@ export type ModerationIncidentView = {
   alertedAt: string | null;
   /** Set when the alert was queued for delivery; until alertedAt is set too, it is still in flight. */
   alertQueuedAt: string | null;
+  /** When a reviewer's copy last failed; at or after alertQueuedAt, that round awaits a resend. */
+  alertFailedAt: string | null;
   lastReminderAt: string | null;
   /** Null until the incident moves to the second review step. */
   escalatedAt: string | null;
@@ -155,6 +157,8 @@ export type ModerationIncidentView = {
   escalationAlertedAt: string | null;
   /** Same as alertQueuedAt, for the escalation email. */
   escalationAlertQueuedAt: string | null;
+  /** Same as alertFailedAt, for the escalation email. */
+  escalationAlertFailedAt: string | null;
   reportedAt: string | null;
   falsePositiveAt: string | null;
   noActionAt: string | null;

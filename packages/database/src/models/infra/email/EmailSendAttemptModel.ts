@@ -163,9 +163,17 @@ export class EmailSendAttemptRepository
    * (delivered, opened, clicked, bounced, complained, cancelled). FAILED -> SENT is allowed: a
    * retried send can succeed. Returns the attempt's jobId when the write applied, else null.
    */
-  async recordDeliveryOutcome(id: string, outcome: EmailDeliveryOutcome): Promise<string | null> {
+  async recordDeliveryOutcome(
+    id: string,
+    outcome: EmailDeliveryOutcome,
+    options?: { retryCount?: number }
+  ): Promise<string | null> {
+    const retryCount = options?.retryCount;
     const update = outcome.ok
-      ? { $set: { status: EmailSendStatus.SENT, sentAt: outcome.at }, $unset: { errorMessage: 1 } }
+      ? {
+          $set: { status: EmailSendStatus.SENT, sentAt: outcome.at, ...(retryCount !== undefined && { retryCount }) },
+          $unset: { errorMessage: 1 },
+        }
       : { $set: { status: EmailSendStatus.FAILED, errorMessage: outcome.error }, $inc: { retryCount: 1 } };
     const result = await this.model.findOneAndUpdate(
       {
@@ -178,6 +186,19 @@ export class EmailSendAttemptRepository
       { new: true, projection: { jobId: 1 }, runValidators: true }
     );
     return result?.jobId ?? null;
+  }
+
+  /**
+   * Records the batch's own give-up. Matches only an attempt still PENDING/PROCESSING: a publish that
+   * threw may still have been accepted, and the worker's outcome must win over this write.
+   */
+  async markSendFailed(id: string, updates: { errorMessage: string; retryCount: number }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] } },
+      { $set: { status: EmailSendStatus.FAILED, ...updates } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
   }
 
   async markOpened(trackingToken: string): Promise<IEmailSendAttemptDocument | null> {

@@ -192,6 +192,23 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
   }
 
   /**
+   * Completes a send run from a recount. Matches only while the job is not cancelled and has not been
+   * re-claimed for a newer send since `runStartedAt` (its lastSentAt) was read; returns whether it matched.
+   */
+  async completeRun(
+    id: string,
+    runStartedAt: Date | undefined,
+    updates: Pick<IEmailJob, 'sentCount' | 'failedCount' | 'cancelledCount' | 'overallStatus' | 'completedAt'>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $ne: EmailJobStatus.CANCELLED }, lastSentAt: runStartedAt ?? null },
+      { $set: { ...updates, status: EmailJobStatus.COMPLETED } },
+      { runValidators: true }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Find scheduled jobs that are due to be sent
    * Returns jobs with status SCHEDULED where scheduledAt <= now
    */

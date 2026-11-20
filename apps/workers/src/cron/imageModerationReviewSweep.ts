@@ -39,8 +39,10 @@ const toRecorded = (doc: StoredIncident) => ({
 });
 
 const incidents: IncidentReviewSweepDeps['incidents'] = {
-  findUnalerted: async (createdBefore, limit, queuedBefore) =>
-    (await imageModerationIncidentRepository.findUnalerted(createdBefore, limit, queuedBefore)).map(toRecorded),
+  findUnalerted: async (createdBefore, limit, queuedBefore, lostBefore) =>
+    (await imageModerationIncidentRepository.findUnalerted(createdBefore, limit, queuedBefore, lostBefore)).map(
+      toRecorded
+    ),
   findDueForReminder: async (notifiedBefore, limit) =>
     (await imageModerationIncidentRepository.findDueForReminder(notifiedBefore, limit)).map(toRecorded),
   findOldestPending: async () => {
@@ -57,8 +59,8 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
     const escalated = await imageModerationIncidentRepository.escalate(id, { trigger: 'timeout' }, at);
     return escalated && toRecorded(escalated);
   },
-  findEscalationUnalerted: async (limit, queuedBefore) =>
-    (await imageModerationIncidentRepository.findEscalationUnalerted(limit, queuedBefore)).map(toRecorded),
+  findEscalationUnalerted: async (limit, queuedBefore, lostBefore) =>
+    (await imageModerationIncidentRepository.findEscalationUnalerted(limit, queuedBefore, lostBefore)).map(toRecorded),
   markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at),
   markEscalationAlertQueued: (id, at) => imageModerationIncidentRepository.markEscalationAlertQueued(id, at),
   findDueForEscalationReminder: async (notifiedBefore, limit) =>

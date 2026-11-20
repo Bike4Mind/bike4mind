@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   REVIEW_ALERT_IN_FLIGHT_MINUTES,
+  REVIEW_ALERT_LOST_HOURS,
   REVIEW_SWEEP_BATCH_LIMIT,
   REVIEW_SWEEP_REMINDER_LIMIT,
   REVIEW_SWEEP_SEND_BUDGET_MS,
@@ -99,10 +100,11 @@ describe('runIncidentReviewSweep', () => {
       1,
       minutesAgo(15),
       REVIEW_SWEEP_BATCH_LIMIT,
-      minutesAgo(REVIEW_ALERT_IN_FLIGHT_MINUTES)
+      minutesAgo(REVIEW_ALERT_IN_FLIGHT_MINUTES),
+      minutesAgo(REVIEW_ALERT_LOST_HOURS * 60)
     );
     // The alarm read counts a queued alert as unalerted until the worker confirms it.
-    expect(deps.incidents.findUnalerted).toHaveBeenLastCalledWith(NOW, 1, NOW);
+    expect(deps.incidents.findUnalerted).toHaveBeenLastCalledWith(NOW, 1, NOW, NOW);
   });
 
   it('stamps alertQueuedAt, not alertedAt, when the alert is queued for the email-send worker', async () => {
@@ -118,23 +120,23 @@ describe('runIncidentReviewSweep', () => {
     expect(result).toMatchObject({ alerted: 1, failed: 0 });
   });
 
-  it('does not resend a queued alert while it is in flight, and resends it once after the window', async () => {
+  it('resends a queued alert with no outcome only after the lost window, not the in-flight one', async () => {
     const row = incident('inc-1', 40);
     const queuedAt = new Map<string, Date>();
     const deps = setup({}, { sendEmail: vi.fn().mockResolvedValue({ queued: true }) });
-    // Same in-flight rule as ImageModerationIncidentRepository.findUnalerted.
-    vi.mocked(deps.incidents.findUnalerted).mockImplementation(async (_cutoff, limit, queuedBefore) =>
-      [row].filter(r => !queuedAt.has(r.id) || queuedAt.get(r.id)! <= queuedBefore).slice(0, limit)
+    // Same rule as ImageModerationIncidentRepository.findUnalerted with no failed copy recorded.
+    vi.mocked(deps.incidents.findUnalerted).mockImplementation(async (_cutoff, limit, _queuedBefore, lostBefore) =>
+      [row].filter(r => !queuedAt.has(r.id) || queuedAt.get(r.id)! <= lostBefore).slice(0, limit)
     );
     vi.mocked(deps.incidents.markAlertQueued).mockImplementation(async (id, at) => {
       queuedAt.set(id, at);
     });
 
     await runIncidentReviewSweep(deps, NOW);
-    await runIncidentReviewSweep(deps, new Date(NOW.getTime() + 15 * 60_000));
+    await runIncidentReviewSweep(deps, new Date(NOW.getTime() + (REVIEW_ALERT_IN_FLIGHT_MINUTES + 1) * 60_000));
     expect(deps.sendEmail).toHaveBeenCalledTimes(1);
 
-    await runIncidentReviewSweep(deps, new Date(NOW.getTime() + (REVIEW_ALERT_IN_FLIGHT_MINUTES + 1) * 60_000));
+    await runIncidentReviewSweep(deps, new Date(NOW.getTime() + (REVIEW_ALERT_LOST_HOURS * 60 + 1) * 60_000));
     expect(deps.sendEmail).toHaveBeenCalledTimes(2);
   });
 
@@ -449,7 +451,8 @@ describe('runIncidentReviewSweep', () => {
       expect(result.escalated).toBe(REVIEW_SWEEP_BATCH_LIMIT);
       expect(deps.incidents.findEscalationUnalerted).toHaveBeenCalledWith(
         REVIEW_SWEEP_BATCH_LIMIT,
-        minutesAgo(REVIEW_ALERT_IN_FLIGHT_MINUTES)
+        minutesAgo(REVIEW_ALERT_IN_FLIGHT_MINUTES),
+        minutesAgo(REVIEW_ALERT_LOST_HOURS * 60)
       );
       expect(result.escalationAlerted).toBe(REVIEW_SWEEP_BATCH_LIMIT);
     });

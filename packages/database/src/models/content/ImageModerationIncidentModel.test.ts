@@ -93,6 +93,29 @@ describe('ImageModerationIncidentRepository', () => {
 
       expect((await read(inc._id))?.escalationAlertedAt).toEqual(delivered);
     });
+
+    it('does not let a delivered copy close a round in which another copy already failed', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.markAlertQueued(inc.id, new Date('2026-10-19T12:00:00.000Z'));
+      const failedAt = new Date('2026-10-19T12:01:00.000Z');
+
+      await imageModerationIncidentRepository.recordAlertDelivery(
+        inc.id,
+        'review',
+        { ok: false, error: 'x' },
+        failedAt
+      );
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', {
+        ok: true,
+        at: new Date('2026-10-19T12:02:00.000Z'),
+      });
+      expect((await read(inc._id))?.alertedAt).toBeUndefined();
+
+      const resent = new Date('2026-10-19T13:00:00.000Z');
+      await imageModerationIncidentRepository.markAlertQueued(inc.id, resent);
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: resent });
+      expect((await read(inc._id))?.alertedAt).toEqual(resent);
+    });
   });
 
   describe('review sweep queries', () => {
@@ -136,29 +159,34 @@ describe('ImageModerationIncidentRepository', () => {
       await seed({ createdAt: hoursAgo(7), reviewStatus: 'false_positive' });
       await seed({ createdAt: hoursAgo(8), reviewStatus: 'no_action' });
 
-      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, NOW);
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, NOW, NOW);
 
       expect(found.map(incident => String(incident._id))).toEqual([older, newer]);
-      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1, NOW)).toHaveLength(1);
+      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1, NOW, NOW)).toHaveLength(1);
     });
 
-    it('findUnalerted skips an alert queued after the in-flight cutoff and returns one queued before it', async () => {
-      const inFlight = await seed({ createdAt: hoursAgo(3) });
-      const stale = await seed({ createdAt: hoursAgo(4) });
-      await imageModerationIncidentRepository.markAlertQueued(inFlight, hoursAgo(0.5));
-      await imageModerationIncidentRepository.markAlertQueued(stale, hoursAgo(2));
+    it('findUnalerted resends a queued alert only once a copy failed past the window or it is lost', async () => {
+      const failedRecently = await seed({ createdAt: hoursAgo(3), alertFailedAt: hoursAgo(0.4) });
+      const noOutcome = await seed({ createdAt: hoursAgo(4) });
+      const failed = await seed({ createdAt: hoursAgo(5), alertFailedAt: hoursAgo(1.9) });
+      const lost = await seed({ createdAt: hoursAgo(9) });
+      const failedBeforeQueue = await seed({ createdAt: hoursAgo(10), alertFailedAt: hoursAgo(3) });
+      await imageModerationIncidentRepository.markAlertQueued(failedRecently, hoursAgo(0.5));
+      await imageModerationIncidentRepository.markAlertQueued(noOutcome, hoursAgo(2));
+      await imageModerationIncidentRepository.markAlertQueued(failed, hoursAgo(2));
+      await imageModerationIncidentRepository.markAlertQueued(lost, hoursAgo(7));
+      await imageModerationIncidentRepository.markAlertQueued(failedBeforeQueue, hoursAgo(2));
 
-      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, hoursAgo(1));
-      expect(found.map(incident => String(incident._id))).toEqual([stale]);
-      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, NOW)).toHaveLength(2);
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, hoursAgo(1), hoursAgo(6));
+      expect(found.map(incident => String(incident._id))).toEqual([lost, failed]);
     });
 
     it('findEscalationUnalerted skips an escalation email still in flight', async () => {
       const inFlight = await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1) });
       await imageModerationIncidentRepository.markEscalationAlertQueued(inFlight, hoursAgo(0.5));
 
-      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, hoursAgo(1))).toEqual([]);
-      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW)).toHaveLength(1);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, hoursAgo(1), hoursAgo(6))).toEqual([]);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW, NOW)).toHaveLength(1);
     });
 
     it('findDueForReminder returns alerted unreviewed incidents whose last notice is a day old', async () => {

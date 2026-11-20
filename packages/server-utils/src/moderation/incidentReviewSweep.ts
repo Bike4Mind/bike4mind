@@ -28,17 +28,26 @@ export const REVIEW_SWEEP_SEND_BUDGET_MS = 3 * MINUTE_MS;
 // An incident still awaiting a verdict this long after it was recorded moves to the second review
 // step. Kept here, not with the sweep specs, because no deployed resource reads it.
 export const REVIEW_ESCALATION_TIMEOUT_HOURS = 24;
-// A queued alert the email-send worker has not confirmed is resent only after this long, so one
-// still in flight (the worker's own retries finish within minutes) is not sent twice.
+// A queued alert with a failed copy is resent only this long after it was queued, so the worker's
+// own async-invoke retries (two, within minutes) have run first.
 export const REVIEW_ALERT_IN_FLIGHT_MINUTES = 60;
+// A queued alert with no outcome at all is resent after Lambda's default maximum event age for async
+// invokes. EventBridge redelivering a throttled invoke can outlast it, so a duplicate stays possible.
+export const REVIEW_ALERT_LOST_HOURS = 6;
 
 export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
   incidents: {
     /**
      * Unreviewed incidents created at or before the cutoff with no delivered alert, oldest first,
-     * skipping one whose alert was queued after `queuedBefore`.
+     * skipping one whose queued alert may still be in flight: queued after `queuedBefore`, or after
+     * `lostBefore` with no failed copy recorded since.
      */
-    findUnalerted(createdBefore: Date, limit: number, queuedBefore: Date): Promise<RecordedIncident[]>;
+    findUnalerted(
+      createdBefore: Date,
+      limit: number,
+      queuedBefore: Date,
+      lostBefore: Date
+    ): Promise<RecordedIncident[]>;
     /** Alerted, unreviewed incidents whose last alert or reminder is at or before the cutoff, oldest first. */
     findDueForReminder(notifiedBefore: Date, limit: number): Promise<RecordedIncident[]>;
     /** Number of unreviewed incidents of any age. */
@@ -52,8 +61,8 @@ export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
     findDueForEscalation(createdBefore: Date, limit: number): Promise<RecordedIncident[]>;
     /** Stamps a timeout escalation; null when the incident was escalated or decided meanwhile. */
     escalateOnTimeout(id: string, at: Date): Promise<RecordedIncident | null>;
-    /** Escalated, unreviewed incidents with no delivered escalation email, oldest first; same `queuedBefore` rule. */
-    findEscalationUnalerted(limit: number, queuedBefore: Date): Promise<RecordedIncident[]>;
+    /** Escalated, unreviewed incidents with no delivered escalation email, oldest first; same in-flight rule. */
+    findEscalationUnalerted(limit: number, queuedBefore: Date, lostBefore: Date): Promise<RecordedIncident[]>;
     markEscalationAlerted(id: string, at: Date): Promise<void>;
     markEscalationAlertQueued(id: string, at: Date): Promise<void>;
     /** Escalated, unreviewed incidents whose escalation email or last escalation reminder is at or before the cutoff, oldest first. */
@@ -135,6 +144,7 @@ export async function runIncidentReviewSweep(
   const oldestPending = await incidents.findOldestPending();
   const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
   const inFlightCutoff = new Date(now.getTime() - REVIEW_ALERT_IN_FLIGHT_MINUTES * MINUTE_MS);
+  const lostCutoff = new Date(now.getTime() - REVIEW_ALERT_LOST_HOURS * HOUR_MS);
   const digestFor = async (due: RecordedIncident[]): Promise<IncidentReminderDigest> => ({
     pendingCount: Math.max(await incidents.countPending(), due.length),
     oldestAgeMinutes: ageMinutes(oldestPending ?? due[0], now),
@@ -142,7 +152,7 @@ export async function runIncidentReviewSweep(
 
   if (reviewersConfigured) {
     const graceCutoff = new Date(now.getTime() - REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES * MINUTE_MS);
-    const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff);
+    const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff, lostCutoff);
     for (const incident of unalerted) {
       if (outOfBudget()) break;
       const sent = await sendAlert(incident, deps);
@@ -197,7 +207,7 @@ export async function runIncidentReviewSweep(
     }
   }
 
-  const owed = await incidents.findEscalationUnalerted(REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff);
+  const owed = await incidents.findEscalationUnalerted(REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff, lostCutoff);
   if (escalationConfigured) {
     for (const incident of owed) {
       if (outOfBudget()) break;
@@ -247,7 +257,7 @@ export async function runIncidentReviewSweep(
 
   // Read after the sends so an incident this run alerted inline does not count against the alarm. A
   // queued alert still counts until the email-send worker confirms it.
-  const [oldestUnalerted] = await incidents.findUnalerted(now, 1, now);
+  const [oldestUnalerted] = await incidents.findUnalerted(now, 1, now, now);
   result.oldestUnalertedAgeMinutes = ageMinutes(oldestUnalerted, now);
   result.oldestPendingAgeMinutes = ageMinutes(oldestPending, now);
   result.pendingWithoutReviewers = !reviewersConfigured && oldestPending !== undefined;

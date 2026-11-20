@@ -13,15 +13,15 @@ export interface QueuedMail {
   text?: string;
 }
 
-/**
- * `queued` means the event bus accepted the mail, not that it was delivered: the email-send worker
- * sends it, and a failed send is retried by EventBridge and then dead-lettered.
- */
 export type QueuedMailOptions = SendEmailOptions & {
   /** Carried on the event so the worker can record the outcome; self-host callers record it themselves. */
   ref?: EmailDeliveryRef;
 };
 
+/**
+ * `queued` means the event bus accepted the mail, not that it was delivered: the email-send worker
+ * sends it, and a failed send is retried by EventBridge and then dead-lettered.
+ */
 export type QueuedMailResult = MailSendResult | { queued: true } | false;
 
 /**
