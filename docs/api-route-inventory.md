@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1242 routes: 112 contracted, 11 aliases of another route, 333 with no static caller in `apps/client/app`.
+1245 routes: 112 contracted, 11 aliases of another route, 336 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -134,7 +134,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
+| skills | 25 | 0 | 3 | 22 | 0 | 0 | 3 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
 | spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
@@ -1594,6 +1594,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/[id]/permanent` | DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/rating` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/report` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/template` | GET, PUT, DELETE | jwt | - | - | no | - | 0 |
+| `/api/skills/market/[id]/template/draft` | POST | jwt | - | - | no | - | 0 |
+| `/api/skills/market/[id]/template/publish` | POST, DELETE | jwt | - | - | no | - | 0 |
 | `/api/skills/market/[id]/versions` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |

@@ -11,7 +11,8 @@ export interface ISkillListingVersionDocument extends Omit<ISkillListingVersion,
   id: string;
 }
 
-const FindingSchema = new Schema(
+/** Shared with SkillListingTemplateModel, whose copy runs the same scan. */
+export const SkillScanFindingSchema = new Schema(
   {
     rule: { type: String, required: true },
     severity: { type: String, required: true, enum: ['critical', 'high', 'medium', 'low'] },
@@ -50,7 +51,7 @@ const SkillListingVersionSchema = new Schema<ISkillListingVersionDocument>(
 
     scanStatus: { type: String, required: true, enum: ['scanning', 'passed', 'failed', 'error'] },
     scanClaimedAt: { type: Date, default: null },
-    scanFindings: { type: [FindingSchema], default: [] },
+    scanFindings: { type: [SkillScanFindingSchema], default: [] },
     scanModel: { type: String },
     scanError: { type: String, maxlength: 500 },
     riskTier: { type: String, enum: ['clean', 'review', 'high'] },

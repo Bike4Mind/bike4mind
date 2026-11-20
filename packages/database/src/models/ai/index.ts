@@ -55,6 +55,7 @@ export * from './SkillBundleModel';
 export * from './SkillListingVersionModel';
 export * from './SkillListingImportModel';
 export * from './SkillListingReportModel';
+export * from './SkillListingTemplateModel';
 export * from './ToolDefinitionOverrideModel';
 export * from './ToolExecutionLogModel';
 export * from './ToolModel';
