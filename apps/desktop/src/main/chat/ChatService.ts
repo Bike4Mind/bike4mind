@@ -3070,6 +3070,8 @@ export class ChatService {
     for (const sessionId of this.loopRunSessions(runId)) {
       this.loopRuns.delete(sessionId);
       this.deps.approvals?.setUnattended(sessionId, false);
+      // The runner set auto or full for the run; a later wake must not inherit it.
+      void this.deps.store.setApprovalMode(sessionId, 'ask').catch(() => undefined);
     }
   }
 

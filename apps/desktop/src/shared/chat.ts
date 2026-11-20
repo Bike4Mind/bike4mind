@@ -1269,8 +1269,9 @@ export type ChatSessionMode = 'chat' | 'code';
  *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
  *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
- * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
- * output can raise it; see ChatService.setApprovalMode and HostContext.
+ * Changed by the user in the renderer, and by the loop runner for the session it starts (reset to
+ * 'ask' when the run ends). No tool, no MCP server and no model output can raise it; see
+ * ChatService.setApprovalMode and HostContext.
  */
 export type ChatApprovalMode = 'ask' | 'auto' | 'full';
 

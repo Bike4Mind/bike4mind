@@ -150,6 +150,15 @@ describe('ChatService loop runner sessions', () => {
     expect(ended().some(call => call.status === 'denied')).toBe(false);
   });
 
+  it('resets the approval mode the runner set once its run ends', async () => {
+    const session = await service.createSession();
+    await service.setApprovalMode(session.id, 'full');
+    await service.startAutomaticTurn(session.id, 'work the ticket', origin);
+    (await nextStream(1)).write(frame('[DONE]'));
+    service.endLoopRun('run-1');
+    await vi.waitUntil(async () => (await store.approvalMode(session.id)) === 'ask', { timeout: 5000, interval: 10 });
+  });
+
   it('starts its shell commands at low priority; a normal session does not', async () => {
     const runner = await service.createSession();
     await service.setApprovalMode(runner.id, 'full');
