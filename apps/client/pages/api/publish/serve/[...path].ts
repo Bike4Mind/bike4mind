@@ -109,7 +109,8 @@ import {
   type ArtifactParseResult,
 } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
-import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { getBrandName } from '@client/config/general';
+import { publishedAuthorShareLink, publishMarketingUrl, type ShareLinkVia } from '@server/referrals/shareLink';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -1162,17 +1163,18 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
-  // site with UTM attribution when configured, else a branded fallback. The embed
-  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
-  // the app root (the viewer is already on the canonical page). The bar only renders
-  // for an own-tab open-public artifact.
-  const marketing = (medium: string) =>
-    WEBSITE_URL
-      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
-      : '';
-  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
-  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
+  // link comes first: it lands on the same tagged marketing page (signup when none is
+  // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
+  // Without one, the marketing site with UTM attribution when configured, else a branded
+  // fallback. The embed pill falls back to the artifact's canonical page; the own-tab bar
+  // falls back to the app root (the viewer is already on the canonical page). The bar only
+  // renders for an own-tab open-public artifact.
+  const leadVia: ShareLinkVia | null = isEmbed ? 'embed-badge' : isOpenPublic ? 'share-bar' : null;
+  const authorLink = leadVia ? await publishedAuthorShareLink(artifact.ownerId, owner, leadVia) : null;
+  const marketing = (via: ShareLinkVia) => publishMarketingUrl(via) ?? '';
+  const pillHref = isEmbed ? authorLink || marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? authorLink || marketing('share-bar') || `${docOrigin}/` : '';
   // "Save as HTML" on the wrapper - see `exportSelfAuthorizes`. Dropped in embed mode,
   // which is chrome-less by design.
   const exportHtmlHref =
