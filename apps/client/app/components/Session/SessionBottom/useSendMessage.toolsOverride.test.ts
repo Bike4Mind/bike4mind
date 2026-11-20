@@ -17,7 +17,7 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
 
   it('derives the dispatch tool selection from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist)', () => {
     expect(source).toMatch(
-      /const \{ enabledTools, enabledToolsAreAmbient \} = resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*dispatchAgent\?\.allowedTools\s*\);/
+      /const \{ enabledTools, enabledToolsAreAmbient \} = resolveDispatchTools\(\s*toolsOverride,\s*effectiveTools,\s*dispatchAgent\?\.allowedTools\s*\);/
     );
   });
 
@@ -87,12 +87,32 @@ describe('useSendMessage - forceAgent routes to the agent executor', () => {
 
   it('forces the agent override when forceAgent is set, independent of the toggle', () => {
     expect(normalized).toMatch(
-      /const userOverride: 'force_agent' \| undefined = agentToggleActive \|\| agentDefaultOn \|\| classifierUpgraded \|\| \(agentModeFeatureEnabled && options\?\.forceAgent === true\) \? 'force_agent' : undefined;/
+      /const userOverride: 'force_agent' \| undefined = agentToggleActive \|\| agentDefaultOn \|\| classifierUpgraded \|\| \(agentModeFeatureEnabled && options\?\.forceAgent === true\) \|\| \(agentModeFeatureEnabled && directedSession\) \? 'force_agent' : undefined;/
     );
   });
 
   it('never reads forceAgent outside the Agent Mode admin gate, so a disabled feature never dispatches', () => {
     expect(normalized).not.toMatch(/(?<!agentModeFeatureEnabled && )options\?\.forceAgent/);
+  });
+
+  it('keeps a directed notebook (Studio Direct) in agent mode with the director tools, slash commands excepted', () => {
+    expect(normalized).toMatch(
+      /const directedSession = agentModeFeatureEnabled && productionsFlagOn && !isRealSlashCommand && Boolean\(sessionToSend\?\.productionCompositionId\);/
+    );
+    expect(normalized).toMatch(
+      /const toolsOverride = options\?\.toolsOverride \?\? \(directedSession \? \[\.\.\.DIRECTOR_TOOLS\] : undefined\);/
+    );
+    expect(normalized).toMatch(
+      /const productionsFlagOn = studioFeatureSettingKeys\('productions'\)\.every\(isAdminFeatureEnabled\);/
+    );
+    // The send-scoped override is the only one any route reads, so a directed turn cannot skip it.
+    expect(normalized).not.toMatch(/options\?\.toolsOverride(?! \?\? \(directedSession)/);
+  });
+
+  it('sends the launch productionCompositionId with the agent start so the server marks the session', () => {
+    expect(normalized).toMatch(
+      /agentExecution\.start\(\{[^;]*\.\.\.\(options\?\.productionCompositionId \? \{ productionCompositionId: options\.productionCompositionId \} : \{\}\),/
+    );
   });
 
   it('hands userOverride to routeQuery and dispatches the agent branch through agentExecution.start', () => {

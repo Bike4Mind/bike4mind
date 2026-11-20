@@ -773,6 +773,13 @@ export interface ISession {
    */
   enabledTools?: string[];
   /**
+   * The Studio production this notebook directs, set by the agent start of a Direct launch after the server
+   * checks the caller owns the composition and has Productions open. While set, every turn runs in agent mode
+   * with the director tools and system context (client: useSendMessage; executor: agentExecutor.directedSession).
+   * Not copied by clone/fork/snip.
+   */
+  productionCompositionId?: string;
+  /**
    * Tools that must NOT be offered to the model for this session, even if the
    * request or global auto-adds include them. Applied as a denylist after all
    * other tool resolution. Generic capability - lets a product surface restrict

@@ -20,6 +20,7 @@ import {
   sessionRepository,
   sessionToolApprovalRepository,
   userRepository,
+  studioCompositionRepository,
   Quest,
   type AgentExecutionStatus,
 } from '@bike4mind/database';
@@ -42,6 +43,8 @@ import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConn
 import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
 import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
+import { isStudioFeatureEnabled } from '@bike4mind/server-utils/middlewares/studioFeatureFlag';
+import type { Request } from 'express';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -151,6 +154,13 @@ export type StartAgentExecutionInput = {
    * system message, carried in the server-only checkpoint so continuations keep it.
    */
   systemContext?: string;
+  /**
+   * The Studio production a Direct launch directs. Once the run is accepted, the session is marked with it
+   * (`ISession.productionCompositionId`) so every later turn runs as the director, but only for a signed-in caller
+   * with Productions open who owns the composition. Anything else is ignored rather than refused: the run itself
+   * is an ordinary agent run, and the executor re-checks access on every run anyway.
+   */
+  productionCompositionId?: string;
   /**
    * Scripted per-iteration gate confidences (see `IAgentExecution.confidenceOverrides`).
    * Admin-only: any other caller is refused with `confidence_overrides_forbidden`.
@@ -445,6 +455,8 @@ export async function startAgentExecution(
   }
 
   await pinning;
+  // Before dispatch, so the executor's first run already reads the marker.
+  if (input.productionCompositionId) await markDirectedSession(input, logger);
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is
@@ -521,6 +533,35 @@ export async function startAgentExecution(
 
   logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
+}
+
+/**
+ * Marks the session as directing `productionCompositionId` (see the input field). Never throws: a refused or failed
+ * mark leaves the run as an ordinary agent run.
+ */
+async function markDirectedSession(input: StartAgentExecutionInput, logger: Logger): Promise<void> {
+  const { userId, sessionId, productionCompositionId } = input;
+  if (!productionCompositionId) return;
+  try {
+    // An API key never gets the production tools (buildAgentProductionToolConfig), so it never directs either.
+    if (input.apiKeyInfo) return;
+    const user = await userRepository.findById(userId);
+    // The flag check reads only req.user, the same way the executor calls it (agentExecutor.productionToolConfig).
+    if (!user || !(await isStudioFeatureEnabled('productions', { user } as unknown as Request))) {
+      logger.warn('[Start] Productions is not open to the caller; session not marked as directed', { sessionId });
+      return;
+    }
+    if (!(await studioCompositionRepository.findOwned(productionCompositionId, userId))) {
+      logger.warn('[Start] Composition not found for the caller; session not marked as directed', { sessionId });
+      return;
+    }
+    await sessionRepository.update({ id: sessionId, productionCompositionId });
+  } catch (error) {
+    logger.warn('[Start] Could not mark the session as directed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function isAdminUser(userId: string): Promise<boolean> {

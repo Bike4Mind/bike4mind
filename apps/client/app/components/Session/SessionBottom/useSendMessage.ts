@@ -67,7 +67,14 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
+import {
+  DIRECTOR_TOOLS,
+  classifyQueryComplexity,
+  expandChoiceKey,
+  isImageAttachment,
+  routeQuery,
+  studioFeatureSettingKeys,
+} from '@bike4mind/common';
 import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
 import { recordReplyChoice } from '@client/app/hooks/data/quests';
 import { pickOrchestrationAgent } from '@bike4mind/server-utils/lib/agentOrchestration';
@@ -113,6 +120,8 @@ interface SendClickOptions {
   systemContext?: string;
   /** Route this one send to the agent executor (still gated on the agent-mode feature flag). */
   forceAgent?: boolean;
+  /** The Studio production a Direct launch directs; sent with the agent start so the server marks the session. */
+  productionCompositionId?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -186,8 +195,11 @@ export function useSendMessage({
   // bolt ON and later lost the feature (admin kill switch) would silently keep
   // routing every send to `agent_executor` with no UI to disable it.
   const { settings: userSettings } = useUserSettings();
-  const { isFeatureEnabled } = useFeatureEnabled();
+  const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
+  // Only the admin flags: the server already checked the full Productions access (audience, plan) before it
+  // marked the session, and the executor re-checks it on every run.
+  const productionsFlagOn = studioFeatureSettingKeys('productions').every(isAdminFeatureEnabled);
   // Layer-2 preference. Default `'off'` per IUserPreferences. Only meaningful
   // when Layer-1 (`agentModeFeatureEnabled`, resolved above via
   // `useFeatureEnabled('agentMode')`) is true; non-gated users never reach the
@@ -608,6 +620,15 @@ export function useSendMessage({
     // `agentMode.enabled` doesn't outlive a feature-flag revocation, and skip
     // it entirely for real slash commands so they keep dispatching normally.
     const agentToggleActive = agentModeFeatureEnabled && agentMode.enabled && !isRealSlashCommand;
+    // A notebook the Studio Direct button started stays in agent mode with the production tools on every turn:
+    // the director's tools exist only in the agent executor, and a plain chat turn would claim work it cannot do.
+    // Without agent mode the turn stays plain chat with its own tools: the chat path cannot run the director's.
+    const directedSession =
+      agentModeFeatureEnabled &&
+      productionsFlagOn &&
+      !isRealSlashCommand &&
+      Boolean(sessionToSend?.productionCompositionId);
+    const toolsOverride = options?.toolsOverride ?? (directedSession ? [...DIRECTOR_TOOLS] : undefined);
     // 'on' = "agent_executor used by default". Treated as a force_agent
     // override on every send (verification: Layer-1 + 'always on' + "hi" ->
     // ReAct dispatched). Layer-1 gated and slash-command-bypassed for the
@@ -664,7 +685,8 @@ export function useSendMessage({
       agentToggleActive ||
       agentDefaultOn ||
       classifierUpgraded ||
-      (agentModeFeatureEnabled && options?.forceAgent === true)
+      (agentModeFeatureEnabled && options?.forceAgent === true) ||
+      (agentModeFeatureEnabled && directedSession)
         ? 'force_agent'
         : undefined;
     // Heuristic auto-routing (`routingComplexity === 'complex'` ->
@@ -765,7 +787,7 @@ export function useSendMessage({
     const { effectiveTools, refused } = resolveTools({
       prompt,
       supportsTools: !!currentModelInfo?.supportsTools,
-      toolsOverride: options?.toolsOverride,
+      toolsOverride,
       skipAutoOffers,
       activeSurface: sessionToSend?.surface,
       deniedTools: effectiveDisabledTools(currentSession),
@@ -778,7 +800,7 @@ export function useSendMessage({
     // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
     // model sees neither the tools nor the hidden system context, so with either present an
     // instant ack could contradict what the real reply is told to do.
-    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
+    const skipRapidReply = (toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -1056,7 +1078,7 @@ export function useSendMessage({
         // ships the user's Smart Tools marked ambient; the server unions them onto the
         // profile it resolves rather than replacing it.
         const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
-          options?.toolsOverride,
+          toolsOverride,
           effectiveTools,
           dispatchAgent?.allowedTools
         );
@@ -1136,7 +1158,19 @@ export function useSendMessage({
           // Per-send system context: the executor folds it into the run's system
           // message, and it is kept off the stored execution and Quest.
           ...systemContextField,
+          ...(options?.productionCompositionId ? { productionCompositionId: options.productionCompositionId } : {}),
         });
+        const directedCompositionId = options?.productionCompositionId;
+        if (directedCompositionId) {
+          // Mirrors the marker the server writes on start, so the next turn in this notebook already routes as
+          // directed. The executor re-checks access each run, so a refused marker only costs the forced route.
+          setCurrentSession(prev =>
+            prev?.id === dispatchSessionId ? { ...prev, productionCompositionId: directedCompositionId } : prev
+          );
+          queryClient.setQueryData<ISessionDocument>(['sessions', dispatchSessionId], prev =>
+            prev ? { ...prev, productionCompositionId: directedCompositionId } : prev
+          );
+        }
         setChatInputValue('');
         clearDraft(dispatchSessionId);
         // A first send from a new notebook drafted under the new-notebook key

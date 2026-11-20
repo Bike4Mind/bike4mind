@@ -165,6 +165,9 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // continuations keep it. Capped like every other caller-supplied prompt body (the client
   // refuses an over-cap launch before sending). Must stay in sync with `StartExecutionSchema`.
   systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
+  // The Studio production a Direct launch directs. startAgentExecution marks the session with it only after its own
+  // access and ownership checks (an id that fails them is ignored); see `productionCompositionId` there.
+  productionCompositionId: z.string().max(64).optional(),
 });
 
 const AbortCommandSchema = BaseMessageSchema.extend({
@@ -339,6 +342,7 @@ async function handleStart(
         audioConfig: cmd.audioConfig,
         routingSource: cmd.routingSource,
         systemContext: cmd.systemContext,
+        productionCompositionId: cmd.productionCompositionId,
       },
       logger
     );

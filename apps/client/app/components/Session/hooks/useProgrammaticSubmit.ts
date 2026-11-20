@@ -115,6 +115,7 @@ export function useProgrammaticSubmit({
         toolsOverride,
         ...(systemContext ? { systemContext } : {}),
         ...(dispatch.forceAgent ? { forceAgent: true } : {}),
+        ...(dispatch.productionCompositionId ? { productionCompositionId: dispatch.productionCompositionId } : {}),
       });
     }, 150);
     launchTimersRef.current.add(timer);

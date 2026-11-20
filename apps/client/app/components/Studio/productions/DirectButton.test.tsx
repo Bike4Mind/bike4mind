@@ -40,7 +40,7 @@ vi.mock('@client/app/components/Files/EmbeddedFileBrowser', async () => {
 });
 
 import DirectButton from './DirectButton';
-import { DIRECTOR_TOOLS } from './directorTools';
+import { DIRECTOR_TOOLS } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (children: ReactNode) => <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>;
@@ -70,6 +70,7 @@ describe('DirectButton', () => {
     const dispatch = setProgrammaticLaunch.mock.calls[0][0];
     expect(dispatch.forceAgent).toBe(true);
     expect(dispatch.sessionId).toBe('session1');
+    expect(dispatch.productionCompositionId).toBe('comp123');
     expect(dispatch.requiredTools).toEqual([...DIRECTOR_TOOLS]);
     expect(dispatch.systemContext).toContain('comp123');
     expect(dispatch.promptContent).toContain('Direct this production: A running shoe ad');
