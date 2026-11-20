@@ -242,5 +242,8 @@ export const SCENE_COMPOSITION_PROJECTION = {
   }),
   statusFields: () => ({}),
   outputOf: (job: SceneJob): ComposeJobOutput | undefined => job.payload.output,
-  outputFields: (output: ComposeJobOutput) => ({ duration_seconds: output.durationSeconds }),
+  outputFields: (output: ComposeJobOutput) => ({
+    duration_seconds: output.durationSeconds,
+    files_skip_reason: output.filesSkipReason ?? null,
+  }),
 };

@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
+import {
+  SETTING_TABS,
+  makeContributedBooleanSetting,
+  registerContributedSettings,
+  resetContributedSettings,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
@@ -366,6 +373,36 @@ describe('AdminSettingsTab category headings', () => {
     renderSecurityTab();
 
     expect(screen.getByTestId('admin-settings-category-heading-AI Moderation').textContent).toBe('AI Moderation');
+  });
+});
+
+describe('AdminSettingsTab settings that stay off the list', () => {
+  afterEach(() => resetContributedSettings());
+
+  it('lists no editor for a core setting flagged hideFromSettingsList', () => {
+    renderSecurityTab();
+
+    expect(settingsMap.secopsTriageConfig.hideFromSettingsList).toBe(true);
+    expect(settingsMap.secopsTriageConfig.category).toBe(settingsMap.abuseAssessmentEnabled.category);
+    expect(screen.queryByTestId('generic-setting-secopsTriageConfig')).toBeNull();
+    expect(screen.getByTestId('generic-setting-abuseAssessmentEnabled')).toBeTruthy();
+  });
+
+  it('applies the flag to a contributed setting too', () => {
+    const contributed = (key: string, hideFromSettingsList?: boolean) =>
+      makeContributedBooleanSetting({
+        key,
+        name: key,
+        description: 'x',
+        defaultValue: false,
+        category: settingsMap.abuseAssessmentEnabled.category,
+        hideFromSettingsList,
+      });
+    registerContributedSettings([contributed('ExtensionListed'), contributed('ExtensionOwnEditor', true)]);
+    renderSecurityTab();
+
+    expect(screen.getByTestId('generic-setting-ExtensionListed')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-ExtensionOwnEditor')).toBeNull();
   });
 });
 

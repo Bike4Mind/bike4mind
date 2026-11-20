@@ -36,7 +36,7 @@ import {
 } from './activeSubscriptions';
 import { partnerEntitlementsForEmail } from './partnerRules';
 import { resolvePaidStanding } from './paidStanding';
-import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
+import { PAID_PLAN_ENTITLEMENT_KEY, hasDeveloperUserTag, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -225,8 +225,7 @@ export async function getCompleteRequestEntitlements(req: EntitlementRequest): P
  * user bypasses any entitlement" is a product-level affordance, not a sound
  * platform default for every future consumer (a paid entitlement may
  * legitimately want to charge developers). Call sites that want the client
- * `RestrictedPage` developer bypass add it explicitly with the shared
- * `hasDeveloperUserTag` predicate (`@bike4mind/common`).
+ * `RestrictedPage` developer bypass use `requestHasProductAccess`.
  */
 export async function requestHasEntitlement(req: EntitlementRequest, key: EntitlementKey): Promise<boolean> {
   // Fail closed at this shared choke point: every product gate funnels through here,
@@ -235,4 +234,14 @@ export async function requestHasEntitlement(req: EntitlementRequest, key: Entitl
   if (!req.user) return false;
   if (req.user.isAdmin) return true;
   return (await getRequestEntitlements(req)).includes(normalizeTag(key));
+}
+
+/**
+ * Product API gate for premium overlays: admins, developers, or holders of `key`. The server
+ * twin of the client `RestrictedPage` / `useEntitlementGate` bypass, so a staff user who can open
+ * a product's page can also call its API.
+ */
+export async function requestHasProductAccess(req: EntitlementRequest, key: EntitlementKey): Promise<boolean> {
+  if (!req.user) return false;
+  return hasDeveloperUserTag(req.user.tags) || requestHasEntitlement(req, key);
 }

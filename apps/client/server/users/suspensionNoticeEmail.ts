@@ -2,7 +2,7 @@ import { SUSPENSION_REASONS, WEBSITE_URL, getWebsiteUrl, toSuspensionReasonCateg
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 
 type WarnLogger = { warn(msg: string, meta: unknown): void };
@@ -31,7 +31,7 @@ export async function emailSuspensionNoticeIfEnabled(
         supportEmail: configuredSupportEmail(),
         policyUrl: WEBSITE_URL ? getWebsiteUrl(SUSPENSION_REASONS[category].policy.slug) : undefined,
       },
-      { db: { users: userRepository }, mailer, logger }
+      { db: { users: userRepository }, mailer: queuedMailer, logger }
     );
   } catch (error) {
     logger?.warn('[suspension] notice email skipped after an error', { userId, error: String(error) });

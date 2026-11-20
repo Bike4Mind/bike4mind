@@ -414,13 +414,22 @@ describe('streamCompletion', () => {
     const done = streamCompletion(
       instance,
       '/c',
-      { model: 'm', messages: [{ role: 'user', content: 'Image from the call above.', continuesTurn: true }] },
+      {
+        model: 'm',
+        messages: [
+          { role: 'system', content: 'sys', cacheSplitAt: 1 },
+          { role: 'user', content: 'Image from the call above.', continuesTurn: true },
+        ],
+      },
       () => {}
     );
     stream.write(frame('[DONE]'));
     await done;
 
-    expect(post.mock.calls[0][1].messages).toEqual([{ role: 'user', content: 'Image from the call above.' }]);
+    expect(post.mock.calls[0][1].messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Image from the call above.' },
+    ]);
   });
 
   it("describes a 403 as not allowed, with the server's words, rather than as an expired session", async () => {
@@ -696,6 +705,20 @@ describe('withCacheBreakpoints', () => {
 
   it('marks the system message and the last message, and nothing between', () => {
     expect(withCacheBreakpoints(history).map(message => message.cache)).toEqual([true, undefined, undefined, true]);
+  });
+
+  it('sends a system prompt with a per-session tail as a cached shared block and the tail after it', () => {
+    const split = [{ role: 'system' as const, content: 'shared\ntail', cacheSplitAt: 7 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(split).slice(0, 3)).toEqual([
+      { role: 'system', content: 'shared\n', cache: true },
+      { role: 'system', content: 'tail' },
+      { role: 'user', content: 'one' },
+    ]);
+  });
+
+  it('keeps one block when the split leaves nothing after it', () => {
+    const whole = [{ role: 'system' as const, content: 'sys', cacheSplitAt: 3 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(whole)[0]).toEqual({ role: 'system', content: 'sys', cache: true });
   });
 
   it('never touches the messages it was given', () => {

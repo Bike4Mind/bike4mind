@@ -23,16 +23,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
+import com.bike4mind.app.R
 import com.bike4mind.kit.briefs.Brief
 import com.bike4mind.kit.briefs.BriefDecision
 import com.bike4mind.kit.briefs.BriefItem
@@ -62,9 +63,9 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Brief") },
-                navigationIcon = { TextButton(onClick = onBack, modifier = Modifier.testTag("brief-back-btn")) { Text("Back") } },
-                actions = { TextButton(onClick = controller::load, modifier = Modifier.testTag("brief-refresh-btn")) { Text("Refresh") } },
+                title = { Text(stringResource(R.string.brief_title)) },
+                navigationIcon = { TextButton(onClick = onBack, modifier = Modifier.testTag("brief-back-btn")) { Text(stringResource(R.string.action_back)) } },
+                actions = { TextButton(onClick = controller::load, modifier = Modifier.testTag("brief-refresh-btn")) { Text(stringResource(R.string.action_refresh)) } },
             )
         },
     ) { padding ->
@@ -73,16 +74,16 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
             when {
                 state.loading && brief == null -> Centered(tag = "brief-loading") { CircularProgressIndicator() }
                 brief == null && state.error != null -> Message(
-                    title = "Couldn't load the brief",
+                    title = stringResource(R.string.brief_load_failed),
                     body = state.error,
-                    action = "Try again" to controller::load,
+                    action = stringResource(R.string.action_try_again) to controller::load,
                     tag = "brief-error",
                     actionTag = "brief-retry-btn",
                 )
                 brief == null -> Message(
-                    title = "No brief yet",
-                    body = "Your assistant can summarize what happened, what it handled and what needs you.",
-                    action = "Compose a brief" to controller::compose,
+                    title = stringResource(R.string.brief_empty_title),
+                    body = stringResource(R.string.brief_empty_body),
+                    action = stringResource(R.string.brief_compose) to controller::compose,
                     tag = "brief-empty",
                     actionTag = "brief-compose-btn",
                 )
@@ -97,43 +98,43 @@ private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit,
     when (brief.status) {
         BriefStatus.COMPOSING -> if (state.error != null) {
             Message(
-                title = "Couldn't load the brief",
+                title = stringResource(R.string.brief_load_failed),
                 body = state.error,
-                action = "Try again" to onLoad,
+                action = stringResource(R.string.action_try_again) to onLoad,
                 tag = "brief-error",
                 actionTag = "brief-retry-btn",
             )
         } else if (state.composeTimedOut) {
             Message(
-                title = "Still working on it",
-                body = "This is taking longer than usual. Refresh to check again.",
+                title = stringResource(R.string.brief_timed_out_title),
+                body = stringResource(R.string.brief_timed_out_body),
                 tag = "brief-composing",
             )
         } else {
             Centered(tag = "brief-composing") {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                     CircularProgressIndicator()
-                    Text("Putting your brief together")
+                    Text(stringResource(R.string.brief_composing))
                 }
             }
         }
         BriefStatus.FAILED -> Message(
-            title = "The brief didn't finish",
-            body = "Something went wrong while putting it together.",
-            action = "Try again" to onCompose,
+            title = stringResource(R.string.brief_failed_title),
+            body = stringResource(R.string.brief_failed_body),
+            action = stringResource(R.string.action_try_again) to onCompose,
             tag = "brief-failed",
             actionTag = "brief-failed-retry-btn",
         )
         BriefStatus.UNKNOWN -> Message(
-            title = "Update to read this brief",
-            body = "This brief needs a newer version of Bike4Mind.",
+            title = stringResource(R.string.brief_unsupported_title),
+            body = stringResource(R.string.brief_unsupported_body),
             tag = "brief-unsupported",
         )
         BriefStatus.READY -> if (brief.isEmpty) {
             Message(
-                title = "All quiet",
-                body = "Nothing needs you right now.",
-                action = "Compose a brief" to onCompose,
+                title = stringResource(R.string.brief_quiet_title),
+                body = stringResource(R.string.brief_quiet_body),
+                action = stringResource(R.string.brief_compose) to onCompose,
                 tag = "brief-empty",
                 actionTag = "brief-compose-btn",
             )
@@ -146,11 +147,11 @@ private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit,
 @Composable
 private fun Ready(brief: Brief, error: String?, onOpenSession: (String) -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).testTag("brief-content"),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Spacing.m).testTag("brief-content"),
+        verticalArrangement = Arrangement.spacedBy(Spacing.l),
     ) {
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             brief.headline?.takeIf { it.isNotEmpty() }?.let {
                 Text(
                     it,
@@ -161,33 +162,33 @@ private fun Ready(brief: Brief, error: String?, onOpenSession: (String) -> Unit)
             }
             brief.periodStart?.let {
                 Text(
-                    "Since " + PERIOD_FORMAT.format(it.atZone(ZoneId.systemDefault())),
+                    stringResource(R.string.brief_since, PERIOD_FORMAT.format(it.atZone(ZoneId.systemDefault()))),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
         if (brief.decisions.isNotEmpty()) {
-            Section("What needs you", tag = "brief-decisions-section") {
+            Section(stringResource(R.string.brief_decisions), tag = "brief-decisions-section") {
                 brief.decisions.forEach { Decision(it, onOpenSession) }
             }
         }
-        Items("Handled", brief.handled, tag = "brief-handled-section")
-        Items("What happened", brief.happened, tag = "brief-happened-section")
+        Items(stringResource(R.string.brief_handled), brief.handled, tag = "brief-handled-section")
+        Items(stringResource(R.string.brief_happened), brief.happened, tag = "brief-happened-section")
     }
 }
 
 @Composable
 private fun Decision(decision: BriefDecision, onOpenSession: (String) -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().testTag("brief-decision-row")) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
             Text(decision.text, style = MaterialTheme.typography.bodyLarge)
             decision.approval?.let { approval ->
                 // The chat holds the existing approval card; the brief does not rebuild it.
                 Button(
                     onClick = { onOpenSession(approval.sessionId) },
                     modifier = Modifier.testTag("brief-open-approval-btn"),
-                ) { Text("Open approval") }
+                ) { Text(stringResource(R.string.brief_open_approval)) }
             }
         }
     }
@@ -205,7 +206,7 @@ private fun Items(title: String, items: List<BriefItem>, tag: String) {
 
 @Composable
 private fun Section(title: String, tag: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().testTag(tag), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().testTag(tag), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
         content()
     }
@@ -226,9 +227,9 @@ private fun Message(
 ) {
     Centered(tag = tag) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(Spacing.l),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
             body?.let {

@@ -127,7 +127,9 @@ export type StartAgentExecutionInput = {
    * without the others.
    */
   apiKeyInfo:
-    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
+    | (ApiKeyCredential &
+        Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted' | 'unpaidAccountLimits'>)
+    | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -249,6 +251,7 @@ export async function startAgentExecution(
       owner: userId,
       ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
       billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      unpaidAccountLimits: input.apiKeyInfo.unpaidAccountLimits,
       holdSlot: false,
     });
   }

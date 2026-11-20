@@ -62,7 +62,7 @@ export function versionOutcome(v: ISkillListingVersion, visibility: SkillListing
         title: 'Live on the Skill Market',
         body:
           v.riskTier === 'review'
-            ? `Passed the automated scan with a note and is live for your ${visibility === 'organization' ? 'organization' : 'link holders'}.`
+            ? `Passed the automated scan with a note and is live for your ${visibility === 'organization' ? 'organization' : visibility === 'space' ? 'Space' : 'link holders'}.`
             : 'Passed the automated safety scan and is live now.',
       };
     case 'approved':

@@ -42,6 +42,7 @@ import {
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  emailSendSubscription,
   pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
@@ -63,6 +64,7 @@ import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
+import { mailStatusEnvironment } from './mailTransport';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -322,6 +324,9 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
     // The WebSocket `agent_execute` handler reaches the agent executor function
     // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
+    // Admin "Send test email" asks the worker that delivers mail to run the test
+    // (packages/server-utils/src/utils/mailer/testEmail.ts).
+    emailSend: emailSendSubscription.nodes.function.apply(fn => fn.name),
   },
 });
 
@@ -492,11 +497,16 @@ export const web = new sst.aws.Nextjs(
       },
       {
         // Invoked by name through the lambdaFunctionNames Linkable: admin "Run now" for the attack
-        // simulation and model discovery, and QuestMaster node dispatch. The other functions this
+        // simulation and model discovery, QuestMaster node dispatch, and the admin test email. The other functions this
         // Lambda invokes (mcpHandler, remoteMcpHandler, the two import-complete functions) are
         // linked above and carry their own invoke grant.
         actions: ['lambda:InvokeFunction'],
-        resources: [attackSimulationFunction.arn, modelDiscoveryFunction.arn, agentExecutor.arn],
+        resources: [
+          attackSimulationFunction.arn,
+          modelDiscoveryFunction.arn,
+          agentExecutor.arn,
+          emailSendSubscription.nodes.function.apply(fn => fn.arn),
+        ],
       },
       {
         actions: ['events:PutEvents'],
@@ -600,6 +610,7 @@ export const web = new sst.aws.Nextjs(
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
       IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
+      ...mailStatusEnvironment,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       BEDROCK_COHERE_EMBED_MODEL_ID: process.env.BEDROCK_COHERE_EMBED_MODEL_ID?.trim() || '',
@@ -684,6 +695,14 @@ export const web = new sst.aws.Nextjs(
       // comes from the GA_MEASUREMENT_ID env var with no brand fallback (empty == analytics disabled).
       ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID
         ? { NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.GA_MEASUREMENT_ID }
+        : {}),
+      // A second GA4 property the app also reports to: the marketing site's, so that one property
+      // holds the whole funnel from the ad click on the marketing site to sign_up and purchase
+      // here (getGaMeasurementIds in apps/client/app/utils/gaConsentBootstrap.ts). Same rules as
+      // GA_MEASUREMENT_ID: production only, account-tied, no brand fallback. It only rides
+      // alongside GA_MEASUREMENT_ID, which stays the one switch for GA.
+      ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID && process.env.GA_MARKETING_MEASUREMENT_ID
+        ? { NEXT_PUBLIC_GA_MARKETING_MEASUREMENT_ID: process.env.GA_MARKETING_MEASUREMENT_ID }
         : {}),
       // Reddit ads pixel: production-only for the same reason as GA4 above, and account-tied with
       // no brand fallback (empty == pixel disabled). Consent-deferred loading + the signup

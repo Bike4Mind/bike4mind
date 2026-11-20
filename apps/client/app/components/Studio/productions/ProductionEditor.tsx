@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { styled } from '@mui/system';
 import { useBlocker } from '@tanstack/react-router';
 import { Button, Chip, Input, Modal, ModalDialog, Slider, Stack, Typography } from '@mui/joy';
@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import {
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_OUTPUT_ASPECT_RATIOS,
+  shiftSyncedCaptions,
   studioFileMediaKind,
   type IFabFileDocument,
   type StudioCompositionResponse,
@@ -145,7 +146,15 @@ const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durati
  * selected clip's inspector. Timeline edits stay in a local draft that autosaves.
  */
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
-  const [timeline, setTimeline] = useState(composition.timeline);
+  const [timeline, setTimelineState] = useState(composition.timeline);
+  // Every edit goes through here, so captions synced to a voice clip follow its audio when it moves.
+  const setTimeline = useCallback(
+    (update: SetStateAction<StudioTimeline>) =>
+      setTimelineState(current =>
+        shiftSyncedCaptions(current, typeof update === 'function' ? update(current) : update)
+      ),
+    []
+  );
   const timelineRef = useRef(timeline);
   useEffect(() => {
     timelineRef.current = timeline;
@@ -309,6 +318,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
             timeline={timeline}
             clipId={selectedClipId}
             files={files}
+            sourceDurationsMs={context.sourceDurationsMs}
             onChange={setTimeline}
             onDeselect={() => setSelectedClipId(null)}
           />

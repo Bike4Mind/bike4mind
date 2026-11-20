@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -202,6 +203,39 @@ describe('ChatService approval record', () => {
     useTool(streams[1], 'c2', 'touch made.txt');
     const second = await awaitCall('c2', 'done');
     expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'chat-allowance' }, asked: false });
+  });
+
+  /** Allows `git commit -m test` in this chat while commit.gpgSign is off, turns it on, then sends it again in `mode`. */
+  async function signAfterAllowance(mode: 'auto' | 'full'): Promise<void> {
+    execFileSync('git', ['init', '-q', root]);
+    const configPath = join(root, '.git/config');
+    await writeFile(configPath, '[core]\nrepositoryformatversion = 0\n[commit]\ngpgsign = false\n');
+    const command = 'git commit -m test';
+    const sessionId = await run('ask', command);
+    const first = await awaitCall('c1', 'awaiting-approval');
+    approvals.resolve(first.approvalId!, { decision: 'always' });
+    await awaitCall('c1', 'done');
+    expect(bashExecute.run).toHaveBeenCalledTimes(1);
+    await writeFile(configPath, '[core]\nrepositoryformatversion = 0\n[commit]\ngpgsign = true\n');
+    await service.setApprovalMode(sessionId, mode);
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    useTool(streams[1], 'c2', command);
+  }
+
+  it.each(['auto', 'full'] as const)('does not reuse an unsigned chat allowance for signing in %s', async mode => {
+    await signAfterAllowance(mode);
+    const second = await vi.waitUntil(() => calls('c2', 'awaiting-approval')[0] ?? calls('c2', 'done')[0], {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(second.status).toBe('awaiting-approval');
+    expect(second.approvalDetail).toContain('commit.gpgsign');
+    expect(second.approvalOnceOnly).toBe(true);
+    expect(bashExecute.run).toHaveBeenCalledTimes(1);
+    approvals.resolve(second.approvalId!, { decision: 'once' });
+    const done = await awaitCall('c2', 'done');
+    expect(done.approval?.decidedBy).toEqual({ kind: 'user', answer: 'once' });
+    expect(bashExecute.run).toHaveBeenCalledTimes(2);
   });
 
   it('keeps grant changes without writing a use event for each authorized call', async () => {

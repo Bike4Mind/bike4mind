@@ -228,7 +228,11 @@ describe('admitApiKeyCompletion', () => {
       mocks.userTokensSince.mockResolvedValue({ tokens: 1000, oldestAt: new Date(now - 45_000) });
       const error = await rejectionOf(admitApiKeyCompletion({ owner, holdSlot: true }));
       expect(error.statusCode).toBe(429);
-      expect(error.additionalInfo).toMatchObject({ errorCode: TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE });
+      expect(error.additionalInfo).toMatchObject({
+        errorCode: TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+        limit: 1000,
+        windowSeconds: 60,
+      });
       const retryAfter = error.additionalInfo?.retryAfter as number;
       expect(retryAfter).toBe(15);
       expect(mocks.tryAcquireLease).not.toHaveBeenCalled();
@@ -324,7 +328,7 @@ describe('admitApiKeyCompletion', () => {
     it('refuses with a 429 and its code when every slot is taken', async () => {
       mocks.tryAcquireLease.mockResolvedValue(false);
       const error = await rejectionOf(admitApiKeyCompletion({ owner, holdSlot: true }));
-      expect(error.additionalInfo).toMatchObject({ errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE });
+      expect(error.additionalInfo).toMatchObject({ errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE, limit: 2 });
     });
 
     it('takes no slot when the caller does not hold one for the completion', async () => {
@@ -341,6 +345,44 @@ describe('admitApiKeyCompletion', () => {
         userId: owner.id,
         error,
       });
+    });
+  });
+
+  describe('unpaid account limits override', () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+
+    it("uses the client's token limit instead of the settings", async () => {
+      mocks.userTokensSince.mockResolvedValue({ tokens: 300, oldestAt: new Date() });
+      const error = await rejectionOf(admitApiKeyCompletion({ owner, holdSlot: false, unpaidAccountLimits }));
+      expect(error.additionalInfo).toMatchObject({ limit: 300, windowSeconds: 60 });
+      mocks.userTokensSince.mockResolvedValue({ tokens: 300 });
+      await expect(admitApiKeyCompletion({ owner, holdSlot: false })).resolves.toBeDefined();
+    });
+
+    it("uses the client's concurrency limit instead of the settings", async () => {
+      await admitApiKeyCompletion({ owner, holdSlot: true, unpaidAccountLimits });
+      expect(mocks.tryAcquireLease).toHaveBeenCalledWith(
+        completionSlotsKey(owner.id),
+        expect.any(String),
+        1,
+        expect.any(Number)
+      );
+    });
+
+    it('treats a zero in the override as no limit even when the settings set one', async () => {
+      const off = { ...unpaidAccountLimits, tokensPerMinute: 0, maxConcurrent: 0 };
+      expect(await admitApiKeyCompletion({ owner, holdSlot: true, unpaidAccountLimits: off })).toBe(
+        NO_COMPLETION_QUOTA
+      );
+    });
+
+    it('forwards the override from the authenticated request', async () => {
+      const req = {
+        user: owner,
+        apiKeyInfo: { ownerUntrusted: true, unpaidAccountLimits },
+      } as unknown as Parameters<typeof admitRequestCompletion>[0];
+      await admitRequestCompletion(req, { holdSlot: true });
+      expect(mocks.tryAcquireLease.mock.calls[0][2]).toBe(1);
     });
   });
 });

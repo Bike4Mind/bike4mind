@@ -39,6 +39,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/sessions/bulk',
     'GET|POST /api/v1/artifacts',
     'GET|PATCH|DELETE /api/v1/artifacts/:id',
+    'POST|DELETE /api/v1/artifacts/:id/publish',
+    'POST /api/v1/artifacts/:id/republish',
     'GET|POST /api/v1/artifacts/:id/versions',
     'GET /api/v1/artifacts/:id/versions/:version',
     'GET /api/v1/artifacts/search',

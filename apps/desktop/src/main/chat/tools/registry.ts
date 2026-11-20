@@ -67,7 +67,6 @@ const localTools = (patch: boolean): readonly ToolDefinition[] => [
   bashOutput,
   bashList,
   bashKill,
-  todoWrite,
 ];
 
 /**
@@ -105,14 +104,17 @@ const MEDIA_TOOLS: readonly ToolDefinition[] = [
  * see hostTools.ts. Reads are ungated; spawning and messaging are gated on cost and autonomy,
  * and deleting is gated as irreversible, which no standing approval can cover.
  */
-const HOST_TOOLS: readonly ToolDefinition[] = [
+const SHARED_HOST_TOOLS: readonly ToolDefinition[] = [
   sessionList,
   sessionRead,
-  sessionSpawn,
   sessionSend,
   sessionArchive,
   sessionDelete,
 ];
+
+const HOST_TOOLS: readonly ToolDefinition[] = [...SHARED_HOST_TOOLS, sessionSpawn];
+
+const MCP_MANAGE_TOOLS = MCP_TOOLS.filter(tool => !MCP_READ_TOOLS.includes(tool));
 
 /** Revising a spawn suggestion, which only exists where a user is present to see its card. */
 const SUGGESTION_TOOLS: readonly ToolDefinition[] = [sessionSuggestionUpdate, sessionSuggestionDismiss];
@@ -146,6 +148,7 @@ const SKILL_TOOLS: readonly ToolDefinition[] = [skillTool];
 const BY_NAME = new Map(
   [
     ...localTools(false),
+    todoWrite,
     applyPatch,
     exploreTool,
     ...MEDIA_TOOLS,
@@ -190,6 +193,16 @@ export function offeredMediaToolNames(options: { media: boolean; video?: readonl
 }
 
 /**
+ * session_spawn for a managed worker: the delegated parameters without `isolation`, which only a
+ * session with delegates reads; a managed worker's spawn is placed by cardPlacement (hostTools.ts).
+ */
+function managedSpawnSchema(modelHint: string | null): ToolSchema {
+  const { parameters } = delegatedSpawnSchema(modelHint);
+  const properties = Object.fromEntries(Object.entries(parameters.properties).filter(([key]) => key !== 'isolation'));
+  return { ...sessionSpawn.schema, parameters: { ...parameters, properties } };
+}
+
+/**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
  * Every family is declared independently, because each becomes available for its own unrelated
@@ -199,6 +212,9 @@ export function offeredMediaToolNames(options: { media: boolean; video?: readonl
  * so they are offered to a user who has shared nothing. The host tools need a project, which
  * is what makes them Code-only. MCP tools are passed in rather than declared here because they
  * only exist once a server the user configured is connected.
+ *
+ * todo_write is declared in every conversation: the plan is the call's own input and lives in
+ * the transcript (see todoTool.ts), so it touches nothing and needs nothing granted.
  *
  * Two families need neither a folder nor a project nor a sign-in. The skill tool reads the
  * user's own skill files, so it is offered wherever a catalog exists. The browser tools drive
@@ -279,8 +295,8 @@ export function toolsForRequest(options: {
    */
   mcpServers?: boolean;
   /**
-   * A Code session with a user present, who is the only one who may say which PR the session
-   * follows. Offers set_session_pull_request.
+   * A Code session with a PR monitor. Offers set_session_pull_request, which only a turn the user
+   * typed may run.
    */
   pullRequest?: boolean;
   /** A loop runner session, which merges only through loop_merge_pr. */
@@ -288,17 +304,15 @@ export function toolsForRequest(options: {
   /** A Desktop loop run: its loop's loop_ticket_* tools, backed by the local store. */
   localLoopTickets?: boolean;
 }): { toolSchema: ToolSchema }[] {
+  // Shared families first and per-session ones last, so a spawned worker's list is a prefix of
+  // its parent's and sibling workers share one cached prefix; see ChatService.promptPrefix.test.ts.
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
+    todoWrite,
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     // Writes into the project, so it needs a granted folder as well as a session that generated something.
     ...(options.media && options.roots.length > 0 ? [saveGeneratedImageTool] : []),
-    ...(options.host ? HOST_TOOLS : []),
-    ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
-    ...(options.host && options.delegates ? [questComplete] : []),
-    ...(options.host && (options.delegates || options.managedDelegation) ? [taskAssess] : []),
-    ...(options.host && options.structuredTask ? [taskReport] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
     ...(options.simulator ? SIMULATOR_TOOLS : []),
@@ -306,23 +320,35 @@ export function toolsForRequest(options: {
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),
+    ...(options.mcpServers ? MCP_READ_TOOLS : []),
+    ...(options.host ? SHARED_HOST_TOOLS : []),
+  ];
+  const sessionSpecific = [
+    ...(options.host && (options.delegates || options.managedDelegation) ? [taskAssess] : []),
+    // Its schema depends on the session's delegation; see the mapping below.
+    ...(options.host ? [sessionSpawn] : []),
+    ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
+    ...(options.host && options.delegates ? [questComplete] : []),
+    ...(options.host && options.structuredTask ? [taskReport] : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory, loopTool] : []),
-    ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
+    // Declared on every turn of such a session, unattended ones included, so a wake keeps the
+    // tool list; its run refuses when nobody typed the turn (see pullRequestTool.ts).
+    ...(options.pullRequest ? [setSessionPullRequest] : []),
     ...(options.loopMerge ? [loopMergePr] : []),
     ...(options.localLoopTickets ? LOCAL_LOOP_TICKET_TOOLS : []),
-    ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
+    ...(options.mcpServers && options.ask ? MCP_MANAGE_TOOLS : []),
   ];
+  const schemaOf = (tool: ToolDefinition): ToolSchema =>
+    tool === sessionSpawn && options.delegates
+      ? delegatedSpawnSchema(options.spawnModelHint ?? null)
+      : tool === sessionSpawn && options.managedDelegation
+        ? managedSpawnSchema(options.spawnModelHint ?? null)
+        : tool.schema;
   return [
-    ...available.map(tool => ({
-      toolSchema:
-        tool === sessionSpawn && options.delegates
-          ? delegatedSpawnSchema(options.spawnModelHint ?? null)
-          : tool === sessionSpawn && options.managedDelegation
-            ? { ...tool.schema, parameters: delegatedSpawnSchema(options.spawnModelHint ?? null).parameters }
-            : tool.schema,
-    })),
+    ...available.map(tool => ({ toolSchema: schemaOf(tool) })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
+    ...sessionSpecific.map(tool => ({ toolSchema: schemaOf(tool) })),
   ];
 }

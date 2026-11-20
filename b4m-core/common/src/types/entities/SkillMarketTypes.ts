@@ -6,7 +6,7 @@
  * are readable by the author and reviewers only (packages/server-utils/src/skillMarket/market.ts).
  */
 
-export type SkillListingVisibility = 'public' | 'organization' | 'unlisted';
+export type SkillListingVisibility = 'public' | 'organization' | 'space' | 'unlisted';
 
 export type SkillListingStatus = 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
 
@@ -74,6 +74,7 @@ export interface ISkillListing {
   authorName?: string;
   visibility: SkillListingVisibility;
   organizationId?: string;
+  spaceId?: string;
   tags: string[];
   status: SkillListingStatus;
   /** Unguessable token for unlisted links (192 bits). Never returned to non-authors of public/org listings. */
@@ -84,7 +85,7 @@ export interface ISkillListing {
   pendingVersion?: number | null;
   /** Monotonic counter used to number new versions. */
   latestVersion: number;
-  /** Organization listings' Claude Code plugin name: assigned at first approval, never changed. */
+  /** Organization and Space listings' Claude Code plugin name: assigned at first approval, never changed. */
   claudePluginName?: string;
 
   // Denormalized from the current approved version so browse/search/cards read only the listing.
@@ -147,10 +148,11 @@ export interface ISkillListingVersion {
   updatedAt: Date;
 }
 
-/** An org's curated set of Organization listings, served as one Claude Code plugin in the org feed. */
+/** An org's or Space's curated set of its listings, served as one Claude Code plugin in its feed. Exactly one owner. */
 export interface ISkillBundle {
   id: string;
-  organizationId: string;
+  organizationId?: string;
+  spaceId?: string;
   name: string;
   description: string;
   /** Claude Code plugin name, unique in the org feed alongside listings' `claudePluginName`. */

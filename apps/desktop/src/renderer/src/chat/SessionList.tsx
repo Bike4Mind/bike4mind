@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -45,7 +46,14 @@ import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
-import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import {
+  descendantsOf,
+  groupSessions,
+  orderedSessions,
+  parentHints,
+  type CustomGroup,
+  type ProjectGroup,
+} from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
@@ -148,7 +156,9 @@ export function NavItem({
  * px each level of sub-session steps in. With the list's 8px inset and a 14px badge, a parent's
  * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
  */
-const NEST_INDENT = 18;
+const NEST_INDENT = 14;
+/** Levels that still step right; a deeper session stays at this indent and wears a "level N" chip. */
+const MAX_NEST_DEPTH = 3;
 const BADGE_CENTER = 15;
 /** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
 const ROW_GAP = 2;
@@ -175,6 +185,8 @@ interface NestProps {
    * siblings below, so its rail runs straight through this row.
    */
   nestGuides?: string;
+  /** The real spawn depth when it is past MAX_NEST_DEPTH, so the row can say how deep it sits. */
+  nestDeeper?: number;
   /** Sessions anywhere under this one; 0 or absent on a row with none. */
   subCount?: number;
   /** The loudest state among them, which the fold pill wears while they are folded away. */
@@ -182,6 +194,8 @@ interface NestProps {
   subFolded?: boolean;
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
+  /** Title of the parent a spawned session is drawn away from, shown as "from X". */
+  hintTitle?: string;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -191,11 +205,19 @@ type SubActivity = 'needs-action' | 'processing' | undefined;
  * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
  * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
  */
-function railSx(depth: number, first: boolean, last: boolean, guides: string) {
+function railSx(depth: number, first: boolean, last: boolean, guides: string, heat: SubActivity, elbow: boolean) {
   const indent = depth * NEST_INDENT;
   const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
-  if (!last) straight.push(depth - 1);
+  if (!last && elbow) straight.push(depth - 1);
   const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
+  // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
+  // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
+  const elbowColor =
+    heat === 'needs-action'
+      ? 'var(--joy-palette-warning-400)'
+      : heat === 'processing'
+        ? 'var(--joy-palette-primary-400)'
+        : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -214,7 +236,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       backgroundPosition: straight.map(level => `${level * NEST_INDENT + BADGE_CENTER}px 0`).join(', '),
     },
     // The first child reaches on up through the parent row to just under the parent's badge.
-    '&::after': {
+    '&::after': elbow && {
       content: '""',
       position: 'absolute',
       zIndex: 1,
@@ -223,9 +245,13 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       height: `calc(50% + ${first ? FIRST_RAIL_REACH : ROW_GAP}px)`,
       left: BADGE_CENTER - NEST_INDENT,
       width: NEST_INDENT - BADGE_CENTER + ELBOW_END,
-      borderLeft: `1px solid ${RAIL_COLOR}`,
-      borderBottom: `1px solid ${RAIL_COLOR}`,
+      borderLeft: `1px solid ${elbowColor}`,
+      borderBottom: `1px solid ${elbowColor}`,
       borderBottomLeftRadius: '7px',
+      ...(heat === 'processing' && {
+        animation: `${pulse} 1.2s ease-in-out infinite`,
+        '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+      }),
     },
   };
 }
@@ -338,6 +364,28 @@ interface RowProps extends NestProps {
   refChip?: string;
 }
 
+/** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
+function MenuShortcut({ letter }: { letter: string }) {
+  return (
+    <Typography aria-hidden level="body-xs" textColor="text.tertiary" sx={{ ml: 3, fontFamily: 'monospace' }}>
+      {letter}
+    </Typography>
+  );
+}
+
+/**
+ * A bare letter runs the item whose data-shortcut it is, by clicking it so the item's own handler
+ * decides what happens (closing, switching view). Marked handled so Joy's type-to-focus stays out.
+ */
+function onRowMenuKeyDown(event: ReactKeyboardEvent<HTMLElement> & { defaultMuiPrevented?: boolean }) {
+  if (event.metaKey || event.ctrlKey || event.altKey || !/^[a-z]$/i.test(event.key)) return;
+  const item = event.currentTarget.querySelector<HTMLElement>(`[data-shortcut="${event.key.toUpperCase()}"]`);
+  if (!item || item.getAttribute('aria-disabled') === 'true') return;
+  event.preventDefault();
+  event.defaultMuiPrevented = true;
+  item.click();
+}
+
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
   session,
@@ -359,7 +407,7 @@ function MoveToItems({
         <ListItemDecorator>
           <ArrowLeftIcon />
         </ListItemDecorator>
-        Move to
+        Move to section
       </MenuItem>
       <ListDivider />
       {userSections.map(section => (
@@ -426,6 +474,10 @@ const isolate = (event: SyntheticEvent) => event.stopPropagation();
  *
  * Keydown stops here, which is also what keeps SessionList's window-level Cmd shortcuts away
  * while typing: React's handler runs at the root, before the event reaches window.
+ *
+ * Focus and blur stop here too: the input sits inside the row's ListItemButton, which would take
+ * the input's focus as its own keyboard focus and keep its focus ring once the input unmounts,
+ * since an unmounted node sends no blur.
  */
 function RenameInput({ title, onDone }: { title: string; onDone: (next: string | null) => void }) {
   const [draft, setDraft] = useState(title);
@@ -453,7 +505,11 @@ function RenameInput({ title, onDone }: { title: string; onDone: (next: string |
       size="sm"
       value={draft}
       onChange={event => setDraft(event.target.value)}
-      onBlur={save}
+      onFocus={isolate}
+      onBlur={event => {
+        event.stopPropagation();
+        save();
+      }}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Enter') save();
@@ -495,15 +551,23 @@ const SessionRow = memo(function SessionRow({
   nestFirst = false,
   nestLast = false,
   nestGuides = '',
+  nestDeeper = 0,
   subCount = 0,
   subActivity,
   subFolded = false,
   subFoldable = true,
+  hintTitle,
   refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
+  const nestHeat: SubActivity =
+    status === 'needs-action' || subActivity === 'needs-action'
+      ? 'needs-action'
+      : status === 'processing' || subActivity === 'processing'
+        ? 'processing'
+        : undefined;
   const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
@@ -517,8 +581,10 @@ const SessionRow = memo(function SessionRow({
   return (
     <ListItem
       data-nest-depth={nestDepth || undefined}
+      data-nest-guides={nestGuides || undefined}
+      data-nest-heat={nestDepth > 0 ? nestHeat : undefined}
       sx={{
-        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides)),
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, nestHeat, nestDeeper === 0)),
         ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
@@ -564,7 +630,7 @@ const SessionRow = memo(function SessionRow({
               >
                 <MoreIcon />
               </MenuButton>
-              <Menu size="sm" placement="bottom-end">
+              <Menu size="sm" placement="bottom-end" onKeyDown={onRowMenuKeyDown} sx={{ minWidth: 200 }}>
                 {menuView === 'move' ? (
                   <MoveToItems
                     session={session}
@@ -578,8 +644,14 @@ const SessionRow = memo(function SessionRow({
                   />
                 ) : (
                   <>
-                    <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
-                      {session.pinned ? 'Unpin' : 'Pin'}
+                    <MenuItem
+                      onClick={() => actions.togglePin(session)}
+                      data-testid="chat-pin-session-btn"
+                      data-shortcut="P"
+                      aria-keyshortcuts="P"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
+                      <MenuShortcut letter="P" />
                     </MenuItem>
                     <MenuItem
                       onClick={() => {
@@ -589,40 +661,65 @@ const SessionRow = memo(function SessionRow({
                         setEditing(true);
                       }}
                       data-testid="chat-rename-session-btn"
+                      data-shortcut="R"
+                      aria-keyshortcuts="R"
                     >
-                      Rename
+                      <Box sx={{ flex: 1 }}>Rename</Box>
+                      <MenuShortcut letter="R" />
                     </MenuItem>
                     <MenuItem
                       disabled={!!session.archived}
                       onClick={() => actions.message(session)}
                       data-testid="session-row-message-action"
+                      data-shortcut="M"
+                      aria-keyshortcuts="M"
                     >
-                      Message session...
+                      <Box sx={{ flex: 1 }}>Message session...</Box>
+                      <MenuShortcut letter="M" />
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => actions.download(session)}
+                      data-testid="chat-download-session-btn"
+                      data-shortcut="L"
+                      aria-keyshortcuts="L"
+                    >
+                      <Box sx={{ flex: 1 }}>Download</Box>
+                      <MenuShortcut letter="L" />
                     </MenuItem>
                     {!session.pinned && !session.archived && (
-                      <MenuItem
-                        onClick={event => {
-                          keepMenuOpen(event);
-                          setMenuView('move');
-                        }}
-                        data-testid="chat-move-session-btn"
-                      >
-                        <Box sx={{ flex: 1 }}>Move to</Box>
-                        <ChevronIcon open={false} />
-                      </MenuItem>
+                      <>
+                        <ListDivider />
+                        <MenuItem
+                          onClick={event => {
+                            keepMenuOpen(event);
+                            setMenuView('move');
+                          }}
+                          data-testid="chat-move-session-btn"
+                        >
+                          <Box sx={{ flex: 1 }}>Move to section</Box>
+                          <ChevronIcon open={false} />
+                        </MenuItem>
+                      </>
                     )}
-                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
-                      Download
-                    </MenuItem>
-                    <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
-                      {session.archived ? 'Unarchive' : 'Archive'}
+                    <ListDivider />
+                    <MenuItem
+                      onClick={() => actions.toggleArchived(session)}
+                      data-testid="chat-archive-session-btn"
+                      data-shortcut="A"
+                      aria-keyshortcuts="A"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.archived ? 'Unarchive' : 'Archive'}</Box>
+                      <MenuShortcut letter="A" />
                     </MenuItem>
                     <MenuItem
                       color="danger"
                       onClick={() => actions.remove(session.id)}
                       data-testid="chat-delete-session-btn"
+                      data-shortcut="D"
+                      aria-keyshortcuts="D"
                     >
-                      Delete
+                      <Box sx={{ flex: 1 }}>Delete</Box>
+                      <MenuShortcut letter="D" />
                     </MenuItem>
                   </>
                 )}
@@ -661,7 +758,7 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }),
+          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
@@ -694,6 +791,30 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {!editing && hintTitle && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
+              title={`from ${hintTitle}`}
+              data-testid="chat-session-parent-hint"
+            >
+              from {hintTitle}
+            </Typography>
+          )}
+          {!editing && nestDeeper > 0 && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem' }}
+              title={`level ${nestDeeper + 1} of the tree`}
+              data-testid="chat-session-depth-chip"
+            >
+              level {nestDeeper + 1}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1099,10 +1220,18 @@ export function SessionList({
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested);
+    // A search lists matches flat: a tree would hide a match inside a parent that did not match.
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
   }, [matching, mode, userSections, searching, importedInline, nested]);
+
+  // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
+  // No hints with nesting off: the setting brings back the plain flat list.
+  const hints = useMemo(
+    () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
+    [nested, sessions, sections.children]
+  );
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1285,7 +1414,7 @@ export function SessionList({
     const children = sections.children.get(session.id) ?? [];
     const under = descendants(session);
     const folded = isFolded(session.id);
-    const childGuides = depth > 0 ? guides + (last ? '0' : '1') : '';
+    const childGuides = depth > 0 && depth <= MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
     return [
       <SessionRow
         key={session.id}
@@ -1296,7 +1425,8 @@ export function SessionList({
         userSections={userSections.sections}
         sectionId={sectionOf(userSections, session.id)}
         actions={actions}
-        nestDepth={depth}
+        nestDepth={Math.min(depth, MAX_NEST_DEPTH)}
+        nestDeeper={depth > MAX_NEST_DEPTH ? depth : 0}
         nestFirst={first}
         nestLast={last}
         nestGuides={guides}
@@ -1304,6 +1434,7 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
+        hintTitle={hints.get(session.id)}
       />,
       ...(folded
         ? []
@@ -1324,6 +1455,7 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
+      hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
     />
   );

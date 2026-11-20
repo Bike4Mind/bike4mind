@@ -168,10 +168,14 @@ jobs:
           # every conversion event it would report is silently inert. GA_COOKIE_DOMAIN is optional
           # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
-          # outright, which is WORSE than leaving it unset.
+          # outright, which is WORSE than leaving it unset. GA_MARKETING_MEASUREMENT_ID is optional:
+          # a second GA4 property (your marketing site's) the app also reports to, so one property
+          # sees the journey from a marketing-site landing to sign_up and purchase here. It is
+          # only injected alongside GA_MEASUREMENT_ID.
           ADMIN_MORNING_BRIEF_ENVIRONMENTS: ${{ vars.ADMIN_MORNING_BRIEF_ENVIRONMENTS }}
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+          GA_MARKETING_MEASUREMENT_ID: ${{ vars.GA_MARKETING_MEASUREMENT_ID }}
           REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}
           META_PIXEL_ID: ${{ vars.META_PIXEL_ID }}
           GA_COOKIE_DOMAIN: ${{ vars.GA_COOKIE_DOMAIN }}
@@ -215,10 +219,14 @@ jobs:
           # every conversion event it would report is silently inert. GA_COOKIE_DOMAIN is optional
           # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
-          # outright, which is WORSE than leaving it unset.
+          # outright, which is WORSE than leaving it unset. GA_MARKETING_MEASUREMENT_ID is optional:
+          # a second GA4 property (your marketing site's) the app also reports to, so one property
+          # sees the journey from a marketing-site landing to sign_up and purchase here. It is
+          # only injected alongside GA_MEASUREMENT_ID.
           ADMIN_MORNING_BRIEF_ENVIRONMENTS: ${{ vars.ADMIN_MORNING_BRIEF_ENVIRONMENTS }}
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+          GA_MARKETING_MEASUREMENT_ID: ${{ vars.GA_MARKETING_MEASUREMENT_ID }}
           REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}
           META_PIXEL_ID: ${{ vars.META_PIXEL_ID }}
           GA_COOKIE_DOMAIN: ${{ vars.GA_COOKIE_DOMAIN }}

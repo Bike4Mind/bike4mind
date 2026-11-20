@@ -147,6 +147,8 @@ export default $config({
       PRODUCTION_STAGES,
       wafReadPermissions,
       wafWebAclArn,
+      contributedQueues,
+      dlqAlarmTopic,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -252,13 +254,20 @@ export default $config({
     });
 
     // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
+    // Also handed the shared bus, the package-declared queue pairs (infra/queues.ts) and the alarm
+    // topic, so a package can subscribe consumers and attach rules and alarms from its own infra.
+    // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
     const { contributeInfra: contributeSentinelInfra } =
       await import('./infra/premium-generated/sentinel-infra.generated');
-    contributeSentinelInfra({
+    const infrastructureContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
-    });
+      eventBus,
+      contributedQueues,
+      alarmTopic: dlqAlarmTopic,
+    };
+    contributeSentinelInfra(infrastructureContext);
 
     return {
       appName: $app.name,

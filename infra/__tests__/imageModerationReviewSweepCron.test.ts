@@ -20,7 +20,7 @@ describe('imageModerationReviewSweep cron', () => {
     expect(CRON).toMatch(/schedule:\s*`rate\(\$\{REVIEW_SWEEP_INTERVAL_MINUTES\} minutes\)`/);
     expect(CRON).toMatch(/handler:\s*'apps\/workers\/src\/cron\/imageModerationReviewSweep\.handler'/);
     expect(CRON).toMatch(/vpc:\s*lambdaVpc/);
-    expect(CRON).toMatch(/link:\s*\[\.\.\.allSecrets\]/);
+    expect(CRON).toMatch(/link:\s*\[\.\.\.allSecrets, eventBus\]/);
     expect(CRON).toMatch(/runsScheduledJobs\s*&&\s*imageModerationReviewSweepDeadLetter/);
   });
 
