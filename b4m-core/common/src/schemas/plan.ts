@@ -94,7 +94,8 @@ export function normalizePlan(value: unknown): NormalizedPlan {
       let id = baseId;
       let suffix = 2;
       while (ids.has(id)) id = `${baseId}-${suffix++}`;
-      if (id !== baseId) warnings.push(`${itemPath}.id: replaced duplicate id.`);
+      // Derived ids are internal, so only a caller-supplied id gets a warning it can act on.
+      if (id !== baseId && suppliedId) warnings.push(`${itemPath}.id: replaced duplicate id.`);
       ids.add(id);
       const normalized: PlanItem = { id, content, status };
       if (item.activeForm !== undefined) {
@@ -123,12 +124,17 @@ export function normalizePlan(value: unknown): NormalizedPlan {
   return { plan: { version: 1, source, items: items(input.items, 'items'), updatedAt }, warnings };
 }
 
-/** Counts leaf work, not both a group and its children. Cancelled groups exclude their subtree. */
-export function planProgress(plan: Plan): { done: number; total: number; current?: string; next?: string } {
-  const leaves = plan.items
+/** Leaf work items: a group counts as its children, and a cancelled group drops its whole subtree. */
+export function planLeaves(items: PlanItem[]): PlanItem[] {
+  return items
     .filter(item => item.status !== 'cancelled')
     .flatMap(item => (item.children?.length ? item.children : [item]))
     .filter(item => item.status !== 'cancelled');
+}
+
+/** Counts leaf work, not both a group and its children. Cancelled groups exclude their subtree. */
+export function planProgress(plan: Plan): { done: number; total: number; current?: string; next?: string } {
+  const leaves = planLeaves(plan.items);
   const current = leaves.find(item => item.status === 'in_progress');
   const next = leaves.find(item => item.status === 'pending');
   return {
@@ -151,13 +157,23 @@ export function fromClaudeTodoWrite(input: unknown, options: PlanAdapterOptions 
   return adapt('TodoWrite', Array.isArray(input) ? input : record(input).todos, options);
 }
 
+/** `content` wins; `description` is a deprecated alias that warns once per call. */
 export function fromCliTodos(input: unknown, options: PlanAdapterOptions = {}): NormalizedPlan {
   const todos = Array.isArray(input) ? input : record(input).todos;
-  return adapt(
+  if (!Array.isArray(todos)) return adapt('write_todos', todos, options);
+  const usesAlias = todos.some(item => typeof record(item).description === 'string');
+  const result = adapt(
     'write_todos',
-    Array.isArray(todos) ? todos.map(item => ({ ...record(item), content: record(item).description })) : todos,
+    todos.map(item => {
+      const { description, ...rest } = record(item);
+      const content = typeof rest.content === 'string' && rest.content.trim() ? rest.content : undefined;
+      return { ...rest, content: content ?? (typeof description === 'string' ? description : rest.content) };
+    }),
     options
   );
+  return usesAlias
+    ? { plan: result.plan, warnings: ["description is deprecated; use 'content'.", ...result.warnings] }
+    : result;
 }
 
 export interface ClaudeTaskCall {

@@ -219,6 +219,7 @@ export {
   CUSTOM_MCP_DATA_NOTICE,
   MAX_CUSTOM_TOOLS_PER_TURN,
   type CustomMcpToolHost,
+  type CustomMcpListOptions,
   type CustomMcpConnectionOffer,
   type CustomMcpToolCallInput,
   type CustomMcpApprovalRequest,

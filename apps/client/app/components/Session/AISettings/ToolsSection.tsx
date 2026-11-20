@@ -41,7 +41,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerResponse } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerResponse, type McpConnectionListEntry } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -59,6 +59,10 @@ import {
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import {
+  isComposerConnectionOn,
+  toggleComposerConnection,
+} from '@client/app/components/integrations/customMcp/customMcpModel';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -324,9 +328,11 @@ const ToolsSection = ({
     isPending: isLoadingMcpServers,
     isFetching: isFetchingMcpServers,
   } = useMcpServers();
-  // Custom MCP connectors: on unless switched off here (an opt-out list, so a new one starts on).
+  // Custom MCP connectors: the user's own start on and a platform connector starts off
+  // (see isComposerConnectionOn).
   const { offered: customConnections } = useComposerMcpConnections();
   const disabledMcpConnections = useLLM(state => state.disabledMcpConnections) ?? [];
+  const enabledPlatformMcpConnections = useLLM(state => state.enabledPlatformMcpConnections) ?? [];
 
   // Must stay above the unsupported-model early return further down, which cuts off hooks.
   const isMobile = useIsMobile();
@@ -440,14 +446,10 @@ const ToolsSection = ({
     setLLM({ enabledMcpServers: next });
   };
 
-  const isConnectionOn = (slug: string) => !disabledMcpConnections.includes(slug);
-
-  const toggleConnection = (slug: string) =>
-    setLLM({
-      disabledMcpConnections: isConnectionOn(slug)
-        ? [...disabledMcpConnections, slug]
-        : disabledMcpConnections.filter(s => s !== slug),
-    });
+  const connectionChoices = { disabledMcpConnections, enabledPlatformMcpConnections };
+  const isConnectionOn = (connection: McpConnectionListEntry) => isComposerConnectionOn(connection, connectionChoices);
+  const toggleConnection = (connection: McpConnectionListEntry) =>
+    setLLM(toggleComposerConnection(connection, connectionChoices));
 
   const getMcpServerLabel = (serverName: string) => {
     switch (serverName) {
@@ -595,7 +597,7 @@ const ToolsSection = ({
   // filter for them.
   const enabledMcpServerCount =
     visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length +
-    customConnections.filter(connection => isConnectionOn(connection.slug)).length;
+    customConnections.filter(isConnectionOn).length;
   // Feature-gated switches that live outside the `tools` array (each has its own LLM
   // state flag) but appear in this panel, so they count like any other tool. Must stay
   // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
@@ -971,12 +973,19 @@ const ToolsSection = ({
                   <HubOutlinedIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                   />
-                  <ToolLabel name={connection.displayName} description={`Custom connector on ${connection.urlHost}`} />
+                  <ToolLabel
+                    name={connection.displayName}
+                    description={
+                      connection.ownerType === 'platform'
+                        ? `Connector set up by an admin on ${connection.urlHost}`
+                        : `Custom connector on ${connection.urlHost}`
+                    }
+                  />
                 </Box>
                 <SquareSlideToggle
                   data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
-                  onChange={() => toggleConnection(connection.slug)}
-                  checked={isConnectionOn(connection.slug)}
+                  onChange={() => toggleConnection(connection)}
+                  checked={isConnectionOn(connection)}
                 />
               </ToolContainer>
             </Grid>

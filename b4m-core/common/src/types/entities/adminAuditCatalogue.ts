@@ -339,6 +339,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: platform MCP connectors
+  'settings.mcp_connector.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.api_key_rotated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.tools_refreshed': { category: 'settings', severity: 'info', write: 'bestEffort' },
   // Handler coverage: rapid reply
   'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },

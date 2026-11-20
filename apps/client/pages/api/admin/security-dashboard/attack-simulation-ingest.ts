@@ -8,7 +8,7 @@ import {
   type SecurityFindingSeverity,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
@@ -94,7 +94,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
 
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Attack simulation ingest token is not configured.' });
   }
 

@@ -418,8 +418,24 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
   const questMasterPlan = useGetQuestMasterPlan(questMasterPlanId);
   const queryClient = useQueryClient();
   const { sendJsonMessage } = useWebsocket();
-  const [model, max_tokens, tools, organizationId, enabledMcpServers, disabledMcpConnections] = useLLM(
-    useShallow(s => [s.model, s.max_tokens, s.tools, s.organizationId, s.enabledMcpServers, s.disabledMcpConnections])
+  const [
+    model,
+    max_tokens,
+    tools,
+    organizationId,
+    enabledMcpServers,
+    disabledMcpConnections,
+    enabledPlatformMcpConnections,
+  ] = useLLM(
+    useShallow(s => [
+      s.model,
+      s.max_tokens,
+      s.tools,
+      s.organizationId,
+      s.enabledMcpServers,
+      s.disabledMcpConnections,
+      s.enabledPlatformMcpConnections,
+    ])
   );
   const turnPreferences = useLLM(useShallow(selectTurnPreferences));
   const updateQuestProgress = useUpdateQuestProgress();
@@ -554,6 +570,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           organizationId,
           mcpServers: enabledMcpServers ?? undefined,
           disabledMcpConnections,
+          enabledPlatformMcpConnections,
           ...turnPreferences,
           questMaster: {
             questMasterPlanId,
@@ -599,6 +616,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       turnPreferences,
       enabledMcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
     ]
   );
 
@@ -679,6 +697,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           ...turnPreferences,
           mcpServers: enabledMcpServers ?? undefined,
           disabledMcpConnections,
+          enabledPlatformMcpConnections,
           questMaster: {
             questMasterPlanId,
             questId: mainTaskId,
@@ -708,6 +727,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       turnPreferences,
       enabledMcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       questMasterPlanId,
       updateQuestProgress,
     ]
@@ -765,6 +785,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
         ...turnPreferences,
         mcpServers: enabledMcpServers ?? undefined,
         disabledMcpConnections,
+        enabledPlatformMcpConnections,
         deepResearchConfig: {
           maxDepth: 5,
           duration: 3,
@@ -795,6 +816,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       turnPreferences,
       enabledMcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       questMasterPlanId,
       updateQuestProgress,
     ]
@@ -841,6 +863,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           ...turnPreferences,
           mcpServers: enabledMcpServers ?? undefined,
           disabledMcpConnections,
+          enabledPlatformMcpConnections,
         });
       } catch (error) {
         console.error('Error breaking down task:', error);
@@ -860,6 +883,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       turnPreferences,
       enabledMcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
     ]
   );
 

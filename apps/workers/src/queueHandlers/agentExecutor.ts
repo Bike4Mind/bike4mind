@@ -289,6 +289,7 @@ import { PRODUCTION_TOOL_NAMES } from '@bike4mind/services/llm/tools';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { createSpendFreezeDenialReader, type SpendFreezeDenialDeps } from './agentExecutor.spendFreeze';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
@@ -2507,7 +2508,7 @@ async function runExecution(
       videoConfig,
       musicConfig,
       productionConfig,
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+      imageUrlSigningSecret: signingKey('search-image-url'),
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -4988,7 +4989,7 @@ async function processSubagentDispatch(
         { ...mediaCaller, toolEnabled: mediaToolNames.includes('music_generation') },
         getAgentMusicToolConfigDeps(logger)
       ),
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+      imageUrlSigningSecret: signingKey('search-image-url'),
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates

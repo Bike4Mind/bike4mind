@@ -92,8 +92,8 @@ interface GenerateAndSendProactiveMessageAdapters {
   /**
    * Threaded into `web_search`'s tool config so `/api/search-image` can verify a proactive
    * message's card images the same way an interactive chat's can - see
-   * WebSearchToolConfig.imageUrlSigningSecret and ChatCompletionFeatures.telemetryHmacSecret for
-   * the same SECRET_ENCRYPTION_KEY reuse pattern. Left unset, every card tile a proactive message
+   * WebSearchToolConfig.imageUrlSigningSecret; the worker passes `signingKey('search-image-url')`
+   * from server-utils/src/security/signingKeys.ts. Left unset, every card tile a proactive message
    * emits fails verification and renders "Image unavailable" rather than an insecure fallback.
    */
   imageUrlSigningSecret?: string;

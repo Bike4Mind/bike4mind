@@ -1633,7 +1633,7 @@ export interface paths {
     put?: never;
     /**
      * Publish an artifact
-     * @description Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable generated slug and rejects an existing page; use the returned page for subsequent updates. Concurrent requests with different explicit slugs are not serialized per artifact. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.
+     * @description Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable generated slug and rejects an existing page; use the returned page for subsequent updates. If two requests publish the same artifact at once, one succeeds and the other gets 409. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.
      */
     post: operations['publishArtifact'];
     /**
@@ -29030,7 +29030,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `notebooks:write`. */
+      /** @description The API key lacks `artifacts:publish`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -29089,7 +29089,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The artifact already has a page (use republish or unpublish it first), or `slug` is used by another of your pages. */
+      /** @description The artifact already has a page (use republish or unpublish it first), `slug` is used by another of your pages, or a concurrent request published this artifact first. */
       409: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -29226,7 +29226,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `notebooks:write`. */
+      /** @description The API key lacks `artifacts:publish`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -29424,7 +29424,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `notebooks:write`. */
+      /** @description The API key lacks `artifacts:publish`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

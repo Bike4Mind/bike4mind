@@ -1,27 +1,10 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { fromCliTodos, type PlanItem, type PlanItemStatus } from '@bike4mind/common';
 
-/**
- * Todo item status values
- */
-export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+export type TodoStatus = PlanItemStatus;
 
-/**
- * Todo item structure
- */
-export interface TodoItem {
-  /** Task description */
-  description: string;
-  /** Current status of the task */
-  status: TodoStatus;
-}
-
-/**
- * Parameters for the write_todos tool
- */
-interface WriteTodosParams {
-  /** Complete list of todo items (replaces existing list) */
-  todos: TodoItem[];
-}
+/** Todo items are shared-schema plan items. */
+export type TodoItem = PlanItem;
 
 /**
  * Store for managing todo state
@@ -32,62 +15,6 @@ export interface TodoStore {
   todos: TodoItem[];
   /** Callback when todos are updated */
   onUpdate?: (todos: TodoItem[]) => void;
-}
-
-/**
- * Valid status values for validation
- */
-const VALID_STATUSES: TodoStatus[] = ['pending', 'in_progress', 'completed', 'cancelled'];
-
-/**
- * Validate todo items
- * @throws Error if validation fails
- */
-function validateTodos(todos: unknown): TodoItem[] {
-  if (!Array.isArray(todos)) {
-    throw new Error('write_todos: todos must be an array');
-  }
-
-  if (todos.length === 0) {
-    throw new Error('write_todos: todos array cannot be empty');
-  }
-
-  // Track in_progress count for validation
-  let inProgressCount = 0;
-
-  const validatedTodos: TodoItem[] = todos.map((item, index) => {
-    if (!item || typeof item !== 'object') {
-      throw new Error(`write_todos: item at index ${index} must be an object`);
-    }
-
-    const { description, status } = item as Record<string, unknown>;
-
-    if (typeof description !== 'string' || description.trim() === '') {
-      throw new Error(`write_todos: item at index ${index} must have a non-empty description`);
-    }
-
-    if (typeof status !== 'string' || !VALID_STATUSES.includes(status as TodoStatus)) {
-      throw new Error(
-        `write_todos: item at index ${index} has invalid status "${status}". Must be one of: ${VALID_STATUSES.join(', ')}`
-      );
-    }
-
-    if (status === 'in_progress') {
-      inProgressCount++;
-    }
-
-    return {
-      description: description.trim(),
-      status: status as TodoStatus,
-    };
-  });
-
-  // Validate that only one task is in_progress at a time
-  if (inProgressCount > 1) {
-    throw new Error(`write_todos: only one task can be 'in_progress' at a time, but found ${inProgressCount}`);
-  }
-
-  return validatedTodos;
 }
 
 /**
@@ -103,7 +30,7 @@ function formatTodosOutput(todos: TodoItem[]): string {
 
   const lines = todos.map((todo, index) => {
     const emoji = statusEmoji[todo.status];
-    return `${index + 1}. ${emoji} [${todo.status}] ${todo.description}`;
+    return `${index + 1}. ${emoji} [${todo.status}] ${todo.content}`;
   });
 
   return lines.join('\n');
@@ -127,20 +54,27 @@ function formatTodosOutput(todos: TodoItem[]): string {
 export function createWriteTodosTool(todoStore: TodoStore): ICompletionOptionTools {
   return {
     toolFn: async (args: unknown) => {
-      const params = args as WriteTodosParams;
-
-      const validatedTodos = validateTodos(params.todos);
-
-      // Update the store (replaces existing list)
-      todoStore.todos = validatedTodos;
-
-      if (todoStore.onUpdate) {
-        todoStore.onUpdate(validatedTodos);
+      const todos = (args as { todos?: unknown } | null)?.todos;
+      if (!Array.isArray(todos)) {
+        throw new Error('write_todos: todos must be an array');
       }
 
-      const output = formatTodosOutput(validatedTodos);
+      const { plan, warnings } = fromCliTodos(todos);
+      const notes = warnings.length > 0 ? `\n\nNotes:\n${warnings.map(w => `- ${w}`).join('\n')}` : '';
 
-      return `Todo list updated successfully:\n\n${output}`;
+      // Nothing usable: keep the prior plan rather than wiping it on a malformed write.
+      if (todos.length > 0 && plan.items.length === 0) {
+        throw new Error(`write_todos: no valid todo items; the existing list was kept.${notes}`);
+      }
+
+      todoStore.todos = plan.items;
+      todoStore.onUpdate?.(plan.items);
+
+      if (plan.items.length === 0) return 'Todo list cleared.';
+
+      const output = formatTodosOutput(plan.items);
+
+      return `Todo list updated successfully:\n\n${output}${notes}`;
     },
     toolSchema: {
       name: 'write_todos',
@@ -154,7 +88,7 @@ export function createWriteTodosTool(todoStore: TodoStore): ICompletionOptionToo
 **Important guidelines:**
 - Call this tool early when receiving complex requests
 - Update the list immediately when starting, completing, or cancelling tasks
-- Only ONE task should be 'in_progress' at a time
+- Only ONE task should be 'in_progress' at a time (extra ones are reset to pending)
 - Never batch updates - update as soon as state changes
 
 **Status values:**
@@ -175,13 +109,19 @@ If asked to "create a new React component with tests", break it down:
           todos: {
             type: 'array',
             description:
-              'Complete list of todo items. This replaces any existing list. Each item needs a description and status.',
+              'Complete list of todo items (at most 50). This replaces any existing list. Each item needs content and a status.',
             items: {
               type: 'object',
               properties: {
-                description: {
+                content: {
                   type: 'string',
-                  description: 'Clear, concise description of the task',
+                  description: 'Clear, concise description of the task (imperative, e.g. "Run tests")',
+                  maxLength: 200,
+                },
+                activeForm: {
+                  type: 'string',
+                  description: 'Present-continuous form shown while in progress (e.g. "Running tests")',
+                  maxLength: 200,
                 },
                 status: {
                   type: 'string',
@@ -189,7 +129,7 @@ If asked to "create a new React component with tests", break it down:
                   description: "Current status of the task. Only ONE task can be 'in_progress' at a time.",
                 },
               },
-              required: ['description', 'status'],
+              required: ['content', 'status'],
             },
           },
         },
@@ -207,6 +147,12 @@ export function createTodoStore(onUpdate?: (todos: TodoItem[]) => void): TodoSto
     todos: [],
     onUpdate,
   };
+}
+
+/** Empty the plan and tell listeners (the Ink plan block) it is gone. */
+export function resetTodoStore(store: TodoStore): void {
+  store.todos = [];
+  store.onUpdate?.([]);
 }
 
 /**
