@@ -20,7 +20,7 @@ import {
   type WorkItemPatch,
   type WorkItemStatus,
 } from '@bike4mind/common';
-import { loopEventRepository, loopRepository, workItemRepository } from '@bike4mind/database';
+import { agentExecutionRepository, loopEventRepository, loopRepository, workItemRepository } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
@@ -51,8 +51,8 @@ import {
   validateWorkItemTitle,
 } from '@server/utils/workItemValidation';
 
-/** Per-invocation cap on loop_ticket_create, so a runaway run cannot flood a loop. Per-run budgets are later work. */
-export const MAX_TICKET_CREATES_PER_INVOCATION = 20;
+/** Cap on tickets one run creates (loop_ticket_create and loop_ticket_split), so a runaway run cannot flood a loop. */
+export const MAX_TICKET_CREATES_PER_RUN = 20;
 const LIST_DESCRIPTION_CHARS = 500;
 const LIST_LIMIT = 100;
 
@@ -142,7 +142,12 @@ export async function asToolResult(run: () => Promise<unknown>): Promise<string>
 }
 
 export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicketScope): Record<string, ToolDefinition> {
-  let creates = 0;
+  /** Counted on the run's execution doc, so the cap holds across executor continuations. */
+  const reserveCreates = async (count: number) => {
+    if (!(await agentExecutionRepository.reserveLoopTicketCreates(executionId, count, MAX_TICKET_CREATES_PER_RUN))) {
+      throw new BadRequestError(`at most ${MAX_TICKET_CREATES_PER_RUN} tickets can be created per run`);
+    }
+  };
 
   /** After a ticket write: make the loop due if it has a ready ticket, ask for a dispatch, refresh its open page. */
   const ticketsChanged = async (loop: ILoop) => {
@@ -287,9 +292,6 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
     implementation: () => ({
       toolFn: async value =>
         asToolResult(async () => {
-          if (creates >= MAX_TICKET_CREATES_PER_INVOCATION) {
-            throw new BadRequestError(`at most ${MAX_TICKET_CREATES_PER_INVOCATION} tickets can be created per run`);
-          }
           const params = (value ?? {}) as {
             title?: unknown;
             description?: unknown;
@@ -326,7 +328,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           );
           await assertBlockedOnSatisfiable(userId, dependencies, move.blockedOn);
 
-          creates++;
+          await reserveCreates(1);
           const at = new Date();
           const handoff: IWorkItemHandoff | undefined =
             loop.id === loopId
@@ -449,6 +451,9 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             ([key, v]) => v === undefined || ['id', 'priority'].includes(key)
           );
           if (!onlyPriority) assertCloudRunMayChange(current, existing);
+          if (!onlyPriority && existing.status === 'in_progress' && existing.executionId !== executionId) {
+            throw new ConflictError('the ticket is being worked by another run; change it once that run ends');
+          }
           if (params.status !== undefined && !['open', 'blocked', 'closed'].includes(params.status as string)) {
             throw new BadRequestError('status must be one of: open, blocked, closed');
           }
@@ -589,9 +594,6 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           if (!Array.isArray(raw) || raw.length < SPLIT_MIN || raw.length > SPLIT_MAX) {
             throw new BadRequestError(`children must be an array of ${SPLIT_MIN} to ${SPLIT_MAX} tickets`);
           }
-          if (creates + raw.length > MAX_TICKET_CREATES_PER_INVOCATION) {
-            throw new BadRequestError(`at most ${MAX_TICKET_CREATES_PER_INVOCATION} tickets can be created per run`);
-          }
 
           // Every child is checked before anything is written.
           const children = raw.map((entry: unknown, index) => {
@@ -628,7 +630,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           // With the epic's id, so a child cannot depend on the epic it unblocks (directly or through another ticket).
           await assertDependenciesUsable(userId, [...new Set(children.flatMap(child => child.external))], existing.id);
 
-          creates += children.length;
+          await reserveCreates(children.length);
           const ids: string[] = [];
           const now = new Date();
           try {

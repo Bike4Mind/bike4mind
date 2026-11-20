@@ -17,8 +17,21 @@ const items = vi.hoisted(() => ({
   listUntriagedForLoop: vi.fn(),
   softDeleteForUser: vi.fn(),
 }));
+const executions = vi.hoisted(() => {
+  const counts = new Map<string, number>();
+  return {
+    counts,
+    reserveLoopTicketCreates: vi.fn(async (id: string, count: number, max: number) => {
+      const used = counts.get(id) ?? 0;
+      if (used + count > max) return false;
+      counts.set(id, used + count);
+      return true;
+    }),
+  };
+});
 const events = vi.hoisted(() => ({ recordUnsure: vi.fn(), recordHandoff: vi.fn(), closeAskedForHandoff: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  agentExecutionRepository: executions,
   loopEventRepository: events,
   loopRepository: loops,
   workItemRepository: items,
@@ -29,7 +42,7 @@ vi.mock('@server/utils/loopDispatch', () => dispatch);
 
 import {
   buildLoopTicketTools,
-  MAX_TICKET_CREATES_PER_INVOCATION,
+  MAX_TICKET_CREATES_PER_RUN,
   resolveLoopTicketTools,
 } from './agentExecutor.loopTicketTools';
 
@@ -52,6 +65,7 @@ const run = (tools: ReturnType<typeof buildLoopTicketTools>, name: string, param
 
 beforeEach(() => {
   vi.clearAllMocks();
+  executions.counts.clear();
   // Ownership is the repository's userId scope: another user's loop simply is not found.
   loops.findByIdAndUserId.mockImplementation(async (id: string, userId: string) =>
     userId === 'u1' && (id === OWN || id === SIBLING) ? loop(id) : null
@@ -190,12 +204,17 @@ describe('loop_ticket_create', () => {
     expect(await run(tools, 'loop_ticket_create', { title: 'A', stage: 'nope' })).toMatch(/^Error: stage must be/);
   });
 
-  it(`stops after ${MAX_TICKET_CREATES_PER_INVOCATION} creates in one invocation`, async () => {
-    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
-    for (let i = 0; i < MAX_TICKET_CREATES_PER_INVOCATION; i++)
-      await run(tools, 'loop_ticket_create', { title: `T${i}` });
-    expect(await run(tools, 'loop_ticket_create', { title: 'one too many' })).toMatch(/^Error: at most/);
-    expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_INVOCATION);
+  it(`stops after ${MAX_TICKET_CREATES_PER_RUN} creates in one run, across executor continuations`, async () => {
+    const half = MAX_TICKET_CREATES_PER_RUN / 2;
+    const first = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    for (let i = 0; i < half; i++) await run(first, 'loop_ticket_create', { title: `T${i}` });
+    // A continuation rebuilds the tools; the count lives on the run.
+    const next = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    for (let i = half; i < MAX_TICKET_CREATES_PER_RUN; i++) await run(next, 'loop_ticket_create', { title: `T${i}` });
+    expect(await run(next, 'loop_ticket_create', { title: 'one too many' })).toMatch(/^Error: at most/);
+    expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_RUN);
+    const other = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-2' });
+    expect(await run(other, 'loop_ticket_create', { title: 'another run' })).not.toMatch(/^Error/);
   });
   it('files a blocked owner step with its reason, and requires the reason', async () => {
     const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
@@ -334,12 +353,39 @@ describe('loop_ticket_update', () => {
     expect(items.updateForUser).toHaveBeenCalledWith('t1', 'u1', expect.objectContaining({ title: 'New' }), 'open');
   });
 
+  it('refuses to change a ticket another run is working, but its own run may', async () => {
+    loops.findByIdAndUserId.mockImplementation(async (id: string) => (id === OWN ? loop(id) : null));
+    const ticket = (executionId: string) => ({
+      id: 't1',
+      loopId: OWN,
+      stage: 'todo',
+      status: 'in_progress',
+      executionId,
+      dependencies: [],
+    });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    items.findByIdForUser.mockResolvedValue(ticket('exec-2'));
+    expect(await run(tools, 'loop_ticket_update', { id: 't1', title: 'New' })).toMatch(/^Error: .*another run/);
+    expect(items.updateForUser).not.toHaveBeenCalled();
+
+    items.findByIdForUser.mockResolvedValue(ticket('exec-1'));
+    await run(tools, 'loop_ticket_update', { id: 't1', title: 'New' });
+    expect(items.updateForUser).toHaveBeenCalledWith(
+      't1',
+      'u1',
+      expect.objectContaining({ title: 'New' }),
+      'in_progress'
+    );
+  });
+
   it('blocks its own ticket with a reason, and requires the reason', async () => {
     items.findByIdForUser.mockResolvedValue({
       id: 't1',
       loopId: OWN,
       stage: 'todo',
       status: 'in_progress',
+      executionId: 'exec-1',
       dependencies: [],
     });
     const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
@@ -369,6 +415,7 @@ describe('loop_ticket_update', () => {
       loopId: OWN,
       stage: 'doing',
       status: 'in_progress',
+      executionId: 'exec-1',
       dependencies: [],
     });
     items.updateForUser.mockResolvedValueOnce(null);

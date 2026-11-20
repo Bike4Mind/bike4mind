@@ -396,6 +396,8 @@ export interface IAgentExecution {
   toolsErrored?: string[];
   /** The untriaged tickets a triage run was shown; its fold sets p2 on any it left without a priority. */
   triageWorkItemIds?: string[];
+  /** Tickets a loop run has created with the loop ticket tools, across its executor continuations. */
+  loopTicketCreates?: number;
   /**
    * Set on a loop run a desktop runner works (apps/client/server/utils/loopRunner.ts). No executor runs it:
    * the runner posts its progress and outcome, and its lease (`runnerLeaseUntil`) keeps it alive.
@@ -918,6 +920,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     toolsUnavailable: { type: [String], default: undefined },
     toolsErrored: { type: [String], default: undefined },
     triageWorkItemIds: { type: [String], default: undefined },
+    loopTicketCreates: { type: Number },
     runner: { type: String, enum: ['desktop'] },
     runnerLeaseUntil: { type: Date },
     runnerDurationMs: { type: Number },
@@ -1406,6 +1409,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       createdAt: { $gte: since },
       parentExecutionId: null,
     });
+  }
+
+  /** Adds `count` to a run's `loopTicketCreates` unless that would take it past `max`; false when it would. */
+  async reserveLoopTicketCreates(id: string, count: number, max: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, $or: [{ loopTicketCreates: { $exists: false } }, { loopTicketCreates: { $lte: max - count } }] },
+      { $inc: { loopTicketCreates: count } },
+      { runValidators: true }
+    );
+    return result.matchedCount > 0;
   }
 
   async setLoopOutcome(id: string, loopOutcome: LoopRunOutcome): Promise<void> {
