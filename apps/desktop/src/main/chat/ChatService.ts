@@ -7748,6 +7748,7 @@ export class ChatService {
             approvalDetail: [asked.prompt.detail, ...unshownStops, ...(outsideReason ? [outsideReason] : [])].join(
               '\n\n'
             ),
+            ...(prompt.summary ? { approvalDescription: prompt.summary } : {}),
             ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),

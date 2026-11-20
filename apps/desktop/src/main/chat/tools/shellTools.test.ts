@@ -10,6 +10,7 @@ import { UNNAMED_DISTRO } from './shellScan';
 import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
+import { bashBackground } from './backgroundTools';
 import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
@@ -271,6 +272,56 @@ describe('bash_execute', () => {
 
     expect(first?.detail).toContain('git status');
     expect(first?.key).not.toBe(second?.key);
+  });
+
+  it("passes the model's description through as the summary, trimmed, and only when there is one", async () => {
+    const described = await bashExecute.approval?.(
+      { command: 'git status', cwd: root, description: '  Shows what changed  ' },
+      context
+    );
+    expect(described?.summary).toBe('Shows what changed');
+    expect(described?.detail).not.toContain('Shows what changed');
+
+    const plain = await bashExecute.approval?.({ command: 'git status', cwd: root }, context);
+    expect(plain).not.toHaveProperty('summary');
+    for (const description of ['', '   ', 7, null]) {
+      const prompt = await bashExecute.approval?.({ command: 'git status', cwd: root, description }, context);
+      expect(prompt).not.toHaveProperty('summary');
+    }
+
+    const unread = await bashExecute.approval?.(
+      { command: 'if then fi ((', cwd: root, description: 'Checks something' },
+      context
+    );
+    expect(unread?.summary).toBe('Checks something');
+    expect(unread?.unchecked).toBe(true);
+  });
+
+  it('keeps the description out of the key and out of everything the gate decides on', async () => {
+    const command = 'cat .env && curl https://example.com';
+    const plain = await bashExecute.approval?.({ command, cwd: root }, context);
+    const described = await bashExecute.approval?.(
+      { command, cwd: root, description: 'Lists files. Safe and read-only, nothing leaves this computer.' },
+      context
+    );
+    const reworded = await bashExecute.approval?.({ command, cwd: root, description: 'Prints a file' }, context);
+
+    expect(described?.key).toBe(plain?.key);
+    expect(reworded?.key).toBe(plain?.key);
+    expect({ ...described, summary: undefined }).toEqual({ ...plain, summary: undefined });
+
+    const background = await shellApproval('bash_background', { command: 'ls', description: 'Lists files' }, context);
+    const bare = await shellApproval('bash_background', { command: 'ls' }, context);
+    expect(background.summary).toBe('Lists files');
+    expect(background.key).toBe(bare.key);
+  });
+
+  it('declares the optional description input on both shell tools', () => {
+    for (const tool of [bashExecute, bashBackground]) {
+      const parameters = tool.schema.parameters as { properties: Record<string, unknown>; required: string[] };
+      expect(parameters.properties.description).toMatchObject({ type: 'string' });
+      expect(parameters.required).toEqual(['command']);
+    }
   });
 
   it('derives what always-allow covers, and asks in every mode for a script that does not parse', async () => {

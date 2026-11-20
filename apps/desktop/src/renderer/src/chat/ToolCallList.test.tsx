@@ -176,6 +176,53 @@ describe('ToolCallList', () => {
     expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
   });
 
+  describe("the agent's summary on a command card", () => {
+    const summaryOf = (html: string) =>
+      /data-testid="chat-tool-approval-summary"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+
+    it('shows the description on one labelled line between the heading and the command', () => {
+      const html = markup([
+        awaiting({
+          name: 'bash_execute',
+          approvalDetail: '$ rm -rf build',
+          approvalDescription: 'Deletes the build folder',
+        }),
+      ]);
+      expect(summaryOf(html)).toBe('Agent&#x27;s summary: Deletes the build folder');
+      const heading = html.indexOf('Run this command?');
+      const summary = html.indexOf('data-testid="chat-tool-approval-summary"');
+      const detail = html.indexOf('data-testid="chat-tool-approval-detail"');
+      expect(heading).toBeLessThan(summary);
+      expect(summary).toBeLessThan(detail);
+      expect(html.slice(detail)).toContain('$ rm -rf build');
+    });
+
+    it('draws the card as before when there is no description, or only whitespace', () => {
+      const plain = markup([awaiting()]);
+      expect(plain).not.toContain('chat-tool-approval-summary');
+      expect(markup([awaiting({ approvalDescription: ' \n ' })])).toBe(plain);
+    });
+
+    it('folds line breaks into one line and cuts a long description short', () => {
+      const html = markup([awaiting({ approvalDescription: `Runs the tests\n\nand ${'reports '.repeat(40)}` })]);
+      const shown = summaryOf(html) ?? '';
+      expect(shown.startsWith('Agent&#x27;s summary: Runs the tests and reports')).toBe(true);
+      expect(shown.endsWith('...')).toBe(true);
+      expect(shown.length).toBeLessThanOrEqual('Agent&#x27;s summary: '.length + 140);
+    });
+
+    it('leaves the description off a card that shows a diff', () => {
+      const html = markup([
+        awaiting({
+          name: 'file_write',
+          approvalDescription: 'Writes a file',
+          approvalDiff: { path: '/a/one.ts', operation: 'create', lines: [], added: 0, removed: 0 },
+        }),
+      ]);
+      expect(html).not.toContain('chat-tool-approval-summary');
+    });
+  });
+
   it('lists only the parts of a chain that need a decision, each with why', () => {
     const html = markup([
       awaiting({

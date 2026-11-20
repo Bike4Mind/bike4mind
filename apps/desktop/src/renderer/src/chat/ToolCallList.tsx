@@ -241,6 +241,14 @@ function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalPar
   );
 }
 
+const MAX_DESCRIPTION_CHARS = 140;
+
+/** The model's description as one capped line, or '' when there is nothing to show. */
+function approvalDescriptionLine(description: string | undefined): string {
+  const flat = (description ?? '').replace(/\s+/g, ' ').trim();
+  return flat.length <= MAX_DESCRIPTION_CHARS ? flat : `${flat.slice(0, MAX_DESCRIPTION_CHARS - 3).trimEnd()}...`;
+}
+
 /**
  * The consent prompt for a tool that has not run yet.
  *
@@ -265,6 +273,7 @@ function ApprovalPrompt({
   const irreversible = call.approvalIrreversible === true;
   const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
+  const description = approvalDescriptionLine(call.approvalDescription);
 
   return (
     <Sheet
@@ -287,6 +296,18 @@ function ApprovalPrompt({
                 ? 'Start this in the background?'
                 : 'Run this command?'))}
       </Typography>
+
+      {/* Labelled as the agent's: it is the model's account of the command, not a check of it. */}
+      {!diff && description && (
+        <Typography
+          level="body-xs"
+          textColor="text.secondary"
+          sx={{ mt: 0.5, overflowWrap: 'anywhere' }}
+          data-testid="chat-tool-approval-summary"
+        >
+          {`Agent's summary: ${description}`}
+        </Typography>
+      )}
 
       {diff ? (
         <Stack spacing={0.75} sx={{ mt: 0.75 }}>
