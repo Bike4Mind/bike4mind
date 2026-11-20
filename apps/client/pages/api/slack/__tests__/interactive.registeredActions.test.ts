@@ -7,6 +7,7 @@ import { Logger } from '@bike4mind/observability';
 import { SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 
 const approvals = vi.hoisted(() => ({ liveops: vi.fn(), sre: vi.fn() }));
+const audit = vi.hoisted(() => ({ success: vi.fn(), failure: vi.fn() }));
 const contributed = vi.hoisted(() => {
   const handlers = {
     exact: vi.fn(),
@@ -38,7 +39,7 @@ vi.mock('@server/integrations/slack/slackWebhookVerification', () => ({
   verifySlackRequest: () => ({ valid: true }),
 }));
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
-  IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
+  IntegrationAuditLogger: { create: () => audit },
 }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
 vi.mock('@bike4mind/database', async () => {
@@ -295,6 +296,35 @@ describe('POST /api/slack/interactive registered actions', () => {
       expect(problems[0]).toContain('sre_approve_fix');
       expect(problems[1]).toContain('confirm_action');
       expect(problems[2]).toContain('app_home_notebook_');
+    });
+  });
+
+  describe('a failing registered handler', () => {
+    it('answers 500 and records an audit failure when handle rejects', async () => {
+      approvals.sre.mockRejectedValue(new Error('boom'));
+
+      const res = await post(blockAction('sre_approve_fix', 'proposal-1'));
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(res._getJSONData()).toEqual({ error: 'Internal server error' });
+      expect(audit.failure).toHaveBeenCalledTimes(1);
+      expect(audit.success).not.toHaveBeenCalled();
+      expect(User.findOne).not.toHaveBeenCalled();
+    });
+
+    it('keeps the 200 response and logs when deferred work rejects after it', async () => {
+      // Rejected inside the handler so it is never left unhandled before the endpoint attaches its catch.
+      approvals.sre.mockImplementation(async () => ({
+        response: { text: 'ack' },
+        deferred: Promise.reject(new Error('late failure')),
+      }));
+
+      const res = await post(blockAction('sre_approve_fix', 'proposal-1'));
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ text: 'ack' });
+      expect(audit.failure).not.toHaveBeenCalled();
+      expect(errorLogs.some(args => String(args[0]).includes('Deferred work failed'))).toBe(true);
     });
   });
 
