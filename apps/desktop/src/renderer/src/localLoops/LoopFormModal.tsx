@@ -441,6 +441,7 @@ export function LoopFormModal({
                         <Option value="green-ci">Green CI</Option>
                         <Option value="never">Never</Option>
                       </Select>
+                      <FormHelperText>Branch protection on the repo is what actually blocks merges.</FormHelperText>
                     </FormControl>
                     <FormControl sx={{ flex: 1 }}>
                       <FormLabel>Deploy workflow</FormLabel>

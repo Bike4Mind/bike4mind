@@ -206,12 +206,18 @@ describe('autoFixRefusal', () => {
     'git push origin +feat/widget-ladder',
     'git add . && git push --force',
     'gh pr merge 611 --squash',
+    'git push origin HEAD:main',
+    'git push origin HEAD:refs/heads/master',
+    'git push origin feat/x:main',
+    'git push origin refs/heads/main',
+    'git push -u origin main',
+    'git add . && git push origin main',
     'gh api repos/example-org/widgets/pulls/611/merge -X PUT',
   ])('refuses %s', command => {
     expect(autoFixRefusal(command)).not.toBeNull();
   });
 
-  it.each(['git push', 'git push -u origin feat/widget-ladder', 'git commit -m "fix" && git push', 'gh pr checks 611'])(
+  it.each(['git push', 'git push -u origin feat/widget-ladder', 'git commit -m "fix" && git push', 'gh pr checks 611', 'git push origin HEAD:feat/main-menu', 'git push origin main-menu'])(
     'allows %s',
     command => {
       expect(autoFixRefusal(command)).toBeNull();

@@ -18,6 +18,7 @@ describe('loopRunnerToolRefusal', () => {
     );
     expect(loopRunnerToolRefusal('bash_background', { command: 'git push --force origin x' })).toMatch(/force-push/);
     expect(loopRunnerToolRefusal('bash_execute', { command: 'git push origin x' })).toBeNull();
+    expect(loopRunnerToolRefusal('bash_execute', { command: 'git push origin HEAD:main' })).toMatch(/default branch/);
     expect(loopRunnerToolRefusal('session_spawn', { prompt: 'go' })).toBeNull();
     expect(loopRunnerToolRefusal('set_session_pull_request', {})).not.toBeNull();
   });

@@ -251,6 +251,15 @@ const DELEGATING_TOOLS = new Set(['session_spawn', 'session_send']);
 const FORCE_PUSH = /(^|\s)(--force(-with-lease|-if-includes)?(=\S*)?|-[A-Za-z]*f[A-Za-z]*|--mirror|\+\S+)(\s|$)/;
 const MERGE = /\bgh\s+pr\s+merge\b|\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/;
 
+/** A refspec (`main`, `HEAD:main`, `+x:refs/heads/master`) whose destination is main or master; first token is the remote. */
+function pushesDefaultBranch(afterPush: string): boolean {
+  const [, ...refspecs] = afterPush.split(/\s+/).filter(token => token && !token.startsWith('-'));
+  return refspecs.some(refspec => {
+    const destination = refspec.replace(/^\+/, '').split(':').pop() ?? '';
+    return /^(refs\/heads\/)?(main|master)$/.test(destination.replace(/^["']|["']$/g, ''));
+  });
+}
+
 /**
  * Whether a shell command force-pushes or merges a PR, or null. Shared by the auto-fix and loop
  * runner guards: either is the one outcome of an unattended turn that cannot be taken back.
@@ -258,10 +267,12 @@ const MERGE = /\bgh\s+pr\s+merge\b|\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\b
  * Read per command segment, so `git add . && git push --force` is caught. A script file that
  * force-pushes is beyond a textual check; the approval gate still sees it in 'ask' mode.
  */
-export function shellGuardViolation(command: string): 'force-push' | 'merge' | null {
+export function shellGuardViolation(command: string): 'force-push' | 'merge' | 'default-branch-push' | null {
   for (const segment of command.split(/&&|\|\||[;|\n]/)) {
-    if (/\bgit\b.*\bpush\b/.test(segment) && FORCE_PUSH.test(segment.replace(/^.*?\bpush\b/, ' '))) {
-      return 'force-push';
+    if (/\bgit\b.*\bpush\b/.test(segment)) {
+      const afterPush = segment.replace(/^.*?\bpush\b/, ' ');
+      if (FORCE_PUSH.test(afterPush)) return 'force-push';
+      if (pushesDefaultBranch(afterPush)) return 'default-branch-push';
     }
     if (MERGE.test(segment)) return 'merge';
   }
@@ -273,6 +284,7 @@ export function autoFixRefusal(command: string): string | null {
   const violation = shellGuardViolation(command);
   if (violation === 'force-push') return 'An auto-fix turn may not force-push. Push a new commit on top instead.';
   if (violation === 'merge') return 'An auto-fix turn may not merge the pull request; the user decides that.';
+  if (violation === 'default-branch-push') return 'An auto-fix turn may not push to the default branch.';
   return null;
 }
 

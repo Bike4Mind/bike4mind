@@ -20,6 +20,7 @@ export function loopRunnerToolRefusal(name: string, input: Record<string, unknow
   const violation = shellGuardViolation(typeof input.command === 'string' ? input.command : '');
   if (violation === 'force-push') return 'A loop runner turn may not force-push. Push a new commit on top instead.';
   if (violation === 'merge') return `A loop runner turn may not merge from the shell; call ${LOOP_MERGE_TOOL_NAME}.`;
+  if (violation === 'default-branch-push') return 'A loop runner turn may not push to the default branch.';
   return null;
 }
 
