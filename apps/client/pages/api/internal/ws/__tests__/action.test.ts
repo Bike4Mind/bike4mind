@@ -98,6 +98,20 @@ describe('self-host ws bridge: connect', () => {
     expect(res.statusCode).toBe(401);
     expect(connectFunc).not.toHaveBeenCalled();
   });
+
+  it('rejects every request while the internal secret is the example placeholder', async () => {
+    const placeholder = 'change-me-openssl-rand-hex-32';
+    process.env.INTERNAL_WS_SECRET = placeholder;
+    const req = {
+      query: { action: 'connect' },
+      headers: { 'x-internal-ws-secret': placeholder },
+      body: { connectionId: 'c4', ticket: 't' },
+    };
+    const res = makeRes();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+    expect(res.statusCode).toBe(401);
+    expect(connectFunc).not.toHaveBeenCalled();
+  });
 });
 
 describe('self-host ws bridge: message', () => {

@@ -19,7 +19,7 @@ import type {
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
-import type { AttentionNotice, AttentionOpenEvent } from './attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -641,6 +641,10 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
+  attentionGetNotifyScope: 'attention:get-notify-scope',
+  attentionSetNotifyScope: 'attention:set-notify-scope',
+  attentionNotifyScope: 'attention:notify-scope',
   /** The menu-bar toggle, for Settings; see @shared/watch. */
   watchGetPreferences: 'watch:get-preferences',
   watchSetPreferences: 'watch:set-preferences',
@@ -1566,6 +1570,11 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+    /** Whether plain sessions alert too, or only orchestrations and their agents. */
+    getNotifyScope(): Promise<NotifyScope>;
+    /** Resolves to the scope main now holds; an invalid value leaves it unchanged. */
+    setNotifyScope(scope: NotifyScope): Promise<NotifyScope>;
+    onNotifyScope(listener: (scope: NotifyScope) => void): () => void;
   };
   /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
   watch: {

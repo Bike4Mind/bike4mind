@@ -145,7 +145,9 @@ function timeOf(iso: string): number {
 
 export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
   const { sessions, statuses, activity, pending, needsYouSince, unacknowledgedDone, now } = input;
-  const alertable = alertableSessions(sessions);
+  // Agents scope on purpose: the menu bar lists orchestrations and their approvals, whatever the
+  // notify scope, so under "All sessions" the dock badge can count plain sessions this does not.
+  const alertable = alertableSessions(sessions, 'agents');
   if (alertable.size === 0) return EMPTY_WATCH_SNAPSHOT;
 
   const byId = new Map(sessions.map(session => [session.id, session]));
@@ -170,7 +172,7 @@ export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
     for (const member of members) {
       const status = statuses.get(member.id);
       if (status === 'processing') working = true;
-      // The dock badge's rule (needsYouCount), so the menu-bar title and header count the same.
+      // The dock badge's rule (needsYouCount), so with the agents-only scope the two count the same.
       if (deriveTaskAgentState(member, status) === 'needs-you') needsYouCount += 1;
       if (status !== 'needs-action') continue;
       const waitingSince = needsYouSince.get(member.id) ?? now;

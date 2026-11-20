@@ -1,4 +1,5 @@
 import { assignPersonas } from './agentPersona';
+import { DEFAULT_NOTIFY_SCOPE, type NotifyScope } from './attention';
 import { deriveTaskAgentState } from './agentState';
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
 import type { LocalLoopDetail, LocalLoopSummary } from './localLoops';
@@ -29,21 +30,48 @@ export function enteredNeedsYou(
 
 /**
  * Sessions whose needs-you entries alert: a parent with agents, and every agent its stage shows.
- * Plain sessions stay quiet (the alerts and the chime setting are about agents), and so do archived
- * ones and anything under an archived agent, by the same rule the roster hides them with.
+ * With the `all` scope every other session alerts too; with `agents` (the default) plain sessions
+ * stay quiet. Archived sessions and anything under an archived one never alert, by the same rule
+ * the roster hides them with.
  */
-export function alertableSessions(sessions: readonly ChatSessionSummary[]): ReadonlySet<string> {
+export function alertableSessions(
+  sessions: readonly ChatSessionSummary[],
+  scope: NotifyScope = DEFAULT_NOTIFY_SCOPE
+): ReadonlySet<string> {
+  const alertable = new Set(agentTreeSessions(sessions));
+  if (scope === 'all') {
+    const byId = new Map(sessions.map(session => [session.id, session]));
+    for (const session of sessions) if (!underArchived(byId, session.id)) alertable.add(session.id);
+  }
+  return alertable;
+}
+
+/** Sessions in an orchestration: a parent with agents, and every agent its stage shows. */
+function agentTreeSessions(sessions: readonly ChatSessionSummary[]): ReadonlySet<string> {
   const archived = new Set(sessions.filter(session => session.archived).map(session => session.id));
   const roots = new Set(sessions.filter(session => session.origin).map(session => rootSessionOf(sessions, session.id)));
-  const alertable = new Set<string>();
+  const inTree = new Set<string>();
   for (const root of roots) {
     if (archived.has(root)) continue;
     const agents = descendantsOf(sessions, root).map(({ session }) => session.id);
     if (agents.length === 0) continue;
-    alertable.add(root);
-    for (const id of agents) alertable.add(id);
+    inTree.add(root);
+    for (const id of agents) inTree.add(id);
   }
-  return alertable;
+  return inTree;
+}
+
+/** `sessionId` or any session above it in its spawn chain is archived. */
+function underArchived(byId: ReadonlyMap<string, ChatSessionSummary>, sessionId: string): boolean {
+  const visited = new Set<string>();
+  let current = byId.get(sessionId);
+  while (current && !visited.has(current.id)) {
+    if (current.archived) return true;
+    visited.add(current.id);
+    const parentId = current.origin?.parentSessionId;
+    current = parentId ? byId.get(parentId) : undefined;
+  }
+  return false;
 }
 
 /**
@@ -52,9 +80,10 @@ export function alertableSessions(sessions: readonly ChatSessionSummary[]): Read
  */
 export function needsYouCount(
   statuses: ReadonlyMap<string, ChatSessionStatus>,
-  sessions: readonly ChatSessionSummary[]
+  sessions: readonly ChatSessionSummary[],
+  scope: NotifyScope = DEFAULT_NOTIFY_SCOPE
 ): number {
-  const alertable = alertableSessions(sessions);
+  const alertable = alertableSessions(sessions, scope);
   return sessions.filter(
     session => alertable.has(session.id) && deriveTaskAgentState(session, statuses.get(session.id)) === 'needs-you'
   ).length;

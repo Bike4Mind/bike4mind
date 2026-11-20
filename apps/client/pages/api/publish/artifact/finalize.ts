@@ -269,7 +269,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     deletedAt: null,
   })
     .select(
-      'publicId publishedAt ownerId lastPublishedBy size sha256Index indexObjectPath versions accessGate visibility shareTokens'
+      'publicId publishedAt ownerId lastPublishedBy size sha256Index indexObjectPath versions accessGate visibility shareTokens source.artifactId v1ArtifactId'
     )
     .lean<{
       publicId: string;
@@ -283,6 +283,8 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
       accessGate?: unknown;
       visibility?: string;
       shareTokens?: PublishedArtifactShareToken[];
+      source?: { artifactId?: string };
+      v1ArtifactId?: string;
     } | null>();
 
   if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
@@ -426,11 +428,15 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     $push: { versions: { $each: versionsToPush } },
   };
   const scope = { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null, ownerId };
+  // Replacing a v1-published page with a different artifact must drop its one-page-per-artifact
+  // marker, or the old artifact stays locked out of publishing elsewhere.
+  const v1MarkerUnset =
+    previous?.v1ArtifactId && previous.v1ArtifactId !== manifest.source.artifactId ? { v1ArtifactId: 1 } : {};
   // A first publish includes its newly allocated identity in the upsert filter, so it cannot
   // match a competing publisher's row. The unique live-slug index rejects that insert instead.
   const saved = await PublishedArtifact.findOneAndUpdate(
     { ...scope, publicId, ...(previous ? { ...publishedContentSnapshotFilter(previous), revisingAt: null } : {}) },
-    { ...update, ...(previous ? { $unset: { indexObjectPath: 1 } } : {}) },
+    { ...update, ...(previous ? { $unset: { indexObjectPath: 1, ...v1MarkerUnset } } : {}) },
     { upsert: !previous, new: true }
   ).catch((err: unknown) => {
     if (isDuplicateKeyError(err)) return null;

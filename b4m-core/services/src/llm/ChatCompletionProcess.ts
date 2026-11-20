@@ -3801,6 +3801,7 @@ export class ChatCompletionProcess {
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
         disabledMcpConnections: parsedBody.disabledMcpConnections,
+        enabledPlatformMcpConnections: parsedBody.enabledPlatformMcpConnections,
         defaultAdminSettings,
         userMessage: initContext.message,
         logger,
