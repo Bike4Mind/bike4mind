@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron';
-import type { ComposerDrafts } from '@shared/composerDrafts';
+import { isKeptDraft, type ComposerDrafts } from '@shared/composerDrafts';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ComposerDraftStore } from './ComposerDraftStore';
 
@@ -27,7 +27,7 @@ export function registerComposerDraftsIpc(
   ipc.handle(IPC_CHANNELS.composerDraftsSave, async (_event, sessionId: unknown, text: unknown): Promise<void> => {
     if (typeof sessionId !== 'string' || sessionId.length > SESSION_ID_MAX_LENGTH || typeof text !== 'string') return;
     await loaded;
-    if (text.trim() === '') return store.forget(sessionId);
+    if (!isKeptDraft(text)) return store.forget(sessionId);
     if (!(await isKnownSession(sessionId))) return;
     return store.set(sessionId, text);
   });
