@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EmailJobStatus, EmailSendStatus } from '@bike4mind/common';
+import { EmailJobOverallStatus, EmailJobStatus, EmailSendStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 // Passthrough so `dispatch` is the raw (event, ctx, logger) handler - the queue is
@@ -14,6 +14,7 @@ const mockFindTemplateById = vi.fn();
 const mockFindAttemptById = vi.fn();
 const mockIncrementCountsBy = vi.fn();
 const mockUpdateJob = vi.fn();
+const mockCompleteRun = vi.fn();
 const mockCountAttempts = vi.fn();
 const sendMocks = vi.hoisted(() => ({
   publish: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...args: unknown[]) => mockFindJobById(...args),
     incrementCountsBy: (...args: unknown[]) => mockIncrementCountsBy(...args),
     update: (...args: unknown[]) => mockUpdateJob(...args),
+    completeRun: (...args: unknown[]) => mockCompleteRun(...args),
   },
   emailSendAttemptRepository: {
     findById: (...args: unknown[]) => mockFindAttemptById(...args),
@@ -171,6 +173,13 @@ describe('emailBatch delivery through the event bus', () => {
   });
 
   it('publishes the rendered mail with its attempt ref and marks the attempt queued', async () => {
+    mockCountAttempts.mockImplementation(async (filter: { status?: unknown }) => {
+      if (filter.status === undefined) return 1;
+      const statuses = (filter.status as { $in?: string[] }).$in ?? [filter.status];
+      return statuses.includes(EmailSendStatus.QUEUED) ? 1 : 0;
+    });
+    mockCompleteRun.mockResolvedValue(true);
+
     await expect(run()).resolves.toEqual({ batchItemFailures: [] });
 
     expect(sendMocks.publish).toHaveBeenCalledExactlyOnceWith(
@@ -194,8 +203,10 @@ describe('emailBatch delivery through the event bus', () => {
     expect(sendMocks.markQueued).toHaveBeenCalledWith('attempt-1', expect.objectContaining({ retryCount: 0 }));
     expect(sendMocks.recordOutcome).not.toHaveBeenCalled();
     expect(mockIncrementCountsBy).not.toHaveBeenCalled();
-    expect(mockUpdateJob).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'job-1', status: EmailJobStatus.COMPLETED })
+    expect(mockCompleteRun).toHaveBeenCalledWith(
+      'job-1',
+      undefined,
+      expect.objectContaining({ sentCount: 1, failedCount: 0, overallStatus: EmailJobOverallStatus.COMPLETE })
     );
   });
 
