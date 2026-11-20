@@ -45,7 +45,10 @@ it('stores and dispatches an item that references only the caller own live files
   const item = await createDelegation(OWNER, { intent: 'Summarize', file_ids: [own, blocked] });
 
   expect((await DelegatedItemModel.findById(item._id).lean())?.fileIds).toEqual([own, blocked]);
-  expect(publish).toHaveBeenCalledWith({ delegationId: item._id.toString(), userId: OWNER });
+  expect(publish).toHaveBeenCalledWith(
+    { delegationId: item._id.toString(), userId: OWNER },
+    { requireAcceptance: true }
+  );
 });
 
 it.each([
