@@ -141,13 +141,13 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
       },
       { $set: { leaseUntil: new Date(now.getTime() + leaseMs) } },
-      { new: true, sort: { nextRunAt: 1 } }
+      { new: true, sort: { nextRunAt: 1 }, runValidators: true }
     );
     return result?.toJSON() ?? null;
   }
 
   async releaseLease(id: string): Promise<void> {
-    await this.loopModel.updateOne({ _id: id }, { $unset: { leaseUntil: '' } });
+    await this.loopModel.updateOne({ _id: id }, { $unset: { leaseUntil: '' } }, { runValidators: true });
   }
 
   async recordDispatchFailure(id: string, statusReason: string): Promise<void> {
@@ -175,31 +175,35 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     laneHoldAt?: Date,
     leaseUntil?: Date
   ): Promise<boolean> {
-    const result = await this.loopModel.updateOne({ _id: id, ...(leaseUntil && { leaseUntil }) }, [
-      {
-        $set: {
-          activeExecutionIds: {
-            $let: {
-              vars: { ids: { $ifNull: ['$activeExecutionIds', []] } },
-              in: {
-                $cond: [
-                  { $in: [{ $literal: executionId }, '$$ids'] },
-                  '$$ids',
-                  { $concatArrays: ['$$ids', [{ $literal: executionId }]] },
-                ],
+    const result = await this.loopModel.updateOne(
+      { _id: id, ...(leaseUntil && { leaseUntil }) },
+      [
+        {
+          $set: {
+            activeExecutionIds: {
+              $let: {
+                vars: { ids: { $ifNull: ['$activeExecutionIds', []] } },
+                in: {
+                  $cond: [
+                    { $in: [{ $literal: executionId }, '$$ids'] },
+                    '$$ids',
+                    { $concatArrays: ['$$ids', [{ $literal: executionId }]] },
+                  ],
+                },
               },
             },
+            lastExecutionId: { $literal: executionId },
+            // null: a `tickets` wake-mode loop, which only a ticket makes due.
+            nextRunAt: nextRunAt ?? '$$REMOVE',
+            hold: laneHoldAt ? { $literal: { kind: 'capacity', limit: 'loop', at: laneHoldAt } } : '$$REMOVE',
+            // Another lane's long_run alarm stays; an idle alarm ends with this run.
+            alarm: { $cond: [{ $eq: ['$alarm.kind', 'idle_with_work'] }, '$$REMOVE', '$alarm'] },
           },
-          lastExecutionId: { $literal: executionId },
-          // null: a `tickets` wake-mode loop, which only a ticket makes due.
-          nextRunAt: nextRunAt ?? '$$REMOVE',
-          hold: laneHoldAt ? { $literal: { kind: 'capacity', limit: 'loop', at: laneHoldAt } } : '$$REMOVE',
-          // Another lane's long_run alarm stays; an idle alarm ends with this run.
-          alarm: { $cond: [{ $eq: ['$alarm.kind', 'idle_with_work'] }, '$$REMOVE', '$alarm'] },
         },
-      },
-      { $unset: ['leaseUntil'] },
-    ]);
+        { $unset: ['leaseUntil'] },
+      ],
+      { runValidators: true }
+    );
     return result.matchedCount > 0;
   }
 
@@ -212,7 +216,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   ): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { nextRunAt, hold: { kind, until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
+      { $set: { nextRunAt, hold: { kind, until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } },
+      { runValidators: true }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
@@ -220,7 +225,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async holdForCapacity(id: string, limit: LoopCapacityLimit, now: Date): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { hold: { kind: 'capacity', limit, at: now } }, $unset: { leaseUntil: '' } }
+      { $set: { hold: { kind: 'capacity', limit, at: now } }, $unset: { leaseUntil: '' } },
+      { runValidators: true }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
@@ -229,7 +235,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async clearCapacityHolds(): Promise<void> {
     await this.loopModel.updateMany(
       { hold: { $exists: true }, 'hold.kind': 'capacity', 'hold.limit': { $ne: 'loop' } },
-      { $unset: { hold: '' } }
+      { $unset: { hold: '' } },
+      { runValidators: true }
     );
   }
 
@@ -243,7 +250,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         ...LANE_FREE,
         $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
       },
-      { $set: { hold: { kind: 'capacity', limit: 'server', at: now } } }
+      { $set: { hold: { kind: 'capacity', limit: 'server', at: now } } },
+      { runValidators: true }
     );
   }
 
@@ -282,26 +290,31 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     const stillApplies = alarm.executionId
       ? { activeExecutionIds: alarm.executionId }
       : { status: 'live', ...NO_LANE_ACTIVE };
-    await this.loopModel.updateOne({ _id: id, ...stillApplies }, [
-      {
-        $set: {
-          alarm: {
-            kind: alarm.kind,
-            // $literal: a pipeline update would read a reason starting with '$' as a field path.
-            reason: { $literal: alarm.reason },
-            since: { $cond: [same, '$alarm.since', alarm.since] },
-            // An object in a pipeline $set merges into the old alarm, so drop a stale executionId explicitly.
-            executionId: alarm.executionId ?? '$$REMOVE',
+    await this.loopModel.updateOne(
+      { _id: id, ...stillApplies },
+      [
+        {
+          $set: {
+            alarm: {
+              kind: alarm.kind,
+              // $literal: a pipeline update would read a reason starting with '$' as a field path.
+              reason: { $literal: alarm.reason },
+              since: { $cond: [same, '$alarm.since', alarm.since] },
+              // An object in a pipeline $set merges into the old alarm, so drop a stale executionId explicitly.
+              executionId: alarm.executionId ?? '$$REMOVE',
+            },
           },
         },
-      },
-    ]);
+      ],
+      { runValidators: true }
+    );
   }
 
   async clearAlarm(id: string, kind: LoopAlarmKind): Promise<void> {
     await this.loopModel.updateOne(
       { _id: id, alarm: { $exists: true }, 'alarm.kind': kind },
-      { $unset: { alarm: '' } }
+      { $unset: { alarm: '' } },
+      { runValidators: true }
     );
   }
 
@@ -315,7 +328,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   ): Promise<number> {
     const result = await this.loopModel.updateMany(
       { userId, status: 'live', ...NO_LANE_ACTIVE },
-      { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } }
+      { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } },
+      { runValidators: true }
     );
     return result.modifiedCount;
   }
@@ -354,40 +368,46 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     for (const [key, value] of Object.entries(update.$set ?? {})) set[key] = { $literal: value };
     for (const [key, by] of Object.entries(update.$inc ?? {})) set[key] = { $add: [{ $ifNull: [`$${key}`, 0] }, by] };
     for (const key of Object.keys(update.$unset ?? {})) set[key] = '$$REMOVE';
-    const result = await this.loopModel.updateOne({ _id: id, activeExecutionIds: executionId }, [
-      {
-        $set: {
-          ...set,
-          activeExecutionIds: {
-            $filter: { input: '$activeExecutionIds', cond: { $ne: ['$$this', { $literal: executionId }] } },
+    const result = await this.loopModel.updateOne(
+      { _id: id, activeExecutionIds: executionId },
+      [
+        {
+          $set: {
+            ...set,
+            activeExecutionIds: {
+              $filter: { input: '$activeExecutionIds', cond: { $ne: ['$$this', { $literal: executionId }] } },
+            },
+            alarm: {
+              $cond: [
+                { $and: [{ $eq: ['$alarm.kind', 'long_run'] }, { $eq: ['$alarm.executionId', executionId] }] },
+                '$$REMOVE',
+                '$alarm',
+              ],
+            },
+            hold: {
+              $cond: [
+                { $and: [{ $eq: ['$hold.kind', 'capacity'] }, { $eq: ['$hold.limit', 'loop'] }] },
+                '$$REMOVE',
+                '$hold',
+              ],
+            },
+            ...(memory && { memory: mergedMemory(memory) }),
           },
-          alarm: {
-            $cond: [
-              { $and: [{ $eq: ['$alarm.kind', 'long_run'] }, { $eq: ['$alarm.executionId', executionId] }] },
-              '$$REMOVE',
-              '$alarm',
-            ],
-          },
-          hold: {
-            $cond: [
-              { $and: [{ $eq: ['$hold.kind', 'capacity'] }, { $eq: ['$hold.limit', 'loop'] }] },
-              '$$REMOVE',
-              '$hold',
-            ],
-          },
-          ...(memory && { memory: mergedMemory(memory) }),
         },
-      },
-    ]);
+      ],
+      { runValidators: true }
+    );
     return result.modifiedCount > 0;
   }
 
   /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
   async makeDueNow(id: string, now: Date): Promise<boolean> {
     // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
-    const result = await this.loopModel.updateOne({ _id: id, status: 'live' }, [
-      { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } },
-    ]);
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      [{ $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } }],
+      { runValidators: true }
+    );
     return result.matchedCount > 0;
   }
 
@@ -395,25 +415,31 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async endBackoff(id: string, nextRunAt: Date): Promise<void> {
     // Conditional on 'live': a paused loop's nextRunAt is its auto-resume time.
     // Stamped even when not backing off, so a run in flight is not folded as idle (see idleResetAt).
-    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
-      {
-        $set: {
-          nextRunAt: { $cond: [{ $gt: ['$idleStreak', 0] }, { $min: ['$nextRunAt', nextRunAt] }, '$nextRunAt'] },
-          idleStreak: 0,
-          idleResetAt: '$$NOW',
+    await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      [
+        {
+          $set: {
+            nextRunAt: { $cond: [{ $gt: ['$idleStreak', 0] }, { $min: ['$nextRunAt', nextRunAt] }, '$nextRunAt'] },
+            idleStreak: 0,
+            idleResetAt: '$$NOW',
+          },
         },
-      },
-    ]);
+      ],
+      { runValidators: true }
+    );
   }
 
   async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
     await this.loopModel.updateOne(
       { _id: id, status: 'live', consecutiveFailures: { $gte: maxFailures } },
-      { $set: { status: 'error' } }
+      { $set: { status: 'error' } },
+      { runValidators: true }
     );
   }
 
   async removeLoopReferences(userId: string, loopId: string): Promise<void> {
+    // update-validators-off: $pull matches subdocs by predicate; validators would run on the match as a partial subdoc (missing required stage)
     await this.loopModel.updateMany(
       { userId, $or: [{ oversees: loopId }, { handoffTargets: loopId }, { 'triggers.fromLoopId': loopId }] },
       { $pull: { oversees: loopId, handoffTargets: loopId, triggers: { fromLoopId: loopId } } }
@@ -421,6 +447,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   async pruneTriggersForStages(userId: string, fromLoopId: string, stages: string[]): Promise<void> {
+    // update-validators-off: $pull matches subdocs by predicate; validators would run on the match as a partial subdoc (missing required stage)
     await this.loopModel.updateMany(
       { userId, 'triggers.fromLoopId': fromLoopId },
       { $pull: { triggers: { fromLoopId, stage: { $nin: stages } } } }
@@ -459,21 +486,26 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'paused', autoResume: kind },
-      { $set: { status: 'live', nextRunAt: now }, $unset: { autoResume: '', statusReason: '' } }
+      { $set: { status: 'live', nextRunAt: now }, $unset: { autoResume: '', statusReason: '' } },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
 
   async foldRunnerRun(id: string, userId: string, run: LoopRunMemory | undefined, lastRunAt: Date): Promise<void> {
-    await this.loopModel.updateOne({ _id: id, userId }, [
-      {
-        $set: {
-          ...(run && { memory: mergedMemory(run) }),
-          lastRunAt,
-          runCount: { $add: [{ $ifNull: ['$runCount', 0] }, 1] },
+    await this.loopModel.updateOne(
+      { _id: id, userId },
+      [
+        {
+          $set: {
+            ...(run && { memory: mergedMemory(run) }),
+            lastRunAt,
+            runCount: { $add: [{ $ifNull: ['$runCount', 0] }, 1] },
+          },
         },
-      },
-    ]);
+      ],
+      { runValidators: true }
+    );
   }
 }
 

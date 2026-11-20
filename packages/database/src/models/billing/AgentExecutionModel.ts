@@ -1422,7 +1422,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   async setLoopOutcome(id: string, loopOutcome: LoopRunOutcome): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { loopOutcome } });
+    await this.model.updateOne({ _id: id }, { $set: { loopOutcome } }, { runValidators: true });
   }
 
   /** Stores a run's reflection and adds what the reflection call cost to the run's credits, in one write. */
@@ -1430,7 +1430,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const credits = Number.isFinite(loopReflection.credits) && loopReflection.credits > 0 ? loopReflection.credits : 0;
     await this.model.updateOne(
       { _id: id },
-      { $set: { loopReflection: { ...loopReflection, credits } }, $inc: { totalCreditsUsed: credits } }
+      { $set: { loopReflection: { ...loopReflection, credits } }, $inc: { totalCreditsUsed: credits } },
+      { runValidators: true }
     );
   }
 
@@ -1478,7 +1479,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       ...(failures.unavailable.length > 0 && { toolsUnavailable: merged('toolsUnavailable', failures.unavailable) }),
       ...(failures.errored.length > 0 && { toolsErrored: merged('toolsErrored', failures.errored) }),
     };
-    if (Object.keys(set).length > 0) await this.model.updateOne({ _id: id }, [{ $set: set }]);
+    if (Object.keys(set).length > 0) await this.model.updateOne({ _id: id }, [{ $set: set }], { runValidators: true });
   }
 
   /** A loop's top-level runs since `since`, newest first, capped (`truncated`): a cut drops the oldest. */
@@ -1575,7 +1576,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const doc = await this.model.findOneAndUpdate(
       { ...activeRunnerRun(id, userId), runnerLeaseUntil: { $gte: now } },
       { $set: { runnerLeaseUntil: until } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return doc?.toObject() ?? null;
   }
@@ -1606,7 +1607,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           'checkpoint.pendingText': next.pendingText,
           runnerLeaseUntil: next.leaseUntil,
         },
-      }
+      },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
@@ -1619,17 +1621,21 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const doc = await this.model.findOneAndUpdate(
       { _id: id, userId, runner: 'desktop' },
       { $inc: { totalCreditsUsed: credits } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return doc?.toObject() ?? null;
   }
 
   /** Ends an active desktop run with `set` (its status and outcome) and drops its lease; false when it was not active. */
   async finishRunnerRun(id: string, userId: string, set: Partial<IAgentExecution>): Promise<boolean> {
-    const result = await this.model.updateOne(activeRunnerRun(id, userId), {
-      $set: { completedAt: new Date(), ...set },
-      $unset: { runnerLeaseUntil: '' },
-    });
+    const result = await this.model.updateOne(
+      activeRunnerRun(id, userId),
+      {
+        $set: { completedAt: new Date(), ...set },
+        $unset: { runnerLeaseUntil: '' },
+      },
+      { runValidators: true }
+    );
     return result.modifiedCount > 0;
   }
 
@@ -1976,34 +1982,38 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   /** Adds a viewer connection (deduped), keeping only the newest MAX_VIEWER_CONNECTIONS. */
   async addViewer(id: string, connectionId: string): Promise<void> {
-    await this.model.updateOne({ _id: id }, [
-      {
-        $set: {
-          viewerConnectionIds: {
-            $slice: [
-              {
-                $concatArrays: [
-                  {
-                    $filter: {
-                      input: { $ifNull: ['$viewerConnectionIds', []] },
-                      cond: { $ne: ['$$this', connectionId] },
+    await this.model.updateOne(
+      { _id: id },
+      [
+        {
+          $set: {
+            viewerConnectionIds: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    {
+                      $filter: {
+                        input: { $ifNull: ['$viewerConnectionIds', []] },
+                        cond: { $ne: ['$$this', connectionId] },
+                      },
                     },
-                  },
-                  [connectionId],
-                ],
-              },
-              -MAX_VIEWER_CONNECTIONS,
-            ],
+                    [connectionId],
+                  ],
+                },
+                -MAX_VIEWER_CONNECTIONS,
+              ],
+            },
           },
         },
-      },
-    ]);
+      ],
+      { runValidators: true }
+    );
   }
 
   async removeViewer(id: string, connectionId: string): Promise<void> {
     // The id comes straight from a client (`unsubscribe`); a malformed one would throw a CastError.
     if (!mongoose.isObjectIdOrHexString(id)) return;
-    await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } });
+    await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } }, { runValidators: true });
   }
 
   async findViewerConnectionIds(id: string): Promise<string[]> {
