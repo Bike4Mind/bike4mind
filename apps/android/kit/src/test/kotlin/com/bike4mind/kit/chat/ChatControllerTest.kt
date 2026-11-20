@@ -149,6 +149,26 @@ class ChatControllerTest {
     }
 
     @Test
+    fun aLongRunKeepsSettlingPastAChatTurnsPollBudget() = runTest {
+        fun run(status: QuestStatus, reply: String?) = Quest("q-run", "s1", null, reply, status, "message", null)
+        val backend = FakeBackend().apply { polled = run(QuestStatus.PENDING, null) }
+        val chat = agentController(backend, FakeRuns(), "s1")
+
+        chat.setSendsAsAgentRun(true)
+        chat.send("Audit this")
+        runCurrent()
+        advanceTimeBy(20 * 60 * 1_000L)
+        runCurrent()
+        assertEquals(QuestStatus.PENDING, chat.state.value.turns.single().status)
+
+        backend.polled = run(QuestStatus.DONE, "Audited")
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals("Audited", chat.state.value.turns.single().reply)
+        assertEquals(QuestStatus.DONE, chat.state.value.turns.single().status)
+    }
+
+    @Test
     fun aRunWithoutAQuestSettlesAsStarted() = runTest {
         val runs = FakeRuns(AgentRunReceipt("e1", null, "s1"))
         val chat = agentController(FakeBackend(), runs, "s1")

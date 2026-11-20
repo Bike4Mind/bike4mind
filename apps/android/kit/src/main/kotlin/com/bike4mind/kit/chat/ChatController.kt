@@ -1,5 +1,6 @@
 package com.bike4mind.kit.chat
 
+import com.bike4mind.kit.agents.AgentRunMonitor
 import com.bike4mind.kit.agents.AgentRunReceipt
 import com.bike4mind.kit.agents.AgentRunStarter
 import com.bike4mind.kit.agents.AgentRunTitle
@@ -144,7 +145,8 @@ class ChatController(
                 mutableState.update { it.copy(sending = false, sendsAsAgentRun = false, turns = it.turns + runTurn(receipt, text)) }
                 receipt.questId?.let {
                     lastHeard[it] = now()
-                    pollWhileStale(it)
+                    // A run outlasts a chat turn: keep settling it for as long as its notification follows it.
+                    pollWhileStale(it, polls = (AgentRunMonitor.FOLLOW_FOR_MS / pollIntervalMs).toInt())
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -200,8 +202,8 @@ class ChatController(
         }
     }
 
-    private suspend fun pollWhileStale(questId: String) {
-        repeat(maxPolls) {
+    private suspend fun pollWhileStale(questId: String, polls: Int = maxPolls) {
+        repeat(polls) {
             delay(pollIntervalMs)
             val current = mutableState.value.turns.firstOrNull { it.id == questId } ?: return
             if (current.status.isTerminal) return

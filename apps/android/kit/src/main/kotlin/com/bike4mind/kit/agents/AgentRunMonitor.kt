@@ -29,9 +29,14 @@ class AgentRunMonitor(
     private val tracker: AgentRunTracker,
     private val scope: CoroutineScope,
     private val intervalMs: Long = 5_000,
-    /** Hard stop per run: an hour at the default interval. */
-    private val maxPolls: Int = 720,
+    /** Hard stop per run. */
+    private val maxPolls: Int = (FOLLOW_FOR_MS / intervalMs).toInt(),
 ) {
+    companion object {
+        /** How long a run is followed at most. ChatController follows the run's turn for as long. */
+        const val FOLLOW_FOR_MS = 60 * 60 * 1_000L
+    }
+
     private val watching = mutableMapOf<String, Job>()
 
     val watchedExecutionIds: Set<String> get() = synchronized(watching) { watching.keys.toSet() }
