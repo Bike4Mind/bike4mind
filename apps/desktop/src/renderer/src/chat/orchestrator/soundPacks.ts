@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { DesktopApi } from '@shared/ipc';
-import { SOUND_PACK_EVENTS, type SoundPackEvent, type SoundPackSummary } from '@shared/mods';
+import type { SoundPackEvent, SoundPackSummary } from '@shared/mods';
 import { readSoundPack, writeSoundPack } from './orchestratorPrefs';
 
 /**
@@ -85,15 +85,15 @@ export function resolveEventSound(
   event: SoundPackEvent,
   sources: { packSounds?: Partial<Record<SoundPackEvent, string>>; skinFinale?: string }
 ): string | undefined {
-  if (!SOUND_PACK_EVENTS.includes(event)) return undefined;
   return sources.packSounds?.[event] ?? (event === 'finale' ? sources.skinFinale : undefined);
 }
 
 /** Test seam: forget the module state between tests. */
 export function resetSoundPacksForTests(
   packs: readonly SoundPackSummary[] = [],
-  selectedId: string | null = null
+  selectedId: string | null = null,
+  hasStarted = true
 ): void {
-  started = true;
+  started = hasStarted;
   state = buildState(packs, selectedId, false);
 }

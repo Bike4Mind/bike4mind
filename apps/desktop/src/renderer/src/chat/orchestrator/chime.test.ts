@@ -27,9 +27,12 @@ describe('the orchestrator sound setting', () => {
   });
 });
 
+const peaks: number[] = [];
+
 describe('playChime', () => {
   function fakeAudio() {
     const started: number[] = [];
+    peaks.length = 0;
     class FakeContext {
       currentTime = 0;
       destination = {};
@@ -45,7 +48,11 @@ describe('playChime', () => {
       }
       createGain() {
         return {
-          gain: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          gain: {
+            setValueAtTime: vi.fn(),
+            linearRampToValueAtTime: (value: number) => peaks.push(value),
+            exponentialRampToValueAtTime: vi.fn(),
+          },
           connect: vi.fn(),
         };
       }
@@ -200,6 +207,64 @@ describe('playChime', () => {
       chime.playSoundEvent('finale', 'b4m-skin://pack/sounds/finale.ogg');
       chime.playChime();
       expect(files[0].pause).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the needs-you chime audible at volume 0 while event sounds follow the volume', async () => {
+      fakeAudio();
+      const chime = await load();
+      const settings = await import('./soundSettings');
+      chime.setOrchestratorSound(true);
+      settings.setSoundVolume(0);
+      chime.playChime();
+      expect(peaks.every(peak => peak >= 0.08)).toBe(true);
+      peaks.length = 0;
+      chime.playSoundEvent('finale');
+      expect(peaks.every(peak => peak <= 0.0001)).toBe(true);
+    });
+
+    it('plays an approval sound that arrives during the needs-you chime once the chime has ended', async () => {
+      vi.useFakeTimers();
+      const started = fakeAudio();
+      const chime = await load();
+      const settings = await import('./soundSettings');
+      chime.setOrchestratorSound(true);
+      settings.setSoundEventEnabled('approval-requested', true);
+      chime.playChime();
+      chime.playSoundEvent('approval-requested');
+      expect(started).toHaveLength(2);
+      vi.advanceTimersByTime(1000);
+      expect(started).toHaveLength(4);
+    });
+
+    it('replays an approval sound the needs-you chime cut, after the chime', async () => {
+      vi.useFakeTimers();
+      fakeAudio();
+      const files = fakeFiles();
+      const chime = await load();
+      const settings = await import('./soundSettings');
+      chime.setOrchestratorSound(true);
+      settings.setSoundEventEnabled('approval-requested', true);
+      chime.playSoundEvent('approval-requested', 'b4m-skin://pack/sounds/approval.ogg');
+      chime.playChime();
+      expect(files[0].pause).toHaveBeenCalledTimes(1);
+      expect(files).toHaveLength(1);
+      vi.advanceTimersByTime(1000);
+      expect(files).toHaveLength(2);
+      expect(files[1].url).toBe('b4m-skin://pack/sounds/approval.ogg');
+    });
+
+    it('does not replay an approval sound that had already finished when the chime started', async () => {
+      vi.useFakeTimers();
+      const started = fakeAudio();
+      const chime = await load();
+      const settings = await import('./soundSettings');
+      chime.setOrchestratorSound(true);
+      settings.setSoundEventEnabled('approval-requested', true);
+      chime.playSoundEvent('approval-requested');
+      vi.advanceTimersByTime(5000);
+      chime.playChime();
+      vi.advanceTimersByTime(5000);
+      expect(started).toHaveLength(4);
     });
 
     it('never uses a file for the needs-you chime', async () => {

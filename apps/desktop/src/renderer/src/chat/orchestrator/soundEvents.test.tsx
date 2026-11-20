@@ -95,6 +95,27 @@ describe('useAgentSoundEvents', () => {
     expect(chime.playSoundEvent).toHaveBeenLastCalledWith('approval-requested', undefined);
   });
 
+  it('uses the stored pack from mount, without the view menu ever opening', async () => {
+    const pack: SoundPackSummary = {
+      status: 'ok',
+      id: 'chimes',
+      name: 'Chimes',
+      version: '1.0.0',
+      sounds: { 'agent-done': skinAssetUrl('chimes', 'sounds/done.ogg') },
+    };
+    window.localStorage.setItem('b4m.orchestrator.soundPack', 'chimes');
+    const list = vi.fn(async () => [pack]);
+    (window as unknown as { b4m: unknown }).b4m = { soundPacks: { list, onChanged: vi.fn() } };
+    const soundPacks = await import('./soundPacks');
+    soundPacks.resetSoundPacksForTests([], 'chimes', false);
+
+    await render(agents(['a', 'working']));
+    await render(agents(['a', 'done']));
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(chime.playSoundEvent).toHaveBeenLastCalledWith('agent-done', 'b4m-skin://chimes/sounds/done.ogg');
+    delete (window as unknown as { b4m?: unknown }).b4m;
+  });
+
   it('plays the active pack file for the event, resolved when it fires', async () => {
     const pack: SoundPackSummary = {
       status: 'ok',

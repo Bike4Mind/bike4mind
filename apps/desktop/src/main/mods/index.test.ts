@@ -26,7 +26,24 @@ beforeEach(() => {
 });
 
 describe('registerSkins scan ordering', () => {
-  it('keeps the newest scan result when an older scan finishes last', async () => {
+  it('gives each overlapping list call its own scan, so neither caller gets a stale or empty answer', async () => {
+    const { registerSkins } = await import('./index');
+    registerSkins();
+    const listSkins = harness.handlers.get('skins:list')!;
+    const listPacks = harness.handlers.get('soundpacks:list')!;
+
+    let finishOlder!: (results: SkinLoadResult[]) => void;
+    harness.loadSkins.mockReturnValueOnce(new Promise(resolve => (finishOlder = resolve)));
+    harness.loadSkins.mockResolvedValueOnce([rejected('newer')]);
+
+    const older = listSkins();
+    const newer = listPacks();
+    await newer;
+    finishOlder([rejected('older')]);
+    expect(await older).toMatchObject([{ id: 'older' }]);
+  });
+
+  it('serves the newest scan when an older scan finishes last', async () => {
     const { registerSkins } = await import('./index');
     registerSkins();
     const list = [...harness.handlers.values()][0];
@@ -39,7 +56,7 @@ describe('registerSkins scan ordering', () => {
     const newer = list();
     expect(await newer).toMatchObject([{ id: 'newer' }]);
     finishOlder([rejected('older')]);
-    expect(await older).toMatchObject([{ id: 'newer' }]);
+    expect(await older).toMatchObject([{ id: 'older' }]);
   });
 });
 

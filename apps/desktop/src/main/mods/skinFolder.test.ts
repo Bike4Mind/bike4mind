@@ -116,6 +116,16 @@ describe('loadSkin', () => {
     expectRejected(await loadSkin(modsRoot, 'nightglass'), /skin folder is a symbolic link/);
   });
 
+  it('lists a symlinked mod folder once, as a broken skin, and not as a broken sound pack', async () => {
+    await installSampleSkin(outside, 'nightglass');
+    await symlink(join(outside, 'nightglass'), join(modsRoot, 'nightglass'));
+    expect(await loadSoundPack(modsRoot, 'nightglass')).toBe('not-a-sound-pack');
+    expect(await loadSoundPacks(modsRoot)).toEqual([]);
+    expect((await loadSkins(modsRoot)).map(result => (result.ok ? result.skin.manifest.id : result.id))).toEqual([
+      'nightglass',
+    ]);
+  });
+
   it('rejects a mod.json that is a symlink', async () => {
     const folder = await installSampleSkin(modsRoot);
     await writeJson(join(outside, 'mod.json'), { manifest: 1 });

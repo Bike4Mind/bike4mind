@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { AgentState } from '@shared/agentState';
 import type { SoundPackEvent } from '@shared/mods';
 import { playSoundEvent } from './chime';
-import { activeSoundPack, resolveEventSound } from './soundPacks';
+import { activeSoundPack, resolveEventSound, useSoundPacks } from './soundPacks';
 
 /**
  * Sound for the moments of a run, detected from the roster's state transitions (never from a render):
@@ -46,6 +46,8 @@ export function useAgentSoundEvents(
   parentNeedsYou: boolean
 ): void {
   const previous = useRef<ReadonlyMap<string, AgentState> | null>(null);
+  // Subscribing starts the pack store at stage mount, as the skin store does, not when the view menu first opens.
+  useSoundPacks();
 
   const signature = [...agents.map(agent => `${agent.id}:${agent.state}`), `${PARENT_KEY}:${parentNeedsYou}`].join('|');
   useEffect(() => {

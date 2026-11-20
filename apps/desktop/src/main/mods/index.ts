@@ -34,7 +34,6 @@ export function registerSkins(): void {
   const modsRoot = join(app.getPath('userData'), 'mods');
   let loadedSkins = new Map<string, LoadedSkin>();
   let loadedPacks = new Map<string, LoadedSoundPack>();
-  let latest: ModSummaries = { skins: [], soundPacks: [] };
   let generation = 0;
 
   // One scheme for both kinds; a folder is one mod, so a skin and a pack never share an id.
@@ -43,7 +42,12 @@ export function registerSkins(): void {
   const scan = async (): Promise<ModSummaries> => {
     const mine = ++generation;
     const [skinResults, packResults] = await Promise.all([loadSkins(modsRoot), loadSoundPacks(modsRoot)]);
-    // An older scan can finish after a newer one; only the newest may publish.
+    const summaries: ModSummaries = {
+      skins: skinResults.map(toSummary),
+      soundPacks: packResults.map(toSoundPackSummary),
+    };
+    // An older scan can finish after a newer one; only the newest may publish. Every caller still
+    // gets its own scan back, so an overlapping list call never receives a stale (or empty) answer.
     if (mine === generation) {
       loadedSkins = new Map(
         skinResults.flatMap(result => (result.ok ? [[result.skin.manifest.id, result.skin] as const] : []))
@@ -51,7 +55,6 @@ export function registerSkins(): void {
       loadedPacks = new Map(
         packResults.flatMap(result => (result.ok ? [[result.pack.manifest.id, result.pack] as const] : []))
       );
-      latest = { skins: skinResults.map(toSummary), soundPacks: packResults.map(toSoundPackSummary) };
     }
     for (const result of skinResults) {
       if (!result.ok) console.warn(`SKINS: ${result.id} rejected: ${result.error}`);
@@ -62,7 +65,7 @@ export function registerSkins(): void {
     for (const result of packResults) {
       if (!result.ok) console.warn(`SKINS: sound pack ${result.id} rejected: ${result.error}`);
     }
-    return latest;
+    return summaries;
   };
 
   const broadcast = (summaries: ModSummaries) => {

@@ -105,7 +105,10 @@ async function openMod<K extends DataModKind>(
   const label = KIND_LABEL[kind];
   const folder = join(modsRoot, id);
   const stat = await lstat(folder);
-  if (stat.isSymbolicLink()) throw new SkinRejected(`the ${label} folder is a symbolic link`);
+  if (stat.isSymbolicLink()) {
+    if (kind !== 'skin') return 'other';
+    throw new SkinRejected(`the ${label} folder is a symbolic link`);
+  }
   if (!stat.isDirectory()) return 'other';
   if (!MOD_ID_PATTERN.test(id)) {
     if (kind !== 'skin') return 'other';
