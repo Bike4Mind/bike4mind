@@ -23,7 +23,9 @@ import type {
   IDataLakeResearchRunDocument,
   ResearchPreset,
   ResearchItemRuleAction,
+  ResearchDropBucket,
   ResearchPresetId,
+  ResearchRunLevers,
   ResearchRunTotals,
   ResearchSource,
   ResearchScheduleCadence,
@@ -37,6 +39,7 @@ import {
   isResearchRunInFlight,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
+  RESEARCH_DROP_REASONS,
   RESEARCH_FEED_URL_MAX_CHARS,
   RESEARCH_ITEM_RULE_ACTIONS,
   RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
@@ -541,16 +544,57 @@ const RUN_STATUS_COLOR = {
  */
 const STOP_REASON_LABEL = {
   exhausted: 'Reviewed every search result',
-  cost_ceiling: 'Stopped at the cost ceiling',
-  proposal_limit: 'Reached the proposal limit',
-  time_budget: 'Stopped at the time budget',
-  judge_unavailable: 'Stopped: the relevance judge was unavailable',
+  cost_ceiling: 'Stopped at the cost ceiling for one run. Raise Cost ceiling in Advanced settings to check more.',
+  proposal_limit: 'Reached the proposals limit for one run. Raise Proposals per run in Advanced settings to see more.',
+  time_budget: 'Stopped at the time limit for one run. The rest are checked next run.',
+  judge_unavailable: 'Stopped because the relevance judge was unavailable. No setting applies. Try again later.',
 } as const;
 
 const isFeedRun = (run: IDataLakeResearchRunDocument): boolean => run.levers.source === 'feed';
 
 const stopReasonLabel = (run: IDataLakeResearchRunDocument, reason: keyof typeof STOP_REASON_LABEL): string =>
   reason === 'exhausted' && isFeedRun(run) ? 'Reviewed every new feed item' : STOP_REASON_LABEL[reason];
+
+/** The panel's name for each lever a drop bucket can point at, and how to show the value the run used. */
+const DROP_LEVER_NOUN: Partial<
+  Record<keyof ResearchRunLevers, { label: string; value?: (levers: IDataLakeResearchRunDocument['levers']) => string }>
+> = {
+  minRelevance: { label: 'Minimum relevance', value: levers => String(levers.minRelevance) },
+  blockedDomains: { label: 'Never these sites' },
+  unlistedSources: {
+    label: 'Other sites',
+    value: levers => (levers.unlistedSources === 'drop' ? 'Ignore' : 'Send to review'),
+  },
+  itemRules: { label: 'Item rules' },
+};
+
+const DROP_HINT_VERB = { raise: 'Raise', lower: 'Lower', edit_list: 'Check' } as const;
+
+/**
+ * One line for the run's largest drop bucket, naming the setting that explains it and the value the
+ * run actually used. Null when nothing was dropped or the largest bucket has no setting to point at.
+ */
+const runDropHint = (run: IDataLakeResearchRunDocument): string | null => {
+  const { totals } = run;
+  let top: ResearchDropBucket | null = null;
+  let topCount = 0;
+  for (const key of Object.keys(RESEARCH_DROP_REASONS) as ResearchDropBucket[]) {
+    const count = totals[key] ?? 0;
+    if (count > topCount) {
+      top = key;
+      topCount = count;
+    }
+  }
+  if (!top) return null;
+  // A run stored before the split counts both source drops in filteredBySource, so it cannot name one list.
+  if (top === 'filteredBySource' && totals.unlistedDropped === undefined) return null;
+  const { lever, direction, reason } = RESEARCH_DROP_REASONS[top];
+  const noun = lever ? DROP_LEVER_NOUN[lever] : undefined;
+  if (!lever || !direction || !noun) return null;
+  const value = noun.value ? ` (${noun.value(run.levers)})` : '';
+  const tail = direction === 'lower' ? ' to keep more' : '';
+  return `${reason} ${DROP_HINT_VERB[direction]} ${noun.label}${value} in Advanced settings${tail}.`;
+};
 
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
 const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
@@ -852,12 +896,16 @@ export function DataLakeResearchPanel({
     formSession.current += 1;
     setFormOpenCount(count => count + 1);
   };
-  const openEdit = (config: IDataLakeResearchConfigResponse) => {
+  const openEdit = (config: IDataLakeResearchConfigResponse, options: { forceAdvanced?: boolean } = {}) => {
     setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
     setDraftBaseline(loaded);
-    setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
+    setAdvancedOpen(
+      options.forceAdvanced === true ||
+        matchingPreset(loaded, modelLabelById, modelsLoading) === null ||
+        hasNonPresetLeverSet(loaded)
+    );
     setEditingId(config.id);
     formSession.current += 1;
     setFormOpenCount(count => count + 1);
@@ -1649,10 +1697,31 @@ export function DataLakeResearchPanel({
                     {runOutcomeSummary(run)}
                   </Typography>
                 )}
+                {(run.status === 'completed' || (run.status === 'failed' && run.totals.judgeFailed > 0)) &&
+                  (() => {
+                    const hint = runDropHint(run);
+                    return hint ? (
+                      <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-hint">
+                        {hint}
+                      </Typography>
+                    ) : null;
+                  })()}
                 {run.stopReason && (
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-stop-reason">
                     {stopReasonLabel(run, run.stopReason)}
                   </Typography>
+                )}
+                {configById.has(run.configId) && (
+                  <Box>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      onClick={() => openEdit(configById.get(run.configId)!, { forceAdvanced: true })}
+                      data-testid={`datalake-research-run-adjust-${run.id}`}
+                    >
+                      Adjust settings
+                    </Button>
+                  </Box>
                 )}
               </Stack>
             </Box>

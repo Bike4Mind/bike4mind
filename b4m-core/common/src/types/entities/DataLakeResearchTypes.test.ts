@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isResearchRunInFlight, RESEARCH_RUN_STALE_AFTER_MS } from './DataLakeResearchTypes';
+import {
+  emptyResearchRunTotals,
+  isResearchRunInFlight,
+  RESEARCH_DROP_REASONS,
+  RESEARCH_RUN_STALE_AFTER_MS,
+  type ResearchDropBucket,
+  type ResearchRunLevers,
+  type ResearchRunTotals,
+} from './DataLakeResearchTypes';
 
 const NOW = new Date('2026-03-01T12:00:00.000Z').getTime();
 const agoMs = (ms: number) => new Date(NOW - ms);
@@ -59,5 +67,34 @@ describe('isResearchRunInFlight', () => {
     expect(isResearchRunInFlight({ status: 'running', startedAt: null }, { now: NOW })).toBe(false);
     expect(isResearchRunInFlight({ status: 'running' }, { now: NOW })).toBe(false);
     expect(isResearchRunInFlight({ status: 'queued', createdAt: 'not a date' }, { now: NOW })).toBe(false);
+  });
+});
+
+describe('RESEARCH_DROP_REASONS', () => {
+  const NOT_BUCKETS = ['searchHits', 'proposed', 'autoAdmitted', 'autoAdmitSkipped', 'reviewedByRule'] as const;
+
+  it('has an entry for every drop bucket and none for a total or sub-count', () => {
+    const bucketKeys = Object.keys(emptyResearchRunTotals()).filter(
+      key => !(NOT_BUCKETS as readonly string[]).includes(key)
+    );
+    expect(Object.keys(RESEARCH_DROP_REASONS).sort()).toEqual(bucketKeys.sort());
+  });
+
+  it('is compile-exhaustive: the bucket union is exactly the totals keys minus the non-buckets', () => {
+    type Expected = Exclude<keyof ResearchRunTotals, (typeof NOT_BUCKETS)[number]>;
+    const bothWays: [Expected, ResearchDropBucket] extends [ResearchDropBucket, Expected] ? true : false = true;
+    expect(bothWays).toBe(true);
+  });
+
+  it('pairs a lever with a direction, and a null lever with none', () => {
+    const leverKeys = (key: keyof ResearchRunLevers) => key;
+    for (const entry of Object.values(RESEARCH_DROP_REASONS)) {
+      expect(entry.reason.length).toBeGreaterThan(0);
+      expect(entry.lever === null).toBe(entry.direction === null);
+    }
+    expect(RESEARCH_DROP_REASONS.belowRelevance).toMatchObject({
+      lever: leverKeys('minRelevance'),
+      direction: 'lower',
+    });
   });
 });

@@ -942,8 +942,8 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toBe(
-        'Stopped: the relevance judge was unavailable'
+      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(
+        /^Stopped because the relevance judge was unavailable\./
       );
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/3 could not be judged/);
@@ -1763,5 +1763,105 @@ describe('DataLakeResearchPanel', () => {
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toContain('4 found');
     });
+  });
+});
+
+describe('DataLakeResearchPanel run fix hints', () => {
+  const quickConfig = (overrides: Partial<IDataLakeResearchConfigResponse> = {}) =>
+    config({
+      model: undefined,
+      recencyDays: undefined,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      allowedDomains: [],
+      blockedDomains: [],
+      proposedTags: [],
+      ...overrides,
+    });
+  const totalsWith = (overrides: Partial<ReturnType<typeof emptyResearchRunTotals>>) => ({
+    ...emptyResearchRunTotals(),
+    searchHits: 10,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+  });
+
+  it('opens the run config with Advanced expanded from Adjust settings', () => {
+    const configs = [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })];
+    const first = renderPanel({ configs });
+    fireEvent.click(screen.getAllByTestId('datalake-research-edit-btn')[1]);
+    expect(screen.getByTestId('datalake-research-advanced')).not.toBeVisible();
+    first.unmount();
+
+    renderPanel({ configs, runs: [run({ id: 'run-9', configId: 'config-b' })] });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-advanced')).toBeVisible();
+    expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('B');
+  });
+
+  it('hides Adjust settings when the config was deleted', () => {
+    renderPanel({ configs: [quickConfig()], runs: [run({ id: 'run-9', configId: 'gone' })] });
+    expect(screen.queryByTestId('datalake-research-run-adjust-run-9')).toBeNull();
+  });
+
+  it.each([
+    [
+      'belowRelevance',
+      { minRelevance: 0.7 },
+      'The largest group scored below the minimum relevance. Lower Minimum relevance (0.7) in Advanced settings to keep more.',
+    ],
+    [
+      'filteredBySource',
+      {},
+      'The largest group came from sites on the never list, or had no usable web address. Check Never these sites in Advanced settings.',
+    ],
+    [
+      'unlistedDropped',
+      { unlistedSources: 'drop' },
+      'The largest group came from sites on none of your lists, which are ignored. Check Other sites (Ignore) in Advanced settings.',
+    ],
+    ['blockedByRule', {}, 'The largest group was blocked by an item rule. Check Item rules in Advanced settings.'],
+  ] as const)('renders a hint for the %s bucket from the run levers', (bucket, levers, expected) => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, ...levers },
+          totals: totalsWith({ filteredBySource: 1, unlistedDropped: 1, [bucket]: 6 }),
+        }),
+      ],
+    });
+    expect(screen.getByTestId('datalake-research-run-hint').textContent).toBe(expected);
+  });
+
+  it.each(['unresolvedRedirect', 'judgeFailed', 'fetchFailed', 'alreadyInLake', 'notJudged'] as const)(
+    'renders no hint when the largest bucket (%s) has no setting',
+    bucket => {
+      renderPanel({ runs: [run({ totals: totalsWith({ belowRelevance: 1, [bucket]: 6 }) })] });
+      expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+    }
+  );
+
+  it('renders no hint for a run with no drops', () => {
+    renderPanel({ runs: [run({ totals: totalsWith({ proposed: 4 }) })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint when a run stored before the split cannot say which list dropped hits', () => {
+    const { unlistedDropped: _omitted, ...legacy } = totalsWith({ filteredBySource: 6 });
+    renderPanel({ runs: [run({ totals: legacy })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['cost_ceiling', /^Stopped at the cost ceiling for one run\. Raise Cost ceiling in Advanced settings/],
+    ['proposal_limit', /^Reached the proposals limit for one run\. Raise Proposals per run in Advanced settings/],
+    ['time_budget', /^Stopped at the time limit for one run\. The rest are checked next run\.$/],
+    ['judge_unavailable', /No setting applies/],
+  ] as const)('words the %s stop reason as a setting or as no setting', (stopReason, expected) => {
+    renderPanel({ runs: [run({ stopReason })] });
+    expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(expected);
   });
 });
