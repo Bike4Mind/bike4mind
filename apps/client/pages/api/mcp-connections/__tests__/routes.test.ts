@@ -125,6 +125,8 @@ const repo = vi.hoisted(() => ({
   findByIdForOwner: vi.fn(),
   findByIdWithCredentials: vi.fn(),
   listAllForUser: vi.fn(),
+  listPlatform: vi.fn(),
+  listPlatformSlugs: vi.fn(),
   updateSettings: vi.fn(),
   setStatus: vi.fn(),
   setApiKey: vi.fn(),
@@ -152,6 +154,8 @@ function installRepo(): void {
   repo.listAllForUser.mockImplementation(async (userId: string) =>
     [...h.store.values()].filter(doc => doc.userId === userId).map(doc => defaultRead(doc))
   );
+  repo.listPlatform.mockResolvedValue([]);
+  repo.listPlatformSlugs.mockResolvedValue([]);
   const patch = (id: string, owner: { ownerKey: string }, set: Record<string, unknown>) => {
     const doc = h.store.get(id);
     if (!ownerMatches(doc, owner)) return null;
@@ -341,7 +345,10 @@ describe('POST /api/mcp-connections', () => {
     expect(stored.auth.apiKey?.valueEnc).toBe(`enc:${Buffer.from(API_KEY).toString('base64')}`);
     expect(stored.urlEnc).toMatch(/^enc:/);
     expect(stored).toMatchObject({ ownerType: 'user', ownerKey: 'user-1', userId: 'user-1' });
-    expect(discover).toHaveBeenCalledWith(stored.id, 'user-1', expect.objectContaining({ context: h.context }));
+    expect(discover).toHaveBeenCalledWith(stored.id, 'user-1', expect.objectContaining({ context: h.context }), {
+      ownerType: 'user',
+      ownerKey: 'user-1',
+    });
     expect(h.audits.map(a => `${a.action}:${a.outcome}`)).toEqual([
       'connection_created:success',
       'probe_result:success',

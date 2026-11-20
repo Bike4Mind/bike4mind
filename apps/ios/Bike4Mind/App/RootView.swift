@@ -140,6 +140,8 @@ struct RootView: View {
   private func endSession() {
     hasShownShell = false
     services.accountStatus.reset()
+    // The profile belongs to the account that fetched it; the next sign-in must not see it.
+    services.accountProfiles.invalidate()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }

@@ -60,6 +60,15 @@ export const mcpConnectionCreateBodySchema = z
 
 export type McpConnectionCreateBody = z.infer<typeof mcpConnectionCreateBodySchema>;
 
+/**
+ * A platform connector (pages/api/admin/mcp-connections/**) holds one credential for every user,
+ * so it takes an API key or none: an OAuth grant, and a preset that asks for one, belong to a user.
+ */
+export const mcpPlatformConnectionCreateBodySchema = mcpConnectionCreateBodySchema
+  .omit({ presetId: true })
+  .extend({ auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema]) })
+  .strict();
+
 export const mcpConnectionPatchBodySchema = z
   .object({
     displayName: displayNameSchema.optional(),

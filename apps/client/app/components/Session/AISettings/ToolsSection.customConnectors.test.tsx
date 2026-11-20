@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
     disableAutoRouteForThisSession: false,
     skipAutoOffers: false,
     disabledMcpConnections: [] as string[],
+    enabledPlatformMcpConnections: [] as string[],
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for the Zustand hook (selector + setState)
   const useLLM: any = (selector: (s: Record<string, unknown>) => unknown) => selector(state);
@@ -79,6 +80,7 @@ const toggleOf = (container: HTMLElement, slug: string) =>
 
 beforeEach(() => {
   mocks.state.disabledMcpConnections = [];
+  mocks.state.enabledPlatformMcpConnections = [];
   mocks.connections.value = [
     { id: 'c1', slug: 'acme', displayName: 'Acme tracker', urlHost: 'mcp.acme.test' },
     { id: 'c2', slug: 'docs', displayName: 'Docs', urlHost: 'mcp.docs.test' },
@@ -109,6 +111,30 @@ describe('ToolsSection - custom MCP connector rows', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     fireEvent.click(toggleOf(container, 'docs')!);
     expect(mocks.useLLM.setState).toHaveBeenCalledWith({ disabledMcpConnections: ['acme'] });
+  });
+
+  it('lists a platform connector switched off until the user switches it on, by id', () => {
+    mocks.connections.value = [
+      { id: 'p1', ownerType: 'platform', slug: 'shared', displayName: 'Shared docs', urlHost: 'mcp.example.com' },
+    ];
+    const { container, getByText } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    expect(getByText('Connector set up by an admin on mcp.example.com')).toBeTruthy();
+    expect(toggleOf(container, 'shared')!.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggleOf(container, 'shared')!);
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ enabledPlatformMcpConnections: ['p1'] });
+  });
+
+  it('switches a platform connector off again', () => {
+    mocks.state.enabledPlatformMcpConnections = ['p1'];
+    mocks.connections.value = [
+      { id: 'p1', ownerType: 'platform', slug: 'shared', displayName: 'Shared docs', urlHost: 'mcp.example.com' },
+    ];
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    expect(toggleOf(container, 'shared')!.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(toggleOf(container, 'shared')!);
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ enabledPlatformMcpConnections: [] });
   });
 
   it('renders no connector row when none is offered', () => {

@@ -139,6 +139,7 @@ export async function resolveMcpPendingAction({
         toolName: pendingAction.tool,
         args: pendingAction.params,
         approved: true,
+        platformConnectionIds: [connectionId],
       });
       return {
         status: 200,

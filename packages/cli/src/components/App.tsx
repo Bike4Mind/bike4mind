@@ -5,6 +5,7 @@ import { InputPrompt, type SubmitOptions } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
 import { BackgroundAgentStatus } from './BackgroundAgentStatus';
 import { BackgroundShellStatus } from './BackgroundShellStatus';
+import { PlanBlock, MAX_PLAN_ROWS, expandedPlanRows } from './PlanBlock';
 import { CompletedGroupNotification } from './CompletedGroupNotification';
 import { PermissionPrompt } from './PermissionPrompt';
 import type { PermissionResponse } from './PermissionPrompt';
@@ -213,7 +214,13 @@ export function App({
   // entirely - keeping scrollback usable matters more than a two-line trace.
   // One row per entry (multi-line entries show their first line) plus the hint.
   const queueRows = messageQueue.length > 0 ? messageQueue.length + 1 : 0;
-  const liveRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - queueRows - promptRows);
+  const budgetRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - queueRows - promptRows);
+  // The expanded plan sits in the live column too: it gets at most half the leftover rows.
+  const planActive = useCliStore(state => state.isThinking || state.turnInFlight);
+  const plan = useCliStore(state => state.plan);
+  const planMaxRows = Math.min(MAX_PLAN_ROWS, Math.floor(budgetRows / 2));
+  const planRows = planActive ? expandedPlanRows(plan, planMaxRows) : 0;
+  const liveRows = budgetRows - planRows;
 
   const handleSubmit = React.useCallback(
     async (input: string, options?: SubmitOptions) => {
@@ -407,6 +414,9 @@ export function App({
 
               {/* Agent thinking display - hidden when an interactive prompt is active */}
               {!permissionPrompt && !userQuestionPrompt && !reviewGatePrompt && !exitHandoffPrompt && <AgentThinking />}
+
+              {/* write_todos plan: expanded during the turn, one line after */}
+              <PlanBlock maxRows={planMaxRows} />
 
               {/* Background agent status */}
               <BackgroundAgentStatus />

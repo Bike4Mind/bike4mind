@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1237 routes: 112 contracted, 11 aliases of another route, 329 with no static caller in `apps/client/app`.
+1242 routes: 112 contracted, 11 aliases of another route, 333 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 366 | 0 | 201 | 158 | 0 | 7 | 68 |
+| admin | 371 | 0 | 201 | 163 | 0 | 7 | 72 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -214,6 +214,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/ai-assessment-suggestions/accept` | POST | jwt | `admin:*` | POST: `users:moderate` or `credits:adjust` | no | - | 1: `hooks/data/aiAssessmentSuggestions.ts` |
 | `/api/admin/ai-operations` | GET, POST, PUT | jwt | - | GET: `settings:manage`; PUT: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/AiOperationsTab.tsx` |
 | `/api/admin/analytics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useAnalyticsMetrics.ts` |
+| `/api/admin/analytics/acquisition` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useAcquisitionConversion.ts` |
 | `/api/admin/analytics/activation` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useActivationFunnel.ts` |
 | `/api/admin/analytics/cohorts` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useAnalyticsCohorts.ts` |
 | `/api/admin/analytics/feature-adoption` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/EventMetrics/AdoptionView.tsx` |
@@ -308,6 +309,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/liveops-triage-configs/runs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
 | `/api/admin/liveops-triage-env` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/llm-models/configurations` | GET, PUT | jwt+key | `admin:*` | - | no | - | 2: `hooks/data/adminModels.ts`, `hooks/data/llmModelConfig.ts` |
+| `/api/admin/mcp-connections` | GET, POST | jwt | `admin:*` | GET: ?; POST: `settings:manage` | no | - | 0 |
+| `/api/admin/mcp-connections/[id]` | GET, PATCH, DELETE | jwt | `admin:*` | GET: ?; PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 0 |
+| `/api/admin/mcp-connections/[id]/api-key` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/mcp-connections/[id]/refresh-tools` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 0 |
 | `/api/admin/mementos/reembed` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
 | `/api/admin/mementos/reembed-ledger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
 | `/api/admin/modal-tool` | POST | jwt+key | `admin:*` | - | no | - | 0 |
@@ -1846,8 +1851,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/agents/from-context` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
 | `/api/v1/artifacts` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PATCH, DELETE: `notebooks:write` | - | yes | - | 0 |
-| `/api/v1/artifacts/[id]/publish` | POST, DELETE | jwt+key | `notebooks:write` | - | yes | - | 0 |
-| `/api/v1/artifacts/[id]/republish` | POST | jwt+key | `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/publish` | POST, DELETE | jwt+key | `artifacts:publish` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/republish` | POST | jwt+key | `artifacts:publish` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]/versions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |

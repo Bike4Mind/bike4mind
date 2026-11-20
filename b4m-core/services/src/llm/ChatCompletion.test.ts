@@ -11396,6 +11396,7 @@ describe('ChatCompletionProcess', () => {
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
       disabledMcpConnections?: string[];
+      enabledPlatformMcpConnections?: string[];
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
@@ -11454,6 +11455,9 @@ describe('ChatCompletionProcess', () => {
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
         ...(params.disabledMcpConnections !== undefined
           ? { disabledMcpConnections: params.disabledMcpConnections }
+          : {}),
+        ...(params.enabledPlatformMcpConnections !== undefined
+          ? { enabledPlatformMcpConnections: params.enabledPlatformMcpConnections }
           : {}),
         ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
@@ -11625,6 +11629,28 @@ describe('ChatCompletionProcess', () => {
         await runWithBuildToolsSpy({ message: 'Compare the smartphones', disabledMcpConnections: ['some-slug'] });
         expect(buildMcpToolsSpy).toHaveBeenCalledWith(
           expect.objectContaining({ disabledMcpConnections: ['some-slug'] })
+        );
+      } finally {
+        buildMcpToolsSpy.mockRestore();
+      }
+    });
+
+    it('request enabledPlatformMcpConnections -> buildMcpTools, and none when the request names none', async () => {
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+      buildMcpToolsSpy.mockClear();
+      try {
+        await runWithBuildToolsSpy({
+          message: 'Compare the smartphones',
+          enabledPlatformMcpConnections: ['b'.repeat(24)],
+        });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: ['b'.repeat(24)] })
+        );
+        await runWithBuildToolsSpy({ message: 'Compare the smartphones' });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: undefined })
         );
       } finally {
         buildMcpToolsSpy.mockRestore();
@@ -11820,7 +11846,27 @@ describe('ChatCompletionProcess', () => {
       enabledTools: string[];
       videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
       musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+      /** Rebuilds the service with these constructor options layered over baseOptions. */
+      serviceOptions?: Record<string, unknown>;
     }) => {
+      if (opts.serviceOptions) {
+        service = new ChatCompletionProcess({
+          ...baseOptions,
+          ...opts.serviceOptions,
+        } as unknown as ConstructorParameters<typeof ChatCompletionProcess>[0]);
+        service.db = mockDb;
+        const internals = service as unknown as {
+          statusManager: unknown;
+          buildOptimizedFeatures: () => Promise<void>;
+          loadAdminSettingsAsync: () => Promise<Record<string, string>>;
+          fabFilesToMessages: () => Promise<unknown>;
+        };
+        internals.statusManager = { sendStatusUpdate: vi.fn() };
+        vi.spyOn(service, 'sendStatusUpdate').mockResolvedValue(undefined);
+        vi.spyOn(internals, 'buildOptimizedFeatures').mockResolvedValue(undefined);
+        vi.spyOn(internals, 'loadAdminSettingsAsync').mockResolvedValue({});
+        vi.spyOn(internals, 'fabFilesToMessages').mockResolvedValue({ promptMessages: [], convertedFabFiles: [] });
+      }
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
       buildToolsSpy.mockClear();
       const buildToolPromptSpy = vi
@@ -11895,6 +11941,24 @@ describe('ChatCompletionProcess', () => {
       const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
       expect(resolver).not.toHaveBeenCalled();
       expect(passed?.config?.video_generation).toBeUndefined();
+    });
+
+    // The web_search signing key reaches the tool config only through this call site, so a dropped
+    // line would still typecheck (the option is optional) and leave every card image unsigned.
+    it('signs web_search image URLs with imageUrlSigningSecret when the host provides one', async () => {
+      const passed = await runWithResolvers({
+        enabledTools: ['web_search'],
+        serviceOptions: { telemetryHmacSecret: 'telemetry-key', imageUrlSigningSecret: 'image-url-key' },
+      });
+      expect(passed?.config?.web_search).toEqual({ imageUrlSigningSecret: 'image-url-key' });
+    });
+
+    it('falls back to telemetryHmacSecret for web_search image URLs when no image key is provided', async () => {
+      const passed = await runWithResolvers({
+        enabledTools: ['web_search'],
+        serviceOptions: { telemetryHmacSecret: 'telemetry-key' },
+      });
+      expect(passed?.config?.web_search).toEqual({ imageUrlSigningSecret: 'telemetry-key' });
     });
   });
 
