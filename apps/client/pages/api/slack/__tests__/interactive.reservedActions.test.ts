@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { IMAGE_GEN_MODEL_ACTION_ID } from '@bike4mind/slack';
 import { SLACK_INTERACTIVE_RESERVED_ACTIONS } from '@bike4mind/server-utils/integrations/slack/interactiveReservedActions';
 
-const SOURCE = readFileSync(join(__dirname, '../interactive.ts'), 'utf8');
+// A URL off import.meta.url, not a __dirname join: files under pages/ compile as routes, and the
+// build's file tracer copies a __dirname-relative read into the standalone output as raw source.
+const SOURCE = readFileSync(new URL('../interactive.ts', import.meta.url), 'utf8');
 
 /** The dispatcher body, so the scan ignores `case` labels and ids elsewhere in the file. */
 function dispatcherBody(): string {
