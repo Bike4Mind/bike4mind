@@ -404,20 +404,22 @@ describe('production director tools', () => {
     expect(first.prompt).toBeUndefined();
   });
 
-  it('leaves an editor-made still unanimated unless the shot is named', async () => {
+  it('keeps a prompt-less editor shot as a still unless it is named in shotIds', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
     const take = harness.composition().shots[0].fileIds[0];
-    const editorId = 'shot-editor';
+    const editorId = 'shot-3f2b9c1e-7a4d-4e8b-9c55-0d1e2f3a4b5c';
     await harness.config.compositions.update(COMPOSITION_ID, {
-      shots: [{ id: editorId, title: 'Packshot', fileIds: [take], chosenFileId: take }],
+      shots: [{ id: editorId, title: 'Added in the editor', fileIds: [take], chosenFileId: take }],
     });
 
-    const unnamed = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
-    expect(unnamed.shots[0]).toMatchObject({ id: editorId, still: 'placed in the editor; left a still' });
+    const kept = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+    expect(harness.counts.video).toBe(0);
+    expect(kept.shots[0]).toMatchObject({ id: editorId, problem: expect.stringContaining('kept as a still') });
     expect(harness.composition().shots[0].clipFileId).toBeUndefined();
 
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, shotIds: [editorId] });
+    expect(harness.counts.video).toBe(1);
     expect(harness.composition().shots[0].clipFileId).toBeDefined();
   });
 
