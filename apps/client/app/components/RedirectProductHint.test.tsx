@@ -67,10 +67,10 @@ describe('RedirectProductHint', () => {
   });
 
   describe('when the item names the site the redirect carries', () => {
-    // Stands in for the overlay's check: a dotted host, else null.
+    // Stands in for the overlay's check: a short dotted host, else null.
     const redirectTargetName = (params: URLSearchParams) => {
       const url = params.get('url');
-      return url && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(url) ? url : null;
+      return url && url.length <= 253 && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(url) ? url : null;
     };
     const item = { path: '/product', label: 'Product', redirectTargetName };
 
