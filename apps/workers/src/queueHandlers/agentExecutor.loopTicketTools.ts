@@ -343,21 +343,27 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
                   executionId,
                   at,
                 };
-          const created = await workItemRepository.create({
-            userId,
-            loopId: loop.id,
-            title,
-            ...(description ? { description } : {}),
-            dependencies,
-            stage: move.stage!,
-            status: move.status!,
-            ...(priority && priorityPatch(priority, 'agent')),
-            ...(move.closedAt && { closedAt: move.closedAt }),
-            ...(move.statusReason && { statusReason: move.statusReason }),
-            ...(move.blockedOn && { blockedOn: move.blockedOn }),
-            ...(handoff && { handoffs: [handoff], handoffCount: 1 }),
-            ...initialStageHistory(move),
-          } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
+          let created: IWorkItem;
+          try {
+            created = await workItemRepository.create({
+              userId,
+              loopId: loop.id,
+              title,
+              ...(description ? { description } : {}),
+              dependencies,
+              stage: move.stage!,
+              status: move.status!,
+              ...(priority && priorityPatch(priority, 'agent')),
+              ...(move.closedAt && { closedAt: move.closedAt }),
+              ...(move.statusReason && { statusReason: move.statusReason }),
+              ...(move.blockedOn && { blockedOn: move.blockedOn }),
+              ...(handoff && { handoffs: [handoff], handoffCount: 1 }),
+              ...initialStageHistory(move),
+            } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
+          } catch (error) {
+            await agentExecutionRepository.releaseLoopTicketCreates(executionId, 1).catch(() => undefined);
+            throw error;
+          }
           if (handoff) {
             await loopEventRepository
               .recordHandoff({
@@ -673,6 +679,9 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             // Not a transaction; a crash between the creates and the epic write leaves the children behind.
             // Best effort, so a failed cleanup does not hide why the split failed.
             await Promise.all(ids.map(id => workItemRepository.softDeleteForUser(id, userId))).catch(() => undefined);
+            await agentExecutionRepository
+              .releaseLoopTicketCreates(executionId, children.length)
+              .catch(() => undefined);
             throw error;
           }
         }),

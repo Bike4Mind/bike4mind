@@ -1421,6 +1421,15 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return result.matchedCount > 0;
   }
 
+  /** Gives back slots reserveLoopTicketCreates took for tickets that were not created. */
+  async releaseLoopTicketCreates(id: string, count: number): Promise<void> {
+    await this.model.updateOne(
+      { _id: id, loopTicketCreates: { $gte: count } },
+      { $inc: { loopTicketCreates: -count } },
+      { runValidators: true }
+    );
+  }
+
   async setLoopOutcome(id: string, loopOutcome: LoopRunOutcome): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { loopOutcome } }, { runValidators: true });
   }

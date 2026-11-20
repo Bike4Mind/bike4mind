@@ -27,6 +27,9 @@ const executions = vi.hoisted(() => {
       counts.set(id, used + count);
       return true;
     }),
+    releaseLoopTicketCreates: vi.fn(async (id: string, count: number) => {
+      counts.set(id, (counts.get(id) ?? 0) - count);
+    }),
   };
 });
 const events = vi.hoisted(() => ({ recordUnsure: vi.fn(), recordHandoff: vi.fn(), closeAskedForHandoff: vi.fn() }));
@@ -215,6 +218,14 @@ describe('loop_ticket_create', () => {
     expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_RUN);
     const other = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-2' });
     expect(await run(other, 'loop_ticket_create', { title: 'another run' })).not.toMatch(/^Error/);
+  });
+  it('gives a failed create its slot back', async () => {
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    items.create.mockRejectedValueOnce(new Error('write failed'));
+    await expect(run(tools, 'loop_ticket_create', { title: 'lost' })).rejects.toThrow('write failed');
+    for (let i = 0; i < MAX_TICKET_CREATES_PER_RUN; i++) await run(tools, 'loop_ticket_create', { title: `T${i}` });
+    expect(await run(tools, 'loop_ticket_create', { title: 'one too many' })).toMatch(/^Error: at most/);
+    expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_RUN + 1);
   });
   it('files a blocked owner step with its reason, and requires the reason', async () => {
     const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
