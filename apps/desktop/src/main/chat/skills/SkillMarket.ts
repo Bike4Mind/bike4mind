@@ -44,7 +44,7 @@ const SIGNED_OUT = 'Sign in to browse the Skill Market.';
 const CONFLICT_CODES = new Set(['name_taken', 'local_changes', 'version_changed']);
 const UPLOAD_SIGNED_OUT = 'Sign in to upload skills.';
 export const RATE_LIMITED = "You've hit the Skill Market submit limit; try again later.";
-const VISIBILITIES = new Set(['public', 'organization', 'unlisted']);
+const VISIBILITIES = new Set(['public', 'organization', 'unlisted', 'space']);
 
 type WriteFailure = { error: string; status?: number; code?: SkillWriteCode };
 type OpenDialog = (options: OpenDialogOptions) => Promise<{ canceled: boolean; filePaths: string[] }>;
@@ -533,7 +533,9 @@ function toMyListing(row: unknown): SkillMyListing | null {
     id: listing.id,
     name: listing.name,
     visibility:
-      listing.visibility === 'organization' || listing.visibility === 'unlisted' ? listing.visibility : 'public',
+      listing.visibility === 'organization' || listing.visibility === 'unlisted' || listing.visibility === 'space'
+        ? listing.visibility
+        : 'public',
     status: typeof listing.status === 'string' ? listing.status : '',
     hiddenByReports: listing.hiddenByReports === true,
     tags: asStrings(listing.tags),
@@ -573,7 +575,9 @@ function toListing(row: unknown): SkillMarketListing | null {
     description: typeof listing.description === 'string' ? listing.description : '',
     ...(typeof listing.authorName === 'string' ? { authorName: listing.authorName } : {}),
     visibility:
-      listing.visibility === 'organization' || listing.visibility === 'unlisted' ? listing.visibility : 'public',
+      listing.visibility === 'organization' || listing.visibility === 'unlisted' || listing.visibility === 'space'
+        ? listing.visibility
+        : 'public',
     status: typeof listing.status === 'string' ? listing.status : '',
     tags: asStrings(listing.tags),
     ratingAvg: typeof listing.ratingAvg === 'number' ? listing.ratingAvg : 0,

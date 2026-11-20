@@ -5,6 +5,7 @@ import {
   ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
+  OAuthClientUnpaidAccountLimits,
   PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -22,6 +23,8 @@ declare global {
       rateLimit: IUserApiKeyRateLimit;
       /** Owner trust before API key scopes can withhold the admin role. */
       ownerUntrusted?: boolean;
+      /** The minting OAuth client's limits for unpaid owners; replaces the global untrusted limits. */
+      unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
       expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;

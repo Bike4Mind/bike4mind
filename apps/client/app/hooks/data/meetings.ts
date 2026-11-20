@@ -27,10 +27,8 @@ const meetingsRouteExists = premiumRoutes.some(route => route.path.startsWith('/
  * row is missing while `/api/entitlements` is still in flight. The fetch is skipped
  * entirely when the fast path grants, and skipped when the route does not exist at all.
  *
- * Note this is NOT the same predicate as `filterVisiblePremiumNavItems`, which has no admin
- * bypass by design. That one governs the generic, overlay-declared nav rows; this governs a
- * core-owned rail row, which is the pattern Opti established and which an administrator
- * needs in order to find the surface at all before granting anybody the entitlement.
+ * `filterVisiblePremiumNavItems` applies the same staff rule to the generic, overlay-declared
+ * nav rows; this hook governs a core-owned rail row, the pattern Opti established.
  */
 export function useMeetingsAccess(): boolean {
   const currentUser = useUser(s => s.currentUser);

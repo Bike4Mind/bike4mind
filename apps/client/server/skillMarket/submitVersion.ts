@@ -27,6 +27,7 @@ import type { ClassifierLlm, ClassifierResult } from './classifySkill';
 import { classifySkill } from './classifySkill';
 import {
   canReviewListing,
+  type MarketAudience,
   loadMarketSettings,
   notifyUser,
   skillContentHash,
@@ -332,7 +333,7 @@ export type ReviewDecision =
 export async function decideVersion(
   versionId: string,
   actor: MarketActor,
-  adminOrgIds: string[],
+  adminAudience: MarketAudience,
   decision: ReviewDecision
 ): Promise<ISkillListingVersion> {
   const versionDoc = mongoose.isObjectIdOrHexString(versionId) ? await SkillListingVersion.findById(versionId) : null;
@@ -342,7 +343,7 @@ export async function decideVersion(
   if (!listingDoc) throw new NotFoundError('Listing not found');
   const listing = listingDoc.toJSON() as unknown as ISkillListing;
 
-  if (!canReviewListing(listing, actor, adminOrgIds)) {
+  if (!canReviewListing(listing, actor, adminAudience)) {
     throw new ForbiddenError(
       listing.authorUserId === actor.id && listing.visibility === 'public'
         ? 'You cannot review your own Public listing'

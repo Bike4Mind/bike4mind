@@ -17,7 +17,8 @@ export const SKILL_BUNDLE_MAX_LISTINGS = 50;
 
 const SkillBundleSchema = new Schema<ISkillBundleDocument>(
   {
-    organizationId: { type: String, required: true },
+    organizationId: { type: String },
+    spaceId: { type: String },
     name: { type: String, required: true, maxlength: 64 },
     description: { type: String, required: true, maxlength: 500 },
     pluginName: { type: String, required: true, maxlength: 64 },
@@ -36,7 +37,17 @@ const SkillBundleSchema = new Schema<ISkillBundleDocument>(
   }
 );
 
-SkillBundleSchema.index({ organizationId: 1, pluginName: 1 }, { unique: true });
+SkillBundleSchema.pre('validate', function () {
+  if ((this.organizationId == null) === (this.spaceId == null)) {
+    this.invalidate('organizationId', 'A bundle needs exactly one of organizationId or spaceId');
+  }
+});
+
+// Keeps the legacy auto-generated name so pre-deploy instances hit a name conflict instead of rebuilding the old key.
+SkillBundleSchema.index(
+  { organizationId: 1, spaceId: 1, pluginName: 1 },
+  { unique: true, name: 'organizationId_1_pluginName_1' }
+);
 
 export const SkillBundle: Model<ISkillBundleDocument> =
   (mongoose.models.SkillBundle as Model<ISkillBundleDocument>) ??

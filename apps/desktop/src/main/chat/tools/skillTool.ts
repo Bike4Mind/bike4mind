@@ -56,6 +56,13 @@ export const skillTool: ToolDefinition = {
     const available = await skills.available();
     const command = available.find(candidate => candidate.name === name);
     if (!command) {
+      // Reported as missing, a user-only skill sends the model and the user hunting for a stale
+      // install; it is there, and typing its name is the way to run it.
+      if (await skills.isUserOnly?.(name))
+        throw new Error(
+          `The skill "${name}" exists but only the user can start it (it sets disable-model-invocation), ` +
+            `so you cannot load it. Ask the user to type /${name} if they want it to run.`
+        );
       // Named rather than a bare miss: the usual cause is a near-miss on a real skill, and a
       // model told only "not found" guesses again or abandons the skill and improvises the job.
       const names = available.map(candidate => candidate.name).join(', ');

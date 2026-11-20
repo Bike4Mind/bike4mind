@@ -47,7 +47,7 @@ const {
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
   userState: {
     isAdmin: false,
-    currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
+    currentUser: undefined as { id?: string; tags?: string[]; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
   logEvent: vi.fn(),
 }));
@@ -398,6 +398,20 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     expect(contributedRow()).not.toBeInTheDocument();
 
     entitlements.push('launch:pro');
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
+  it('draws a gated row for an admin who lacks the entitlement', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    userState.isAdmin = true;
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
+  it('draws a gated row for a developer who lacks the entitlement', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    userState.currentUser = { tags: ['Developer'] };
     renderNav();
     expect(contributedRow()).toHaveTextContent('Launch Pad');
   });

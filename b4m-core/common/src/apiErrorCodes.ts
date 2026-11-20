@@ -9,6 +9,8 @@ export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mi
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
 export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded';
+export const API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'api_key_rate_limit_exceeded';
+export const API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE = 'api_key_daily_limit_exceeded';
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
@@ -75,6 +77,10 @@ export const API_ERROR_CODES = [
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   /** The account already has as many completions in flight as it may; a 429, retry once one finishes. */
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+  /** The key used up its requests-per-minute allowance; a 429 with Retry-After. */
+  API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  /** The key used up its requests-per-day allowance; a 429 with Retry-After. */
+  API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE,
   /** A reasoning model spent the caller's whole `max_tokens` thinking; remediation is raising it or omitting it. */
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   /** A 426: the declared X-Client-Version is below the minimum set for that X-Client-Name; remediation is upgrading the client. */

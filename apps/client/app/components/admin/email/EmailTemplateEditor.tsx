@@ -305,7 +305,7 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
       await api.post(`/api/admin/email/templates/${templateId}/test`, {
         email: testEmail,
       });
-      setTestResult({ success: true, message: `Test email sent to ${testEmail}` });
+      setTestResult({ success: true, message: `Test email accepted for delivery to ${testEmail}` });
       setTestEmail('');
     } catch (error: any) {
       setTestResult({

@@ -11,6 +11,7 @@ import MinimizeIcon from '@mui/icons-material/Minimize';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import type { GetCopyMarkdown } from './useCopySessionMarkdown';
 import FloatingChatPill from './FloatingChatPill';
 import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
@@ -27,6 +28,8 @@ interface FloatingChatWindowProps {
   closeToPill?: boolean;
   /** Offer the dock layouts in the Layout menu. */
   dockable?: boolean;
+  /** Markdown for the copy button; omit to copy the main chat's current session. */
+  getCopyMarkdown?: GetCopyMarkdown;
 }
 
 // Animation for expand/collapse
@@ -95,6 +98,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
   title,
   closeToPill = false,
   dockable = true,
+  getCopyMarkdown,
 }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -430,7 +434,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
             onPointerDown={e => e.stopPropagation()}
           >
             {headerActions}
-            <ChatPanelControls testIdPrefix="floating-chat" dockable={dockable} />
+            <ChatPanelControls testIdPrefix="floating-chat" dockable={dockable} getCopyMarkdown={getCopyMarkdown} />
             <Tooltip title="Minimize" disableInteractive>
               <IconButton
                 size="sm"

@@ -37,11 +37,11 @@ import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
-} from '@server/utils/dispatchAgentExecution';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
-import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitApiKeyCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 import { isStudioFeatureEnabled } from '@bike4mind/server-utils/middlewares/studioFeatureFlag';
 import type { Request } from 'express';
@@ -126,7 +126,9 @@ export type StartAgentExecutionInput = {
    * without the others.
    */
   apiKeyInfo:
-    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
+    | (ApiKeyCredential &
+        Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted' | 'unpaidAccountLimits'>)
+    | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -243,6 +245,7 @@ export async function startAgentExecution(
       owner: userId,
       ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
       billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      unpaidAccountLimits: input.apiKeyInfo.unpaidAccountLimits,
       holdSlot: false,
     });
   }

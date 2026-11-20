@@ -103,7 +103,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "content_blocked"
             ]
           },
           "reply": {
@@ -148,7 +149,7 @@
         "required": [
           "id"
         ],
-        "description": "Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: \"error\"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: \"message\"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
+        "description": "Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: \"error\"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: \"message\"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
         "example": {
           "id": "664f1c2b9a1e4d0012ab34cd",
           "status": "done",
@@ -188,7 +189,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "content_blocked"
             ]
           },
           "reply": {
@@ -285,7 +287,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "content_blocked"
             ]
           },
           "reply": {
@@ -393,7 +396,8 @@
                   "insufficient_credits",
                   "spend_cap_exceeded",
                   "spend_frozen",
-                  "free_quest_limit_reached"
+                  "free_quest_limit_reached",
+                  "content_blocked"
                 ]
               },
               "tools": {
@@ -664,7 +668,8 @@
                   "insufficient_credits",
                   "spend_cap_exceeded",
                   "spend_frozen",
-                  "free_quest_limit_reached"
+                  "free_quest_limit_reached",
+                  "content_blocked"
                 ]
               },
               "tools": {
@@ -9126,7 +9131,8 @@
                   "insufficient_credits",
                   "spend_cap_exceeded",
                   "spend_frozen",
-                  "free_quest_limit_reached"
+                  "free_quest_limit_reached",
+                  "content_blocked"
                 ]
               },
               "reply": {
@@ -9604,7 +9610,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "content_blocked"
             ]
           },
           "reply": {
@@ -12534,7 +12541,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "content_blocked"
             ]
           },
           "reply": {
@@ -13238,7 +13246,8 @@
                     "insufficient_credits",
                     "spend_cap_exceeded",
                     "spend_frozen",
-                    "free_quest_limit_reached"
+                    "free_quest_limit_reached",
+                    "content_blocked"
                   ],
                   "description": "Machine-readable failure class, present only on `type: \"error\"` turns that have one."
                 },
@@ -17849,6 +17858,19 @@
                 "type": "number",
                 "description": "The length of the Scene, which is the length of its video."
               },
+              "files_skip_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error",
+                  null
+                ],
+                "description": "Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url."
+              },
               "file_id": {
                 "type": [
                   "string",
@@ -17863,6 +17885,7 @@
               "expires_at",
               "content_type",
               "duration_seconds",
+              "files_skip_reason",
               "file_id"
             ]
           },
@@ -18101,6 +18124,19 @@
                 "type": "number",
                 "description": "The length of the Scene, which is the length of its video."
               },
+              "files_skip_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error",
+                  null
+                ],
+                "description": "Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url."
+              },
               "file_id": {
                 "type": [
                   "string",
@@ -18115,6 +18151,7 @@
               "expires_at",
               "content_type",
               "duration_seconds",
+              "files_skip_reason",
               "file_id"
             ]
           },
@@ -18498,6 +18535,19 @@
                 "type": "number",
                 "description": "The length of the Scene, which is the length of its video."
               },
+              "files_skip_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error",
+                  null
+                ],
+                "description": "Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url."
+              },
               "file_id": {
                 "type": [
                   "string",
@@ -18512,6 +18562,7 @@
               "expires_at",
               "content_type",
               "duration_seconds",
+              "files_skip_reason",
               "file_id"
             ]
           },
@@ -18723,6 +18774,19 @@
                       "type": "number",
                       "description": "The length of the Scene, which is the length of its video."
                     },
+                    "files_skip_reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "storage_limit",
+                        "file_too_large",
+                        "error",
+                        null
+                      ],
+                      "description": "Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url."
+                    },
                     "file_id": {
                       "type": [
                         "string",
@@ -18737,6 +18801,7 @@
                     "expires_at",
                     "content_type",
                     "duration_seconds",
+                    "files_skip_reason",
                     "file_id"
                   ]
                 },
@@ -20607,6 +20672,381 @@
             "visualization"
           ]
         }
+      },
+      "publishArtifactResponse201": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "public_id": {
+            "type": "string",
+            "description": "The id of the published page. Stable across republishes."
+          },
+          "url": {
+            "type": "string",
+            "description": "The absolute URL of the page."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "organization",
+              "public"
+            ]
+          },
+          "access_gate": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "passphrase",
+                  "domain"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "The kind of gate on the page, or `null` when it has none. The passphrase is never returned."
+          },
+          "published_version": {
+            "type": "integer",
+            "description": "The artifact version whose content the page shows."
+          },
+          "published_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of the latest publish."
+          }
+        },
+        "required": [
+          "artifact_id",
+          "public_id",
+          "url",
+          "slug",
+          "visibility",
+          "access_gate",
+          "published_version",
+          "published_at"
+        ],
+        "example": {
+          "artifact_id": "<artifactId>",
+          "public_id": "a1b2c3d4e5f6",
+          "url": "https://app.example.com/p/u/<userId>/signup-flow",
+          "slug": "signup-flow",
+          "visibility": "public",
+          "access_gate": {
+            "kind": "passphrase"
+          },
+          "published_version": 2,
+          "published_at": "2026-10-03T08:00:00.000Z"
+        }
+      },
+      "publishArtifactResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "storage_limit_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
+      },
+      "publishArtifactResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ]
+            },
+            "description": "Present when the rendered page failed validation: what was rejected and where."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "publishArtifactRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "The page address, unique within your pages. Omitted: one is generated from the title."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "organization",
+              "public"
+            ],
+            "default": "public",
+            "description": "Who can open the page. `private` is visible to you only."
+          },
+          "access_gate": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "passphrase"
+                    ]
+                  },
+                  "passphrase": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "kind",
+                  "passphrase"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "domain"
+                    ]
+                  },
+                  "allowed_domains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 253
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "kind",
+                  "allowed_domains"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Put the page behind a passphrase or an email-domain list. Applied together with the visibility, so the page is never reachable without it. Requires `visibility: \"public\"`."
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "slug": "signup-flow",
+          "visibility": "public",
+          "access_gate": {
+            "kind": "passphrase",
+            "passphrase": "<passphrase>"
+          }
+        }
+      },
+      "republishArtifactResponse200": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "public_id": {
+            "type": "string",
+            "description": "The id of the published page. Stable across republishes."
+          },
+          "url": {
+            "type": "string",
+            "description": "The absolute URL of the page."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "organization",
+              "public"
+            ]
+          },
+          "access_gate": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "passphrase",
+                  "domain"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "The kind of gate on the page, or `null` when it has none. The passphrase is never returned."
+          },
+          "published_version": {
+            "type": "integer",
+            "description": "The artifact version whose content the page shows."
+          },
+          "published_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of the latest publish."
+          }
+        },
+        "required": [
+          "artifact_id",
+          "public_id",
+          "url",
+          "slug",
+          "visibility",
+          "access_gate",
+          "published_version",
+          "published_at"
+        ],
+        "example": {
+          "artifact_id": "<artifactId>",
+          "public_id": "a1b2c3d4e5f6",
+          "url": "https://app.example.com/p/u/<userId>/signup-flow",
+          "slug": "signup-flow",
+          "visibility": "public",
+          "access_gate": {
+            "kind": "passphrase"
+          },
+          "published_version": 2,
+          "published_at": "2026-10-03T08:00:00.000Z"
+        }
+      },
+      "republishArtifactResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "storage_limit_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
+      },
+      "republishArtifactResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ]
+            },
+            "description": "Present when the rendered page failed validation: what was rejected and where."
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "createTranscriptionUploadResponse201": {
         "type": "object",
@@ -23158,10 +23598,17 @@
                   "enum": [
                     "public",
                     "organization",
+                    "space",
                     "unlisted"
                   ]
                 },
                 "organization_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "space_id": {
                   "type": [
                     "string",
                     "null"
@@ -23265,6 +23712,7 @@
                 "description",
                 "visibility",
                 "organization_id",
+                "space_id",
                 "tags",
                 "status",
                 "author_name",
@@ -23313,10 +23761,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -23420,6 +23875,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -23764,10 +24220,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -23871,6 +24334,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -24121,6 +24585,7 @@
             "enum": [
               "public",
               "organization",
+              "space",
               "unlisted"
             ]
           },
@@ -24128,6 +24593,11 @@
             "type": "string",
             "minLength": 1,
             "description": "Required for `organization` visibility, unless you belong to exactly one organization."
+          },
+          "space_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required for `space` visibility; you must belong to the Space."
           },
           "tags": {
             "type": "array",
@@ -24172,10 +24642,17 @@
                   "enum": [
                     "public",
                     "organization",
+                    "space",
                     "unlisted"
                   ]
                 },
                 "organization_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "space_id": {
                   "type": [
                     "string",
                     "null"
@@ -24499,6 +24976,7 @@
                 "description",
                 "visibility",
                 "organization_id",
+                "space_id",
                 "tags",
                 "status",
                 "author_name",
@@ -24548,10 +25026,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -24655,6 +25140,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -25996,10 +26482,17 @@
                       "enum": [
                         "public",
                         "organization",
+                        "space",
                         "unlisted"
                       ]
                     },
                     "organization_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "space_id": {
                       "type": [
                         "string",
                         "null"
@@ -26103,6 +26596,7 @@
                     "description",
                     "visibility",
                     "organization_id",
+                    "space_id",
                     "tags",
                     "status",
                     "author_name",
@@ -26949,7 +27443,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: \"org_model_not_allowed\"` or `\"org_tool_not_allowed\"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: \"error\"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A turn that prompt moderation refuses settles as `type: \"error\"` with `errorCode: \"content_blocked\"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: \"org_model_not_allowed\"` or `\"org_tool_not_allowed\"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: \"error\"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
         "tags": [
           "AI"
         ],
@@ -38810,7 +39304,7 @@
       "post": {
         "operationId": "createFileUpload",
         "summary": "Start a file upload",
-        "description": "Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type` and `If-None-Match: *`, which makes the upload create-only (a URL may require it, and a PUT onto an object that already landed is refused with 412); the URL is bound to `file_size`, so the body must be exactly that many bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.",
+        "description": "Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type` and `If-None-Match: *`, which makes the upload create-only (the URL signature covers it, so a PUT without it is refused with 403, and a PUT onto an object that already landed is refused with 412); the URL is bound to `file_size`, so the body must be exactly that many bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.",
         "tags": [
           "Files"
         ],
@@ -57377,7 +57871,7 @@
       "post": {
         "operationId": "createSceneComposition",
         "summary": "Compose a Scene from a video and a music track",
-        "description": "Queues a Scene: one shareable clip made from a video file and an audio file you own, with optional cover art, and returns `202` with the job. The Scene runs exactly as long as the video: its picture is copied unchanged and the audio is trimmed (or looped) to fit, with optional fades. The video may run at most 300 seconds, and the input files together may total at most 200 MB. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed` or `cancelled`. The finished Scene is saved to your Files with the `generated` and `scene` tags, linked to its inputs (see `GET /api/v1/files/{id}/lineage`); if that save fails it is kept outside Files and `output.file_id` is null. `output.availability` works as on the other generation jobs: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one), `pending_scan` means keep re-fetching, and `unavailable` means stop polling. A file that cannot be read as the media its slot needs (no video stream, an over-long video) ends the job `failed` with `unsupported_input`. Composing is free: no credits are reserved or charged. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`.",
+        "description": "Queues a Scene: one shareable clip made from a video file and an audio file you own, with optional cover art, and returns `202` with the job. The Scene runs exactly as long as the video: its picture is copied unchanged and the audio is trimmed (or looped) to fit, with optional fades. The video may run at most 300 seconds, and the input files together may total at most 200 MB. A Scene over your Files per-file size limit is still rendered, but is stored outside Files: its output has a null file_id and a files_skip_reason. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed` or `cancelled`. The finished Scene is saved to your Files with the `generated` and `scene` tags, linked to its inputs (see `GET /api/v1/files/{id}/lineage`); if that save fails it is kept outside Files and `output.file_id` is null. `output.availability` works as on the other generation jobs: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one), `pending_scan` means keep re-fetching, and `unavailable` means stop polling. A file that cannot be read as the media its slot needs (no video stream, an over-long video) ends the job `failed` with `unsupported_input`. Composing is free: no credits are reserved or charged. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`.",
         "tags": [
           "Scenes"
         ],
@@ -66386,6 +66880,1477 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/artifacts/types\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/artifacts/{id}/publish": {
+      "post": {
+        "operationId": "publishArtifact",
+        "summary": "Publish an artifact",
+        "description": "Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable generated slug and rejects an existing page; use the returned page for subsequent updates. Concurrent requests with different explicit slugs are not serialized per artifact. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.",
+        "tags": [
+          "Artifacts"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/publishArtifactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The published page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/publishArtifactResponse201"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Your storage quota would be exceeded by this page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/publishArtifactResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `notebooks:write`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No artifact with that id is yours to publish. Only the owner can publish, so one shared with you, a public one, a deleted one and one that does not exist are all reported as 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The artifact already has a page (use republish or unpublish it first), or `slug` is used by another of your pages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body failed validation, `access_gate` was sent without `visibility: \"public\"`, `slug` is reserved or an allowed domain is not a registrable domain, the artifact is empty, or its rendered page failed validation (see `violations`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/publishArtifactResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, or the daily publish allowance is used up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "notebooks:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"slug\": \"signup-flow\",\n  \"visibility\": \"public\",\n  \"access_gate\": {\n    \"kind\": \"passphrase\",\n    \"passphrase\": \"<passphrase>\"\n  }\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"slug\": \"signup-flow\",\n  \"visibility\": \"public\",\n  \"access_gate\": {\n    \"kind\": \"passphrase\",\n    \"passphrase\": \"<passphrase>\"\n  }\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"slug\": \"signup-flow\",\n        \"visibility\": \"public\",\n        \"access_gate\": {\n            \"kind\": \"passphrase\",\n            \"passphrase\": \"<passphrase>\"\n        }\n    },\n)"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "unpublishArtifact",
+        "summary": "Unpublish an artifact",
+        "description": "Takes the artifact's page down. The artifact itself is unchanged and can be published again.",
+        "tags": [
+          "Artifacts"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The page was taken down.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `notebooks:write`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "You have no published page for that artifact id. The artifact itself does not need to exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "notebooks:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X DELETE \"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\", {\n  method: \"DELETE\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.delete(\n    \"https://your-deployment.example.com/api/v1/artifacts/<id>/publish\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/artifacts/{id}/republish": {
+      "post": {
+        "operationId": "republishArtifact",
+        "summary": "Republish an artifact",
+        "description": "Replaces the page's content with the artifact's current version. The address, visibility and access gate stay as they are, and earlier versions of the page are kept.",
+        "tags": [
+          "Artifacts"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The refreshed page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/republishArtifactResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Your storage quota would be exceeded by this page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/republishArtifactResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `notebooks:write`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No artifact with that id is yours to publish. Only the owner can publish, so one shared with you, a public one, a deleted one and one that does not exist are all reported as 404. Also returned when the artifact has no published page to refresh.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The page changed or a revision is in progress. Reload it before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body failed validation, `access_gate` was sent without `visibility: \"public\"`, `slug` is reserved or an allowed domain is not a registrable domain, the artifact is empty, or its rendered page failed validation (see `violations`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/republishArtifactResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, or the daily publish allowance is used up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "notebooks:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/artifacts/<id>/republish\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/artifacts/<id>/republish\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/artifacts/<id>/republish\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }
@@ -77884,8 +79849,8 @@
     "/api/v1/skills/market/claude-marketplace.json": {
       "get": {
         "operationId": "getClaudeMarketplace",
-        "summary": "Get an organization's Claude Code plugin marketplace",
-        "description": "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
+        "summary": "Get an organization's or Space's Claude Code plugin marketplace",
+        "description": "Returns a Claude Code `marketplace.json` listing the organization's (`orgId`) or Space's (`spaceId`) approved Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Send exactly one of `orgId` and `spaceId`. A Space feed is named `b4m-space-<id>`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
         "tags": [
           "Skills"
         ],
@@ -77901,10 +79866,23 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "description": "The organization whose feed to return. Send this or `spaceId`."
             },
-            "required": true,
+            "required": false,
+            "description": "The organization whose feed to return. Send this or `spaceId`.",
             "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The Space whose feed to return. Send this or `orgId`."
+            },
+            "required": false,
+            "description": "The Space whose feed to return. Send this or `orgId`.",
+            "name": "spaceId",
             "in": "query"
           }
         ],
@@ -77982,7 +79960,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:read`, or the caller is not a member of the organization.",
+            "description": "The API key lacks `skills:read`, or the caller is not a member of the organization or Space (or Spaces are not enabled).",
             "content": {
               "application/json": {
                 "schema": {
@@ -79093,7 +81071,7 @@
       "get": {
         "operationId": "listSkillMarketListings",
         "summary": "Browse Skill Market listings",
-        "description": "Lists the approved Public listings and the Organization listings of your organizations, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.",
+        "description": "Lists the approved Public listings, the Organization listings of your organizations and the Space listings of your Spaces, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.",
         "tags": [
           "Skills"
         ],
@@ -79142,11 +81120,23 @@
               "type": "string",
               "enum": [
                 "public",
-                "org"
+                "org",
+                "space"
               ]
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "With `scope=space`, only this Space. Empty when you do not belong to it."
+            },
+            "required": false,
+            "description": "With `scope=space`, only this Space. Empty when you do not belong to it.",
+            "name": "space_id",
             "in": "query"
           },
           {
@@ -79541,7 +81531,7 @@
       "post": {
         "operationId": "publishSkillMarketListing",
         "summary": "Publish a skill to the Skill Market",
-        "description": "Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. Unknown body fields are rejected.",
+        "description": "Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. `space` visibility needs `space_id` and membership of that Space. Unknown body fields are rejected.",
         "tags": [
           "Skills"
         ],
@@ -79619,7 +81609,7 @@
             }
           },
           "400": {
-            "description": "The skill was imported from the market, no organization was chosen, a tag is invalid, or you have reached your active listing cap.",
+            "description": "The skill was imported from the market, no organization or Space was chosen, a tag is invalid, or you have reached your active listing cap.",
             "content": {
               "application/json": {
                 "schema": {
@@ -79691,7 +81681,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization, your account is too new for a Public listing, or moderators removed this skill from the market.",
+            "description": "The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization or Space (or Spaces are not enabled), your account is too new for a Public listing, or moderators removed this skill from the market.",
             "content": {
               "application/json": {
                 "schema": {
@@ -84861,7 +86851,7 @@
       "get": {
         "operationId": "listSkillMarketReviewQueue",
         "summary": "List Skill Market versions awaiting review",
-        "description": "Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.",
+        "description": "Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer and the Space listings of Spaces you own or administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.",
         "tags": [
           "Skills"
         ],
@@ -84969,7 +86959,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:review`, or you administer no organization.",
+            "description": "The API key lacks `skills:review`, or you administer no organization or Space.",
             "content": {
               "application/json": {
                 "schema": {
@@ -85396,7 +87386,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:review`, or you may not review this listing: it is not an Organization listing of an organization you administer, or it is your own Public listing.",
+            "description": "The API key lacks `skills:review`, or you may not review this listing: it is not an Organization or Space listing you administer, or it is your own Public listing.",
             "content": {
               "application/json": {
                 "schema": {

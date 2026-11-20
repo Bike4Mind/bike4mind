@@ -13,7 +13,9 @@ const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn(), 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated }),
 }));
-vi.mock('@server/sessions/generatedMediaPurgeQueue', () => ({ enqueueGeneratedMediaPurge: effects.enqueue }));
+vi.mock('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue', () => ({
+  enqueueGeneratedMediaPurge: effects.enqueue,
+}));
 vi.mock('@aws-sdk/client-cloudfront', () => ({
   CloudFrontClient: class {
     send = effects.cdnSend;
@@ -27,7 +29,7 @@ vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
 }));
 
 import { purgeDeletedMessageMedia } from './purgeDeletedMessageMedia';
-import { MAX_DELETES_PER_RUN } from './purgeDeletedNotebookMedia';
+import { MAX_DELETES_PER_RUN } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

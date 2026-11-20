@@ -138,9 +138,7 @@ private struct GenerationTile: View {
       }
     case .succeeded:
       if generation.handle.kind == .image, let url = generation.resultURLs.first {
-        AsyncImage(url: url) { phase in
-          if case .success(let image) = phase { image.resizable().scaledToFill() } else { symbol(doneSymbol) }
-        }
+        CachedThumbnail(url: url) { _ in symbol(doneSymbol) }
       } else {
         symbol(doneSymbol)
       }

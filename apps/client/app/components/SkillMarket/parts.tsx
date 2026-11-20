@@ -81,6 +81,7 @@ export const StarInput: FC<{ value: number; onChange: (v: number) => void }> = (
 const VISIBILITY: Record<SkillListingVisibility, { label: string; icon: ReactElement }> = {
   public: { label: 'Public', icon: <PublicIcon /> },
   organization: { label: 'Organization', icon: <GroupsIcon /> },
+  space: { label: 'Space', icon: <GroupsIcon /> },
   unlisted: { label: 'Unlisted', icon: <LinkIcon /> },
 };
 

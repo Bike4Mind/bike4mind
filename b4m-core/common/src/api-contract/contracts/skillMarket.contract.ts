@@ -15,18 +15,19 @@ const AUTH_NOTE =
   'and forwards it to the same-origin plugin archives.';
 
 /**
- * The Skill Market as a Claude Code plugin marketplace: one feed per org, one archive plugin per
- * approved Organization listing, plus one per skill bundle. Both routes serve only what the caller can already browse.
+ * The Skill Market as a Claude Code plugin marketplace: one feed per org or Space, one archive plugin per
+ * approved Organization or Space listing, plus one per skill bundle. Both routes serve only what the caller can already browse.
  */
 export const getClaudeMarketplaceContract = defineEndpoint({
   method: 'get',
   path: '/api/v1/skills/market/claude-marketplace.json',
   operationId: 'getClaudeMarketplace',
-  summary: "Get an organization's Claude Code plugin marketplace",
+  summary: "Get an organization's or Space's Claude Code plugin marketplace",
   description:
-    "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility " +
+    "Returns a Claude Code `marketplace.json` listing the organization's (`orgId`) or Space's (`spaceId`) approved " +
     'Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin ' +
-    'per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are ' +
+    'per skill bundle whose `version` is a hash prefix, not a semantic version. Send exactly one of `orgId` and ' +
+    '`spaceId`. A Space feed is named `b4m-space-<id>`. Public and unlisted listings are ' +
     `not included. Responses are never cacheable. ${AUTH_NOTE}`,
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
@@ -56,7 +57,8 @@ export const getClaudeMarketplaceContract = defineEndpoint({
       },
     },
     403: {
-      description: 'The API key lacks `skills:read`, or the caller is not a member of the organization.',
+      description:
+        'The API key lacks `skills:read`, or the caller is not a member of the organization or Space (or Spaces are not enabled).',
       schema: ScopeForbiddenErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },

@@ -27,7 +27,7 @@ const m = vi.hoisted(() => ({
   disabledModelIds: [] as string[],
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {

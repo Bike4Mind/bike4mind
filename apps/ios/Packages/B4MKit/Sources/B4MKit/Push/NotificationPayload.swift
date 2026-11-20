@@ -8,16 +8,19 @@ public struct NotificationPayload: Equatable, Sendable {
   public let category: NotificationCategory?
   /// `approval_needed` pushes: the pending action the notification buttons answer.
   public let approval: PendingActionTarget?
+  /// `brief_ready` pushes: the id of the brief to fetch. The push never carries the brief itself.
+  public let briefID: String?
 
   public init(
     deepLink: URL? = nil, sessionID: String? = nil, questID: String? = nil, category: NotificationCategory? = nil,
-    approval: PendingActionTarget? = nil
+    approval: PendingActionTarget? = nil, briefID: String? = nil
   ) {
     self.deepLink = deepLink
     self.sessionID = sessionID
     self.questID = questID
     self.category = category
     self.approval = approval
+    self.briefID = briefID
   }
 
   /// Parses `UNNotificationContent.userInfo`. Unknown or malformed fields are dropped, never fatal.
@@ -29,6 +32,7 @@ public struct NotificationPayload: Equatable, Sendable {
       (userInfo["category"] as? String) ?? (userInfo["aps"] as? [String: Any])?["category"] as? String
     category = rawCategory.flatMap(NotificationCategory.init(rawValue:))
     approval = Self.approval(in: userInfo)
+    briefID = (userInfo["briefId"] as? String).flatMap { DeepLinkRouter.isValidIdentifier($0) ? $0 : nil }
   }
 
   /// The server's `approval: {questId, pendingActionTs, actions}` object. Anything missing or malformed means
@@ -43,6 +47,7 @@ public struct NotificationPayload: Equatable, Sendable {
 
   /// Where tapping the notification should go: the `deepLink` when it routes, else the session id.
   public var route: Route? {
+    if category == .briefReady, let briefID { return .brief(id: briefID) }
     if let deepLink, let route = DeepLinkRouter.route(url: deepLink) { return route }
     guard let sessionID, DeepLinkRouter.isValidIdentifier(sessionID) else { return nil }
     return .session(id: sessionID)

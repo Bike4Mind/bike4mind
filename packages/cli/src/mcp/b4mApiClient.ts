@@ -24,7 +24,7 @@ import {
   type PublishResult,
   type PublishScopeTier,
   type PublishVisibility,
-  type QuestErrorCode,
+  type QuestOutcomeErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
   type UploadUrlRequest,
@@ -177,9 +177,9 @@ export interface QuestResponse {
   replies?: string[];
   // A failed turn still finishes `status: 'done'` with the explanation in the reply text, so
   // `type: 'error'` is the only reliable failure signal; `errorCode` names the reason only for the
-  // billing failures that have one and its absence never means success.
+  // failures that have one (billing, a moderation refusal) and its absence never means success.
   type?: ChatHistoryItemType;
-  errorCode?: QuestErrorCode;
+  errorCode?: QuestOutcomeErrorCode;
   // Generated-file basenames, and `files` resolves each to a short-lived presigned URL (valid for
   // about an hour).
   images?: string[];

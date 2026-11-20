@@ -249,6 +249,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
@@ -344,7 +345,7 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
 import {
   resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
@@ -3163,13 +3164,15 @@ export class ChatCompletionProcess {
           try {
             await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
+            if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
-            if (moderationError instanceof FlaggedContentError) {
+            // A flag the turn's key is excepted from does neither: the turn continues.
+            if (!(await this.keyModerationExceptionApplies('openai', moderationError.categories, questId, logger))) {
               await this.recordModerationHit('openai', moderationError.categories, questId, logger);
+              throw moderationError;
             }
-            throw moderationError;
           }
           logger.info(
             `⏱️ [${Date.now() - processStartTime}ms] Moderation check completed in ${
@@ -3183,10 +3186,11 @@ export class ChatCompletionProcess {
             try {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
-              if (moderationError instanceof FlaggedContentError) {
+              if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
+              if (!(await this.keyModerationExceptionApplies('bedrock', moderationError.categories, questId, logger))) {
                 await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
+                throw moderationError;
               }
-              throw moderationError;
             }
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] Bedrock Guardrails check completed in ${
@@ -4394,10 +4398,10 @@ export class ChatCompletionProcess {
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
-      const artifactEmissionContent = getSettingsValue(
-        'ArtifactEmissionPrompt',
-        defaultAdminSettings,
-        ARTIFACT_EMISSION_PROMPT
+      // Names the admin-listed Python data origins when there are any; byte-identical otherwise.
+      const artifactEmissionContent = withArtifactDataOrigins(
+        getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+        getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
       );
       // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
       // default so the nudge can never be silently stripped.
@@ -7997,12 +8001,19 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
+      const moderationRefused = err instanceof FlaggedContentError;
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message, as does an account refusal (fixed text from accountState); the categorized branches
-      // below overwrite this reply with fixed text anyway.
+      // message, as do an account refusal (fixed text from accountState) and a moderation refusal
+      // (fixed text from promptModeration); the categorized branches below overwrite this reply
+      // with fixed text anyway.
       const masksMessage =
         this.shadowSubstitution &&
-        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
+        !(
+          err instanceof InsufficientCreditsError ||
+          err instanceof AiAccessRefusedError ||
+          moderationRefused ||
+          resolveQuestErrorCode(err)
+        );
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -8014,6 +8025,8 @@ export class ChatCompletionProcess {
       const questErrorCode = resolveQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
+      } else if (moderationRefused) {
+        quest.errorCode = 'content_blocked';
       }
 
       const errorSaveStartTime = Date.now();
@@ -8022,7 +8035,12 @@ export class ChatCompletionProcess {
         `⏱️ [${Date.now() - processStartTime}ms] Error quest save completed in ${Date.now() - errorSaveStartTime}ms`
       );
 
-      if (err instanceof InsufficientCreditsError || questErrorCode) {
+      if (moderationRefused) {
+        // Expected user outcome, already logged once at warn by the moderation service. Settled
+        // rather than rethrown: a queue retry would only repeat the refusal, and the /api/chat
+        // wait route answers with the quest body, where `errorCode` names the reason.
+        return;
+      } else if (err instanceof InsufficientCreditsError || questErrorCode) {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
@@ -9115,6 +9133,35 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
+  }
+
+  /**
+   * Whether the key that authenticated this turn is excepted from every category the check
+   * flagged. Only an API-key turn can be, and a failed lookup keeps the block.
+   */
+  private async keyModerationExceptionApplies(
+    source: 'openai' | 'bedrock',
+    categories: string[],
+    questId: string,
+    logger: Logger
+  ): Promise<boolean> {
+    const userApiKeys = this.db.userApiKeys;
+    if (!this.turnApiKeyId || !userApiKeys) return false;
+    try {
+      const keyCategories = await findKeyModerationExceptionCategories(this.turnApiKeyId, this.user.id, {
+        userApiKeys,
+      });
+      if (!moderationExceptionCovers(categories, keyCategories)) return false;
+    } catch (lookupError) {
+      logger.warn(`[Moderation] Key exception lookup failed for quest ${questId}; keeping the block`, lookupError);
+      return false;
+    }
+    logger.info(`[Moderation] Quest ${questId} continued under its API key exception`, {
+      source,
+      categories,
+      apiKeyId: this.turnApiKeyId,
+    });
+    return true;
   }
 
   private getBedrockGuardrailsService(

@@ -331,6 +331,37 @@ describe('createSceneJobHandler', () => {
     expect(existsSync(workDirs[0])).toBe(false);
   });
 
+  it.each(['file_too_large', 'storage_limit'] as const)(
+    'keeps a Scene Files refuses (%s) outside Files, says why, and renders once',
+    async reason => {
+      const { deps, ffmpeg, jobOf, runToCompletion, repository } = setup({
+        deps: { saveToFiles: vi.fn(async () => ({ saved: false as const, reason })) },
+      });
+      const job = jobOf(await create(deps));
+      await runToCompletion();
+
+      const done = repository.jobs.get(job.id);
+      expect(done).toMatchObject({ state: 'succeeded' });
+      expect(done?.kind === 'compose' && done.payload.output).toMatchObject({
+        location: 'generated',
+        s3Key: `generated-video/u1/${job.id}.mp4`,
+        filesSkipReason: reason,
+      });
+      expect(ffmpeg.renders).toHaveLength(1);
+      expect(deps.saveToFiles).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('records no skip reason for a Scene saved to Files', async () => {
+    const { deps, jobOf, runToCompletion, repository } = setup();
+    const job = jobOf(await create(deps));
+    await runToCompletion();
+
+    const done = repository.jobs.get(job.id);
+    expect(done?.kind === 'compose' && done.payload.output).toMatchObject({ location: 'files' });
+    expect(done?.kind === 'compose' && done.payload.output).not.toHaveProperty('filesSkipReason');
+  });
+
   it('fails with unsupported_input when the video runs past the cap, and still cleans up', async () => {
     const ffmpeg = stubFfmpeg({
       probes: { video: probeOutput(['  Duration: 00:05:00.50', '  Stream #0:0: Video: h264']) },
