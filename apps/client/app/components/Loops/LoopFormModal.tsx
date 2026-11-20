@@ -439,7 +439,7 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
     // Ids match customMcpToolId (services customMcpTools.ts). always_ask tools are left out because
     // withAutoApprovedCustomTools never pre-approves them; org allowWriteTools and the connector's
     // requireApprovalForAll are applied server-side only.
-    // ponytail: ids over 64 chars get a server-side hash suffix, so they're skipped (a saved one shows as unavailable).
+    // Ids over 64 chars get a server-side hash suffix, so they're skipped (a saved one shows as unavailable).
     ...customConnections.map(connection => ({
       name: connection.displayName,
       prefix: connection.slug,

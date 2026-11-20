@@ -201,7 +201,7 @@ const isDuplicateKey = (error: unknown) => (error as { code?: number } | null)?.
  * write that put a ticket in a stage (created it, moved it, closed it). Idempotent: the partial unique index on
  * (`origin.ticketId`, `origin.stage`, `loopId`) allows one copy, so a ticket that re-reaches the stage files
  * nothing. Best effort: a failure is logged and never fails the write that called it.
- * ponytail: in-process hook; a process dying between the ticket write and this call loses that fire. Add an outbox
+ * In-process hook; a process dying between the ticket write and this call loses that fire. Add an outbox
  * if missed fires matter.
  */
 export async function fireStageTriggers({

@@ -25,7 +25,7 @@ import { ticketSegment } from './loopStats';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** ponytail: fixed thresholds; make per-loop only if owners ask. */
+/** Fixed thresholds; make per-loop only if owners ask. */
 export const COACH = {
   windowDays: 30,
   dismissDays: 30,

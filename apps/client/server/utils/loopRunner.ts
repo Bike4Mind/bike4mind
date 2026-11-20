@@ -92,7 +92,7 @@ export async function listRunnerTickets(
   for (const loop of loops) {
     const tickets = await workItemRepository.listReadyInStages(userId, loop.id, loop.stages, desktopStagesOf(loop));
     if (tickets.length === 0) continue;
-    // ponytail: priced on the loop's model; the claim re-checks on the stage's model.
+    // Priced on the loop's model; the claim re-checks on the stage's model.
     const admission = await loopAdmission(loop, loop.model, now);
     if (!admission.ok) {
       const { repoHint } = stageConfigOf(loop, tickets[0].stage);

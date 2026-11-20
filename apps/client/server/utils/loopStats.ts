@@ -25,7 +25,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Runs expire after 90 days (the AgentExecution TTL), so an older baseline has no run data. */
 const RUN_TTL_MS = 90 * DAY_MS;
 const TOP_TOOLS = 5;
-/** ponytail: events and directives read per stats request; a busier loop's eras and directive counts are a prefix. */
+/** Events and directives read per stats request; a busier loop's eras and directive counts are a prefix. */
 const LOOP_STATS_EVENTS = 500;
 
 export interface LoopStatsInput {
@@ -164,7 +164,7 @@ export function computeLoopStats(input: LoopStatsInput): ILoopStats {
 
   // Cumulative flow: each ticket's stage at the end of each UTC day of the window.
   const daily: ILoopStats['daily'] = [];
-  // ponytail: a ticket closed before the baseline window is not read, so the last stage's band undercounts.
+  // A ticket closed before the baseline window is not read, so the last stage's band undercounts.
   const today = Math.floor(to / DAY_MS) * DAY_MS;
   const firstDay = today - (days - 1) * DAY_MS;
   for (let start = firstDay; start <= today; start += DAY_MS) {
