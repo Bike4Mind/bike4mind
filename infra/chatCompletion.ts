@@ -292,10 +292,10 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     ...providerFederation.permissions,
   ],
   environment: {
-    ...mailBodyEnvironment(appFilesBucket),
     // First, so a core variable of the same name always wins.
     ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...mailBodyEnvironment(appFilesBucket),
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // External instance-service, consumed by a premium overlay tool that reads these as

@@ -55,10 +55,10 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     generationJobQueue,
   ],
   environment: {
-    ...mailBodyEnvironment(appFilesBucket),
     // First, so a core variable of the same name always wins.
     ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...mailBodyEnvironment(appFilesBucket),
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
