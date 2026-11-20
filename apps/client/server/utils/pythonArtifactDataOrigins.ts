@@ -16,14 +16,15 @@ export function appReservedHosts(): string[] {
  * The `pythonArtifactDataOrigins` admin setting, validated, for `/api/pyodide-sandbox`.
  *
  * Fails closed: Artifacts turned off, an unreachable database, a slow read or an invalid stored
- * value all yield `[]`,
- * which is the sandbox CSP with no data origins. Reads through the shared settings cache.
+ * value all yield no origins, which is the sandbox CSP with no data origins. `degraded` is set
+ * when the read itself failed, so the caller does not cache a response that may be missing origins.
+ * Reads through the shared settings cache.
  */
 export async function loadPythonArtifactDataOrigins(
   db: { adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'> } = {
     adminSettings: adminSettingsRepository,
   }
-): Promise<string[]> {
+): Promise<{ origins: string[]; degraded: boolean }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const read = (async () => {
@@ -40,12 +41,12 @@ export async function loadPythonArtifactDataOrigins(
     if (origins.length === 0 && Array.isArray(stored) && stored.length > 0) {
       console.warn('[pyodide-sandbox] ignoring pythonArtifactDataOrigins: the stored list has an invalid entry');
     }
-    return origins;
+    return { origins, degraded: false };
   } catch (error) {
     console.warn(
       `[pyodide-sandbox] serving without data origins: ${error instanceof Error ? error.message : String(error)}`
     );
-    return [];
+    return { origins: [], degraded: true };
   } finally {
     if (timer) clearTimeout(timer);
   }

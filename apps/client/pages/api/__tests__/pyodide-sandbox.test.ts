@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-const dataOrigins = vi.hoisted(() => ({ current: [] as string[] }));
+const dataOrigins = vi.hoisted(() => ({ current: [] as string[], degraded: false }));
 vi.mock('@server/utils/pythonArtifactDataOrigins', () => ({
-  loadPythonArtifactDataOrigins: vi.fn(async () => dataOrigins.current),
+  loadPythonArtifactDataOrigins: vi.fn(async () => ({ origins: dataOrigins.current, degraded: dataOrigins.degraded })),
 }));
 
 import handler from '../pyodide-sandbox';
@@ -66,6 +66,7 @@ const CSP_WITH_NO_DATA_ORIGINS = [
 
 beforeEach(() => {
   dataOrigins.current = [];
+  dataOrigins.degraded = false;
 });
 
 afterEach(() => {
@@ -92,6 +93,16 @@ describe('/api/pyodide-sandbox CSP', () => {
   it('sends exactly the pre-existing header when no data origin is listed', async () => {
     const { headers } = await invoke();
     expect(headers['Content-Security-Policy']).toBe(CSP_WITH_NO_DATA_ORIGINS);
+  });
+
+  it('caches the shell, but not a response built after a failed settings read', async () => {
+    const { headers } = await invoke();
+    expect(headers['Cache-Control']).toBe('public, max-age=300, s-maxage=300');
+
+    dataOrigins.degraded = true;
+    const degraded = await invoke();
+    expect(degraded.headers['Cache-Control']).toBe('no-store');
+    expect(degraded.headers['Content-Security-Policy']).toBe(CSP_WITH_NO_DATA_ORIGINS);
   });
 
   it('adds an operator mirror to both script-src and connect-src', async () => {

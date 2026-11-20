@@ -151,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end('Method Not Allowed');
   }
 
-  const dataOrigins = await loadPythonArtifactDataOrigins();
+  const { origins: dataOrigins, degraded } = await loadPythonArtifactDataOrigins();
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', buildSandboxCsp(dataOrigins));
@@ -159,10 +159,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
-  // Static shell - the parent drives it by postMessage after load. Matches the sibling
-  // artifact-sandbox routes, including their caveat: a CSP change here takes up to 5 minutes
-  // to propagate through CDN/browser caches.
-  res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
+  // The parent drives the shell by postMessage after load. Matches the sibling artifact-sandbox
+  // routes, including their caveat: a CSP change here takes up to 5 minutes to propagate through
+  // CDN/browser caches. A response built after a failed settings read is not cached, so it cannot
+  // outlive the failure.
+  res.setHeader('Cache-Control', degraded ? 'no-store' : 'public, max-age=300, s-maxage=300');
 
   return res.status(200).send(req.method === 'HEAD' ? '' : buildSandboxHtml());
 }
