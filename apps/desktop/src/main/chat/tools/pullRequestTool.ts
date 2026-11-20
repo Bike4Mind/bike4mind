@@ -45,7 +45,7 @@ export const setSessionPullRequest: ToolDefinition = {
 
   async run(input, context) {
     const pullRequests = context.pullRequests;
-    if (!pullRequests) throw new Error('The PR bar can only be changed in a conversation the user is in.');
+    if (!pullRequests) throw new Error('The PR bar can only be changed in a turn the user typed.');
     const target = typeof input.pull_request === 'string' ? input.pull_request.trim() : '';
     const clear = input.clear === true;
     if (clear && target) throw new Error('Pass either pull_request or clear, not both.');

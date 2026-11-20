@@ -1,23 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
-const { getActiveSubscriptionsForUser, getRequestActiveSubscriptions, settingsMap } = vi.hoisted(() => ({
-  getActiveSubscriptionsForUser: vi.fn(),
-  getRequestActiveSubscriptions: vi.fn(),
-  settingsMap: vi.fn(),
-}));
+const { getActiveSubscriptionsForUser, getRequestActiveSubscriptions, settingsMap, findByClientId } = vi.hoisted(
+  () => ({
+    findByClientId: vi.fn(),
+    warn: vi.fn(),
+    getActiveSubscriptionsForUser: vi.fn(),
+    getRequestActiveSubscriptions: vi.fn(),
+    settingsMap: vi.fn(),
+  })
+);
 
 vi.mock('../entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
 }));
-vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  oauthClientRepository: { findByClientId },
+}));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: settingsMap,
 }));
 
-import { applyUntrustedRateLimit, resolveApiKeyTrust, resolveUntrustedKeyLimits } from './apiKeyTrust';
+import {
+  applyUntrustedRateLimit,
+  clearUnpaidAccountLimitsCache,
+  resolveApiKeyTrust,
+  resolveUntrustedKeyLimits,
+} from './apiKeyTrust';
 import type { ActiveSubscriptionsRequest } from '../entitlements/activeSubscriptions';
 
 // Only handed through to the mocked reader, so an opaque stand-in is enough.
@@ -167,5 +180,86 @@ describe('applyUntrustedRateLimit', () => {
     const result = await resolveUntrustedKeyLimits(systemOwner, { rateLimit: keyLimit });
     expect(result).toEqual({ rateLimit: keyLimit, ownerUntrusted: false });
     expect(settingsMap).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveUntrustedKeyLimits with an exchange client', () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+  const unpaidAccountLimits = { requestsPerMinute: 8, requestsPerDay: 80, tokensPerMinute: 900, maxConcurrent: 3 };
+  const exchangeKey = { rateLimit: keyLimit, oauthExchangeClientId: 'client-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    clearUnpaidAccountLimitsCache();
+    settingsMap.mockResolvedValue({ apiKeyUntrustedRequestsPerDay: '200' });
+    getActiveSubscriptionsForUser.mockResolvedValue([]);
+  });
+
+  it("replaces the global per-minute and per-day ceilings with the client's and returns its limits", async () => {
+    findByClientId.mockResolvedValue({ unpaidAccountLimits });
+    const result = await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(result).toEqual({
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+      rateLimit: { requestsPerMinute: 8, requestsPerDay: 80 },
+    });
+  });
+
+  it("still applies the key's own lower limit", async () => {
+    findByClientId.mockResolvedValue({ unpaidAccountLimits });
+    const result = await resolveUntrustedKeyLimits(youngVerified, {
+      ...exchangeKey,
+      rateLimit: { requestsPerMinute: 3, requestsPerDay: 40 },
+    });
+    expect(result.rateLimit).toEqual({ requestsPerMinute: 3, requestsPerDay: 40 });
+  });
+
+  it('lets a client set per-day to 0 to leave the day quota to the key', async () => {
+    findByClientId.mockResolvedValue({ unpaidAccountLimits: { ...unpaidAccountLimits, requestsPerDay: 0 } });
+    const result = await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(result.rateLimit).toEqual({ requestsPerMinute: 8, requestsPerDay: 1000 });
+  });
+
+  it('uses the global values when the client has no limits', async () => {
+    findByClientId.mockResolvedValue({});
+    const result = await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(result).toEqual({
+      ownerUntrusted: true,
+      rateLimit: { requestsPerMinute: 20, requestsPerDay: 200 },
+    });
+  });
+
+  it('uses the global values and never looks a client up for a key that was not exchange-minted', async () => {
+    const result = await resolveUntrustedKeyLimits(youngVerified, { rateLimit: keyLimit });
+    expect(result.rateLimit).toEqual({ requestsPerMinute: 20, requestsPerDay: 200 });
+    expect(findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('leaves a trusted owner untouched without a client lookup', async () => {
+    getActiveSubscriptionsForUser.mockResolvedValue([{ priceId: 'price_x' }]);
+    const result = await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(result).toEqual({ rateLimit: keyLimit, ownerUntrusted: false });
+    expect(findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the global clamp and warns when the lookup throws, without caching the failure', async () => {
+    findByClientId.mockRejectedValueOnce(new Error('db down'));
+    const failed = await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(failed.rateLimit).toEqual({ requestsPerMinute: 20, requestsPerDay: 200 });
+    expect(failed.unpaidAccountLimits).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+
+    findByClientId.mockResolvedValueOnce({ unpaidAccountLimits });
+    expect((await resolveUntrustedKeyLimits(youngVerified, exchangeKey)).unpaidAccountLimits).toEqual(
+      unpaidAccountLimits
+    );
+  });
+
+  it('caches the client lookup between requests', async () => {
+    findByClientId.mockResolvedValue({ unpaidAccountLimits });
+    await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    await resolveUntrustedKeyLimits(youngVerified, exchangeKey);
+    expect(findByClientId).toHaveBeenCalledOnce();
   });
 });

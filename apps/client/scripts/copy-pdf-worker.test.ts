@@ -34,6 +34,12 @@ afterAll(() => {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Buffer.equals, not toEqual: a deep toEqual walks every byte and took seconds per megabyte.
+const expectSameBytes = (actual: Buffer, expected: Buffer, label: string) => {
+  expect(actual.length, `${label} length`).toBe(expected.length);
+  expect(actual.equals(expected), `${label} bytes`).toBe(true);
+};
+
 const run = (destinationDir: string, pdfjsRoot?: string) =>
   spawnSync(process.execPath, [SCRIPT, destinationDir, ...(pdfjsRoot ? [pdfjsRoot] : [])], { encoding: 'utf8' });
 
@@ -55,8 +61,8 @@ describe('copy-pdf-worker.mjs', () => {
     const result = run(dir);
 
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(path.join(dir, VERSIONED_NAME))).toEqual(REAL_WORKER_BYTES);
-    expect(fs.readFileSync(path.join(dir, LEGACY_NAME))).toEqual(REAL_WORKER_BYTES);
+    expectSameBytes(fs.readFileSync(path.join(dir, VERSIONED_NAME)), REAL_WORKER_BYTES, VERSIONED_NAME);
+    expectSameBytes(fs.readFileSync(path.join(dir, LEGACY_NAME)), REAL_WORKER_BYTES, LEGACY_NAME);
   });
 
   it('is idempotent: running twice leaves only the current versioned and legacy names behind', () => {
@@ -82,7 +88,11 @@ describe('copy-pdf-worker.mjs', () => {
       'cmaps/UniJIS-UCS2-H.bcmap',
       'iccs/CGATS001Compat-v2-micro.icc',
     ]) {
-      expect(fs.readFileSync(path.join(dir, ASSETS_NAME, file))).toEqual(fs.readFileSync(path.join(pdfjsDir, file)));
+      expectSameBytes(
+        fs.readFileSync(path.join(dir, ASSETS_NAME, file)),
+        fs.readFileSync(path.join(pdfjsDir, file)),
+        file
+      );
     }
     const expectedWasm = fs
       .readdirSync(path.join(pdfjsDir, 'wasm'))
@@ -101,8 +111,10 @@ describe('copy-pdf-worker.mjs', () => {
     for (const sub of ASSET_DIRS) {
       for (const name of fs.readdirSync(path.join(pdfjsDir, sub)).filter(name => name.startsWith('LICENSE'))) {
         const servedName = path.extname(name) ? name : `${name}.txt`;
-        expect(fs.readFileSync(path.join(dir, ASSETS_NAME, sub, servedName))).toEqual(
-          fs.readFileSync(path.join(pdfjsDir, sub, name))
+        expectSameBytes(
+          fs.readFileSync(path.join(dir, ASSETS_NAME, sub, servedName)),
+          fs.readFileSync(path.join(pdfjsDir, sub, name)),
+          `${sub}/${servedName}`
         );
       }
     }
@@ -121,8 +133,10 @@ describe('copy-pdf-worker.mjs', () => {
 
     expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete-v2'))).toBe(true);
     expect(fs.existsSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE'))).toBe(false);
-    expect(fs.readFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE.txt'))).toEqual(
-      fs.readFileSync(path.join(pdfjsDir, 'cmaps', 'LICENSE'))
+    expectSameBytes(
+      fs.readFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE.txt')),
+      fs.readFileSync(path.join(pdfjsDir, 'cmaps', 'LICENSE')),
+      'cmaps/LICENSE.txt'
     );
   });
 

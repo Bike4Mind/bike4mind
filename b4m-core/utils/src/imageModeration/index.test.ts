@@ -1,4 +1,5 @@
 import { randomBytes, randomFillSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { imageSize } from 'image-size';
 import {
@@ -272,6 +273,59 @@ describe('RekognitionImageModerationService.checkImage', () => {
       expect(seenImageBytes[1][0]).toBe(0xff);
       expect(seenImageBytes[1][1]).toBe(0xd8);
       expect(seenImageBytes[1][2]).toBe(0xff);
+    });
+
+    describe('a still WebP (jimp cannot decode WebP)', () => {
+      // 32x32 solid rgb(200, 30, 30), lossy VP8: the shape a gpt-image render with outputFormat webp takes.
+      const STILL_WEBP = readFileSync(new URL('./__fixtures__/still-red.webp', import.meta.url));
+
+      // Like the real API, which takes JPEG or PNG only.
+      const jpegOrPngOnly = (labels: unknown[] = []) => {
+        const seen: Buffer[] = [];
+        const client = {
+          send: vi.fn(async (command: { input: { Image?: { Bytes?: Uint8Array } } }) => {
+            const bytes = Buffer.from(command.input.Image!.Bytes!);
+            seen.push(bytes);
+            const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+            const png = bytes.subarray(0, 4).toString('latin1') === '\x89PNG';
+            if (!jpeg && !png) throw invalidImageFormatError();
+            return { ModerationLabels: labels };
+          }),
+        } as unknown as import('@aws-sdk/client-rekognition').RekognitionClient;
+        return { client, seen };
+      };
+
+      it('is decoded up front and scanned once, as a JPEG of the same pixels', async () => {
+        const { client, seen } = jpegOrPngOnly();
+        const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+
+        await expect(svc.checkImage(STILL_WEBP, 'image/webp')).resolves.toBeUndefined();
+
+        expect(client.send).toHaveBeenCalledTimes(1);
+        const { Jimp } = await import('jimp');
+        const scanned = await Jimp.read(seen[0]);
+        expect(scanned.bitmap).toMatchObject({ width: 32, height: 32 });
+        const [r, g, b] = scanned.bitmap.data;
+        expect(r).toBeGreaterThan(180);
+        expect(g).toBeLessThan(60);
+        expect(b).toBeLessThan(60);
+      });
+
+      it('is still blocked when the scan of the decoded image flags it', async () => {
+        const { client } = jpegOrPngOnly([{ Name: 'Explicit', ParentName: '', Confidence: C }]);
+        const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+
+        await expect(svc.checkImage(STILL_WEBP, 'image/webp')).rejects.toBeInstanceOf(ImageModerationBlockedError);
+      });
+
+      it('is unsupported, never sent to Rekognition, when the WebP is corrupt', async () => {
+        const { client } = jpegOrPngOnly();
+        const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+        const corrupt = Buffer.concat([STILL_WEBP.subarray(0, 20), Buffer.alloc(STILL_WEBP.length - 20)]);
+
+        await expect(svc.checkImage(corrupt, 'image/webp')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+        expect(client.send).not.toHaveBeenCalled();
+      });
     });
 
     it('throws UnsupportedImageFormatError (terminal, not retried further) when jimp cannot decode the bytes either', async () => {

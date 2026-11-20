@@ -33,6 +33,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '../billing/userLimitEvents';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
@@ -158,6 +159,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       projects: projectRepository,
       organizations: organizationRepository,
       spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,

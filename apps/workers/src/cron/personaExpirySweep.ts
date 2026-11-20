@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { connectDB } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { disableExpiredPersonas, readPersonaMintEnabled } from '@server/personas/personaAccounts';
+import { disableExpiredPersonas, readPersonaMintEnabled } from '@bike4mind/server-utils/personas/personaAccounts';
 import { Resource } from 'sst';
 
 /**

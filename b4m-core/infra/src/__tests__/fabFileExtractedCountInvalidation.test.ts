@@ -82,6 +82,7 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/slackQuestProcessor.ts',
   'apps/client/server/qa/storage.ts',
   'apps/client/server/utils/publicSettingsArtifact.ts',
+  'apps/client/server/services/publish/publishStoredArtifact.ts',
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',

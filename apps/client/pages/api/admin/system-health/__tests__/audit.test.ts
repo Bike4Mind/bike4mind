@@ -26,11 +26,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 const mocks = vi.hoisted(() => ({ sendTestEmail: vi.fn(), ping: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
-  MailService: class {
-    sendTestEmail = mocks.sendTestEmail;
-  },
-}));
+vi.mock('@bike4mind/server-utils/utils/mailer/testEmail', () => ({ sendLiveTestEmail: mocks.sendTestEmail }));
 vi.mock('mongoose', () => ({
   default: { connection: { readyState: 1, db: { admin: () => ({ ping: mocks.ping }) } } },
 }));

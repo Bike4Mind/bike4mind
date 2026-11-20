@@ -15,7 +15,7 @@ import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
 // Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
 // The door admits legacy keys until the legacy window ends, since GET was open to every key before.

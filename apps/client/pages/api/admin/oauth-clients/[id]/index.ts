@@ -38,6 +38,11 @@ const handler = adminApi({
       { field: 'federatedIdp', before: before.federatedIdp ?? null, after: after.federatedIdp ?? null },
       { field: 'rateLimit', before: before.rateLimit ?? null, after: after.rateLimit ?? null },
       {
+        field: 'unpaidAccountLimits',
+        before: before.unpaidAccountLimits ?? null,
+        after: after.unpaidAccountLimits ?? null,
+      },
+      {
         field: 'unpaidAccountsAllowed',
         before: before.unpaidAccountsAllowed ?? null,
         after: after.unpaidAccountsAllowed ?? null,

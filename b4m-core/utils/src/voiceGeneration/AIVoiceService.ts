@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { VoiceOutputFormat } from '@bike4mind/common';
+import type { SpeechWordTiming, VoiceOutputFormat } from '@bike4mind/common';
 
 export interface VoiceSynthesisOptions {
   // Provider voice id/name. OpenAI: 'alloy' etc.; ElevenLabs: a voiceId.
@@ -15,6 +15,8 @@ export interface VoiceSynthesisOptions {
   language?: string;
   // Aborts the provider call; an abort surfaces as a thrown transport error.
   signal?: AbortSignal;
+  // Ask for per-word timing of the text in the clip. Providers that cannot align (OpenAI) ignore it.
+  withTimestamps?: boolean;
 }
 
 export interface VoiceSynthesisResult {
@@ -27,6 +29,8 @@ export interface VoiceSynthesisResult {
   model: string;
   // Input character count - the billable unit for per-character TTS pricing.
   characters: number;
+  // Set when withTimestamps was asked for and the provider aligned the text.
+  wordTimings?: SpeechWordTiming[];
 }
 
 // Content-Type for each supported output format, shared by all vendor

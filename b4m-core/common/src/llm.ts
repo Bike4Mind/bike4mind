@@ -311,6 +311,18 @@ export const resolveHistoryFetchLimit = (historyCount: number | null | undefined
 export const normalizeRequestedHistoryCount = (historyCount: number): number =>
   historyCount === CLIENT_UNLIMITED_HISTORY_VALUE ? UNLIMITED_HISTORY_COUNT : historyCount;
 
+/**
+ * Most platform connector ids one request may carry; a bound on what reaches a Mongo `$in`. Generous
+ * because the composer keeps an id across an admin's disable and re-enable and never prunes it.
+ */
+export const MAX_ENABLED_PLATFORM_MCP_CONNECTIONS = 200;
+
+/** Platform MCP connector ids (ObjectId hex) the composer switched on. */
+export const EnabledPlatformMcpConnectionsSchema = z
+  .array(z.string().regex(/^[a-f\d]{24}$/i))
+  .max(MAX_ENABLED_PLATFORM_MCP_CONNECTIONS)
+  .optional();
+
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
@@ -446,6 +458,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * would switch them all off.
    */
   disabledMcpConnections: z.array(z.string()).optional(),
+  /**
+   * Ids of the platform connectors the user switched on in the composer. Opt-in, unlike
+   * `disabledMcpConnections`: a platform connector is offered to no one who has not switched it on,
+   * so a request without this list gets none.
+   */
+  enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
   /** Project ID */
   projectId: z.string().optional(),
   /** Organization ID */

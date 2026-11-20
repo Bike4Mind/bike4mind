@@ -52,7 +52,7 @@ describe('the Settings screen', () => {
     expect(groups).toHaveLength(5);
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
-      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
       ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
       ['local-context', 'token-rate', 'curated-list'],
       ['local-history', 'local-data-export'],
@@ -65,6 +65,14 @@ describe('the Settings screen', () => {
         expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
       }
     });
+  });
+
+  it('offers the notify scope next to the chime, agents only by default', () => {
+    expect(html).toContain('data-testid="settings-notify-scope-group"');
+    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(html).toContain('Agents only');
+    expect(html).toContain('All sessions');
   });
 
   it('keeps advanced worker settings behind an expandable disclosure', () => {

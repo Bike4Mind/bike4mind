@@ -134,7 +134,8 @@ export async function loadAgentMcpTools(
   }
 
   // Own try/catch: a custom-connector failure drops custom tools only. There is no approval hook
-  // here - the executor's permission gate pauses every tool that is not in `approvedTools`.
+  // here - the executor's permission gate pauses every tool that is not in `approvedTools`. An agent
+  // run carries no Tools-menu choice, so no platform connector is listed.
   if (deps.customMcp) {
     try {
       for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {

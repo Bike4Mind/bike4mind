@@ -6,22 +6,21 @@ import { sanitizeRedirectTo } from '@client/app/utils/authRedirect';
  * Visibility filter for premium-overlay nav launch points (empty array in the
  * open-core fork).
  *
- * Visibility is STRICT: an item shows only when its entitlement / feature-tag
- * gate passes (OR when both are set), with NO admin/developer bypass -
- * deliberately NOT mirroring the route/product gate (RestrictedPage), which
- * bypasses both. Each access gate keeps its own bypass set by design; do not
- * "fix" this predicate.
+ * Staff (admins and developers) see every item, matching RestrictedPage, which
+ * lets both through every overlay route. Everyone else sees an item only when
+ * its entitlement / feature-tag gate passes (OR when both are set).
  *
  * While entitlements load (`entitlements` undefined), gated items stay hidden
- * (no flash). Denied items are HIDDEN, never redirected - the route's own gate
- * handles direct navigation. This function never sees admin status, which
- * structurally guarantees the no-bypass rule.
+ * from non-staff (no flash). Denied items are HIDDEN, never redirected - the
+ * route's own gate handles direct navigation.
  */
 export function filterVisiblePremiumNavItems(
   items: readonly PremiumNavDescriptor[],
   entitlements: readonly string[] | undefined,
-  userTags: readonly string[] | null | undefined
+  userTags: readonly string[] | null | undefined,
+  isStaff = false
 ): PremiumNavDescriptor[] {
+  if (isStaff) return [...items];
   return items.filter(item => {
     const gates: boolean[] = [];
     if (item.requireEntitlement) {

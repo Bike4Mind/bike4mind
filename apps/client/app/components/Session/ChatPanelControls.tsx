@@ -8,7 +8,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { useCopySessionMarkdown } from './useCopySessionMarkdown';
+import { useCopySessionMarkdown, type GetCopyMarkdown } from './useCopySessionMarkdown';
 
 /**
  * Square chrome button for a panel header. Exported so surfaces that contribute their
@@ -43,6 +43,11 @@ interface ChatPanelControlsProps {
   showFloat?: boolean;
   /** Offer the dock layouts. Off for hosts that cannot lay out a docked panel (e.g. /admin). */
   dockable?: boolean;
+  /**
+   * Markdown for the copy button. Omit to copy the main chat's current session; a surface
+   * with its own chat (e.g. a premium overlay) passes this so the button copies that chat.
+   */
+  getCopyMarkdown?: GetCopyMarkdown;
 }
 
 /**
@@ -55,8 +60,9 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({
   activeLayout,
   showFloat = false,
   dockable = true,
+  getCopyMarkdown,
 }) => {
-  const { copyMarkdown, copied } = useCopySessionMarkdown();
+  const { copyMarkdown, copied } = useCopySessionMarkdown(getCopyMarkdown);
 
   return (
     <>

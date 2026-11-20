@@ -8,6 +8,7 @@ import { func as reauthFunc } from '@server/websocket/reauthConnection';
 import type { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import crypto from 'crypto';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 
 /**
  * Self-host WebSocket handler bridge.
@@ -41,6 +42,7 @@ const handler = baseApi({ auth: false }).post(
     const provided = Array.isArray(providedRaw) ? '' : (providedRaw ?? '');
     const secretOk =
       !!expected &&
+      !isUnconfiguredSecret(expected) &&
       provided.length === expected.length &&
       crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
     if (!secretOk) {

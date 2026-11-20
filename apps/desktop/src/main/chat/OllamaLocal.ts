@@ -19,7 +19,7 @@ import {
 } from '@shared/localContextSetting';
 import { MAX_DRAFT_TOKENS, type ModelLoadOffer, type ModelLoadSettings } from '@shared/modelSettings';
 import type { QuantizedKvCacheType } from '@shared/modelServers';
-import type { CompletionMessage, CompletionRequest } from './completions';
+import { type CompletionMessage, type CompletionRequest, wireMessages } from './completions';
 import { configuredNumCtx, positiveTokenCount } from './localChatContext';
 import { draftFactsOf, draftTokensOf, ollamaDraft, ollamaLoadFields } from './loadOptions';
 import {
@@ -395,7 +395,7 @@ export class OllamaLocal {
         body: JSON.stringify({
           model,
           stream: true,
-          messages: fitted.map(({ continuesTurn: _continuesTurn, ...message }) => message),
+          messages: wireMessages(fitted),
           // Ollama's own truncation and its context shift (once prompt plus reply reach num_ctx) both
           // keep the first few tokens and the tail, cutting the system prompt. With shift off the
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).

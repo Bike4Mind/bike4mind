@@ -40,8 +40,8 @@ public enum VoiceAudioEvent: Sendable, Equatable {
   case outputRouteLost
 }
 
-/// The shared audio session for a conversation: record and play together, echo cancelled, speaker by
-/// default and Bluetooth routes allowed.
+/// The shared audio session for a conversation: record and play together, speaker by default and Bluetooth
+/// routes allowed. The reply's echo in the mic is kept out of the transcript by `SpeechEchoFilter`, not the session.
 public protocol VoiceAudioSessionControlling: Sendable {
   func activate() async throws
   func deactivate() async

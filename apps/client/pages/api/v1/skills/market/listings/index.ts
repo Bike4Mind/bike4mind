@@ -10,7 +10,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { enforceSubmitRateLimits, memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
+import { audienceIdsFor, enforceSubmitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
 import { searchListings } from '@server/skillMarket/search';
 import { publishListing } from '@server/skillMarket/author';
 import { toPublicListing, toPublicVersion } from '@server/skillMarket/publicView';
@@ -22,7 +22,7 @@ const MAX_PAGE = 1000;
 // ponytail: the cursor wraps a page number, because the ranked sorts (relevance, top) have no stable
 // keyset; rows can skip or repeat if rankings shift mid-iteration. Keyset per sort if that bites.
 const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(async (req, res) => {
-  const { limit, cursor, q, scope, tags, tools, min_rating, sort } = req.validatedQuery;
+  const { limit, cursor, q, scope, space_id, tags, tools, min_rating, sort } = req.validatedQuery;
   let page = 1;
   if (cursor !== undefined) {
     const parts = decodeCursor(cursor, CURSOR_SCOPE).split(':');
@@ -37,9 +37,10 @@ const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(as
     }
   }
 
-  const result = await searchListings(await memberOrgIdsFor(req.user.id), {
+  const result = await searchListings(await audienceIdsFor(req.user.id), {
     q,
     scope,
+    spaceId: space_id,
     tags: tags
       ?.split(',')
       .map(t => t.trim().toLowerCase())
@@ -66,13 +67,19 @@ const publishRoute = nextRouteForContract(publishSkillMarketListingContract, {
   let organizationId = body.organization_id;
   // v1 only: a caller in exactly one organization need not name it.
   if (body.visibility === 'organization' && !organizationId) {
-    const orgIds = await memberOrgIdsFor(req.user.id);
+    const { orgIds } = await audienceIdsFor(req.user.id);
     if (orgIds.length === 1) organizationId = orgIds[0];
   }
 
   const { listing, version } = await publishListing(
     req.user,
-    { skillId: body.skill_id, visibility: body.visibility, organizationId, tags: body.tags },
+    {
+      skillId: body.skill_id,
+      visibility: body.visibility,
+      organizationId,
+      spaceId: body.space_id,
+      tags: body.tags,
+    },
     req.logger
   );
   return res.status(201).json({

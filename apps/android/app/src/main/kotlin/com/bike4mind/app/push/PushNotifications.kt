@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
 import com.bike4mind.app.MainActivity
+import com.bike4mind.app.R
 import com.bike4mind.kit.push.PushTokenMemory
 
 /** Channel and foreground display for pushes. The server's FCM payload is `notification` plus string `data`. */
@@ -18,22 +19,27 @@ internal object PushNotifications {
     const val CHANNEL_ID = "b4m_default"
 
     fun createChannel(context: Context) {
-        val channel = NotificationChannel(CHANNEL_ID, "Bike4Mind", NotificationManager.IMPORTANCE_DEFAULT)
+        val channel = NotificationChannel(CHANNEL_ID, context.getString(R.string.notification_channel_default), NotificationManager.IMPORTANCE_DEFAULT)
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     /**
      * FCM hands a notification message to the app instead of the system tray while the app is in the foreground,
-     * so it is shown here. Tapping it opens the app.
+     * so it is shown here. Tapping it opens the app with [data] as extras, as a system-tray tap would, so
+     * MainActivity routes both the same way.
      */
     @SuppressLint("MissingPermission") // Guarded by areNotificationsEnabled(), which covers POST_NOTIFICATIONS.
-    fun show(context: Context, title: String?, body: String?, tag: String?) {
+    fun show(context: Context, title: String?, body: String?, tag: String?, data: Map<String, String> = emptyMap()) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
+        val launch = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        data.forEach { (key, value) -> launch.putExtra(key, value) }
         val open = PendingIntent.getActivity(
             context,
-            0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            // Distinct per notification: with one request code, FLAG_UPDATE_CURRENT would give every earlier
+            // notification the newest one's extras.
+            tag?.hashCode() ?: 0,
+            launch,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

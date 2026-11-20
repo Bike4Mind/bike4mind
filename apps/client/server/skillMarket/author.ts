@@ -22,7 +22,7 @@ import {
   findListing,
   loadMarketSettings,
   meetsPublicAccountAge,
-  memberOrgIdsFor,
+  audienceIdsFor,
   validateListingTags,
   withdrawListing,
   type MarketActor,
@@ -46,7 +46,13 @@ const ALREADY_LISTED = 'This skill already has a listing. Submit a new version f
  */
 export async function publishListing(
   user: MarketAuthor,
-  input: { skillId: string; visibility: SkillListingVisibility; organizationId?: string; tags?: string[] },
+  input: {
+    skillId: string;
+    visibility: SkillListingVisibility;
+    organizationId?: string;
+    spaceId?: string;
+    tags?: string[];
+  },
   logger: Logger
 ) {
   const tags = validateListingTags(input.tags);
@@ -62,13 +68,20 @@ export async function publishListing(
 
   if (input.visibility === 'organization') {
     if (!input.organizationId) throw new BadRequestError('Choose an organization');
-    if (!(await memberOrgIdsFor(user.id)).includes(input.organizationId)) {
+    if (!(await audienceIdsFor(user.id)).orgIds.includes(input.organizationId)) {
       throw new ForbiddenError('You can only publish to organizations you belong to');
+    }
+  }
+  if (input.visibility === 'space') {
+    if (!input.spaceId) throw new BadRequestError('Choose a space');
+    // Empty with EnableSpaces off, so the flag refuses here too.
+    if (!(await audienceIdsFor(user.id)).spaceIds.includes(input.spaceId)) {
+      throw new ForbiddenError('You can only publish to spaces you belong to');
     }
   }
   if (input.visibility === 'public' && !meetsPublicAccountAge(user, settings)) {
     throw new ForbiddenError(
-      `New accounts can publish Public listings after ${settings.publicMinAccountAgeDays} days. Organization and unlisted listings are available now.`
+      `New accounts can publish Public listings after ${settings.publicMinAccountAgeDays} days. Organization, Space and unlisted listings are available now.`
     );
   }
 
@@ -102,6 +115,7 @@ export async function publishListing(
       authorName: (user.name || user.username || 'A Bike4Mind user').slice(0, 200),
       visibility: input.visibility,
       ...(input.visibility === 'organization' ? { organizationId: input.organizationId } : {}),
+      ...(input.visibility === 'space' ? { spaceId: input.spaceId } : {}),
       tags,
       name: skill.name,
       description: skill.description,
@@ -140,6 +154,17 @@ export async function publishListing(
   return { listing: fresh!, version };
 }
 
+async function requireAudienceMembership(userId: string, listing: ISkillListing): Promise<void> {
+  if (listing.visibility !== 'organization' && listing.visibility !== 'space') return;
+  const audience = await audienceIdsFor(userId);
+  if (listing.visibility === 'organization' && !audience.orgIds.includes(listing.organizationId ?? '')) {
+    throw new ForbiddenError('You can only publish to organizations you belong to');
+  }
+  if (listing.visibility === 'space' && !audience.spaceIds.includes(listing.spaceId ?? '')) {
+    throw new ForbiddenError('You can only publish to spaces you belong to');
+  }
+}
+
 /**
  * Submit the source skill's current content as a new version. It is scanned and tiered like the
  * first one; until it is approved, everyone keeps seeing and importing the previous approved version.
@@ -156,14 +181,9 @@ export async function submitNewVersion(
   if (listing.status === 'withdrawn' || listing.status === 'delisted') {
     throw new ConflictError('This listing no longer accepts new versions');
   }
-  // Membership is checked at publish time but can lapse afterwards. An Organization listing must
-  // not keep auto-publishing into an org its author has been removed from.
-  if (
-    listing.visibility === 'organization' &&
-    !(await memberOrgIdsFor(user.id)).includes(listing.organizationId ?? '')
-  ) {
-    throw new ForbiddenError('You can only publish to organizations you belong to');
-  }
+  // Membership is checked at publish time but can lapse afterwards. An Organization or Space listing
+  // must not keep auto-publishing into an audience its author has been removed from.
+  await requireAudienceMembership(user.id, listing);
 
   const skill = await skillRepository.findById(listing.sourceSkillId);
   if (!skill || skill.userId !== user.id || skill.deletedAt) {
@@ -187,14 +207,9 @@ export async function rescanOwnVersion(user: MarketActor, versionId: string, log
   if (!version) throw new NotFoundError('Version not found');
   const listing = await findListing(version.listingId);
   if (!listing || listing.authorUserId !== user.id) throw new ForbiddenError('Only the author can rescan');
-  // A rescan can turn an unpublished Organization version live, so the author's membership must
-  // still hold at this point too.
-  if (
-    listing.visibility === 'organization' &&
-    !(await memberOrgIdsFor(user.id)).includes(listing.organizationId ?? '')
-  ) {
-    throw new ForbiddenError('You can only publish to organizations you belong to');
-  }
+  // A rescan can turn an unpublished Organization or Space version live, so the author's membership
+  // must still hold at this point too.
+  await requireAudienceMembership(user.id, listing);
 
   return rescanVersion(listing, String(version._id), {
     getClassifier: () => getOperationsClassifierLlm(logger, user.id),

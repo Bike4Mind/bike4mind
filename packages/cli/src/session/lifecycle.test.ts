@@ -120,7 +120,11 @@ describe('session lifecycle', () => {
         .setSession(makeSession({ id: 'old', model: 'claude-opus-4-8', messages: [message('user', 'x')] }));
       const decisionStore = { decisions: [{ id: 'd1' }] } as unknown as DecisionStore;
       const blockerStore = { blockers: [{ id: 'b1' }] } as unknown as BlockerStore;
-      const todoStore = { todos: [{ description: 'stale', status: 'in_progress' }] } as unknown as TodoStore;
+      const onUpdate = vi.fn();
+      const todoStore = {
+        todos: [{ id: 'x', content: 'stale', status: 'in_progress' }],
+        onUpdate,
+      } as unknown as TodoStore;
       const onSessionReplaced = vi.fn();
       const ctx = makeCtx({ decisionStore, blockerStore, todoStore, onSessionReplaced });
 
@@ -135,6 +139,7 @@ describe('session lifecycle', () => {
       // Todos are never persisted; a session switch must clear them so a prior
       // session's todos cannot bleed into the new session's offline handoff.
       expect(todoStore.todos).toEqual([]);
+      expect(onUpdate).toHaveBeenCalledWith([]);
       expect(ctx.checkpointStore!.setSessionId).toHaveBeenCalledWith(created.id);
       expect(onSessionReplaced).toHaveBeenCalledOnce();
     });
@@ -180,6 +185,18 @@ describe('session lifecycle', () => {
   });
 
   describe('resumeSession', () => {
+    it('clears the previous session plan and notifies listeners', async () => {
+      const onUpdate = vi.fn();
+      const todoStore = { todos: [{ id: 'x', content: 'stale', status: 'pending' }], onUpdate } as unknown as TodoStore;
+      const load = vi.fn(async () => makeSession({ id: 'saved-1' }));
+      const ctx = makeCtx({ todoStore, sessionStore: { load, save: vi.fn() } as unknown as SessionStore });
+
+      await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      expect(todoStore.todos).toEqual([]);
+      expect(onUpdate).toHaveBeenCalledWith([]);
+    });
+
     it('loads the selected session from disk and installs it', async () => {
       const stored = makeSession({ id: 'saved-1', name: 'saved', messages: [message('user', 'earlier')] });
       const load = vi.fn(async () => stored);

@@ -16,6 +16,12 @@ export interface ProviderSpendFetchOptions {
 
 export const DEFAULT_SPEND_DEADLINE_MS = 240_000;
 const MAX_ATTEMPTS = 4;
+const BACKOFF_BASE_MS = 500;
+// A 429 that carries no usable wait header is retried for at least a minute in total, so a
+// provider's per-minute request window has rolled over before the last attempt.
+const MAX_RATE_LIMIT_ATTEMPTS = 6;
+const RATE_LIMIT_BACKOFF_BASE_MS = 2_000;
+const MAX_BACKOFF_MS = 30_000;
 const ATTEMPT_TIMEOUT_MS = 30_000;
 const RESET_HEADERS = [
   'anthropic-ratelimit-requests-reset',
@@ -24,6 +30,14 @@ const RESET_HEADERS = [
   'anthropic-ratelimit-output-tokens-reset',
   'x-ratelimit-reset-requests',
   'x-ratelimit-reset-tokens',
+];
+const WAIT_HEADERS = ['retry-after-ms', 'retry-after', ...RESET_HEADERS];
+// Logged only, never waited on: they say which limit a 429 hit.
+const QUOTA_HEADERS = [
+  'x-ratelimit-limit-requests',
+  'x-ratelimit-remaining-requests',
+  'anthropic-ratelimit-requests-limit',
+  'anthropic-ratelimit-requests-remaining',
 ];
 
 function durationMs(value: string): number | undefined {
@@ -36,6 +50,7 @@ function durationMs(value: string): number | undefined {
 }
 
 function waitFromHeader(name: string, value: string, now: number): number | undefined {
+  if (name === 'retry-after-ms') return /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : undefined;
   if (name === 'retry-after' && /^\d+(?:\.\d+)?$/.test(value)) return Number(value) * 1000;
   if (name.startsWith('x-ratelimit-reset-')) return durationMs(value);
   if (
@@ -50,15 +65,13 @@ function waitFromHeader(name: string, value: string, now: number): number | unde
 
 function safeHeaders(headers: Headers | undefined, secrets: string[]): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const name of ['retry-after', ...RESET_HEADERS]) {
+  for (const name of [...WAIT_HEADERS, ...QUOTA_HEADERS]) {
     const value = headers?.get(name);
-    if (
-      value &&
-      !secrets.some(secret => value.includes(secret)) &&
-      value.length <= 100 &&
-      waitFromHeader(name, value, Date.now()) !== undefined
-    )
-      result[name] = value;
+    if (!value || value.length > 100 || secrets.some(secret => value.includes(secret))) continue;
+    const valid = QUOTA_HEADERS.includes(name)
+      ? /^\d{1,12}$/.test(value)
+      : waitFromHeader(name, value, Date.now()) !== undefined;
+    if (valid) result[name] = value;
   }
   return result;
 }
@@ -99,7 +112,7 @@ export async function fetchSpendJson<T>(
     (value): value is string => Boolean(value)
   );
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= MAX_RATE_LIMIT_ATTEMPTS; attempt++) {
     const remainingMs = deadline - Date.now();
     let status: number | undefined;
     let headers: Headers | undefined;
@@ -165,18 +178,23 @@ export async function fetchSpendJson<T>(
     const waits = Object.entries(diagnostic.rateLimitHeaders)
       .filter(
         ([name]) =>
-          name === 'retry-after' ||
-          !headers?.get(name.replace('-reset', '-remaining')) ||
-          headers?.get(name.replace('-reset', '-remaining')) === '0'
+          WAIT_HEADERS.includes(name) &&
+          (name.startsWith('retry-after') ||
+            !headers?.get(name.replace('-reset', '-remaining')) ||
+            headers?.get(name.replace('-reset', '-remaining')) === '0')
       )
       .map(([name, value]) => waitFromHeader(name, value, Date.now()) ?? 0);
-    const delayMs = Math.max(500 * 2 ** (attempt - 1) * (1 + Math.random()), ...waits);
-    if (retryable && attempt < MAX_ATTEMPTS && Date.now() + delayMs < deadline) {
+    const rateLimited = status === 429;
+    const attemptLimit = rateLimited ? MAX_RATE_LIMIT_ATTEMPTS : MAX_ATTEMPTS;
+    const baseMs = rateLimited && !waits.some(ms => ms > 0) ? RATE_LIMIT_BACKOFF_BASE_MS : BACKOFF_BASE_MS;
+    const backoffMs = Math.min(MAX_BACKOFF_MS, baseMs * 2 ** (attempt - 1) * (1 + Math.random()));
+    const delayMs = Math.max(backoffMs, ...waits);
+    if (retryable && attempt < attemptLimit && Date.now() + delayMs < deadline) {
       report({ ...diagnostic, event: 'retry', delayMs });
       await new Promise(resolve => setTimeout(resolve, delayMs));
       continue;
     }
-    if (retryable && attempt < MAX_ATTEMPTS && Date.now() + delayMs >= deadline) diagnostic.reason = 'deadline';
+    if (retryable && attempt < attemptLimit && Date.now() + delayMs >= deadline) diagnostic.reason = 'deadline';
     report(diagnostic);
     throw new Error(`${provider} API${status ? ` ${status}` : ''}: ${diagnostic.reason} (attempt ${attempt})`);
   }

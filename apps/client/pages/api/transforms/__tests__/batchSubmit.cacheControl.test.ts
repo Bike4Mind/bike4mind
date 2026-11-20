@@ -17,7 +17,7 @@ const mockRefs = vi.hoisted(() => ({
   submitted: null as any,
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: async () => ({ release: async () => {} }),
 }));
 

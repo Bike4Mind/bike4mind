@@ -165,6 +165,7 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationEscalationEmails',
   'blockedEmailDomains',
   'freeTierAllowedModels',
+  'pythonArtifactDataOrigins',
 ]);
 
 // Display only: the stored category value stays as is, so settings, search and the API are unaffected.
@@ -254,35 +255,7 @@ const AdminSettingsTab: React.FC = () => {
 
       if ((MODEL_SETTINGS_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
-      // Hide settings that have dedicated custom UI in other admin tabs
-      if (
-        [
-          'logoSettings',
-          'RapidReplySettings',
-          'SystemFiles',
-          // Release notes config is edited in the Release notes tab
-          'releaseNotesConfig',
-          // SRE Agent config has its own dedicated admin tab
-          'sreAgentConfig',
-          // Context Telemetry settings are managed in the Context Inspector tab
-          'EnableContextTelemetry',
-          'contextTelemetryAlerts',
-          // Issue filing settings are edited from the Security page's Scans view
-          'secopsTriageConfig',
-          // Overwatch rollup sync is an internal cron-lock document, not user-configurable
-          'overwatchRollupSync',
-          // Model list revision is an internal stamp rewritten by the model-list refresh
-          'modelListRevision',
-          // Model access revision is an internal stamp rewritten by model access writes
-          'modelAccessRevision',
-          // PR Status Digest settings are edited inline in the PR Status Digest tab
-          'prReportRepo',
-          'prReportIdentityMap',
-          'prReportWebhookUrl',
-          'prReportEgressAllowlist',
-        ].includes(settingConfig.key)
-      )
-        return false;
+      if (settingInfo.hideFromSettingsList) return false;
 
       // Hide child settings when their parent setting is off
       if (settingInfo.dependsOn) {

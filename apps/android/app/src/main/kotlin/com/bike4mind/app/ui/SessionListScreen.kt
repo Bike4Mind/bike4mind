@@ -24,12 +24,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
+import com.bike4mind.app.R
 import com.bike4mind.kit.networking.UpgradeRequiredException
 import com.bike4mind.kit.sessions.SessionSummary
 import kotlinx.coroutines.CancellationException
@@ -43,7 +44,9 @@ data class SessionListState(
     val sessions: List<SessionSummary> = emptyList(),
     val nextCursor: String? = null,
     val loading: Boolean = false,
+    /** The server message of a failed load, if it sent one; the screen shows a generic one otherwise. */
     val error: String? = null,
+    val loadFailed: Boolean = false,
     /** The user's default model from client-config; null until it loads (or when it could not). */
     val defaultModel: String? = null,
 )
@@ -77,7 +80,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 
     private fun load(cursor: String?) {
         if (state.value.loading) return
-        mutableState.update { it.copy(loading = true, error = null) }
+        mutableState.update { it.copy(loading = true, error = null, loadFailed = false) }
         viewModelScope.launch {
             try {
                 val page = graph.sessions.list(cursor)
@@ -93,7 +96,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                mutableState.update { it.copy(loading = false, error = failure.message ?: "Could not load chats") }
+                mutableState.update { it.copy(loading = false, error = failure.message, loadFailed = true) }
             }
         }
     }
@@ -101,7 +104,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit) {
+fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit, onOpenBrief: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
     val model = viewModel { SessionListViewModel(graph) }
     val state by model.state.collectAsStateWithLifecycle()
@@ -110,9 +113,10 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Chats") },
+                title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
-                    TextButton(onClick = model::refresh) { Text("Refresh") }
+                    TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text(stringResource(R.string.sessions_brief)) }
+                    TextButton(onClick = model::refresh) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(onClick = {
                         scope.launch {
                             try {
@@ -126,12 +130,12 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                                 graph.session.restore()
                             }
                         }
-                    }, modifier = Modifier.testTag("settings-signout-btn")) { Text("Sign out") }
+                    }, modifier = Modifier.testTag("settings-signout-btn")) { Text(stringResource(R.string.sessions_sign_out)) }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = onNewChat, modifier = Modifier.testTag("sessions-new-conversation-btn")) { Text("New chat") }
+            ExtendedFloatingActionButton(onClick = onNewChat, modifier = Modifier.testTag("sessions-new-conversation-btn")) { Text(stringResource(R.string.sessions_new_chat)) }
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -139,15 +143,15 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                 state.defaultModel?.let { defaultModel ->
                     item {
                         Text(
-                            text = "Default model: $defaultModel",
+                            text = stringResource(R.string.sessions_default_model, defaultModel),
                             style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s),
                         )
                     }
                 }
-                state.error?.let { error ->
+                if (state.loadFailed) {
                     item {
-                        Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                        Text(state.error ?: stringResource(R.string.sessions_load_failed), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(Spacing.m))
                     }
                 }
                 items(state.sessions, key = { it.id }) { session ->

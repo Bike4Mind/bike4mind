@@ -1,5 +1,6 @@
-import { CreditHolderType, type IUserApiKeyRateLimit } from '@bike4mind/common';
-import { adminSettingsRepository } from '@bike4mind/database';
+import { CreditHolderType, type IUserApiKeyRateLimit, type OAuthClientUnpaidAccountLimits } from '@bike4mind/common';
+import { adminSettingsRepository, oauthClientRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { userApiKeyService } from '@bike4mind/services';
 import {
   getActiveSubscriptionsForUser,
@@ -8,6 +9,39 @@ import {
 } from '../entitlements/activeSubscriptions';
 
 type ApiKeyTrustUser = userApiKeyService.ApiKeyTrustSubject & { id: string; isSystem?: boolean };
+
+const CLIENT_LIMITS_TTL_MS = 60_000;
+const clientLimitsCache = new Map<string, { value: OAuthClientUnpaidAccountLimits | undefined; expiresAt: number }>();
+
+/** Test hook: drops the in-process client limits cache. */
+export function clearUnpaidAccountLimitsCache(): void {
+  clientLimitsCache.clear();
+}
+
+/** A failed lookup resolves to undefined (the global clamp) and is not cached. */
+async function loadUnpaidAccountLimits(clientId: string): Promise<OAuthClientUnpaidAccountLimits | undefined> {
+  const cached = clientLimitsCache.get(clientId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  try {
+    const client = await oauthClientRepository.findByClientId(clientId);
+    const value = client?.unpaidAccountLimits
+      ? {
+          requestsPerMinute: client.unpaidAccountLimits.requestsPerMinute,
+          requestsPerDay: client.unpaidAccountLimits.requestsPerDay,
+          tokensPerMinute: client.unpaidAccountLimits.tokensPerMinute,
+          maxConcurrent: client.unpaidAccountLimits.maxConcurrent,
+        }
+      : undefined;
+    clientLimitsCache.set(clientId, { value, expiresAt: Date.now() + CLIENT_LIMITS_TTL_MS });
+    return value;
+  } catch (error) {
+    Logger.globalInstance.warn('OAuth client unpaid account limits lookup failed; using global untrusted limits', {
+      clientId,
+      error,
+    });
+    return undefined;
+  }
+}
 
 /**
  * The API key trust gate's view of one account, with the settings it was judged against.
@@ -44,24 +78,34 @@ export async function resolveApiKeyTrust(
  * limits they were minted with. Mint time skips trust for the shared system user (createUserApiKey's
  * systemUserId check); here any owner flagged isSystem is exempt. The key's own lower limit wins.
  * `ownerUntrusted` lets a caller skip re-judging the owner.
+ * An exchange key's OAuth client may carry `unpaidAccountLimits`, which replace the global untrusted
+ * ceilings and are returned so callers can apply the token and concurrency values.
  */
 export async function resolveUntrustedKeyLimits(
   owner: ApiKeyTrustUser,
-  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
+  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string; oauthExchangeClientId?: string },
   req?: ActiveSubscriptionsRequest
-): Promise<{ rateLimit: IUserApiKeyRateLimit; ownerUntrusted: boolean }> {
+): Promise<{
+  rateLimit: IUserApiKeyRateLimit;
+  ownerUntrusted: boolean;
+  unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
+}> {
   if (key.billingOwnerType === CreditHolderType.Organization || owner.isSystem === true)
     return { rateLimit: key.rateLimit, ownerUntrusted: false };
   const { assessment, settings } = await resolveApiKeyTrust(owner, req);
   if (assessment.status !== 'untrusted') return { rateLimit: key.rateLimit, ownerUntrusted: false };
+  const unpaidAccountLimits = key.oauthExchangeClientId
+    ? await loadUnpaidAccountLimits(key.oauthExchangeClientId)
+    : undefined;
+  const perMinute = unpaidAccountLimits?.requestsPerMinute ?? settings.untrustedRateLimitPerMinute;
+  const perDay = unpaidAccountLimits?.requestsPerDay ?? settings.untrustedRequestsPerDay;
   return {
     ownerUntrusted: true,
+    ...(unpaidAccountLimits && { unpaidAccountLimits }),
     rateLimit: {
       ...key.rateLimit,
-      requestsPerMinute: Math.min(key.rateLimit.requestsPerMinute, settings.untrustedRateLimitPerMinute),
-      ...(settings.untrustedRequestsPerDay > 0 && {
-        requestsPerDay: Math.min(key.rateLimit.requestsPerDay, settings.untrustedRequestsPerDay),
-      }),
+      requestsPerMinute: Math.min(key.rateLimit.requestsPerMinute, perMinute),
+      ...(perDay > 0 && { requestsPerDay: Math.min(key.rateLimit.requestsPerDay, perDay) }),
     },
   };
 }
@@ -69,7 +113,7 @@ export async function resolveUntrustedKeyLimits(
 /** The rate limit half of {@link resolveUntrustedKeyLimits}. */
 export async function applyUntrustedRateLimit(
   owner: ApiKeyTrustUser,
-  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
+  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string; oauthExchangeClientId?: string },
   req?: ActiveSubscriptionsRequest
 ): Promise<IUserApiKeyRateLimit> {
   return (await resolveUntrustedKeyLimits(owner, key, req)).rateLimit;

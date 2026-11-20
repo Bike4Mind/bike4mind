@@ -110,7 +110,7 @@ vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContr
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: mockAdmitApiKeyCompletion,
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));
@@ -128,7 +128,9 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   cacheService: { get: mockCacheGet, set: vi.fn(), ttl: mockCacheTtl },
 }));
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => ({
+  rateLimitRefusalInfo: (await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>())
+    .rateLimitRefusalInfo,
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
 }));
@@ -1019,6 +1021,8 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
       allowed: false,
       error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
       retryAfter: 12,
+      limitType: 'minute',
+      limit: 10,
       headers: { 'X-RateLimit-Limit-Minute': 10, 'X-RateLimit-Remaining-Minute': 0 },
     });
 
@@ -1027,6 +1031,9 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
     expect(res.headers.get('retry-after')).toBe('12');
     expect(res.headers.get('x-ratelimit-limit-minute')).toBe('10');
     expect(res.headers.get('x-ratelimit-remaining-minute')).toBe('0');
+    expect(body.errorCode).toBe('api_key_rate_limit_exceeded');
+    expect(body.limit).toBe(10);
+    expect(body.windowSeconds).toBe(60);
     expect(body).not.toHaveProperty('retryAfter');
     expect(body).not.toHaveProperty('rateLimitHeaders');
   });
