@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * Skill Market: users publish one of their skills as a listing, every version is safety-scanned,
  * and other users browse, import (a copy of the approved snapshot) and rate it.
@@ -210,3 +212,88 @@ export interface ISkillMarketStatus {
   latestVersion?: number;
   locallyModified: boolean;
 }
+
+/** A listing's shareable template page. Its copy is scanned with the market scan before it is published. */
+export type SkillTemplateStatus = 'draft' | 'in_review' | 'published';
+
+export const SKILL_TEMPLATE_MAX_INPUTS = 3;
+export const SKILL_TEMPLATE_HEADLINE_MAX = 120;
+export const SKILL_TEMPLATE_INPUT_LABEL_MAX = 60;
+export const SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX = 2000;
+export const SKILL_TEMPLATE_SLUG_MAX = 64;
+/** Slugs that would read as a site path under the template page prefix. */
+export const SKILL_TEMPLATE_RESERVED_SLUGS: readonly string[] = [
+  'admin',
+  'api',
+  'app',
+  'b4m',
+  'bike4mind',
+  'help',
+  'login',
+  'logout',
+  'new',
+  'settings',
+  'signup',
+  'support',
+];
+
+export interface ISkillTemplateInput {
+  label: string;
+  required: boolean;
+}
+
+export interface ISkillTemplatePreviewImage {
+  fabFileId: string;
+  source: 'upload' | 'generated';
+}
+
+export interface ISkillListingTemplate {
+  id: string;
+  listingId: string;
+  slug: string;
+  headline: string;
+  inputs: ISkillTemplateInput[];
+  examplePrompt: string;
+  previewImage?: ISkillTemplatePreviewImage | null;
+  status: SkillTemplateStatus;
+  freeRunEnabled: boolean;
+  /** The approved listing version the copy was last drafted from or confirmed against. */
+  generatedFromVersionId?: string | null;
+  /** A newer listing version exists than the one the copy was written for. */
+  stale: boolean;
+  viewCount: number;
+  freeRunCount: number;
+  tryCount: number;
+  /** Set by the first passing publish; the slug is frozen from then on. */
+  firstPublishedAt?: Date;
+  scanStatus?: SkillScanStatus | null;
+  scanClaimedAt?: Date | null;
+  scanFindings: ISkillScanFinding[];
+  scanError?: string;
+  scanModel?: string;
+  riskTier?: SkillRiskTier;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** The copy the draft endpoint proposes; every field is empty when drafting fails. */
+export type SkillTemplateDraft = Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'>;
+
+export const SkillTemplateInputSchema = z.object({
+  label: z.string().trim().min(1).max(SKILL_TEMPLATE_INPUT_LABEL_MAX),
+  required: z.boolean().default(false),
+});
+
+/**
+ * Body of PUT /api/skills/market/[id]/template. Status, counters, the free-run switch and the preview
+ * image are not author-writable here; the slug's shape is checked server-side (templateSlug.ts).
+ */
+export const SkillTemplateUpdateSchema = z.strictObject({
+  slug: z.string().trim().min(1).max(SKILL_TEMPLATE_SLUG_MAX).optional(),
+  headline: z.string().trim().max(SKILL_TEMPLATE_HEADLINE_MAX).optional(),
+  inputs: z.array(SkillTemplateInputSchema).max(SKILL_TEMPLATE_MAX_INPUTS).optional(),
+  examplePrompt: z.string().trim().max(SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX).optional(),
+  /** The listing's current approved version: the copy was (re)drafted from it or reviewed against it. */
+  generatedFromVersionId: z.string().min(1).optional(),
+});
+export type SkillTemplateUpdate = z.infer<typeof SkillTemplateUpdateSchema>;

@@ -296,6 +296,21 @@ The table below remains the literal-update inventory, not proof that all databas
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#approvePendingListingVersion` | repository-check | `literal` | writes "approved" |
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#clearPendingListingVersion` | repository-check | `literal` | writes "rejected" |
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#setPendingListingVersion` | repository-check | `literal` | writes "in_review" |
+| SkillListingTemplate | `scanError` | maxlength | `ai/SkillListingTemplateModel.ts#releaseStaleSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanError` | maxlength | `ai/SkillListingTemplateModel.ts#settleVoidedScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanFindings.excerpt` | maxlength | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanFindings.file` | maxlength | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanFindings.message` | maxlength | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanFindings.severity` | enum | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanFindings.source` | enum | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanStatus` | enum | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanStatus` | enum | `ai/SkillListingTemplateModel.ts#releaseStaleSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `scanStatus` | enum | `ai/SkillListingTemplateModel.ts#settleVoidedScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `status` | enum | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `status` | enum | `ai/SkillListingTemplateModel.ts#releaseStaleSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `status` | enum | `ai/SkillListingTemplateModel.ts#unpublishListingTemplate` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `status` | enum | `ai/SkillListingTemplateModel.ts#unpublishSkillTemplate` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `status` | enum | `ai/SkillListingTemplateModel.ts#writeSkillTemplateScanVerdict` | schema | `runValidators` | update call passes runValidators |
 | SkillListingVersion | `scanFindings.excerpt` | maxlength | `ai/SkillListingVersionModel.ts#claimSkillVersionScan` | repository-check | `packages/database/src/models/ai/SkillListingVersionModel.ts#claimSkillVersionScan` | Writer always sets scanFindings to the literal empty array |
 | SkillListingVersion | `scanFindings.file` | maxlength | `ai/SkillListingVersionModel.ts#claimSkillVersionScan` | repository-check | `packages/database/src/models/ai/SkillListingVersionModel.ts#claimSkillVersionScan` | Writer always sets scanFindings to the literal empty array |
 | SkillListingVersion | `scanFindings.message` | maxlength | `ai/SkillListingVersionModel.ts#claimSkillVersionScan` | repository-check | `packages/database/src/models/ai/SkillListingVersionModel.ts#claimSkillVersionScan` | Writer always sets scanFindings to the literal empty array |

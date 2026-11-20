@@ -379,6 +379,12 @@ export const aiHolders = {
       { path: 'resolvedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  // Template page copy is the author's own writing about the listing, so it follows the listing.
+  SkillListingTemplate: {
+    kind: 'viaParent',
+    parent: 'SkillListing',
+    foreignKey: 'listingId',
+  },
   // Version snapshots carry the author's skill body, so they follow the listing; reviewers are staff.
   SkillListingVersion: {
     kind: 'viaParent',
