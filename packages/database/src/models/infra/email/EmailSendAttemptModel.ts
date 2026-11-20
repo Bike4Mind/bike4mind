@@ -146,12 +146,16 @@ export class EmailSendAttemptRepository
   }
 
   /**
-   * PENDING/PROCESSING -> QUEUED once the event bus accepts the mail. Returns false when the
-   * email-send worker already wrote its outcome, which can land before this write.
+   * PENDING/PROCESSING -> QUEUED once the event bus accepts the mail. Also from CANCELLED: a cancel
+   * that lands mid-publish cannot stop mail the bus accepted. Returns false when the email-send worker
+   * already wrote its outcome, which can land before this write.
    */
   async markQueued(id: string, updates: { sentAt: Date; retryCount: number }): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] } },
+      {
+        _id: id,
+        status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING, EmailSendStatus.CANCELLED] },
+      },
       { $set: { status: EmailSendStatus.QUEUED, ...updates } },
       { runValidators: true }
     );
@@ -160,8 +164,9 @@ export class EmailSendAttemptRepository
 
   /**
    * Writes the transport's result, never downgrading an attempt already SENT or past it
-   * (delivered, opened, clicked, bounced, complained, cancelled). FAILED -> SENT is allowed: a
-   * retried send can succeed. Returns the attempt's jobId when the write applied, else null.
+   * (delivered, opened, clicked, bounced, complained). FAILED -> SENT is allowed: a retried send can
+   * succeed. CANCELLED -> SENT is allowed (the mail went out after a mid-publish cancel); a failure
+   * leaves CANCELLED alone. Returns the attempt's jobId when the write applied, else null.
    */
   async recordDeliveryOutcome(
     id: string,
@@ -179,7 +184,13 @@ export class EmailSendAttemptRepository
       {
         _id: id,
         status: {
-          $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING, EmailSendStatus.QUEUED, EmailSendStatus.FAILED],
+          $in: [
+            EmailSendStatus.PENDING,
+            EmailSendStatus.PROCESSING,
+            EmailSendStatus.QUEUED,
+            EmailSendStatus.FAILED,
+            ...(outcome.ok ? [EmailSendStatus.CANCELLED] : []),
+          ],
         },
       },
       update,

@@ -71,12 +71,25 @@ describe('EmailSendAttemptRepository delivery write-back', () => {
     EmailSendStatus.CLICKED,
     EmailSendStatus.BOUNCED,
     EmailSendStatus.COMPLAINED,
-    EmailSendStatus.CANCELLED,
   ])('never downgrades %s', async status => {
     const id = await attemptIn(status);
     await expect(repo.recordDeliveryOutcome(id, failed)).resolves.toBeNull();
     if (status !== EmailSendStatus.SENT) await expect(repo.recordDeliveryOutcome(id, sent)).resolves.toBeNull();
     expect(await statusOf(id)).toBe(status);
+  });
+
+  it('keeps a cancelled attempt cancelled on a worker failure', async () => {
+    const id = await attemptIn(EmailSendStatus.CANCELLED);
+    await expect(repo.recordDeliveryOutcome(id, failed)).resolves.toBeNull();
+    expect(await statusOf(id)).toBe(EmailSendStatus.CANCELLED);
+  });
+
+  it('records a send that went out after a mid-publish cancel', async () => {
+    const id = await attemptIn(EmailSendStatus.CANCELLED);
+    await expect(repo.markQueued(id, { sentAt: new Date(), retryCount: 0 })).resolves.toBe(true);
+    expect(await statusOf(id)).toBe(EmailSendStatus.QUEUED);
+    await expect(repo.recordDeliveryOutcome(id, sent)).resolves.toBe('job-1');
+    expect(await statusOf(id)).toBe(EmailSendStatus.SENT);
   });
 
   it('marks a processing attempt QUEUED', async () => {
