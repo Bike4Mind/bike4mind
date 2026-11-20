@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { hasAdminPermission } from '@bike4mind/common';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { ACCOUNT_CHECK_FAILED_MESSAGE } from './agentExecutor.iterationCreditGate';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
@@ -140,6 +142,7 @@ const mockMarkFailed = vi.fn().mockResolvedValue(undefined);
 const mockMarkComplete = vi.fn().mockResolvedValue(undefined);
 const mockMarkAborted = vi.fn().mockResolvedValue(undefined);
 const mockCheckAbortFlag = vi.fn().mockResolvedValue(false);
+const mockFindRoles = vi.fn();
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -154,7 +157,9 @@ vi.mock('@bike4mind/database', async () => {
     mockCheckAbortFlag(...args)
   );
   vi.spyOn(actual.userRepository, 'findById').mockImplementation((...args) => mockFreshUserRead(...args));
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
+  vi.spyOn(actual.adminRoleRepository, 'findByIds').mockImplementation((...args) => mockFindRoles(...args));
   // disableUserIntegrations short-circuits loadMcpToolsForSession to an empty pool - no MCP wiring.
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({
     id: 'session-1',
@@ -271,5 +276,84 @@ describe('processSubagentDispatch per-iteration account check', () => {
     expect(mockFreshUserRead).toHaveBeenCalledTimes(ITERATIONS);
     expect(mockMarkComplete).toHaveBeenCalledTimes(1);
     expect(mockMarkFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('processSubagentDispatch role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+
+  const userUsedByHandler = () => vi.mocked(resolveThinkingVisibility).mock.calls[0]?.[0] as never;
+
+  const loadUser = async (fields: Record<string, unknown>) => {
+    const { User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValue({ id: 'user-1', currentCredits: 100, ...fields } as never);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    providerCalls.count = 0;
+    orchestrator.throwsAfterRun = false;
+    mockCheckAbortFlag.mockResolvedValue(false);
+    mockFreshUserRead.mockResolvedValue({ id: 'user-1', currentCredits: 100 });
+    mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    delete (childDoc as { adminRoleWithheld?: boolean }).adminRoleWithheld;
+  });
+
+  it('counts a permission held only through a role', async () => {
+    await loadUser({ adminRoleIds: [ROLE_ID] });
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(userUsedByHandler(), 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    const { handler } = await import('./agentExecutor');
+    await loadUser({ adminRoleIds: [ROLE_ID] });
+    await handler(dagNodeDispatchEvent(), ctx);
+    expect(hasAdminPermission(userUsedByHandler(), 'settings:manage')).toBe(true);
+
+    vi.mocked(resolveThinkingVisibility).mockClear();
+    await loadUser({ adminRoleIds: [] });
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(hasAdminPermission(userUsedByHandler(), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+    await loadUser({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(userUsedByHandler(), 'settings:manage')).toBe(false);
+  });
+
+  it('keeps the role permission hidden when the child was queued without the admin scope', async () => {
+    (childDoc as { adminRoleWithheld?: boolean }).adminRoleWithheld = true;
+    await loadUser({ adminRoleIds: [ROLE_ID] });
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(userUsedByHandler(), 'settings:manage')).toBe(false);
+  });
+
+  it('does not run the subagent with the permission when the role lookup throws', async () => {
+    mockFindRoles.mockRejectedValue(new Error('db down'));
+    await loadUser({ adminRoleIds: [ROLE_ID] });
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx).catch(() => undefined);
+
+    expect(providerCalls.count).toBe(0);
+    expect(mockMarkComplete).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveThinkingVisibility)).not.toHaveBeenCalled();
   });
 });

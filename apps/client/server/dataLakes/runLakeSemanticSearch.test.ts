@@ -18,6 +18,7 @@ const {
   mockBillingEnabled,
   mockRecordOperationalUsage,
   mockIsCurrentOrgMember,
+  mockFindActiveFreeze,
 } = vi.hoisted(() => ({
   mockSemanticSearch: vi.fn(),
   mockGetEffectiveLLMApiKeys: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockBillingEnabled: vi.fn(),
   mockRecordOperationalUsage: vi.fn(),
   mockIsCurrentOrgMember: vi.fn(),
+  mockFindActiveFreeze: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -40,6 +42,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
+  spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
@@ -112,6 +115,7 @@ beforeEach(() => {
   mockFindAccessibleById.mockResolvedValue(null);
   mockBillingEnabled.mockResolvedValue(false);
   mockIsCurrentOrgMember.mockReturnValue(true);
+  mockFindActiveFreeze.mockResolvedValue(null);
 });
 
 describe('runLakeSemanticSearch', () => {
@@ -220,6 +224,37 @@ describe('runLakeSemanticSearch billing owner and source', () => {
 
     expect(mockFindAccessibleById).toHaveBeenCalledWith(jwtReq.user, 'seat-org');
     expect(recorded()).toMatchObject({ organization: SEAT_ORG, source: 'api' });
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen before searching, even when nothing is billed', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+
+    const error = await runLakeSemanticSearch(jwtReq, input()).catch((err: unknown) => err);
+
+    expect(getQuestErrorCode(error)).toBe('spend_frozen');
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'seat-org', apiKeyId: null });
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('checks an org-billed key against its org and key, not the holder', async () => {
+    await runLakeSemanticSearch(
+      apiKeyReq({ keyId: 'key-1', billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+      input()
+    );
+
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'key-1' });
+  });
+
+  it("still checks an org-billed key's org when the holder read fails", async () => {
+    mockUserFindById.mockRejectedValue(new Error('store down'));
+
+    await runLakeSemanticSearch(
+      apiKeyReq({ keyId: 'key-1', billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+      input()
+    );
+
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'key-1' });
   });
 
   // The toggle alone is off; billing applies only once the helper sees this holder (free tier).

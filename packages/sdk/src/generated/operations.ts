@@ -45,6 +45,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
   },
+  composeBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs',
+  },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
@@ -217,6 +221,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getBrief: {
+    method: 'GET',
+    path: '/api/v1/briefs/{id}',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -333,6 +341,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts',
   },
+  listBriefs: {
+    method: 'GET',
+    path: '/api/v1/briefs',
+  },
   listCreditTransactions: {
     method: 'GET',
     path: '/api/v1/credits/transactions',
@@ -445,6 +457,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/slack/messages',
   },
+  publishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/publish',
+  },
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
@@ -472,6 +488,10 @@ export const operations = {
   removeProjectSystemPrompt: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
+  republishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/republish',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
@@ -520,6 +540,10 @@ export const operations = {
   transferAgentCredits: {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
+  },
+  unpublishArtifact: {
+    method: 'DELETE',
+    path: '/api/v1/artifacts/{id}/publish',
   },
   unregisterPushToken: {
     method: 'DELETE',

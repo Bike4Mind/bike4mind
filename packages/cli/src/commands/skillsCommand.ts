@@ -69,7 +69,7 @@ export interface PushDeps {
   log: (line: string) => void;
 }
 
-export type MarketVisibility = 'organization' | 'public' | 'unlisted';
+export type MarketVisibility = 'organization' | 'public' | 'unlisted' | 'space';
 
 export type PushResult = { outcome: 'created' | 'updated'; skillId: string } | { outcome: 'aborted' };
 

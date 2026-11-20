@@ -635,7 +635,7 @@ This is a separate corpus from your uploaded files: the **Help** panel and the H
 | Half                                           | Built by                                          | Needs a key        |
 | ---------------------------------------------- | ------------------------------------------------- | ------------------ |
 | The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
-| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+| The embedding vectors (`help-embeddings.json` + `help-embeddings.bin`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
 
@@ -654,7 +654,9 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
+**Upgrading from an older build:** the vectors used to live entirely in `help-embeddings.json`. An install that built them then and rebuilds without a key keeps serving keyword results until you re-run `help:vectorize`, which writes the new JSON + binary pair.
+
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` + `help-embeddings.bin` pair still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -1349,9 +1351,9 @@ Object storage is outside the Mongo transaction. A failed attempt without a rece
 
 The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
 
-Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+Verification includes the notebook curation service the API route calls (`startNotebookCuration`), both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
 
-The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+The live test calls that service directly, so route validation and the 401 stay with the route tests (`curate.e2e.test.ts`); it does not go through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
 
 ```sh
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts

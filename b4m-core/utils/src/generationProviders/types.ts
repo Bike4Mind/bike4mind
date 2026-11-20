@@ -1,4 +1,4 @@
-import type { GenerationProviderJobHandle, ProviderOutput, VideoInputRole } from '@bike4mind/common';
+import type { GenerationProviderJobHandle, ProviderOutput, SpeechWordTiming, VideoInputRole } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Defined in common because the job payload persists them; re-exported so adapters import one module.
@@ -12,6 +12,8 @@ export type ProviderTerminalResult =
       reportedDurationSeconds?: number;
       /** Lyrics the provider sang (its own or the user's), as plain lines; absent for instrumental output. */
       lyrics?: string;
+      /** Speech: when each word of the input text is spoken, for providers that align it. */
+      wordTimings?: SpeechWordTiming[];
     }
   /**
    * `billed`: set only when the provider is known to have charged for the blocked generation (it generated the

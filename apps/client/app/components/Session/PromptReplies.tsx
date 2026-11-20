@@ -45,12 +45,18 @@ import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
 import MermaidIcon from '@mui/icons-material/AccountTree';
 import InsertDriveFileOutlined from '@mui/icons-material/InsertDriveFileOutlined';
 import ImageDisplay from './ImageDisplay';
+import { FreeQuestLimitNotice } from './FreeQuestLimitNotice';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
 import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
-import { questGenerationJobs, type ChessArtifact, type MermaidArtifact } from '@bike4mind/common';
+import {
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+  questGenerationJobs,
+  type ChessArtifact,
+  type MermaidArtifact,
+} from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -1572,6 +1578,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // message (with the credit numbers).
   if (errorCode === 'insufficient_credits') {
     return <InsufficientCreditsNotice message={reply} />;
+  }
+
+  if (errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+    return <FreeQuestLimitNotice message={reply} />;
   }
 
   return (

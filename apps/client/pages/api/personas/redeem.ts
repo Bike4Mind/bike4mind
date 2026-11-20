@@ -19,7 +19,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { issueBrowserSession, issueSessionForRequest } from '@server/auth/issueSession';
 import { logSignInSuccess } from '@server/auth/signInSecondFactor';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
-import { loadPersonaSettings, redeemPersonaLoginCode } from '@server/personas/personaAccounts';
+import { loadPersonaSettings, redeemPersonaLoginCode } from '@bike4mind/server-utils/personas/personaAccounts';
 
 const RedeemBodySchema = z.strictObject({ code: z.string().max(64), session: z.literal('browser').optional() });
 const INVALID_CODE = 'Login code is invalid, expired or already used';

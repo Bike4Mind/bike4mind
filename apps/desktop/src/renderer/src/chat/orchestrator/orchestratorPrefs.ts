@@ -1,6 +1,17 @@
-export type OrchestratorViewId = 'tavern' | 'aquarium' | 'board' | 'table' | 'tile-wall';
+export type OrchestratorViewId =
+  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
 /** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'aquarium', 'board', 'table', 'tile-wall'];
+export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
+  'tavern',
+  'aquarium',
+  'office',
+  'board',
+  'table',
+  'tile-wall',
+  'swimlanes',
+  'constellation',
+  'transit',
+];
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
@@ -15,6 +26,7 @@ const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
 const AMBIENT_KEY = 'b4m.orchestrator.ambient';
 const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
 const FOCUS_KEY = 'b4m.orchestrator.focus';
+const SKIN_KEY = 'b4m.orchestrator.skin';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -164,4 +176,21 @@ export function readFocus(): boolean {
 
 export function writeFocus(on: boolean): void {
   writeItem(FOCUS_KEY, on ? '1' : '0');
+}
+
+/** The picked skin's id (main/mods), or null for Default. Install-wide, like the other look-and-feel choices. */
+export function readSkin(): string | null {
+  return readItem(SKIN_KEY);
+}
+
+export function writeSkin(id: string | null): void {
+  if (id !== null) {
+    writeItem(SKIN_KEY, id);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SKIN_KEY);
+  } catch {
+    // Unwritable storage: Default for this run only.
+  }
 }

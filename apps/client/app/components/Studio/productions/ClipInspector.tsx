@@ -1,4 +1,15 @@
-import { Button, FormControl, FormLabel, Option, Select, Slider, Stack, Textarea, Typography } from '@mui/joy';
+import {
+  Button,
+  Checkbox,
+  FormControl,
+  FormLabel,
+  Option,
+  Select,
+  Slider,
+  Stack,
+  Textarea,
+  Typography,
+} from '@mui/joy';
 import {
   STUDIO_CAPTION_ALIGNMENTS,
   STUDIO_CAPTION_POSITIONS,
@@ -10,6 +21,7 @@ import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import SecondsField from './SecondsField';
 import { findClip, removeClip, updateClip, type StudioClipPatch } from './timelineEdits';
 import type { TimelineFile } from './useTimelineFiles';
+import VoiceCaptionsControl from './VoiceCaptionsControl';
 
 const MAX_VOLUME = 2;
 
@@ -17,12 +29,14 @@ type ClipInspectorProps = {
   timeline: StudioTimeline;
   clipId: string | null;
   files: ReadonlyMap<string, TimelineFile>;
+  /** Probed source lengths by file id, for timing captions from a voice clip. */
+  sourceDurationsMs?: ReadonlyMap<string, number>;
   onChange: (timeline: StudioTimeline) => void;
   onDeselect: () => void;
 };
 
 /** Edits the selected clip's timing, its audio (volume and fades) or its caption text and placement. */
-const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipInspectorProps) => {
+const ClipInspector = ({ timeline, clipId, files, sourceDurationsMs, onChange, onDeselect }: ClipInspectorProps) => {
   const located = clipId ? findClip(timeline, clipId) : undefined;
   if (!located) {
     return (
@@ -31,7 +45,7 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
       </StudioPanel>
     );
   }
-  const { clip } = located;
+  const { clip, track } = located;
   const patch = (fields: StudioClipPatch) => onChange(updateClip(timeline, clip.id, fields));
 
   return (
@@ -92,6 +106,16 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
           </>
         )}
 
+        {track.kind === 'voice' && 'fileId' in clip && (
+          <VoiceCaptionsControl
+            key={clip.id}
+            timeline={timeline}
+            voiceClip={clip}
+            sourceDurationMs={sourceDurationsMs?.get(clip.fileId)}
+            onChange={onChange}
+          />
+        )}
+
         {'fit' in clip && (
           <FormControl size="sm">
             <FormLabel>Fit</FormLabel>
@@ -127,6 +151,15 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
                 onChange={event => patch({ text: event.target.value })}
               />
             </FormControl>
+            {clip.syncedVoiceClipId !== undefined && (
+              <Checkbox
+                size="sm"
+                checked
+                label="Moves with its voice clip"
+                onChange={() => patch({ syncedVoiceClipId: undefined })}
+                slotProps={{ input: { 'data-testid': 'production-inspector-caption-sync-checkbox' } }}
+              />
+            )}
             <Stack direction="row" spacing={1}>
               <FormControl size="sm" sx={{ flex: 1 }}>
                 <FormLabel>Position</FormLabel>

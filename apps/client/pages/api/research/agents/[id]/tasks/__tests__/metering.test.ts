@@ -15,7 +15,7 @@ const m = vi.hoisted(() => ({
   posts: [] as ((req: unknown, res: unknown) => unknown)[],
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {

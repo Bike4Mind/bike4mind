@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { ForbiddenError, NotFoundError, UnauthorizedError, UnprocessableEntityError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { refuseWholeInvite } from './refuseWholeInvite';
 
@@ -85,7 +85,7 @@ describe('sharingService - refuseWholeInvite', () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
 
     await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(db.invites.refusePendingRecipient).not.toHaveBeenCalled();
     expect(db.invites.closeInvite).not.toHaveBeenCalled();
@@ -119,7 +119,7 @@ describe('sharingService - refuseWholeInvite', () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
 
     await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(db.invites.refusePendingRecipient).not.toHaveBeenCalled();
     expect(db.invites.closeInvite).not.toHaveBeenCalled();
@@ -160,7 +160,7 @@ describe('sharingService - refuseWholeInvite', () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
 
     await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(db.invites.refusePendingRecipient).not.toHaveBeenCalled();
     expect(db.invites.closeInvite).not.toHaveBeenCalled();

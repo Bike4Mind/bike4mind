@@ -1,3 +1,4 @@
+import type { SkinSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -146,6 +147,10 @@ import type {
   ModelCaptureRequestEvent,
   ModelExportFormat,
   ModelStateUpdate,
+  ModelVersion,
+  ModelVersionEntry,
+  ModelVersionRecordRequest,
+  ModelVersionsUpdate,
   ModelViewState,
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
@@ -506,6 +511,13 @@ export const IPC_CHANNELS = {
   modelState: 'model:state',
   /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
   modelCaptureRequest: 'model:capture-request',
+  /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
+  modelListVersions: 'model:list-versions',
+  modelRecordVersion: 'model:record-version',
+  modelWantsVersion: 'model:wants-version',
+  modelRestoreVersion: 'model:restore-version',
+  /** main -> renderer push: a conversation kept a new version. */
+  modelVersions: 'model:versions',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -599,6 +611,10 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
+  skinsList: 'skins:list',
+  /** main -> renderer push after the mods folder changed on disk. */
+  skinsChanged: 'skins:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -759,6 +775,11 @@ export interface MiniTavernApi {
 export interface DesktopApi {
   studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
+  skins: {
+    list(): Promise<SkinSummary[]>;
+    onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -964,7 +985,7 @@ export interface DesktopApi {
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string): Promise<ChatSession | null>;
+    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
@@ -1250,6 +1271,15 @@ export interface DesktopApi {
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (update: ModelStateUpdate) => void): () => void;
     onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
+    /** Oldest first, with thumbnails. */
+    listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
+    /** Keeps the good build of `generation`; null when nothing new was kept. */
+    /** Whether this window should render a thumbnail and keep `generation` (main may already have it). */
+    wantsVersion(sessionId: string, generation: number): Promise<boolean>;
+    recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
+    /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
+    restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;
+    onVersions(listener: (update: ModelVersionsUpdate) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

@@ -95,6 +95,7 @@ function buildDb() {
       findById: vi.fn().mockResolvedValue(user),
     },
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     organizations: {},
   } as unknown as Parameters<typeof executeCompletion>[0]['db'];
 }

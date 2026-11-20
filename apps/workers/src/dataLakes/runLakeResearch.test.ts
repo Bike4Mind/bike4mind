@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  researchFeedFingerprint,
+  RESEARCH_FEED_MAX_BYTES,
+  spendFrozenError,
+} from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -9,7 +14,9 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
+  findActiveFreeze: vi.fn(),
   resolveWebSearchProviders: vi.fn(),
+  resolveSearchRedirect: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
@@ -40,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
+  spendFreezeRepository: { findActiveForSubject: h.findActiveFreeze },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -48,8 +56,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
-  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  const real = actual.dataLakeResearchService;
   return {
+    // Real: the run must refuse with the shared spend_frozen error and subject.
+    spendFreezeService: actual.spendFreezeService,
     apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
     dataLakeService: {
       proposeDataLakeContent: h.proposeDataLakeContent,
@@ -74,6 +85,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
       FeedUnavailableError: real.FeedUnavailableError,
       parseFeed: real.parseFeed,
       trustedEntryForUrl: real.trustedEntryForUrl,
+      resolveSearchRedirect: (url: string) => h.resolveSearchRedirect(url),
     },
     recordOperationalUsage: h.recordOperationalUsage,
   };
@@ -146,7 +158,9 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
+  h.findActiveFreeze.mockResolvedValue(null);
   h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
+  h.resolveSearchRedirect.mockImplementation(async (url: string) => ({ url, resolved: 'not_redirect' }));
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
@@ -191,6 +205,59 @@ describe('runLakeResearch', () => {
       'run-1',
       expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
     );
+  });
+
+  it('fails a run whose billed org has spending paused before any search, judgment or charge', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockResolvedValue({ id: 'org-7' });
+    h.findActiveFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date() });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7', apiKeyId: null });
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        spentMicroUsd: 0,
+        error: spendFrozenError({ scopeType: 'Organization', frozenAt: new Date() }).message,
+      })
+    );
+  });
+
+  it('checks the owner personally when their home org does not resolve, as the charge does', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-gone' });
+    h.findOrgById.mockResolvedValue(null);
+
+    await runLakeResearch('run-1', logger);
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: null });
+    expect(h.executeResearchRun).toHaveBeenCalled();
+  });
+
+  it('settles and rethrows when the billed org read fails, without searching', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockRejectedValue(new Error('org read down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('org read down');
+
+    expect(h.findActiveFreeze).not.toHaveBeenCalled();
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', error: 'org read down' })
+    );
+  });
+
+  it('settles and rethrows when the spend freeze read fails, without searching', async () => {
+    h.findActiveFreeze.mockRejectedValue(new Error('db down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('db down');
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed', error: 'db down' }));
   });
 
   it('settles a finished run with its stop reason, spend and totals', async () => {
@@ -657,6 +724,51 @@ describe('runLakeResearch', () => {
       expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
     });
 
+    it('classifies on the resolved url, keeps unresolved hits as-is, drops duplicates and counts resolutions', async () => {
+      const goto = 'https://www.google.com/goto?url=tok-1';
+      const stuck = 'https://www.google.com/goto?url=tok-2';
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () => [
+          { title: 'Wiki', url: goto, snippet: 's' },
+          { title: 'Wiki again', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+          { title: 'Stuck', url: stuck, snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed', via: 'script' };
+        if (url === stuck) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
+        return { url, resolved: 'not_redirect' };
+      });
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([
+        { title: 'Wiki', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+        { title: 'Stuck', url: stuck, snippet: 's' },
+      ]);
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        expect.objectContaining({
+          hits: 2,
+          redirects: { decoded: 0, followed: 1, unresolved: 1 },
+          followedVia: { script: 1 },
+          unresolvedDetails: [{ reason: 'status', status: 429 }],
+          hosts: ['en.wikipedia.org', 'www.google.com'],
+        })
+      );
+      expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
+    });
+
     it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
       const backup = {
         name: 'searxng',
@@ -679,6 +791,9 @@ describe('runLakeResearch', () => {
           maxResults: 5,
           recencyDays: 30,
           hits: 2,
+          redirects: { decoded: 0, followed: 0, unresolved: 0 },
+          followedVia: {},
+          unresolvedDetails: [],
           hosts: ['arxiv.org', 'www.ieee.org'],
         }
       );

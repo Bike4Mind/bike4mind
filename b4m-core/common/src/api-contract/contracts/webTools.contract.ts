@@ -7,7 +7,13 @@ import {
   WebSearchToolRequestSchema,
   WebToolResultResponseSchema,
 } from '../../schemas/webTools';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 /**
  * POST /api/v1/tools/{web-search,web-fetch,weather} - one built-in tool per call, for integrators
@@ -35,6 +41,12 @@ const FORBIDDEN = {
     'The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right ' +
     'now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`).',
   schema: ScopeForbiddenErrorSchema,
+};
+
+/** FORBIDDEN on the billed tools, which also refuse a spend freeze before the provider is called. */
+const BILLED_FORBIDDEN = {
+  description: `${FORBIDDEN.description} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+  schema: MeteredForbiddenErrorSchema,
 };
 
 const RATE_LIMITED = {
@@ -82,7 +94,7 @@ export const searchWebContract = defineEndpoint({
     },
     400: BILLING_UNRESOLVED,
     401: { description: 'Missing or invalid credentials.', schema: ApiErrorSchema },
-    403: FORBIDDEN,
+    403: BILLED_FORBIDDEN,
     422: INSUFFICIENT_CREDITS,
     429: RATE_LIMITED,
     500: { description: 'The search provider failed, or an unexpected server error.', schema: ApiErrorSchema },
@@ -124,7 +136,7 @@ export const fetchWebPageContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     401: { description: 'Missing or invalid credentials.', schema: ApiErrorSchema },
-    403: FORBIDDEN,
+    403: BILLED_FORBIDDEN,
     422: {
       description:
         'Request body failed validation, the page cannot be read (unreachable, or a content type that is not ' +

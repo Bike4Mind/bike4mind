@@ -24,7 +24,7 @@ import {
 } from '@bike4mind/database';
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
@@ -186,7 +186,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       );
       return; // Don't retry - configuration must be fixed first
     }
-    secret = decryptSecret(orgConfig.secret, encryptionKey);
+    secret = decryptStoredSecret(orgConfig.secret);
   } catch (error) {
     // Differentiate between configuration errors and potential tampering
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

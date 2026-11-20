@@ -33,13 +33,13 @@ vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async import
     return { add: (path: string) => paths.push(path), flush: async () => h.cdnSend(paths) };
   },
 }));
-vi.mock('@server/sessions/generatedMediaPurgeQueue', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/sessions/generatedMediaPurgeQueue')>()),
+vi.mock('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue')>()),
   enqueueGeneratedMediaPurge: h.enqueue,
 }));
 // The purge itself (retention and ownership checks included) is covered by purgeDeletedNotebookMedia.e2e.test.ts.
-vi.mock('@server/sessions/purgeDeletedNotebookMedia', async importOriginal => {
-  const real = await importOriginal<typeof import('@server/sessions/purgeDeletedNotebookMedia')>();
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', async importOriginal => {
+  const real = await importOriginal<typeof import('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia')>();
   return {
     ...real,
     runGeneratedMediaPurge: (...args: Parameters<typeof real.runGeneratedMediaPurge>) => {

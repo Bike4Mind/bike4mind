@@ -11,6 +11,11 @@
       "dockerfile": "infra/searxng/Dockerfile",
       "env": "SEARXNG_IMAGE",
       "hashInputs": ["selfhost/searxng/settings.yml"]
+    },
+    {
+      "name": "render-worker",
+      "dockerfile": "apps/workers/Dockerfile.renderworker",
+      "env": "RENDER_WORKER_IMAGE"
     }
   ],
   "externalImages": [
@@ -53,6 +58,7 @@
     "ENABLE_WARMING",
     "FAB_FILES_BUCKET_NAME",
     "GA_COOKIE_DOMAIN",
+    "GA_MARKETING_MEASUREMENT_ID",
     "GA_MEASUREMENT_ID",
     "GENERATED_IMAGES_BUCKET_NAME",
     "IMPERSONATION_TTL_MINUTES",
@@ -99,6 +105,7 @@
     "PUBLISHED_ARTIFACTS_BUCKET_NAME",
     "REDDIT_PIXEL_ID",
     "REFUSED_REQUEST_BURST_ALARM_PER_15MIN",
+    "RENDER_WORKER_MIN_TASKS",
     "SEED_STAGE_NAME",
     "SERVER_DOMAIN",
     "SES_CONFIGURATION_SET",
@@ -107,6 +114,7 @@
     "SHARE_BRAND_NAVY",
     "SHARE_BRAND_ORANGE",
     "SHARE_BUILTIN_LOGO",
+    "SIDE_APP_HEALTH_ALERTS_ENABLED",
     "SIGNUP_ALARM_PER_HOUR",
     "SIGNUP_BASELINE_SINCE",
     "SIGNUP_CODE_SEND_ALARM_PER_5MIN",

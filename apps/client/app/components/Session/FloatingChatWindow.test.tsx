@@ -8,10 +8,14 @@ import FloatingChatWindow from './FloatingChatWindow';
 
 // The control cluster reaches SessionsContext/react-query through useCopySessionMarkdown,
 // which is irrelevant to the close-button wiring under test. The stub only reports its props.
+const { controlsProps } = vi.hoisted(() => ({
+  controlsProps: { last: undefined as Record<string, unknown> | undefined },
+}));
 vi.mock('./ChatPanelControls', () => ({
-  default: ({ dockable }: { dockable?: boolean }) => (
-    <div data-testid="chat-panel-controls-stub" data-dockable={String(dockable)} />
-  ),
+  default: (props: { dockable?: boolean }) => {
+    controlsProps.last = props;
+    return <div data-testid="chat-panel-controls-stub" data-dockable={String(props.dockable)} />;
+  },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -21,6 +25,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('FloatingChatWindow', () => {
   beforeEach(() => {
+    controlsProps.last = undefined;
     setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false });
   });
 
@@ -44,6 +49,30 @@ describe('FloatingChatWindow', () => {
     );
 
     expect(screen.getByTestId('chat-panel-controls-stub')).toHaveAttribute('data-dockable', 'true');
+  });
+
+  it('passes getCopyMarkdown through to the copy button', () => {
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
+    render(
+      <Wrapper>
+        <FloatingChatWindow getCopyMarkdown={getCopyMarkdown}>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    expect(controlsProps.last).toHaveProperty('getCopyMarkdown', getCopyMarkdown);
+  });
+
+  it('passes getCopyMarkdown through when the dock layouts are off', () => {
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
+    render(
+      <Wrapper>
+        <FloatingChatWindow dockable={false} getCopyMarkdown={getCopyMarkdown}>
+          chat
+        </FloatingChatWindow>
+      </Wrapper>
+    );
+
+    expect(controlsProps.last).toHaveProperty('getCopyMarkdown', getCopyMarkdown);
   });
 
   it('withholds the dock layouts when dockable is off', () => {

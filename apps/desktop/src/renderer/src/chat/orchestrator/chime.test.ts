@@ -71,6 +71,27 @@ describe('playChime', () => {
     expect(started[1]).toBeGreaterThan(started[0]);
   });
 
+  it('stops a playing finale when a chime without a sound fires', async () => {
+    fakeAudio();
+    const pause = vi.fn();
+    vi.stubGlobal(
+      'Audio',
+      class {
+        volume = 1;
+        play = vi.fn(async () => undefined);
+        pause = pause;
+      }
+    );
+    const chime = await load();
+    chime.setOrchestratorSound(true);
+    chime.playChime('b4m-skin://nightglass/sounds/finale.ogg');
+    expect(pause).not.toHaveBeenCalled();
+    chime.playChime();
+    expect(pause).toHaveBeenCalledTimes(1);
+    chime.playChime();
+    expect(pause).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing where Web Audio is missing', async () => {
     vi.stubGlobal('AudioContext', undefined);
     const chime = await load();

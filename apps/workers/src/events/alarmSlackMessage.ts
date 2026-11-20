@@ -153,6 +153,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
     links: ['signup-activity'],
   },
+  'side-app-mint-our-fault': {
+    title: 'Connected apps cannot get tokens',
+    level: 'warn',
+    category: 'infra',
+    unit: 'failed token exchanges',
+    meaning:
+      'Token exchanges for connected apps are failing on our side at a sustained rate. Users of those apps cannot start AI requests until it clears.',
+    action:
+      'Check the Next.js server log for the side-app-mint-our-fault lines and the errors just above them. A database outage shows up in the hourly health alert queue as well.',
+  },
   'turnstile-policy-inactive': {
     title: 'The sign-in bot challenge is switched off',
     level: 'page',

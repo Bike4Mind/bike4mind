@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
+import {
+  SETTING_TABS,
+  makeContributedBooleanSetting,
+  registerContributedSettings,
+  resetContributedSettings,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
@@ -369,6 +376,36 @@ describe('AdminSettingsTab category headings', () => {
   });
 });
 
+describe('AdminSettingsTab settings that stay off the list', () => {
+  afterEach(() => resetContributedSettings());
+
+  it('lists no editor for a core setting flagged hideFromSettingsList', () => {
+    renderSecurityTab();
+
+    expect(settingsMap.secopsTriageConfig.hideFromSettingsList).toBe(true);
+    expect(settingsMap.secopsTriageConfig.category).toBe(settingsMap.abuseAssessmentEnabled.category);
+    expect(screen.queryByTestId('generic-setting-secopsTriageConfig')).toBeNull();
+    expect(screen.getByTestId('generic-setting-abuseAssessmentEnabled')).toBeTruthy();
+  });
+
+  it('applies the flag to a contributed setting too', () => {
+    const contributed = (key: string, hideFromSettingsList?: boolean) =>
+      makeContributedBooleanSetting({
+        key,
+        name: key,
+        description: 'x',
+        defaultValue: false,
+        category: settingsMap.abuseAssessmentEnabled.category,
+        hideFromSettingsList,
+      });
+    registerContributedSettings([contributed('ExtensionListed'), contributed('ExtensionOwnEditor', true)]);
+    renderSecurityTab();
+
+    expect(screen.getByTestId('generic-setting-ExtensionListed')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-ExtensionOwnEditor')).toBeNull();
+  });
+});
+
 describe('AdminSettingsTab reviewer emails setting', () => {
   it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
     'renders the %s string-list editor with the stored reviewers and no generic card',
@@ -534,6 +571,8 @@ describe('AdminSettingsTab Credits System group', () => {
     // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
     ['drip', 'invite-center-schedule', 'schedule'],
     ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['signupGrantActivityMinActiveSeconds', 'invite-center-schedule', 'schedule'],
+    ['signupUnlockPaymentHoldHours', 'invite-center-schedule', 'schedule'],
     ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
     ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
     ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
@@ -563,13 +602,13 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderUsersTab();
 
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
   });
 
-  it('shows them when the server hides nothing', () => {
+  it('leaves moved preview controls to Schedule even when the server hides nothing', () => {
     renderUsersTab();
 
-    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 
   it.each([
@@ -588,7 +627,7 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderSettings();
     fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
 
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });

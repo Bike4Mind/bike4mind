@@ -11,7 +11,7 @@ import {
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@bike4mind/server-utils/utils/auditLog';
-import { MailService } from '@bike4mind/server-utils/utils/mailer/index';
+import { getMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
 
 // Requires authentication - users resend verification to themselves
 const handler = baseApi({ auth: true })
@@ -23,9 +23,7 @@ const handler = baseApi({ auth: true })
   )
   .post(
     asyncHandler(async (req, res) => {
-      // Check if email service is configured before attempting to send
-      const mailService = new MailService();
-      const emailConfig = mailService.getConfigStatus();
+      const emailConfig = getMailConfigStatus();
 
       if (!emailConfig.configured) {
         // Return different error messages based on user role

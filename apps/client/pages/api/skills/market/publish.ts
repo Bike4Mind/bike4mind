@@ -1,13 +1,15 @@
 // apps/client/pages/api/skills/market/publish.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { SkillListingVisibilitySchema } from '@bike4mind/common';
 import { serializeListing, submitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
 import { publishListing } from '@server/skillMarket/author';
 
 const bodySchema = z.object({
   skillId: z.string().min(1),
-  visibility: z.enum(['public', 'organization', 'unlisted']),
+  visibility: SkillListingVisibilitySchema,
   organizationId: z.string().optional(),
+  spaceId: z.string().optional(),
   tags: z.array(z.string()).optional(),
 });
 

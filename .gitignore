@@ -209,3 +209,9 @@ stale-organization-pointers-*.json
 # Python bytecode from local test runs (the selfhost charts have Python tests).
 __pycache__/
 *.pyc
+
+# Temp lint fixture from scripts/__tests__/require-update-validators.test.mjs, left behind if a run aborts
+scripts/update-validator-baseline-fixture-*.mjs
+
+# Per-developer iOS signing (see apps/ios/Config/Local.xcconfig.example)
+apps/ios/Config/Local.xcconfig

@@ -1,9 +1,8 @@
 import type { ApprovalPrompt } from './types';
 
 /*
- * Auto and full mode both run a shell command the scan could not check (`unchecked`). The adversarial tables pin
- * these rather than `askInAuto` or `askInFull`: what they guard is that the scan is never fooled into reading a
- * command that reaches a protected location, or a folder outside the project, as one it checked.
+ * These helpers measure scan confidence as well as mode flags. `unchecked` is diagnostic;
+ * actual ChatService tests separately prove that opaque commands wait for consent in Auto and Full.
  */
 
 /** Whether Approve for me runs a shell command as one the scan checked: false when it asks or the scan could not check it. */

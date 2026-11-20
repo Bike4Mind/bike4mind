@@ -27,6 +27,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { User, IUserObject } from '@bike4mind/database';
 import { MongoQuery } from '@casl/ability';
 import { Logger } from '@bike4mind/observability';
+import { resolveRoleAdminPermissions } from '../auth/adminRoles';
 import { Session as SessionModel, sessionListFilterQuery, sessionRepository } from '@bike4mind/database/auth';
 import { sessionService, projectService } from '@bike4mind/services';
 import {
@@ -420,6 +421,7 @@ export const getSessionsByUser = async (
 export const getFavoriteSessionByUser = async (userId: string): Promise<ISessionFavoriteItem[]> => {
   const sessionFavorites = await favoriteRepository.find({ userId, documentType: 'sessions' });
   const user = await userRepository.findById(userId);
+  if (user) await resolveRoleAdminPermissions(user);
   // A favorited notebook's share can be revoked after it was favorited; the stored favorite row
   // is just a pointer, so re-check current access rather than trusting it still holds.
   const userAbility = defineAbilitiesFor(user ?? undefined);

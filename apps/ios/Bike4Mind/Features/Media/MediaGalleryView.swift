@@ -170,12 +170,8 @@ private struct MediaCell: View {
   private var tile: some View {
     switch item.kind {
     case .image:
-      AsyncImage(url: item.url) { phase in
-        switch phase {
-        case .success(let image): image.resizable().scaledToFill()
-        case .failure: placeholder("photo")
-        default: Tokens.Palette.groupedBackground
-        }
+      CachedThumbnail(url: item.url) { failed in
+        if failed { placeholder("photo") } else { Tokens.Palette.groupedBackground }
       }
     case .video: placeholder("play.rectangle.fill")
     case .audio: placeholder("waveform")

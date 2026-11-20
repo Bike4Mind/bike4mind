@@ -15,6 +15,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
+import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
@@ -49,6 +50,9 @@ import {
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
@@ -176,6 +180,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -247,6 +254,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,

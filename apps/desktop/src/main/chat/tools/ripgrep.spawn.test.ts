@@ -24,6 +24,7 @@ vi.mock('node:child_process', async importOriginal => ({
 }));
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: async () => 'C:\\tools',
   hostProgram: async () => program.rg,
 }));

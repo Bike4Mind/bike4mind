@@ -16,6 +16,7 @@ import {
   mementoRepository,
   mongoose,
   organizationRepository,
+  spendFreezeRepository,
   projectRepository,
   promptRepository,
   questMasterPlanRepository,
@@ -32,6 +33,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '../billing/userLimitEvents';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
@@ -156,6 +158,8 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,

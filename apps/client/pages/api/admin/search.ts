@@ -4,6 +4,7 @@ import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { AdminSearchQuerySchema } from '@client/app/utils/adminEntitySearch';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { providerIdSearchAudit } from '@bike4mind/server-utils/admin/usersList/providerIdSearchAudit';
 import { classifyAdminQuery } from '@server/admin/search/classifyQuery';
 import { searchAdminEntities } from '@server/admin/search/searchEntities';
 
@@ -25,7 +26,16 @@ const handler = adminApi({
         details: { identifierType: kind },
       });
     }
-    return res.json({ results: await searchAdminEntities(q) });
+    const results = await searchAdminEntities(q);
+    if (kind === 'providerEndUserId') {
+      const [only] = results;
+      const input = providerIdSearchAudit(q, 'admin_search', {
+        count: results.length,
+        sole: results.length === 1 && only.type === 'user' ? { id: only.id, displayName: only.displayName } : undefined,
+      });
+      if (input) await recordAdminActionFromRequest(req, input);
+    }
+    return res.json({ results });
   });
 
 export default handler;

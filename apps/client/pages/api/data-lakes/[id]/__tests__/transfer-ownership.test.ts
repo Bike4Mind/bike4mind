@@ -71,9 +71,9 @@ vi.mock('@bike4mind/database', () => ({
   // The notifier looks the addressee + lake name up here.
   userRepository: { findById: vi.fn().mockResolvedValue({ id: 'recipient', email: 'recipient@example.com' }) },
   organizationRepository: {},
-  // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the transport.
+  // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the queued mailer.
 }));
-vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: h.sendEmail } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/queuedMailer', () => ({ queuedMailer: { sendEmail: h.sendEmail } }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../transfer-ownership';

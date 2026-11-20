@@ -1,5 +1,6 @@
 {{- define "b4m.initRevision" -}}
-{{- printf "%s|%s|%s" (.Files.Get "files/buckets.sh") (.Files.Get "files/default-env.yaml") (.Values | toJson) | sha256sum | trunc 8 -}}
+{{- /* mode and renderWorker never reach the bucket initializer, so a change to them must not re-run it. */ -}}
+{{- printf "%s|%s|%s" (.Files.Get "files/buckets.sh") (.Files.Get "files/default-env.yaml") (omit .Values "mode" "renderWorker" | toJson) | sha256sum | trunc 8 -}}
 {{- end -}}
 {{- define "b4m.env" -}}
 envFrom:

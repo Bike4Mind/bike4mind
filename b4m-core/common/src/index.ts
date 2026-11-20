@@ -58,6 +58,8 @@ export { personalEmailProviders } from './organizationUtils';
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
 // NOT exported here - it runs extendZodWithOpenApi and is generate-time only.
 export * from './api-contract';
+// Pure structural patch used to ship the deployment spec as a delta over the core spec.
+export * from './openapi/openApiPatch';
 export type { GeneratedFile } from './schemas/quest';
 export * from './constants/user';
 export * from './constants/organization';
@@ -154,6 +156,7 @@ export * from './utils/researchSourceTiers';
 export * from './utils/researchFeedFingerprint';
 export * from './utils/emailAlias';
 export * from './utils/emailDomain';
+export * from './utils/pythonArtifactDataOrigins';
 export * from './utils/canonicalEmail';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';

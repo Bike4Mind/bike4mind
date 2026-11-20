@@ -27,7 +27,7 @@ const m = vi.hoisted(() => ({
   disabledModelIds: [] as string[],
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -76,7 +76,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {

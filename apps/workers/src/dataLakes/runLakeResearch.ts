@@ -9,18 +9,26 @@ import {
   dataLakeResearchRunRepository,
   fabFileRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeResearchService,
+  dataLakeService,
+  recordOperationalUsage,
+  spendFreezeService,
+} from '@bike4mind/services';
 import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL, ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
+import { isSpendFrozenError, RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
 import type { ResearchFeedCursor, ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
@@ -217,6 +225,33 @@ export async function runLakeResearch(
       error: "This data lake's owner account cannot run research",
     });
     return { claimed: true };
+  }
+
+  // A pause since the start was admitted stops the run before it spends. The subject is the holder
+  // `recordSpend` charges: the owner's org pool when that org resolves, the owner personally otherwise.
+  // A failed read settles failed and rethrows, like the reads above.
+  if (owner) {
+    const billedOrganization = owner.organizationId
+      ? await organizationRepository
+          .findById(owner.organizationId)
+          .catch(error => failAndRethrow(error, 0, claimed.totals))
+      : null;
+    try {
+      await spendFreezeService.assertSpendNotFrozen(
+        spendFreezeSubjectForRequest({ user: owner }, billedOrganization?.id ?? null),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+    } catch (error) {
+      if (!isSpendFrozenError(error)) return failAndRethrow(error, 0, claimed.totals);
+      await settle({
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: claimed.totals,
+        error: error.message,
+      });
+      return { claimed: true };
+    }
   }
 
   // Mirrors what the loop last reported, so the `failed` settle below records the money actually
@@ -488,7 +523,23 @@ export async function runLakeResearch(
           });
           throw error;
         }
-        const { results: hits, servedBy } = outcome;
+        const { results: rawHits, servedBy } = outcome;
+        // Classification reads the stored URL, so a provider redirect must be resolved here.
+        // Sequential: concurrent requests to the redirect host may be refused. The log records why each one fails.
+        const resolution = { decoded: 0, followed: 0, unresolved: 0 };
+        const followedVia: Record<string, number> = {};
+        const unresolvedDetails: Array<dataLakeResearchService.UnresolvedDetail | { reason: 'unknown' }> = [];
+        const seenUrls = new Set<string>();
+        const hits: typeof rawHits = [];
+        for (const hit of rawHits) {
+          const { url, resolved, detail, via } = await dataLakeResearchService.resolveSearchRedirect(hit.url);
+          if (resolved !== 'not_redirect') resolution[resolved] += 1;
+          if (resolved === 'followed' && via) followedVia[via] = (followedVia[via] ?? 0) + 1;
+          if (resolved === 'unresolved') unresolvedDetails.push(detail ?? { reason: 'unknown' });
+          if (seenUrls.has(url)) continue;
+          seenUrls.add(url);
+          hits.push({ ...hit, url });
+        }
         // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
         // otherwise invisible after the fact.
         logger.log('[lakeResearch] search', {
@@ -498,6 +549,9 @@ export async function runLakeResearch(
           maxResults,
           recencyDays,
           hits: hits.length,
+          redirects: resolution,
+          followedVia,
+          unresolvedDetails,
           hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
         });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
