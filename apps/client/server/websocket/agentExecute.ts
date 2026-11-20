@@ -17,7 +17,12 @@ import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { TooManyRequestsError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
-import { agentExecutionRepository, sessionToolApprovalRepository, type IAgentExecution } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  sessionToolApprovalRepository,
+  type IAgentExecution,
+} from '@bike4mind/database';
 import { canReadAgentExecution, toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
@@ -788,6 +793,16 @@ async function handleReconnect(
   );
 }
 
+/**
+ * Live viewing beyond the run's owner is a Loops feature (the loop page's run viewer): a shared-session member may
+ * watch only a loop run, and only while EnableLoops is on. Access is checked at subscribe only, so a member removed
+ * mid-run keeps receiving that run's frames until it ends.
+ */
+async function mayWatchLive(execution: IAgentExecution, userId: string): Promise<boolean> {
+  if (execution.userId === userId) return true;
+  return !!execution.loopId && (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true;
+}
+
 async function handleSubscribe(
   cmd: z.infer<typeof SubscribeCommandSchema>,
   userId: string,
@@ -796,7 +811,7 @@ async function handleSubscribe(
   logger: Logger
 ): Promise<void> {
   const execution = await agentExecutionRepository.findById(cmd.executionId);
-  if (!execution || !(await canReadAgentExecution(execution, userId))) {
+  if (!execution || !(await canReadAgentExecution(execution, userId)) || !(await mayWatchLive(execution, userId))) {
     await sendAgentEvent(connectionId, endpoint, {
       action: 'reconnect_result',
       requestId: cmd.requestId,

@@ -10,6 +10,7 @@ import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
  */
 
 const mockFindById = vi.fn();
+const mockGetSettingsValue = vi.fn();
 const mockUpdatePermissionState = vi.fn();
 const mockMarkFailed = vi.fn();
 const mockUpdateStatus = vi.fn();
@@ -25,7 +26,7 @@ const mockRemoveViewer = vi.fn();
 const mockFindSessionById = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
   agentExecutionRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
     setAbortFlag: vi.fn().mockResolvedValue(undefined),
@@ -917,6 +918,7 @@ describe('subscribe / unsubscribe commands', () => {
     vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
     vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
     mockFindSessionById.mockResolvedValue({ userId: 'user-1' });
+    mockGetSettingsValue.mockResolvedValue(true);
   });
 
   it('adds the owner as a viewer and sends the snapshot without taking over the run', async () => {
@@ -949,6 +951,7 @@ describe('subscribe / unsubscribe commands', () => {
     mockFindSessionById.mockResolvedValue({ userId: 'user-1', users: [{ userId: 'user-2' }] });
     const paused = {
       ...baseExecution,
+      loopId: 'loop-1',
       status: 'awaiting_permission',
       pendingPermission: { toolName: 'bash', toolInput: {}, requestedAt: new Date(), toolCallId: 'c1' },
     };
@@ -959,15 +962,32 @@ describe('subscribe / unsubscribe commands', () => {
     expect(sentPayloads()[0].pendingPermission).toBeUndefined();
   });
 
-  it('lets a member of a shared session watch the run', async () => {
+  it('lets a member of a shared session watch a loop run', async () => {
     vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
     mockFindSessionById.mockResolvedValueOnce({ userId: 'user-1', users: [{ userId: 'user-2' }] });
-    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, loopId: 'loop-1', status: 'running' });
 
     await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
 
     expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
     expect(sentPayloads()[0]).toMatchObject({ found: true });
+  });
+
+  it('keeps a shared-session member off a run that is not a loop run, or with EnableLoops off', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    mockGetSettingsValue.mockResolvedValue(false);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, loopId: 'loop-1', status: 'running' });
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([
+      { action: 'reconnect_result', found: false },
+      { action: 'reconnect_result', found: false },
+    ]);
   });
 
   it("refuses another user's run and never adds them as a viewer", async () => {
