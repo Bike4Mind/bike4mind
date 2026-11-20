@@ -9,18 +9,26 @@ import {
   dataLakeResearchRunRepository,
   fabFileRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeResearchService,
+  dataLakeService,
+  recordOperationalUsage,
+  spendFreezeService,
+} from '@bike4mind/services';
 import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL, ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
+import { isSpendFrozenError, RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
 import type { ResearchFeedCursor, ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
@@ -36,6 +44,13 @@ import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeL
  */
 
 const LOGGED_SEARCH_HOSTS = 10;
+// A waiting page releases after a delay that runs from the search, so unresolved links are retried later in the run.
+const GOTO_RETRY_ROUNDS = 3;
+const GOTO_RETRY_WAIT_MS = 60_000;
+const GOTO_RETRY_SPACING_MS = 2_000;
+const GOTO_RETRY_MAX_LINKS = 15;
+const GOTO_RETRY_MIN_REMAINING_MS = 300_000;
+const defaultSleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const FEED_DOWNLOAD_TIMEOUT_MS = 10_000;
 const FEED_MAX_MEGABYTES = RESEARCH_FEED_MAX_BYTES / (1024 * 1024);
 
@@ -153,7 +168,7 @@ export function describeJudgeFailure(
 export async function runLakeResearch(
   runId: string,
   logger: Logger,
-  options: { remainingTimeMs?: () => number } = {}
+  options: { remainingTimeMs?: () => number; sleep?: (ms: number) => Promise<void> } = {}
 ): Promise<ResearchRunOutcome> {
   const claimed = await dataLakeResearchRunRepository.claimForExecution(runId, new Date());
   if (!claimed) return { claimed: false };
@@ -217,6 +232,33 @@ export async function runLakeResearch(
       error: "This data lake's owner account cannot run research",
     });
     return { claimed: true };
+  }
+
+  // A pause since the start was admitted stops the run before it spends. The subject is the holder
+  // `recordSpend` charges: the owner's org pool when that org resolves, the owner personally otherwise.
+  // A failed read settles failed and rethrows, like the reads above.
+  if (owner) {
+    const billedOrganization = owner.organizationId
+      ? await organizationRepository
+          .findById(owner.organizationId)
+          .catch(error => failAndRethrow(error, 0, claimed.totals))
+      : null;
+    try {
+      await spendFreezeService.assertSpendNotFrozen(
+        spendFreezeSubjectForRequest({ user: owner }, billedOrganization?.id ?? null),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+    } catch (error) {
+      if (!isSpendFrozenError(error)) return failAndRethrow(error, 0, claimed.totals);
+      await settle({
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: claimed.totals,
+        error: error.message,
+      });
+      return { claimed: true };
+    }
   }
 
   // Mirrors what the loop last reported, so the `failed` settle below records the money actually
@@ -377,6 +419,7 @@ export async function runLakeResearch(
     )) as ApiKeyTable;
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
+    const itemRuleService = new dataLakeResearchService.ItemRuleService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
     // retired or disabled falls back rather than failing the whole run. Disabled counts because the
     // picker drops disabled models, but a config saved before the model was disabled still names it.
@@ -397,7 +440,7 @@ export async function runLakeResearch(
 
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
     // owns the lake now. The live config's off switch and site lists can only narrow admits mid-run;
-    // enabling it or adding sites applies from the next run. Never throws: a failure leaves it pending.
+    // enabling it, adding sites or adding item rules applies from the next run. Never throws: a failure leaves it pending.
     const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
       try {
         const grants = await dataLakeService.loadActiveLakeGrants(lake, {
@@ -487,7 +530,85 @@ export async function runLakeResearch(
           });
           throw error;
         }
-        const { results: hits, servedBy } = outcome;
+        const { results: rawHits, servedBy } = outcome;
+        // Classification reads the stored URL, so a provider redirect must be resolved here.
+        // Sequential: concurrent requests to the redirect host may be refused. The log records why each one fails.
+        const sleep = options.sleep ?? defaultSleep;
+        const entries: Array<{
+          hit: (typeof rawHits)[number];
+          position: number;
+          url: string;
+          resolved: dataLakeResearchService.SearchRedirectResult['resolved'];
+          via?: dataLakeResearchService.SearchRedirectVia;
+          detail?: dataLakeResearchService.UnresolvedDetail;
+          cookies?: string[];
+        }> = [];
+        for (const [index, hit] of rawHits.entries()) {
+          const { url, resolved, detail, via, retryCookies } = await dataLakeResearchService.resolveSearchRedirect(
+            hit.url
+          );
+          entries.push({ hit, position: index + 1, url, resolved, via, detail, cookies: retryCookies });
+        }
+
+        const isRetryable = (entry: (typeof entries)[number]) =>
+          entry.resolved === 'unresolved' && dataLakeResearchService.isRetryableUnresolved(entry.detail);
+        const eligible = entries.filter(isRetryable).length;
+        const retryTargets = entries.filter(isRetryable).slice(0, GOTO_RETRY_MAX_LINKS);
+        const timeLeft = () => options.remainingTimeMs?.() ?? Number.POSITIVE_INFINITY;
+        let rounds = 0;
+        let waitedMs = 0;
+        let resolvedOnRetry = 0;
+        let skippedForTime = false;
+        while (rounds < GOTO_RETRY_ROUNDS) {
+          const due = retryTargets.filter(isRetryable);
+          if (due.length === 0) break;
+          if (timeLeft() < GOTO_RETRY_MIN_REMAINING_MS + GOTO_RETRY_WAIT_MS) {
+            skippedForTime = true;
+            break;
+          }
+          await sleep(GOTO_RETRY_WAIT_MS);
+          waitedMs += GOTO_RETRY_WAIT_MS;
+          rounds += 1;
+          for (const [index, entry] of due.entries()) {
+            if (timeLeft() < GOTO_RETRY_MIN_REMAINING_MS) {
+              skippedForTime = true;
+              break;
+            }
+            if (index > 0) await sleep(GOTO_RETRY_SPACING_MS);
+            const result = await dataLakeResearchService.resolveSearchRedirect(entry.hit.url, {
+              cookies: entry.cookies,
+            });
+            entry.url = result.url;
+            entry.resolved = result.resolved;
+            entry.via = result.via;
+            entry.detail = result.detail;
+            if (result.retryCookies) entry.cookies = result.retryCookies;
+            if (result.resolved === 'followed') resolvedOnRetry += 1;
+          }
+          if (skippedForTime) break;
+        }
+
+        const resolution = { decoded: 0, followed: 0, unresolved: 0 };
+        const followedVia: Record<string, number> = {};
+        const unresolvedDetails: Array<
+          (dataLakeResearchService.UnresolvedDetail | { reason: 'unknown' }) & { position: number }
+        > = [];
+        const seenUrls = new Set<string>();
+        const hits: Array<(typeof rawHits)[number] & { unresolvedRedirect?: true }> = [];
+        for (const entry of entries) {
+          if (entry.resolved !== 'not_redirect') resolution[entry.resolved] += 1;
+          if (entry.resolved === 'followed' && entry.via) followedVia[entry.via] = (followedVia[entry.via] ?? 0) + 1;
+          if (entry.resolved === 'unresolved') {
+            unresolvedDetails.push({ ...(entry.detail ?? { reason: 'unknown' }), position: entry.position });
+          }
+          if (seenUrls.has(entry.url)) continue;
+          seenUrls.add(entry.url);
+          hits.push({
+            ...entry.hit,
+            url: entry.url,
+            ...(entry.resolved === 'unresolved' ? { unresolvedRedirect: true } : {}),
+          });
+        }
         // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
         // otherwise invisible after the fact.
         logger.log('[lakeResearch] search', {
@@ -497,9 +618,29 @@ export async function runLakeResearch(
           maxResults,
           recencyDays,
           hits: hits.length,
+          redirects: resolution,
+          followedVia,
+          unresolvedDetails,
+          ...(rounds > 0 || skippedForTime
+            ? {
+                retry: {
+                  eligible,
+                  rounds,
+                  waitedMs,
+                  resolvedOnRetry,
+                  stillUnresolved: eligible - resolvedOnRetry,
+                  skippedForTime,
+                },
+              }
+            : {}),
           hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
         });
-        return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
+        return hits.map(hit => ({
+          title: hit.title,
+          url: hit.url,
+          snippet: hit.snippet,
+          ...(hit.unresolvedRedirect ? { unresolvedRedirect: true } : {}),
+        }));
       },
       judge: async candidate => {
         const judgment = await judgeService.judge({
@@ -518,6 +659,25 @@ export async function runLakeResearch(
         judgeUsage.cacheWriteTokens += judgment.cacheCreationInputTokens ?? 0;
         return judgment;
       },
+      ...((claimed.levers.itemRules?.length ?? 0) > 0
+        ? {
+            evaluateItemRules: async (rules, item) => {
+              const result = await itemRuleService.evaluate({
+                apiKeyTable,
+                models,
+                model,
+                rules,
+                item,
+                endUserId: lake.createdByUserId,
+              });
+              judgeUsage.inputTokens += result.inputTokens;
+              judgeUsage.outputTokens += result.outputTokens;
+              judgeUsage.cachedInputTokens += result.cacheReadInputTokens;
+              judgeUsage.cacheWriteTokens += result.cacheCreationInputTokens;
+              return result;
+            },
+          }
+        : {}),
       fetchSource: url => fetchSourceForProposal(url, logger),
       propose: candidate =>
         dataLakeService.proposeDataLakeContent(lake, candidate, {

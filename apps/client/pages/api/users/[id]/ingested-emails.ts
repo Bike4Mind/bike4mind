@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { IngestedEmailModel } from '@bike4mind/database';
+import { assistantBriefRepository, emailTriageItemRepository, IngestedEmailModel } from '@bike4mind/database';
 import mongoose from 'mongoose';
 
 /**
@@ -73,6 +73,10 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Forbidden: You can only delete your own emails' });
       }
 
+      if (!userId) {
+        return res.status(400).json({ error: 'User id is required' });
+      }
+
       const { emailIds } = req.body;
       if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
         return res.status(400).json({ error: 'emailIds array is required' });
@@ -91,6 +95,9 @@ const handler = baseApi()
 
       // Soft-delete emails that belong to this user (deleteMany is overridden by soft-delete plugin)
       const result = await IngestedEmailModel.deleteMany({ _id: { $in: emailIds }, userId });
+      // Triage items and the brief items composed from them hold the email's content, so they go with it.
+      await emailTriageItemRepository.deleteByEmailIds(userId, emailIds);
+      await assistantBriefRepository.removeEmailSourcedItems(userId, emailIds);
       return res.json({ deletedCount: result.deletedCount });
     })
   );

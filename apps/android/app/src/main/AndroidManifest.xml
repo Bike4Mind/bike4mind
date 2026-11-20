@@ -4,6 +4,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <!-- allowBackup is off: the encrypted tokens are useless without their Keystore key, which never leaves the device. -->
     <application
         android:name=".B4MApplication"
@@ -45,6 +54,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="com.bike4mind.app" android:host="auth-callback" />
+            </intent-filter>
+
+            <!-- App links for the paths with a native screen (kit DeepLinkRouter). Verification needs the server's
+                 /.well-known/assetlinks.json; until then Android opens these links in the browser by default. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.bike4mind.com" />
+                <data android:pathPrefix="/sessions" />
+                <data android:pathPrefix="/notebooks" />
+                <data android:pathPrefix="/briefs" />
             </intent-filter>
         </activity>
     </application>

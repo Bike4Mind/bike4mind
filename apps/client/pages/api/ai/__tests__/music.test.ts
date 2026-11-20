@@ -93,6 +93,8 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
+  warmExchangeAttribution: async () => undefined,
   apiKeyRepository: {},
   cacheRepository: { sentinel: 'cacheRepository' },
   adminSettingsRepository: { sentinel: 'adminSettingsRepository' },

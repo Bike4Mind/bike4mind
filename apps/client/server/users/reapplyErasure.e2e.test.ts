@@ -31,11 +31,23 @@ import {
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   storage: vi.fn(),
   cancel: vi.fn(),
   billingEvent: vi.fn(),
   email: vi.fn(),
   purge: vi.fn(),
+  assertRegistry: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.storage;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
@@ -62,6 +74,11 @@ vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async importOri
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/services/purgeDeletedUserData')>();
   effects.purge.mockImplementation(actual.purgeDeletedUserData);
   return { ...actual, purgeDeletedUserData: effects.purge };
+});
+vi.mock('../dataSubject/registry', async importOriginal => {
+  const actual = await importOriginal<typeof import('../dataSubject/registry')>();
+  effects.assertRegistry.mockImplementation(actual.assertContributedRegistryValid);
+  return { ...actual, assertContributedRegistryValid: effects.assertRegistry };
 });
 vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: effects.cancel,
@@ -263,6 +280,14 @@ describe('reapplyErasure after a simulated restore', () => {
     });
 
     const result = await reapplyErasure(id, { record: record!, logger });
+    if (initiatedBy === 'self') {
+      expect(effects.deleteImportPrefix).toHaveBeenCalledExactlyOnceWith(
+        'test-historyImportBucket',
+        `notebooks/${id}/`
+      );
+    } else {
+      expect(effects.deleteImportPrefix).not.toHaveBeenCalled();
+    }
 
     expect(result.ownedOrganizationIds).toEqual([]);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
@@ -299,6 +324,37 @@ describe('reapplyErasure after a simulated restore', () => {
     expect(effects.email).not.toHaveBeenCalled();
     expect(effects.purge).toHaveBeenCalledTimes(1);
     expect(effects.purge).toHaveBeenCalledWith(id, expect.objectContaining({ integrationGrants: null }));
+  });
+
+  it('purges nothing when the contributed registry is invalid', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'self', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    effects.assertRegistry.mockImplementationOnce(() => {
+      throw new Error('registry invalid');
+    });
+
+    await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('registry invalid');
+
+    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(1);
+    expect(await raw(Session).countDocuments({ userId: id })).toBeGreaterThan(0);
+  });
+
+  it('repeats an admin erasure in full when the restored row shows a scheduled admin deletion', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'admin', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    await raw(User).updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { deletion: { source: 'admin', erasureScope: [] } } }
+    );
+
+    await reapplyErasure(id, { record, logger });
+
+    expect(await raw(Organization).countDocuments({ userId: id })).toBe(0);
+    expect(await raw(Session).countDocuments({ userId: id })).toBe(0);
   });
 
   it('reports a non-personal organisation the restored account still owned, by org id', async () => {

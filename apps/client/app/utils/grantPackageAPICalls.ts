@@ -3,6 +3,7 @@ import type {
   CreateGrantPackageInput,
   GrantPackageReasonPolicy,
   IGrantPackageDocument,
+  IPartnerSignupRuleDocument,
   IRegInviteDocument,
   PaginatedResponse,
   UpdateGrantPackageInput,
@@ -42,10 +43,10 @@ export const updateGrantPackage = async (id: string, data: UpdateGrantPackageInp
 
 export type GrantPackageLinkPage<T> = { data: T[]; truncated: boolean };
 
-/** Codes linked to one package; partnerRules stays empty until the package form edits partner domains. */
+/** Codes and partner signup rules linked to one package, newest first. */
 export type GrantPackageLinks = {
   invites: GrantPackageLinkPage<IRegInviteDocument>;
-  partnerRules: GrantPackageLinkPage<{ id: string; domain: string; enabled: boolean }>;
+  partnerRules: GrantPackageLinkPage<IPartnerSignupRuleDocument>;
 };
 
 export const grantPackageLinksQueryKey = (id: string) => [GRANT_PACKAGES_QUERY_KEY, id, 'links'] as const;

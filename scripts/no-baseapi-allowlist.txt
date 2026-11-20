@@ -46,10 +46,13 @@ apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() H
 apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/slack/__tests__/requestLogContext.test.ts # Test file for the handlers above (script greps by path, not export)
+apps/client/pages/api/slack/__tests__/interactive.registeredActions.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/slack/__tests__/interactive.reservedActions.test.ts # Test file for the handler above (script greps by path, not export)
 
 # SRE workflow callback — authenticated via encrypted bearer token
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
 apps/client/pages/api/sre/__tests__/workflow-callback.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/sre/__tests__/workflow-callback.previousKey.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Fleet usage export: dedicated bearer credential and fixed actor/owner scope
 apps/client/pages/api/usage/fleet-export.ts # Timing-safe server credential check; no session or general API-key auth
@@ -65,6 +68,7 @@ apps/client/pages/api/webhooks/github/__tests__/lake.test.ts # Test file for the
 # Jira webhook — authenticated via HMAC + replay protection
 apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing token + replay protection
 apps/client/pages/api/webhooks/jira/__tests__/[token].test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/webhooks/jira/__tests__/[token].previousKey.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Qwork webhook — authenticated via HMAC-SHA256 (dual-secret rotation + 5-min replay prevention)
 apps/client/pages/api/webhooks/qwork/index.ts           # HMAC-SHA256 over raw body, dual-secret rotation, timestamp replay guard

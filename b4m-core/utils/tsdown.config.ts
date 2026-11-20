@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
   entry: [
     'src/index.ts',
+    'src/cache/ApplicationCache.ts',
     'src/artifactParser.ts',
     // Own entry so the client can import the elision detector without pulling the whole
     // utils barrel into the browser bundle (same reason as artifactParser above).
@@ -45,6 +46,8 @@ export default defineConfig({
     'src/videoProviders/index.ts',
     // Music provider interface, registry and adapters, isolated the same way as videoProviders.
     'src/musicProviders/index.ts',
+    // Speech and sound-effect sync providers for the audio job kinds, isolated the same way.
+    'src/audioProviders/index.ts',
     // Image provider interface, registry and adapters for the image job kind, isolated the same way.
     'src/imageProviders/index.ts',
     // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.

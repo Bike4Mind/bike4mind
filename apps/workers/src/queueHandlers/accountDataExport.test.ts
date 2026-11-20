@@ -86,7 +86,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
-vi.mock('@server/models/UserSubscription', () => ({}));
+vi.mock('@bike4mind/server-utils/models/UserSubscription', () => ({}));
 vi.mock('@server/dataSubject/subjectRecordExport', () => ({
   assertEveryModelClassified: h.assertClassified,
   SubjectRecordExport: class {
@@ -142,7 +142,7 @@ vi.mock('./accountDataExportCollections', () => ({
 }));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
-import { ADMIN_DATA_EXPORT_GIVE_UP_MS } from '@server/dataSubject/adminDataExports';
+import { ADMIN_DATA_EXPORT_GIVE_UP_MS } from '@bike4mind/server-utils/dataSubject/adminDataExports';
 import {
   dispatch,
   LEASE_WAIT_DELAY_SECONDS,

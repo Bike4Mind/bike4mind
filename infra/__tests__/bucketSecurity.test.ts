@@ -91,10 +91,10 @@ describe('S3 buckets state encryption and public-access blocking', () => {
         'fabFileBucket',
         'generatedImagesBucket',
         'historyImportBucket',
+        'modelPriceSnapshotBucket',
         'publishedArtifactsBucket',
         'qaArtifactsBucket',
         'slackExportBucket',
-        'turboCacheBucket',
       ].sort()
     );
   });

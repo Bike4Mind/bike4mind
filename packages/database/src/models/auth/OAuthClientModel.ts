@@ -7,6 +7,8 @@ import {
   type OAuthFederatedIdpConfig,
   type IUserApiKeyRateLimit,
   oauthClientRateLimitSchema,
+  oauthClientUnpaidAccountLimitsSchema,
+  type OAuthClientUnpaidAccountLimits,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Schema, model, Model } from 'mongoose';
@@ -56,6 +58,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
   clientSecretHash: string;
   name: string; // e.g. "VibesWire", "VibesTrader"
   redirectUris: string[];
+  /** Exact-match targets for OIDC RP-Initiated Logout (`post_logout_redirect_uri`). */
+  postLogoutRedirectUris: string[];
   allowedScopes: string[];
   /**
    * How the client authenticates at the token endpoint (RFC 8414 metadata) and,
@@ -81,6 +85,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
   rateLimit?: IUserApiKeyRateLimit;
+  /** Replaces the global untrusted API key limits for this client's exchange keys while the owner is unpaid. */
+  unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
   /** Unset means allowed; false keeps this client's exchange keys paid-only. */
   unpaidAccountsAllowed?: boolean;
   /**
@@ -127,6 +133,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     clientSecretHash: { type: String, required: true },
     name: { type: String, required: true },
     redirectUris: [{ type: String, required: true }],
+    postLogoutRedirectUris: { type: [String], default: [] },
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     tokenEndpointAuthMethod: { type: String, enum: ['none', 'client_secret_post'], default: 'none' },
     clientType: { type: String, enum: [...OAUTH_CLIENT_TYPES], default: 'first-party' },
@@ -167,6 +174,27 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
           oauthClientRateLimitSchema.safeParse({
             requestsPerMinute: value.requestsPerMinute,
             requestsPerDay: value.requestsPerDay,
+          }).success),
+    },
+    unpaidAccountLimits: {
+      type: new Schema<OAuthClientUnpaidAccountLimits>(
+        {
+          requestsPerMinute: { type: Number, required: true },
+          requestsPerDay: { type: Number, required: true },
+          tokensPerMinute: { type: Number, required: true },
+          maxConcurrent: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+      validate: (value: OAuthClientUnpaidAccountLimits | null | undefined) =>
+        value === undefined ||
+        (value !== null &&
+          oauthClientUnpaidAccountLimitsSchema.safeParse({
+            requestsPerMinute: value.requestsPerMinute,
+            requestsPerDay: value.requestsPerDay,
+            tokensPerMinute: value.tokensPerMinute,
+            maxConcurrent: value.maxConcurrent,
           }).success),
     },
   },

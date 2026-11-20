@@ -72,6 +72,14 @@ export class TeamsPage extends BasePage {
     return this.page.getByTestId('organization-tabs').getByRole('tab', { name, exact: true });
   }
 
+  /**
+   * A tab shown locked to the current viewer, by its route key (e.g. 'billing'). The lock icon adds
+   * "Owner only" to the accessible name, so `tab()`'s exact name match misses it.
+   */
+  lockedTab(key: string): Locator {
+    return this.page.getByTestId(`organization-tab-locked-${key}`);
+  }
+
   async openTab(name: TeamTab) {
     await this.tab(name).click();
     await expect(this.tab(name)).toHaveAttribute('aria-selected', 'true');
@@ -93,7 +101,12 @@ export class TeamsPage extends BasePage {
     return this.page.getByTestId('organization-user-card');
   }
 
-  /** "X of N seats used" from the Seat Management card, as numbers. */
+  /** A row of the Pending invitations table (PendingInvitationsTable), by the invitee's label. */
+  pendingInviteRow(label: string): Locator {
+    return this.page.getByTestId('organization-pending-invite-row').filter({ hasText: label });
+  }
+
+  /** "X of N seats used" from the Members tab seat summary (OrgSeatSummary), as numbers. */
   async seatsUsed(): Promise<{ used: number; max: number }> {
     const text = await this.page.getByTestId('organization-members-seats-count').innerText();
     const match = text.match(/(\d+) of (\d+) seats used/);

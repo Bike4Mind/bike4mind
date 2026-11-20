@@ -1,5 +1,5 @@
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { git } from './git';
 import { type InstructionBlock, defaultUserInstructionsRoot, loadInstructions } from './instructions';
 import { memoryStoreFor } from './memory';
@@ -143,12 +143,24 @@ const MEMORY_CAVEAT = [
   'NOT below: read one with memory_read when its line bears on the work.',
 ];
 
-function renderBlock(block: InstructionBlock): string[] {
+/**
+ * A file inside the working directory is named relative to it: this block is cached ahead of the
+ * per-session lines that state the working directory, and sibling agents in their own worktrees
+ * share it only while it holds no worktree path.
+ */
+function locate(path: string, workingDirectory: string | undefined): string {
+  if (!workingDirectory) return path;
+  const inside = relative(workingDirectory, path);
+  return inside && !inside.startsWith('..') && !isAbsolute(inside) ? `${inside} in the working directory` : path;
+}
+
+function renderBlock(block: InstructionBlock, workingDirectory: string | undefined): string[] {
+  const path = locate(block.path, workingDirectory);
   return [
-    `--- begin ${SCOPE_LABEL[block.scope]}, from ${block.path} ---`,
+    `--- begin ${SCOPE_LABEL[block.scope]}, from ${path} ---`,
     ...(block.scope === 'memory' ? MEMORY_CAVEAT : []),
     block.text,
-    `--- end ${block.file} (${block.path}) ---`,
+    `--- end ${block.file} (${path}) ---`,
   ];
 }
 
@@ -181,11 +193,11 @@ export async function loadProjectContext(
       'block wins because it is the more specific. A memory block, if one is present, is the',
       'exception: it is background, and its own label says so.'
     );
-    for (const block of blocks) sections.push(...renderBlock(block));
+    for (const block of blocks) sections.push(...renderBlock(block, workingDirectory));
   }
   if (paths.length > 0) {
     sections.push(
-      `Files in ${workingDirectory} (tracked, plus untracked that are not ignored), as of the start of this`,
+      'Files in the working directory (tracked, plus untracked that are not ignored), as of the start of this',
       'session; files made since are not listed:',
       renderTree(paths)
     );

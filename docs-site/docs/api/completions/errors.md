@@ -61,10 +61,14 @@ deployment settings, so contact your deployment administrator if the allowance d
 
 ## Account-level limits
 
-Some accounts also have a tokens-per-minute limit and a limit on completions in flight at once. A 429 for one of these names it in `errorCode`:
+Your key has a per-minute and a daily request limit. Some accounts also have a tokens-per-minute limit and a limit on completions in flight at once. A 429 for one of these names it in `errorCode`:
 
+- `api_key_rate_limit_exceeded`: the key's per-minute request limit. Wait for `Retry-After` seconds.
+- `api_key_daily_limit_exceeded`: the key's daily request limit. Wait for `Retry-After` seconds.
 - `token_rate_limit_exceeded`: wait for `Retry-After` seconds. A retry can be refused again while your usage in the last minute is still over the limit.
 - `concurrency_limit_exceeded`: retry when one of your running completions finishes.
+
+A 429 body for the request and token limits may also carry `limit` (the limit that was hit) and `windowSeconds` (its window). A concurrency refusal carries `limit` only.
 
 ## Retry guidance
 
@@ -86,6 +90,14 @@ A 404 with `errorCode: "run_not_found"` means the `run.runId` in your request is
 ## Unknown model
 
 A 400 with `errorCode: "unknown_model"` means the model id is not available to you. Check `GET /api/v1/models` for the ids you can use.
+
+## End user id not allowed
+
+A 400 with `errorCode: "end_user_id_not_allowed"` means the request sent `end_user_id` on an API key without the `ai:end-user-id` scope, or with a signed-in session. Remove the field, or ask your administrator to grant the scope to the key. See [End users of your product](./reference.md#end-users-of-your-product).
+
+## Invalid end user id
+
+A 400 with `errorCode: "invalid_end_user_id"` means `end_user_id` was empty, longer than 64 characters, or contained anything other than letters, digits, `_`, `:` and `-` (an email address is never valid). This is checked before the credential, so it applies to every caller. See [End users of your product](./reference.md#end-users-of-your-product).
 
 ## Related
 

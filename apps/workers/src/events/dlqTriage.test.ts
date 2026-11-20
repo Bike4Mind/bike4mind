@@ -41,7 +41,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', () => ({
       values.map(value => Promise.race([value, new Promise(resolve => setTimeout(() => resolve(null), budgetMs))]))
     ),
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ triageDlqMessage: h.triage, loadDlqTriageConfig: h.config }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({
+  triageDlqMessage: h.triage,
+  loadDlqTriageConfig: h.config,
+}));
 vi.mock('sst', () => ({ Resource: { App: { name: 'app', stage: 'test' }, MONGODB_URI: { value: 'fixture' } } }));
 
 import { collectDlqTriage, canNotifyDlqTriage, finishDlqTriageDelivery } from './dlqTriage';
@@ -104,6 +107,11 @@ describe('DLQ triage collection', () => {
   it('does not repost suggestions already claimed by the other trigger', async () => {
     h.claim.mockResolvedValue(false);
     expect(await collectDlqTriage('app-test-dlq-fixture-age')).toBeNull();
+  });
+  it.each(['accepted', 'dismissed'])('does not claim another Slack approval for %s suggestions', async status => {
+    h.triage.mockResolvedValue({ id: 'decided-suggestion', status });
+    expect(await collectDlqTriage('app-test-dlq-fixture-messages')).toBeNull();
+    expect(h.claim).not.toHaveBeenCalled();
   });
   it('rechecks off switches immediately before notification and fails closed', async () => {
     h.config.mockResolvedValueOnce({

@@ -6,7 +6,8 @@ import Security
 ///
 /// Both degrade instead of failing when the entitlement is missing (unsigned simulator builds, SwiftPM test
 /// hosts): the container falls back to Application Support and the keychain group to `nil`, which means the
-/// extension simply cannot see the app's session and asks the user to open the app.
+/// extension simply cannot see the app's session and asks the user to open the app. A signed build without
+/// Keychain Sharing still gets a group, and the token store keeps the item app-private when it is rejected.
 public enum SharedContainer {
   public static let appGroupIdentifier = "group.com.bike4mind.app"
   /// Appended to the team's `AppIdentifierPrefix` to form the keychain access group in the entitlements.
@@ -33,8 +34,9 @@ public enum SharedContainer {
 
 /// Resolves the full keychain access group (`<TeamID>.com.bike4mind.shared`).
 public enum KeychainAccessGroup {
-  /// The access group to give `KeychainTokenStore`, or `nil` when the keychain-access-groups entitlement is
-  /// not in effect, in which case the item stays private to the app (the pre-extension behavior).
+  /// The access group to give `KeychainTokenStore`, or `nil` when the build has no team prefix (unsigned
+  /// builds, SwiftPM test hosts). A signed build without Keychain Sharing still gets the group back, and
+  /// `KeychainTokenStore` falls back to an app-private item when the system rejects it.
   public static func resolved(suffix: String = SharedContainer.keychainGroupSuffix) -> String? {
     guard let defaultGroup = probeDefaultGroup(), let prefix = teamPrefix(fromDefaultGroup: defaultGroup) else {
       return nil

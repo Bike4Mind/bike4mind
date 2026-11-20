@@ -18,7 +18,7 @@ import {
 } from '@bike4mind/common';
 
 const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -63,7 +63,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {

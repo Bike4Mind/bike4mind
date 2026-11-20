@@ -31,3 +31,16 @@ export function parseAttentionNotice(value: unknown): AttentionNotice | null {
   if (trimmedTitle === '') return null;
   return { sessionId, rootId, title: trimmedTitle, body: body.trim().slice(0, MAX_NOTICE_BODY_LENGTH) };
 }
+
+/**
+ * Which sessions raise needs-you alerts (notice, badge, chime): only orchestrations and their agents,
+ * or every session. Held by main (main/attention/NotifyScopeStore.ts), since main's NeedsYouMonitor
+ * announces while no window is open and must follow the same setting as the renderer.
+ */
+export type NotifyScope = 'agents' | 'all';
+
+export const DEFAULT_NOTIFY_SCOPE: NotifyScope = 'agents';
+
+export function parseNotifyScope(value: unknown): NotifyScope | null {
+  return value === 'agents' || value === 'all' ? value : null;
+}

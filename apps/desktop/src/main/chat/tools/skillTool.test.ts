@@ -85,6 +85,18 @@ describe('the skill tool', () => {
     await expect(skillTool.run({ skill: 'private-notes' }, context)).rejects.toThrow(/no skill called/);
   });
 
+  it('says a user-only skill exists and that the user must start it, without running it', async () => {
+    const skills: SkillContext = {
+      available: () => Promise.resolve([command('ship', 'Ship it.')]),
+      isUserOnly: name => Promise.resolve(name === 'orchestrate'),
+    };
+    const context: ToolContext = { roots: [], signal: new AbortController().signal, skills };
+    const refusal = skillTool.run({ skill: '/orchestrate' }, context);
+    await expect(refusal).rejects.toThrow(/"orchestrate" exists but only the user can start it/);
+    await expect(refusal).rejects.toThrow(/type \/orchestrate/);
+    await expect(skillTool.run({ skill: 'missing' }, context)).rejects.toThrow(/no skill called "missing"/);
+  });
+
   it('refuses when the conversation has no catalog', async () => {
     const bare: ToolContext = { roots: [], signal: new AbortController().signal };
     await expect(skillTool.run({ skill: 'ship' }, bare)).rejects.toThrow(/no skills available/);

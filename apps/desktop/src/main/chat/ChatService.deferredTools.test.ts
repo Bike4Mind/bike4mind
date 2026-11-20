@@ -33,6 +33,13 @@ function headHash(body: Body): string {
     .digest('hex');
 }
 
+/** The system prompt's text, which a cacheable request sends as two blocks. */
+const systemText = (body: Body) =>
+  body.messages
+    .filter(message => message.role === 'system' && typeof message.content === 'string')
+    .map(message => message.content)
+    .join('');
+
 const changes = (body: Body) =>
   body.messages.filter(message => message.role === 'system' && Array.isArray(message.content)).map(m => m.content);
 
@@ -309,7 +316,7 @@ describe('ChatService deferred tools', () => {
     expect(off.options.tools.some(tool => tool.toolSchema.name === DEFERRED_ANCHOR_TOOL_NAME)).toBe(false);
     expect(changes(off)).toEqual([]);
     expect(JSON.stringify(off.messages.slice(1))).not.toContain('<system-reminder>');
-    expect(off.messages[0].content).toContain('These folders are shared');
+    expect(systemText(off)).toContain('These folders are shared');
     expect(off.messages.some(message => blockNames(message, 'tool_use').includes('file_read'))).toBe(true);
     expectDeclaredBeforeUse(off);
 
@@ -509,7 +516,7 @@ describe('ChatService deferred tools', () => {
     const { id } = await service.createSession();
     const request = await turn(id, 'hi');
     expect(request.options.tools.some(tool => tool.toolSchema.defer_loading)).toBe(false);
-    expect(request.messages[0].content).toContain('These folders are shared');
+    expect(systemText(request)).toContain('These folders are shared');
   });
 
   it('keeps the request shape of today on Bedrock and on a model without tool changes', async () => {

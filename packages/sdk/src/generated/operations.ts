@@ -29,6 +29,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
   },
+  cancelSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions/{id}/cancel',
+  },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
@@ -40,6 +44,10 @@ export const operations = {
   cloneSession: {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
+  },
+  composeBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs',
   },
   createAgent: {
     method: 'POST',
@@ -56,6 +64,10 @@ export const operations = {
   createArtifactVersion: {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/versions',
+  },
+  createAssistantInstruction: {
+    method: 'POST',
+    path: '/api/v1/assistant/instructions',
   },
   createCompletion: {
     method: 'POST',
@@ -88,6 +100,10 @@ export const operations = {
   createProjectInvite: {
     method: 'POST',
     path: '/api/v1/projects/{id}/invites',
+  },
+  createSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions',
   },
   createSession: {
     method: 'POST',
@@ -124,6 +140,10 @@ export const operations = {
   deleteArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}',
+  },
+  deleteAssistantInstruction: {
+    method: 'DELETE',
+    path: '/api/v1/assistant/instructions/{id}',
   },
   deleteFile: {
     method: 'DELETE',
@@ -209,6 +229,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getBrief: {
+    method: 'GET',
+    path: '/api/v1/briefs/{id}',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -277,6 +301,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}',
   },
+  getSceneComposition: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions/{id}',
+  },
   getSession: {
     method: 'GET',
     path: '/api/sessions/{id}',
@@ -321,6 +349,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts',
   },
+  listAssistantInstructions: {
+    method: 'GET',
+    path: '/api/v1/assistant/instructions',
+  },
+  listBriefs: {
+    method: 'GET',
+    path: '/api/v1/briefs',
+  },
   listCreditTransactions: {
     method: 'GET',
     path: '/api/v1/credits/transactions',
@@ -340,6 +376,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listHandoffDevices: {
+    method: 'GET',
+    path: '/api/v1/handoff-devices',
   },
   listImageModels: {
     method: 'GET',
@@ -385,6 +425,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
   },
+  listSceneCompositions: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions',
+  },
   listSessionFiles: {
     method: 'GET',
     path: '/api/v1/sessions/{id}/files',
@@ -429,6 +473,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/slack/messages',
   },
+  publishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/publish',
+  },
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
@@ -456,6 +504,14 @@ export const operations = {
   removeProjectSystemPrompt: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
+  replyToBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
+  },
+  republishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/republish',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
@@ -489,6 +545,10 @@ export const operations = {
     method: 'POST',
     path: '/api/chat',
   },
+  sendSessionHandoff: {
+    method: 'POST',
+    path: '/api/v1/session-handoffs',
+  },
   startAgentExecution: {
     method: 'POST',
     path: '/api/v1/agent-executions',
@@ -504,6 +564,10 @@ export const operations = {
   transferAgentCredits: {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
+  },
+  unpublishArtifact: {
+    method: 'DELETE',
+    path: '/api/v1/artifacts/{id}/publish',
   },
   unregisterPushToken: {
     method: 'DELETE',

@@ -1,3 +1,8 @@
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
@@ -42,6 +47,7 @@ interface RestoreArtifactLean {
   ownerId: string;
   lastPublishedBy?: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   size: { totalBytes: number; fileCount: number };
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
@@ -83,6 +89,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     {
       publicId,
       deletedAt: null,
+      ...publishedContentSnapshotFilter(artifact),
       $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - RESTORE_LOCK_TTL_MS) } }],
     },
     { $set: { revisingAt: lockNow } }
@@ -127,7 +134,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
 
     // The CURRENT index.html, archived below before overwriting so restore is reversible. Read
     // before the quota check, which counts what it archives. Null if it cannot be read.
-    const currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`).catch(() => null);
+    const currentBuf = await downloadPublishedIndex(artifact, storage).catch(() => null);
     const now = new Date();
 
     // versions[] is keyed by content sha (distinct snapshots). Restoring old bytes
@@ -179,20 +186,26 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
 
     const warnNotArchived = () =>
       req.logger.warn(`[RESTORE] ${publicId} could not archive current version ${currentSha.slice(0, 12)}`);
+    let archivedPrevious = false;
     if (!currentBuf) {
       warnNotArchived();
     } else {
-      await storage
-        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, { ContentType: 'text/html' })
-        .catch(warnNotArchived);
+      try {
+        await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+          ContentType: 'text/html',
+        });
+        archivedPrevious = true;
+      } catch {
+        warnNotArchived();
+      }
     }
 
     // Write the restored version as the new current.
     await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
     written = true;
 
-    await PublishedArtifact.updateOne(
-      { publicId, deletedAt: null },
+    const updated = await PublishedArtifact.updateOne(
+      { publicId, deletedAt: null, revisingAt: lockNow, ...publishedContentSnapshotFilter(artifact) },
       {
         $set: {
           manifest: newManifest,
@@ -209,9 +222,20 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
           },
         },
         // $each:[] is a harmless no-op when nothing new to record.
+        $unset: { indexObjectPath: 1 },
         $push: { versions: { $each: versionsToPush } },
       }
     );
+
+    if (updated.matchedCount === 0) {
+      return res.status(409).json({ error: 'The page changed while this operation was running' });
+    }
+
+    if (archivedPrevious) {
+      await deleteRetiredPublishedIndex(artifact, storage, error =>
+        req.logger.warn('[RESTORE] Could not remove a retired page payload', { error })
+      );
+    }
 
     // Restore overwrote index.html in place - bust the CDN so the rolled-back
     // version is visible immediately, not after the TTL. Only public pages are

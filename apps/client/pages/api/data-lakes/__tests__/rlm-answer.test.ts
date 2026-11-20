@@ -40,7 +40,7 @@ const {
   },
 }));
 mockAdmitRequestCompletion.mockImplementation(async () => ({ release: mockQuotaRelease }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: mockAdmitRequestCompletion,
 }));
 

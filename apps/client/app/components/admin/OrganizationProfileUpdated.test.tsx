@@ -14,6 +14,7 @@ vi.mock('@client/app/hooks/data/useOrgStorageUsage', () => ({
   useOrgStorageUsage: () => ({ data: { usedBytes: 0, limitBytes: 50_000_000 }, isError: false }),
 }));
 vi.mock('./OrganizationGroupTypesCard', () => ({ default: () => null }));
+vi.mock('./OrganizationSegmentCard', () => ({ default: () => null }));
 vi.mock('./OrganizationGroupMembersCard', () => ({ default: () => null }));
 // Stubbed here because it reads the router.
 vi.mock('./Billing/OrganizationBillingSection', () => ({
@@ -53,6 +54,13 @@ describe('OrganizationProfileUpdated - storage limit', () => {
     renderModal(makeOrg({ storageLimit: 50 }));
 
     expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue('50');
+  });
+
+  it('does not turn a plan allowance into an override when saving other settings', () => {
+    renderModal(makeOrg({ storageLimit: 50_000, planStorageLimit: 50_000, storageLimitOverride: null }));
+    expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue('');
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+    expect(sentData()).not.toHaveProperty('storageLimit');
   });
 
   it('sends a changed fractional limit as a number', () => {

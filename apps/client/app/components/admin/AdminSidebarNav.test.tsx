@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab, SIDEBAR_SECTIONS, filterSidebarSections } from './adminSidebarConfig';
@@ -12,6 +12,7 @@ import {
   type AdminActionCountKey,
 } from './adminActionCounts';
 import { onOpenAdminCommandPalette } from './shared/adminKeyboard';
+import { withContributedPages, type ContributedAdminPage } from './adminContributedPages';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -169,7 +170,7 @@ describe('SidebarNav', () => {
       renderNav();
 
       expect(screen.getByTestId('admin-users-tab-btn')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
       const more = screen.getByTestId('admin-sidebar-more-people-btn');
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveTextContent('More');
@@ -182,17 +183,17 @@ describe('SidebarNav', () => {
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'true');
       expect(more).toHaveTextContent('Less');
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
 
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
     });
 
     it('keeps an active item past the cut visible', () => {
-      renderNav({ activeTab: AdminTab.PartnerSignupRules });
+      renderNav({ activeTab: AdminTab.SignupDomainHolds });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toHaveAttribute('aria-current', 'page');
       expect(screen.queryByRole('link', { name: 'Feedback' })).toBeNull();
     });
 
@@ -279,7 +280,7 @@ describe('SidebarNav', () => {
 
       fireEvent.change(filterInput(), { target: { value: 'people' } });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
       expect(screen.queryByTestId('admin-sidebar-more-people-btn')).toBeNull();
     });
 
@@ -475,7 +476,7 @@ describe('SidebarNav', () => {
 
       fireEvent.click(screen.getByTestId('admin-sidebar-rail-people-btn'));
 
-      expect(screen.getByRole('menuitem', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Signup domain holds' })).toBeInTheDocument();
     });
   });
 });
@@ -533,5 +534,211 @@ describe('filterSidebarSections', () => {
     const settings = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'settings').flatMap(section => section.items);
     expect(settings.map(item => item.tab)).toContain(AdminTab.AdminSettings);
     expect(settings.map(item => item.tab)).not.toContain(AdminTab.Models);
+  });
+});
+
+describe('SidebarNav contributed pages', () => {
+  const pages: ContributedAdminPage[] = [
+    { path: '/admin/ext/reports', adminPage: { section: 'money', label: 'Reports', testId: 'ext-reports-link' } },
+    { path: '/admin/ext/audits', adminPage: { section: 'platform', label: 'Audits' } },
+  ];
+  const sections = withContributedPages(SIDEBAR_SECTIONS, pages);
+  const reportsLink = () => screen.getByTestId('ext-reports-link');
+  const currentLinks = () => screen.getAllByRole('link').filter(link => link.getAttribute('aria-current') === 'page');
+  // useId numbers differ between two renders in one file, and nothing else about the markup may.
+  const markup = (container: HTMLElement) => container.innerHTML.replace(/_r_[0-9a-z]+_/g, '_r_id_');
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('lists a page after the items of the section it names, as a link to its path', () => {
+    renderNav({ sections });
+
+    const money = within(screen.getByTestId('admin-sidebar-section-money'));
+    const links = money.getAllByRole('link');
+    expect(links.at(-1)).toBe(reportsLink());
+    expect(reportsLink()).toHaveTextContent('Reports');
+    expect(reportsLink()).toHaveAttribute('href', '/admin/ext/reports');
+    expect(links.slice(0, -1).map(link => link.textContent)).toEqual(
+      SIDEBAR_SECTIONS.find(section => section.key === 'money')!.items.map(item => item.label)
+    );
+    expect(within(screen.getByTestId('admin-sidebar-section-people')).queryByTestId('ext-reports-link')).toBeNull();
+  });
+
+  it('derives a testid from the path when the page gives none', () => {
+    renderNav({ sections, activePagePath: '/admin/ext/audits' });
+
+    expect(screen.getByTestId('admin-ext-audits-btn')).toHaveTextContent('Audits');
+  });
+
+  it('hides the page from a user who may not open it, and keeps every tab', () => {
+    renderNav({ sections, canOpenPage: () => false });
+
+    expect(screen.queryByTestId('ext-reports-link')).toBeNull();
+    expect(screen.queryByText('Reports')).toBeNull();
+    expect(screen.getByTestId('admin-revenue-btn')).toBeInTheDocument();
+  });
+
+  it('marks the open page current and no tab item', () => {
+    renderNav({ sections, activeTab: null, activePagePath: '/admin/ext/reports' });
+
+    expect(reportsLink()).toHaveAttribute('aria-current', 'page');
+    expect(currentLinks()).toEqual([reportsLink()]);
+  });
+
+  it('matches the open path across a trailing slash and letter case', () => {
+    renderNav({ sections, activeTab: null, activePagePath: '/Admin/Ext/Reports/' });
+
+    expect(reportsLink()).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('marks no page current while a tab is open', () => {
+    renderNav({ sections, activeTab: AdminTab.Revenue });
+
+    expect(reportsLink()).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('admin-revenue-btn')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('opens the page in-app on a plain click and leaves a modified click to the browser', () => {
+    const onPageSelect = vi.fn();
+    const { onTabSelect } = renderNav({ sections, onPageSelect });
+
+    fireEvent.click(reportsLink(), { metaKey: true });
+    expect(onPageSelect).not.toHaveBeenCalled();
+
+    fireEvent.click(reportsLink());
+    expect(onPageSelect).toHaveBeenCalledExactlyOnceWith('/admin/ext/reports');
+    expect(onTabSelect).not.toHaveBeenCalled();
+  });
+
+  it('leaves the click to the browser when nothing handles it', () => {
+    renderNav({ sections });
+    const click = createEvent.click(reportsLink());
+
+    fireEvent(reportsLink(), click);
+
+    expect(click.defaultPrevented).toBe(false);
+  });
+
+  describe('More row', () => {
+    const platformSections = withContributedPages(SIDEBAR_SECTIONS, [pages[1]]);
+
+    it('puts a page past the cut behind More, like a trailing item', () => {
+      renderNav({ sections: platformSections });
+
+      expect(screen.queryByTestId('admin-ext-audits-btn')).toBeNull();
+      fireEvent.click(screen.getByTestId('admin-sidebar-more-platform-btn'));
+      expect(screen.getByTestId('admin-ext-audits-btn')).toBeInTheDocument();
+    });
+
+    it('keeps the open page visible past the cut', () => {
+      renderNav({ sections: platformSections, activeTab: null, activePagePath: '/admin/ext/audits' });
+
+      expect(screen.getByTestId('admin-ext-audits-btn')).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByTestId('admin-sidebar-more-platform-btn')).toBeInTheDocument();
+    });
+  });
+
+  describe('filter', () => {
+    it('finds a page by its label, even one behind More', () => {
+      renderNav({ sections: withContributedPages(SIDEBAR_SECTIONS, [pages[1]]) });
+
+      fireEvent.change(filterInput(), { target: { value: 'audits' } });
+
+      const platform = within(screen.getByTestId('admin-sidebar-section-platform'));
+      expect(platform.getByTestId('admin-ext-audits-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('admin-sidebar-section-money')).toBeNull();
+    });
+
+    it('opens the first match on Enter when it is a page', () => {
+      const onPageSelect = vi.fn();
+      const { onTabSelect } = renderNav({ sections, onPageSelect });
+
+      fireEvent.change(filterInput(), { target: { value: 'reports' } });
+      fireEvent.keyDown(filterInput(), { key: 'Enter' });
+
+      expect(onPageSelect).toHaveBeenCalledExactlyOnceWith('/admin/ext/reports');
+      expect(onTabSelect).not.toHaveBeenCalled();
+      expect(filterInput()).toHaveValue('');
+    });
+
+    it('shows a page under a section label match', () => {
+      renderNav({ sections });
+
+      fireEvent.change(filterInput(), { target: { value: 'money' } });
+
+      expect(reportsLink()).toBeInTheDocument();
+    });
+  });
+
+  describe('collapsed rail', () => {
+    it('lists the page in its section menu and opens it from there', () => {
+      const onPageSelect = vi.fn();
+      renderNav({ sections, collapsed: true, onToggleCollapsed: vi.fn(), onPageSelect });
+
+      fireEvent.click(screen.getByTestId('admin-sidebar-rail-money-btn'));
+      const item = screen.getByRole('menuitem', { name: 'Reports' });
+      expect(item).toHaveAttribute('data-testid', 'ext-reports-link');
+      fireEvent.click(item);
+
+      expect(onPageSelect).toHaveBeenCalledExactlyOnceWith('/admin/ext/reports');
+    });
+
+    it('marks the open page current in the menu', () => {
+      renderNav({
+        sections,
+        collapsed: true,
+        onToggleCollapsed: vi.fn(),
+        activeTab: null,
+        activePagePath: '/admin/ext/reports',
+      });
+
+      fireEvent.click(screen.getByTestId('admin-sidebar-rail-money-btn'));
+
+      expect(screen.getByRole('menuitem', { name: 'Reports' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('menuitem', { name: 'Credits' })).not.toHaveAttribute('aria-current');
+    });
+
+    it('leaves the menu without the page for a user who may not open it', () => {
+      renderNav({ sections, collapsed: true, onToggleCollapsed: vi.fn(), canOpenPage: () => false });
+
+      fireEvent.click(screen.getByTestId('admin-sidebar-rail-money-btn'));
+
+      expect(screen.queryByRole('menuitem', { name: 'Reports' })).toBeNull();
+      expect(screen.getByRole('menuitem', { name: 'Credits' })).toBeInTheDocument();
+    });
+  });
+
+  describe('with no contributed pages', () => {
+    it.each([
+      ['expanded', false],
+      ['collapsed', true],
+    ])('renders the %s sidebar markup for markup as the static sections do', (_, collapsed) => {
+      const base = {
+        activeTab: AdminTab.Users,
+        showLiveOpsTriageTab: false,
+        hiddenNotifications: [],
+        onTabSelect: vi.fn(),
+        collapsed,
+        onToggleCollapsed: vi.fn(),
+      };
+      const first = render(<SidebarNav {...base} />, { wrapper: Wrapper });
+      const before = markup(first.container);
+      first.unmount();
+
+      const second = render(
+        <SidebarNav
+          {...base}
+          sections={withContributedPages(SIDEBAR_SECTIONS, [])}
+          canOpenPage={() => true}
+          activePagePath={null}
+          onPageSelect={vi.fn()}
+        />,
+        { wrapper: Wrapper }
+      );
+
+      expect(markup(second.container)).toBe(before);
+    });
   });
 });

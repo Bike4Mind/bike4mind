@@ -54,7 +54,8 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   {
     id: 'credits',
     title: 'Credits and pricing',
-    description: 'How usage is metered and what credits cost.',
+    description:
+      'How usage is metered and what credits cost. Bill Operational Usage extends background model and embedding charges to paid accounts and organization pools; free accounts are billed whenever credits are enforced.',
     keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {

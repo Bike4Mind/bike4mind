@@ -1,6 +1,9 @@
+import { CONSUMER_LOGS_BUDGET_MS, settleWithinBudget } from './dlqLookupBudget';
+export { CONSUMER_LOGS_BUDGET_MS, settleWithinBudget } from './dlqLookupBudget';
 import {
   GetFunctionConfigurationCommand,
   LambdaClient,
+  type GetFunctionConfigurationCommandOutput,
   ListEventSourceMappingsCommand,
   type EventSourceMappingConfiguration,
 } from '@aws-sdk/client-lambda';
@@ -37,7 +40,7 @@ const THROTTLE_ERROR_NAMES = new Set([
 // A hung AWS call would otherwise hold its slot for the life of the instance and stall every later lookup.
 const LOOKUP_TIMEOUT_MS = 10_000;
 
-type LookupResult = { logs: ConsumerLogs | null; retryable: boolean };
+type Lookup<T> = { value: T | null; retryable: boolean };
 
 export const DEFAULT_LOGS_QUERY =
   'fields @timestamp, @message, @logStream\n' +
@@ -45,11 +48,10 @@ export const DEFAULT_LOGS_QUERY =
   '| sort @timestamp desc\n' +
   '| limit 200';
 
-// Well under the web server's 60s Lambda timeout (infra/web.ts): a slow Lambda control plane drops
-// logs links instead of failing the admin request.
-export const CONSUMER_LOGS_BUDGET_MS = 15_000;
+type CacheEntry<T> = { promise: Promise<T | null>; expiresAt: number };
 
-const cache = new Map<string, { promise: Promise<ConsumerLogs | null>; expiresAt: number }>();
+const cache = new Map<string, CacheEntry<ConsumerLogs>>();
+const functionLogGroupCache = new Map<string, CacheEntry<string>>();
 let sqsClient: SQSClient | undefined;
 const lambdaClients = new Map<string, LambdaClient>();
 let activeLookups = 0;
@@ -57,19 +59,76 @@ const waitingLookups: Array<() => void> = [];
 
 export function resetConsumerLogsCacheForTests(): void {
   cache.clear();
+  functionLogGroupCache.clear();
 }
 
-function withLookupTimeout(sourceQueueUrl: string, lookup: Promise<LookupResult>): Promise<LookupResult> {
+function withLookupTimeout<T>(
+  lookup: Promise<Lookup<T>>,
+  logContext: Record<string, string>,
+  deadline: number
+): Promise<Lookup<T>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<LookupResult>(resolve => {
-    timer = setTimeout(() => {
-      Logger.warn('[dlqConsumerLogs] consumer log group lookup timed out', {
-        queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
-      });
-      resolve({ logs: null, retryable: true });
-    }, LOOKUP_TIMEOUT_MS);
+  const timeout = new Promise<Lookup<T>>(resolve => {
+    timer = setTimeout(
+      () => {
+        Logger.warn('[dlqConsumerLogs] log group lookup timed out', logContext);
+        resolve({ value: null, retryable: true });
+      },
+      Math.max(0, deadline - Date.now())
+    );
   });
   return Promise.race([lookup, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Cached 10 minutes, a null result 1 minute; a retryable (throttled or timed-out) result is not cached. */
+function cachedLookup<T>(
+  store: Map<string, CacheEntry<T>>,
+  key: string,
+  run: (deadline: number) => Promise<Lookup<T>>,
+  logContext: Record<string, string>,
+  deadline: number
+): Promise<T | null> {
+  const now = Date.now();
+  if (now >= deadline) return Promise.resolve(null);
+  const hit = store.get(key);
+  if (hit && hit.expiresAt > now) {
+    return settleWithinBudget([hit.promise], deadline - now).then(([value]) => value ?? null);
+  }
+  // Waiting for a global slot consumes the request budget too. A started lookup also
+  // keeps its independent timeout, so a hung SDK call cannot hold a slot forever.
+  const lookup = withLookupSlot(() => {
+    const now = Date.now();
+    if (now >= deadline) return Promise.resolve({ value: null, retryable: true });
+    const lookupDeadline = Math.min(deadline, now + LOOKUP_TIMEOUT_MS);
+    return withLookupTimeout(run(lookupDeadline), logContext, lookupDeadline);
+  });
+  const entry: CacheEntry<T> = {
+    promise: withLookupTimeout(lookup, logContext, deadline).then(({ value, retryable }) => {
+      if (retryable) {
+        if (store.get(key) === entry) store.delete(key);
+      } else if (value === null) {
+        entry.expiresAt = Date.now() + NULL_CACHE_TTL_MS;
+      }
+      return value;
+    }),
+    expiresAt: now + CACHE_TTL_MS,
+  };
+  store.set(key, entry);
+  return entry.promise;
+}
+
+function lambdaClientFor(region: string): LambdaClient {
+  let lambda = lambdaClients.get(region);
+  if (!lambda) {
+    lambda = new LambdaClient({ region });
+    lambdaClients.set(region, lambda);
+  }
+  return lambda;
+}
+
+// SST gives a function's log group its own generated name, so /aws/lambda/<name> is only the AWS default.
+function functionLogGroup(config: GetFunctionConfigurationCommandOutput, functionName: string): string {
+  return config.LoggingConfig?.LogGroup ?? `/aws/lambda/${config.FunctionName ?? functionName}`;
 }
 
 async function withLookupSlot<T>(run: () => Promise<T>): Promise<T> {
@@ -85,7 +144,10 @@ async function withLookupSlot<T>(run: () => Promise<T>): Promise<T> {
 }
 
 /** resolveConsumerLogs for a registry source queue; a queue this stage does not link resolves to null. */
-export function resolveConsumerLogsForSourceQueue(sourceQueue: SourceQueueName | null): Promise<ConsumerLogs | null> {
+export function resolveConsumerLogsForSourceQueue(
+  sourceQueue: SourceQueueName | null,
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
+): Promise<ConsumerLogs | null> {
   if (sourceQueue === null) return Promise.resolve(null);
   let url: string;
   try {
@@ -93,38 +155,63 @@ export function resolveConsumerLogsForSourceQueue(sourceQueue: SourceQueueName |
   } catch {
     return Promise.resolve(null);
   }
-  return resolveConsumerLogs(url).catch(() => null);
+  return resolveConsumerLogs(url, deadline).catch(() => null);
 }
 
 /**
  * Resolves the CloudWatch log groups of the Lambda consumers reading a source queue, via its
  * event source mappings. Never throws: any AWS error resolves to null so callers can drop the link.
  */
-export function resolveConsumerLogs(sourceQueueUrl: string): Promise<ConsumerLogs | null> {
-  const now = Date.now();
-  const hit = cache.get(sourceQueueUrl);
-  if (hit && hit.expiresAt > now) return hit.promise;
+export function resolveConsumerLogs(
+  sourceQueueUrl: string,
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
+): Promise<ConsumerLogs | null> {
+  return cachedLookup(
+    cache,
+    sourceQueueUrl,
+    lookupDeadline => lookupConsumerLogs(sourceQueueUrl, lookupDeadline),
+    {
+      queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
+    },
+    deadline
+  );
+}
 
-  const entry: { promise: Promise<ConsumerLogs | null>; expiresAt: number } = {
-    promise: withLookupSlot(() => withLookupTimeout(sourceQueueUrl, lookupConsumerLogs(sourceQueueUrl))).then(
-      ({ logs, retryable }) => {
-        if (retryable) {
-          if (cache.get(sourceQueueUrl) === entry) cache.delete(sourceQueueUrl);
-        } else if (logs === null) {
-          entry.expiresAt = Date.now() + NULL_CACHE_TTL_MS;
-        }
-        return logs;
+/**
+ * The log group of one Lambda function (a name, or an unqualified function ARN) in `region`, from its
+ * LoggingConfig. Never throws: any AWS error resolves to null so callers can drop the link.
+ */
+export function resolveFunctionLogGroup(
+  region: string,
+  functionId: string,
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
+): Promise<string | null> {
+  if (!REGION_RE.test(region)) return Promise.resolve(null);
+  const functionName = functionId.split(':')[6] ?? functionId;
+  return cachedLookup(
+    functionLogGroupCache,
+    `${region}/${functionId}`,
+    async () => {
+      try {
+        // Never retain the response's environment variables.
+        const config = await lambdaClientFor(region).send(
+          new GetFunctionConfigurationCommand({ FunctionName: functionId })
+        );
+        return { value: functionLogGroup(config, functionName), retryable: false };
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : String(error);
+        Logger.warn('[dlqConsumerLogs] function log group lookup failed', { functionName, error: errorName });
+        return { value: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
       }
-    ),
-    expiresAt: now + CACHE_TTL_MS,
-  };
-  cache.set(sourceQueueUrl, entry);
-  return entry.promise;
+    },
+    { functionName },
+    deadline
+  );
 }
 
 /** `retryable` marks a throttled or timed-out lookup, which is not cached so the next request tries again. */
-async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult> {
-  const none: LookupResult = { logs: null, retryable: false };
+async function lookupConsumerLogs(sourceQueueUrl: string, deadline: number): Promise<Lookup<ConsumerLogs>> {
+  const none: Lookup<ConsumerLogs> = { value: null, retryable: false };
   try {
     const { Attributes: attrs = {} } = await (sqsClient ??= new SQSClient({})).send(
       new GetQueueAttributesCommand({
@@ -137,15 +224,12 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
     const [, partition, , region] = queueArn.split(':');
     if (partition !== 'aws' || !region || !REGION_RE.test(region)) return none;
 
-    let lambda = lambdaClients.get(region);
-    if (!lambda) {
-      lambda = new LambdaClient({ region });
-      lambdaClients.set(region, lambda);
-    }
+    const lambda = lambdaClientFor(region);
     const functionArns = new Set<string>();
     let hasQualifiedConsumer = false;
     let marker: string | undefined;
     do {
+      if (Date.now() >= deadline) return { value: null, retryable: true };
       const page = await lambda.send(new ListEventSourceMappingsCommand({ EventSourceArn: queueArn, Marker: marker }));
       for (const mapping of page.EventSourceMappings ?? []) {
         const arn = activeFunctionArn(mapping);
@@ -161,6 +245,7 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
     let consumerDeployedAt: string | undefined;
     let consumerVersion: string | undefined;
     for (const functionArn of functionArns) {
+      if (Date.now() >= deadline) return { value: null, retryable: true };
       // Never retain the response's environment variables.
       const config = await lambda.send(new GetFunctionConfigurationCommand({ FunctionName: functionArn }));
       // Multiple consumers cannot be attributed to a single recorded failure.
@@ -174,13 +259,12 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
         consumerDeployedAt = new Date(config.LastModified).toISOString();
         consumerVersion = config.Version;
       }
-      const functionName = config.FunctionName ?? functionArn.split(':')[6];
-      logGroups.add(config.LoggingConfig?.LogGroup ?? `/aws/lambda/${functionName}`);
+      logGroups.add(functionLogGroup(config, functionArn.split(':')[6]));
     }
     if (logGroups.size === 0) return none;
 
     return {
-      logs: {
+      value: {
         region,
         logGroups: [...logGroups].sort(),
         retryWindowMs: retryWindow(attrs.VisibilityTimeout, attrs.RedrivePolicy),
@@ -195,7 +279,7 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
       queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
       error: errorName,
     });
-    return { logs: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
+    return { value: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
   }
 }
 
@@ -229,19 +313,6 @@ export function messageLogWindow(
   const end = Math.min(now, sentMs + retryWindowMs + 5 * 60_000);
   // min() keeps start <= end when a producer clock stamped the send time in the future.
   return { start: Math.min(sentMs, end) - 2 * 60_000, end };
-}
-
-/** Settles each lookup still pending after budgetMs to null, so slow lookups never hold up the caller. */
-export async function settleWithinBudget<T>(lookups: Promise<T | null>[], budgetMs: number): Promise<(T | null)[]> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), budgetMs);
-  });
-  try {
-    return await Promise.all(lookups.map(lookup => Promise.race([lookup, deadline])));
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // The console's Logs Insights hash takes a rison-like value whose strings are URI-encoded with

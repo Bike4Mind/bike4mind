@@ -20,7 +20,9 @@ const {
   resolveUntrustedKeyLimitsMock,
   isApiKeyAccessAllowedMock,
   resolveOrgApiKeyReachMock,
+  recordSideAppRefusalMock,
 } = vi.hoisted(() => ({
+  recordSideAppRefusalMock: vi.fn(),
   validateUserApiKeyMock: vi.fn(),
   findOwnerOfDisabledUserApiKeyMock: vi.fn(),
   findByIdMock: vi.fn(),
@@ -31,6 +33,7 @@ const {
   isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
   resolveOrgApiKeyReachMock: vi.fn(),
 }));
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: recordSideAppRefusalMock }));
 vi.mock('@server/organizations/orgApiKeyReach', () => ({ resolveOrgApiKeyReach: resolveOrgApiKeyReachMock }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -274,6 +277,14 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
     // /api/sessions/create reads this to refuse any lake the key was not bound to at mint time.
     // Dropping it here fails that containment OPEN for every bound key.
     expect(bindingOf(req)).toEqual(['lake-a']);
+  });
+
+  it('copies the key owner onto req.apiKeyInfo', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation());
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.userId).toBe('user-1');
   });
 
   it('leaves the binding undefined for a key that carries none', async () => {
@@ -708,6 +719,26 @@ describe('apiKeyAuth with an exchange key', () => {
     ...extra,
   });
 
+  it('judges the exchange client and puts its unpaid account limits on req.apiKeyInfo', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 5, requestsPerDay: 50 },
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+    });
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(true);
+    expect(resolveUntrustedKeyLimitsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      req
+    );
+    expect(
+      (req as unknown as { apiKeyInfo: { unpaidAccountLimits?: unknown } }).apiKeyInfo.unpaidAccountLimits
+    ).toEqual(unpaidAccountLimits);
+  });
+
   it('refuses it on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
     const { passed, error } = await run(undefined, makeReq());
@@ -750,6 +781,57 @@ describe('apiKeyAuth with an exchange key', () => {
   it('still admits a personal key with the same scopes on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({}));
     expect((await run(undefined, makeReq())).passed).toBe(true);
+  });
+
+  describe('refusal records', () => {
+    it('records a scope refusal as verified with the exchange client, and logs the client', async () => {
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ oauthExchangeClientId: 'client-1', scopes: [ApiKeyScope.ME_READ] })
+      );
+      const req = makeReq();
+      expect((await run([ApiKeyScope.AI_GENERATE], req)).passed).toBe(false);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith({
+        verified: true,
+        clientId: 'client-1',
+        stage: 'use',
+        reason: 'insufficient_scope',
+        status: 403,
+        userId: 'user-1',
+        keyId: 'key-1',
+        endpoint: expect.any(String),
+      });
+      const call = req.logger.warn.mock.calls.find(([msg]) => msg === 'API key scope check failed');
+      expect(call?.[1]).toMatchObject({ oauthClientId: 'client-1' });
+    });
+
+    it('records an access-gate refusal as verified with the exchange client', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      const req = makeReq();
+      expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(false);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          verified: true,
+          clientId: 'client-1',
+          stage: 'use',
+          reason: 'subscription_required',
+          keyId: 'key-1',
+        })
+      );
+      const call = req.logger.warn.mock.calls.find(([msg]) => String(msg).includes('apiKeyAccess setting denies'));
+      expect(call?.[1]).toMatchObject({ oauthClientId: 'client-1' });
+    });
+
+    it('records nothing for a personal key refused on scope or access', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.ME_READ] }));
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq())).passed).toBe(false);
+      validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      expect((await run([ApiKeyScope.ME_READ], makeReq())).passed).toBe(false);
+      expect(recordSideAppRefusalMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('on a grandfathering route that declares ai:generate', () => {

@@ -1,13 +1,15 @@
-import { CONVERSATIONAL_VOICE_MODEL_ID, CreditHolderType } from '@bike4mind/common';
+import { CONVERSATIONAL_VOICE_MODEL_ID, CreditHolderType, type ISpendFreezeRepository } from '@bike4mind/common';
 import {
   creditTransactionRepository,
   newAccountSpendCapAdapters,
   sessionRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { creditService } from '@bike4mind/services';
+import { spendFreezeSubjectForRequest } from '../billing/spendFreezeSubject';
 import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
 
 const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
@@ -81,6 +83,8 @@ export type VoiceHold = {
   voiceSessionStartedAt: Date;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  /** The key that opened the hold, so its attribution can be cached before the settlement transaction. */
+  voiceHoldApiKeyId?: string | null;
 };
 
 export type VoiceHoldSettlementSource = 'end' | 'sweep' | 'bootstrap';
@@ -117,6 +121,7 @@ export async function settleVoiceHold(
 ): Promise<VoiceHoldSettlement> {
   const reserved = hold.voiceReservedCredits;
   let settlement: VoiceHoldSettlement;
+  await warmExchangeAttribution(hold.voiceHoldApiKeyId);
   try {
     settlement = await withTransaction(async (): Promise<VoiceHoldSettlement> => {
       const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
@@ -187,6 +192,9 @@ export async function settleVoiceHold(
  * balance inside the transaction: a reserve the balance no longer covers throws `unaffordable()`
  * and the transaction aborts with nothing moved. A reserve that would take a new account over its
  * spend cap is refused before anything opens, with the cap's 422 `insufficient_credits`.
+ *
+ * A frozen user, organization or API key is refused first, with nothing moved, even when credits are
+ * not enforced. Settlement never checks the freeze: a call already running still closes and refunds.
  */
 export async function reserveVoiceHold(args: {
   userId: string;
@@ -198,9 +206,24 @@ export async function reserveVoiceHold(args: {
   /** The UserApiKey that authenticated the bootstrap; every ledger row billed against the hold names it. */
   apiKeyId?: string;
   unaffordable: () => Error;
+  /** Organization the caller spends under, for the spend freeze check. */
+  organizationId: string | null;
+  /** Server-derived from the API key. No longer read by the spend freeze check, which keeps the acting user. */
+  apiKeyBillingOwnerType?: CreditHolderType;
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   /** The apps pass theirs, which alert LiveOps on a refusal; this package cannot import them. */
   newAccountSpendCap?: creditService.NewAccountSpendCapAdapters;
 }): Promise<boolean> {
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(
+      {
+        user: { id: args.userId },
+        apiKeyInfo: args.apiKeyId ? { keyId: args.apiKeyId } : undefined,
+      },
+      args.organizationId
+    ),
+    { db: { spendFreezes: args.spendFreezes } }
+  );
   if (args.reservedCredits) {
     const user = await userRepository.findById(args.userId);
     if (user) {
@@ -244,6 +267,7 @@ export async function settlePriorVoiceHold(session: {
   voiceSessionStartedAt?: Date | null;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  voiceHoldApiKeyId?: string | null;
 }): Promise<VoiceHoldSettlement> {
   if (session.voiceReservedCredits == null || session.voiceSessionStartedAt == null) return { settled: false };
   const hold: VoiceHold = {
@@ -253,6 +277,7 @@ export async function settlePriorVoiceHold(session: {
     voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
     voiceConnectedAt: session.voiceConnectedAt ?? null,
     voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+    voiceHoldApiKeyId: session.voiceHoldApiKeyId ?? null,
   };
   return settleVoiceHold(hold, lastSeenAt(hold), 'bootstrap');
 }

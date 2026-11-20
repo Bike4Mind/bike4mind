@@ -211,12 +211,18 @@ describe('gradeEvalSet', () => {
       example({ userId: id(8), detectionIds: ['d8'], split: 'tuning', frozenLabel: frozen('abuse') }),
     ],
   };
-  const assessment = (detectionId: string, result: 'abuse' | 'legitimate_automation' | 'insufficient_evidence') => ({
+  const assessment = (
+    detectionId: string,
+    result: 'abuse' | 'legitimate_automation' | 'insufficient_evidence' | 'unknown',
+    abuseProbability: number | null = 0.9,
+    assessedAt = new Date('2026-11-01T00:00:00Z')
+  ) => ({
     detectionId,
     result,
+    abuseProbability,
     confidence: 0.9,
     model: 'm1',
-    assessedAt: new Date('2026-11-01T00:00:00Z'),
+    assessedAt,
   });
   const report = gradeEvalSet(set, {
     assessments: [assessment('d1', 'abuse'), assessment('d2', 'abuse'), assessment('d3', 'insufficient_evidence')],
@@ -290,6 +296,57 @@ describe('gradeEvalSet', () => {
       legit: 1,
       falsePositiveShare: 0.5,
     });
+  });
+
+  it('calibrates each assessment model over labelled flagged examples with an answer and a p(abuse)', () => {
+    // d1, d2 and d3 (insufficient_evidence, 0.9) all count; unflagged examples have no assessment.
+    expect(report.calibration).toHaveLength(1);
+    expect(report.calibration[0]).toMatchObject({ model: 'm1', flaggedLabelled: 3, n: 3, brier: 0.2767 });
+    expect(report.calibration[0].buckets[4]).toEqual({
+      lower: 0.8,
+      upper: 1,
+      n: 3,
+      meanPredicted: 0.9,
+      observedAbuseRate: 0.667,
+    });
+  });
+
+  it('reports a model with no usable assessment as n 0', () => {
+    const none = gradeEvalSet(set, {
+      ...noPredictions,
+      assessments: [assessment('d1', 'unknown'), assessment('d2', 'abuse', null)],
+    });
+    expect(none.calibration).toEqual([expect.objectContaining({ model: 'm1', n: 0, brier: null })]);
+  });
+
+  it('calibrates on the newest assessment when a detection has several for one model', () => {
+    const older = new Date('2026-10-01T00:00:00Z');
+    const newer = new Date('2026-11-02T00:00:00Z');
+    const graded = gradeEvalSet(set, {
+      ...noPredictions,
+      assessments: [
+        assessment('d1', 'abuse', 0.9, newer),
+        assessment('d1', 'abuse', 0.2, older),
+        assessment('d2', 'abuse'),
+        assessment('d3', 'insufficient_evidence'),
+      ],
+    });
+    expect(graded.calibration[0]).toMatchObject({ model: 'm1', n: 3, brier: 0.2767 });
+    expect(graded.calibration[0].buckets[0].n).toBe(0);
+    expect(graded.calibration[0].buckets[4].n).toBe(3);
+  });
+
+  it('drops an example whose newest assessment is unknown even when an older one answered', () => {
+    const graded = gradeEvalSet(set, {
+      ...noPredictions,
+      assessments: [
+        assessment('d1', 'unknown', null, new Date('2026-11-02T00:00:00Z')),
+        assessment('d1', 'abuse', 0.9, new Date('2026-10-01T00:00:00Z')),
+        assessment('d2', 'abuse'),
+        assessment('d3', 'insufficient_evidence'),
+      ],
+    });
+    expect(graded.calibration[0]).toMatchObject({ model: 'm1', n: 2 });
   });
 
   it('has no recall estimate before any unflagged example is labelled', () => {
@@ -467,5 +524,30 @@ describe('toEvalSetDetail', () => {
     const detail = toEvalSetDetail(set);
     expect(detail).toMatchObject({ runCount: 2, unreadableRunCount: 1 });
     expect(detail.runs.map(run => run.note)).toEqual(['ok']);
+  });
+
+  it('reads a run stored before calibration, or without labels (the store drops an empty object)', () => {
+    const {
+      calibration: _calibration,
+      labelSources: _labelSources,
+      ...oldReport
+    } = gradeEvalSet({ window, population: { flagged: 1, unflagged: 1 }, examples: [] }, noPredictions);
+    const detail = toEvalSetDetail({
+      id: 'set-1',
+      name: 'November',
+      note: null,
+      createdBy: id(99),
+      window,
+      seed: 'seed',
+      heldOutShare: 0.5,
+      population: { flagged: 1, unflagged: 1 },
+      truncated: false,
+      examples: [],
+      runs: [{ ranAt: window.until, ranBy: id(99), note: 'old', report: oldReport }],
+      createdAt: window.until,
+      updatedAt: window.until,
+    });
+    expect(detail.unreadableRunCount).toBe(0);
+    expect(detail.runs[0].report).toMatchObject({ calibration: [], labelSources: {} });
   });
 });

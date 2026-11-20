@@ -21,6 +21,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToke
 vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({
   executePendingAction: vi.fn(),
   cancelPendingActionOnQuest: vi.fn(),
+  claimPendingAction: vi.fn(),
   isPendingActionRequester: vi.fn(),
   MCP_DISABLED_MESSAGE: 'MCP disabled',
 }));
@@ -60,6 +61,7 @@ import { User, Quest, Session } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import {
   cancelPendingActionOnQuest,
+  claimPendingAction,
   executePendingAction,
   isPendingActionRequester,
 } from '@bike4mind/server-utils/utils/pendingActionExecutor';
@@ -495,5 +497,48 @@ describe('POST /api/slack/interactive set_default_notebook', () => {
 
     expect(Session.findOne).not.toHaveBeenCalled();
     expect(response._getJSONData().text).toMatch(/not found in your account/);
+  });
+});
+
+describe('POST /api/slack/interactive image model picker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
+    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
+      select: () => Promise.resolve({ id: 'workspace-1', slackOAuthSigningSecret: 'secret', slackBotToken: 'enc' }),
+    } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      pendingAction: {
+        tool: 'image_generation',
+        params: { prompt: 'a lighthouse', userId: 'user-1' },
+        ts: PENDING_ACTION_TS,
+      },
+    } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('queues nothing when a concurrent click already claimed the request', async () => {
+    vi.mocked(claimPendingAction).mockResolvedValue(false);
+
+    const response = await postAction(
+      `image_gen_model_0`,
+      `${QUEST_ID}:gpt-image-1`,
+      undefined,
+      {},
+      {
+        message: { ts: '1700000000.000100' },
+      }
+    );
+
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, PENDING_ACTION_TS, 'approved');
+    expect(response._getJSONData()).toMatchObject({
+      response_type: 'ephemeral',
+      text: expect.stringMatching(/already handled/),
+    });
   });
 });

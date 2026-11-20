@@ -13,6 +13,8 @@ export interface WebSearchProviderResult {
   title: string;
   url: string;
   snippet: string;
+  /** Label for a hit whose `url` is a search-engine redirect: the destination host, or a platform name ("Reddit"). */
+  displayHost?: string;
   /** Provider-supplied image for this hit, absent when the provider gave none. Same as `images[0]`. */
   thumbnail?: string;
   /** Every image the provider supplied for this hit, deduped and capped. */
@@ -277,8 +279,57 @@ function dedupeImages(values: (string | undefined)[]): string[] {
 interface SerpApiOrganicResult {
   title?: string;
   link?: string;
+  displayed_link?: unknown;
+  source?: unknown;
   snippet?: string;
   thumbnail?: string;
+}
+
+// Matches the pinned `google_domain` of the SerpAPI requests above.
+const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com']);
+
+/** Host of a breadcrumb-style `displayed_link` ("https://host > a > b"), or undefined when it is not a URL. */
+function breadcrumbHost(displayedLink: unknown): string | undefined {
+  if (typeof displayedLink !== 'string' || !displayedLink) return undefined;
+  try {
+    const shown = new URL(displayedLink.trim().split(/[\s\u203a>]/)[0]);
+    const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
+    return isWeb && !GOOGLE_HOSTS.has(shown.hostname) ? shown.hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MAX_PLATFORM_NAME_CHARS = 40;
+
+/** Platform name from SerpAPI's `source` ("Reddit \u00b7 r/investing" -> "Reddit"), never a Google name. */
+function sourcePlatformName(source: unknown): string | undefined {
+  if (typeof source !== 'string') return undefined;
+  // Brackets and parentheses would break the `[label](url)` link web_search writes for the model,
+  // and a raw newline could forge an extra line in it.
+  const name = source
+    .split(/\s\u00b7\s/)[0]
+    ?.replace(/[[\]()\r\n]/g, '')
+    .trim();
+  return name && !/^google\b/i.test(name) ? name.slice(0, MAX_PLATFORM_NAME_CHARS) : undefined;
+}
+
+/**
+ * SerpAPI can return Google's own redirect (`google.com/goto?url=<opaque token>`) as `link`, which
+ * hides the destination. Returns what to label it with, or undefined for any other link: the host
+ * of the breadcrumb-style `displayed_link` when that is a URL, else the platform name from `source`
+ * for hits whose breadcrumb is an engagement count ("10+ comments", "920+ views"). Only the host is
+ * read from the breadcrumb: its path follows the site's own breadcrumb names, not its URL path, and
+ * is cut short with an ellipsis when long, while the host always comes first and survives both.
+ */
+function googleRedirectDisplayHost(link: string, displayedLink: unknown, source: unknown): string | undefined {
+  try {
+    const parsed = new URL(link);
+    if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return breadcrumbHost(displayedLink) ?? sourcePlatformName(source);
 }
 
 /**
@@ -726,10 +777,12 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
           // `organic_results[].thumbnail` is a ~92px preview. Order the big ones first so the card's
           // hero tile - the one scaled up the most - is not the most pixelated image available.
           const images = dedupeImages([...(extraImages.get(r.link!) ?? []), safeImageUrl(r.thumbnail)]);
+          const displayHost = googleRedirectDisplayHost(r.link!, r.displayed_link, r.source);
           return {
             title: r.title ?? r.link!,
             url: r.link!,
             snippet: r.snippet ?? '',
+            ...(displayHost ? { displayHost } : {}),
             ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
           };
         });

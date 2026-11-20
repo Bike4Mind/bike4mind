@@ -66,6 +66,14 @@ const getFaviconUrl = (url: string): string | null => {
   }
 };
 
+const isBareHostname = (value: string): boolean => {
+  try {
+    return value.includes('.') && new URL(`https://${value}`).hostname === value.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
 /** Names listed in the conflict tooltip before it degrades to a count. Keeps one line readable. */
 const CONFLICT_NAMES_SHOWN = 2;
 
@@ -213,8 +221,18 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
     try {
       if (source.url) {
         const parsedUrl = new URL(source.url);
-        hostname = parsedUrl.hostname.replace('www.', '');
-        faviconUrl = getFaviconUrl(source.url);
+        // A redirect URL hides the real site, so web_search carries the destination host separately.
+        const displayHost =
+          typeof source.metadata?.displayHost === 'string' && source.metadata.displayHost
+            ? source.metadata.displayHost
+            : undefined;
+        hostname = (displayHost ?? parsedUrl.hostname).replace(/^www\./, '');
+        // Only a bare hostname has a favicon; a platform name ("Reddit", "foo@bar.com") does not.
+        faviconUrl = displayHost
+          ? isBareHostname(displayHost)
+            ? getFaviconUrl(`https://${displayHost}`)
+            : null
+          : getFaviconUrl(source.url);
       }
     } catch {
       hostname = source.url || '';
@@ -337,7 +355,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
               <Typography
                 component="span"
                 level="body-xs"
-                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
+                data-testid={isInternal ? 'citable-source-origin-label' : 'citable-source-host-label'}
                 sx={{
                   color: 'text.tertiary',
                   ml: 0.5,

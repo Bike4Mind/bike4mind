@@ -12,7 +12,7 @@ import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKe
 import {
   canSeeListing,
   findListing,
-  memberOrgIdsFor,
+  audienceIdsFor,
   skillContentHash,
   type MarketActor,
 } from '@bike4mind/server-utils/skillMarket/market';
@@ -50,7 +50,7 @@ export async function importListing(user: MarketActor, listingId: string, body: 
   const hasImported = listing
     ? Boolean(await SkillListingImport.exists({ listingId: String(listing.id), userId }))
     : false;
-  if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token, hasImported)) {
+  if (!listing || !canSeeListing(listing, await audienceIdsFor(userId), body.token, hasImported)) {
     throw new NotFoundError('Listing not found');
   }
   if (listing.authorUserId === userId) throw new BadRequestError('This is your own listing');

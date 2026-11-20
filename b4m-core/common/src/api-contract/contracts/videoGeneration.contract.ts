@@ -6,7 +6,12 @@ import {
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  MeteredBillingOrganizationForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
@@ -98,8 +103,8 @@ export const createVideoGenerationContract = defineEndpoint({
       example: exampleJob,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
-      schema: BillingOrganizationForbiddenErrorSchema,
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     400: { description: BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION, schema: ApiErrorSchema },
     404: {
@@ -112,7 +117,8 @@ export const createVideoGenerationContract = defineEndpoint({
     422: {
       description:
         'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
-        '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an ' +
+        '`unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or ' +
+        '`unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An ' +
         'unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names ' +
         'the model to use instead), a model your ' +
         'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +

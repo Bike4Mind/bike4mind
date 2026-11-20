@@ -484,48 +484,49 @@ describe('settings/update enforceCredits hosted lock', () => {
   });
 });
 
-describe('settings/update reviewer email list', () => {
-  beforeEach(() => {
-    stored = null;
-    findOneAndUpdate.mockReset();
-    vi.clearAllMocks();
-  });
-
-  it('refuses a list with an invalid address and names the entry', async () => {
-    await expect(
-      runHandler('ImageModerationReviewerEmails', ['reviewer@example.com', 'not-an-email'])
-    ).rejects.toMatchObject({
-      statusCode: 400,
-      message: expect.stringContaining('not-an-email'),
+describe.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+  'settings/update %s reviewer email list',
+  key => {
+    beforeEach(() => {
+      stored = null;
+      findOneAndUpdate.mockReset();
+      vi.clearAllMocks();
     });
-    expect(findOneAndUpdate).not.toHaveBeenCalled();
-  });
 
-  it('stores a valid list trimmed, lowercased and deduped', async () => {
-    stageWriteResult('ImageModerationReviewerEmails', ['reviewer@example.com']);
-    await runHandler('ImageModerationReviewerEmails', [' Reviewer@Example.com', 'reviewer@example.com']);
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { settingName: 'ImageModerationReviewerEmails' },
-      { $set: { settingValue: ['reviewer@example.com'] } },
-      expect.anything()
-    );
-  });
+    it('refuses a list with an invalid address and names the entry', async () => {
+      await expect(runHandler(key, ['reviewer@example.com', 'not-an-email'])).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('not-an-email'),
+      });
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    });
 
-  it('refuses a value that is not a list', async () => {
-    await expect(runHandler('ImageModerationReviewerEmails', 'reviewer@example.com')).rejects.toThrow();
-    expect(findOneAndUpdate).not.toHaveBeenCalled();
-  });
+    it('stores a valid list trimmed, lowercased and deduped', async () => {
+      stageWriteResult(key, ['reviewer@example.com']);
+      await runHandler(key, [' Reviewer@Example.com', 'reviewer@example.com']);
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: key },
+        { $set: { settingValue: ['reviewer@example.com'] } },
+        expect.anything()
+      );
+    });
 
-  it('stores an empty list when every address is removed', async () => {
-    stageWriteResult('ImageModerationReviewerEmails', []);
-    await runHandler('ImageModerationReviewerEmails', []);
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { settingName: 'ImageModerationReviewerEmails' },
-      { $set: { settingValue: [] } },
-      expect.anything()
-    );
-  });
-});
+    it('refuses a value that is not a list', async () => {
+      await expect(runHandler(key, 'reviewer@example.com')).rejects.toThrow();
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('stores an empty list when every address is removed', async () => {
+      stageWriteResult(key, []);
+      await runHandler(key, []);
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: key },
+        { $set: { settingValue: [] } },
+        expect.anything()
+      );
+    });
+  }
+);
 
 describe('settings/update blocked email domain list', () => {
   beforeEach(() => {
@@ -566,6 +567,86 @@ describe('settings/update blocked email domain list', () => {
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'blockedEmailDomains' },
       { $set: { settingValue: ['kashre.com', 'xzcoot.com'] } },
+      expect.anything()
+    );
+  });
+});
+
+describe('settings/update Python artifact data origins', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+    recordAdminActionFromRequest.mockResolvedValue(null);
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['http://data.example.org', 'must start with https://'],
+    ['https://data.example.org/v1/data.json', 'origin only'],
+    ['https://*.example.org', 'wildcards'],
+    ['https://10.0.0.1', 'IP addresses'],
+    ['https://localhost', 'local and private'],
+  ])('refuses %s and names the entry and the reason', async (entry, reason) => {
+    await expect(runHandler('pythonArtifactDataOrigins', ['https://data.example.org', entry])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(new RegExp(`${JSON.stringify(entry).replace(/[.*?/]/g, '\\$&')}.*${reason}`)),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([['https://app.example.com'], ['https://api.example.com']])(
+    "refuses %s as one of the app's own hosts",
+    async entry => {
+      await expect(runHandler('pythonArtifactDataOrigins', [entry])).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining("this app's own hosts"),
+      });
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses more origins than the cap', async () => {
+    const entries = Array.from({ length: 11 }, (_, i) => `https://d${i}.example.org`);
+    await expect(runHandler('pythonArtifactDataOrigins', entries)).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('At most 10'),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores a valid list as canonical origins, deduplicated, and audits the change', async () => {
+    stored = { settingName: 'pythonArtifactDataOrigins', settingValue: [] };
+    stageWriteResult('pythonArtifactDataOrigins', ['https://data.example.org', 'https://stats.example.net:8443']);
+    await runHandler('pythonArtifactDataOrigins', [
+      ' HTTPS://Data.Example.org/ ',
+      'https://data.example.org:443',
+      'https://stats.example.net:8443',
+    ]);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'pythonArtifactDataOrigins' },
+      { $set: { settingValue: ['https://data.example.org', 'https://stats.example.net:8443'] } },
+      expect.anything()
+    );
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'settings.admin_settings.updated',
+        target: { kind: 'settings', id: 'pythonArtifactDataOrigins', displayName: 'pythonArtifactDataOrigins' },
+      })
+    );
+  });
+
+  it('stores an empty list, which turns network access back off', async () => {
+    stageWriteResult('pythonArtifactDataOrigins', []);
+    await runHandler('pythonArtifactDataOrigins', []);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'pythonArtifactDataOrigins' },
+      { $set: { settingValue: [] } },
       expect.anything()
     );
   });

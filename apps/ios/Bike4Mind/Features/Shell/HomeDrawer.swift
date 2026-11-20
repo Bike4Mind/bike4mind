@@ -33,6 +33,7 @@ struct HomeDrawer: View {
             .background(Tokens.Palette.sidebar.ignoresSafeArea())
             .offset(x: -width * (1 - progress))
             .gesture(dragGesture(width: width))
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
             .accessibilityIdentifier("home-drawer")
         }
@@ -85,7 +86,7 @@ struct HomeDrawer: View {
 private struct DrawerContent: View {
   @Environment(AppServices.self) private var services
   @State private var recents: SessionsViewModel
-  @State private var profile: AccountProfile?
+  private var profile: AccountProfile? { services.cachedAccountProfile }
 
   init(api: any B4MAPI, cache: any SessionListCache) {
     _recents = State(initialValue: SessionsViewModel(api: api, cache: cache))
@@ -102,6 +103,7 @@ private struct DrawerContent: View {
             services.navigator.startVoiceConversation(.newConversation)
           }
           row("Studio", symbol: "wand.and.stars", id: "drawer-studio-btn") { services.navigator.apply(.media) }
+          row("Brief", symbol: "text.badge.checkmark", id: "drawer-brief-btn") { services.navigator.openLatestBrief() }
           notebooks
         }
         .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs / 2)
@@ -111,7 +113,7 @@ private struct DrawerContent: View {
       accountRow
     }
     .task { await recents.load() }
-    .task { profile = await services.accountProfile() }
+    .task { await services.refreshAccountProfile() }
   }
 
   private var notebooks: some View {

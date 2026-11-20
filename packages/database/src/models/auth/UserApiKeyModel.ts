@@ -2,17 +2,22 @@ import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
   ApiKeyCapPool,
+  type ApiKeyScopeValue,
   ApiKeyStoredSecret,
   ApiKeyStatus,
   isWellFormedApiKeyScope,
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
+  IUserApiKeyModerationException,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
   LegacyApiKeyCandidatePage,
   LegacyApiKeyCandidateQuery,
+  MODERATION_EXCEPTION_CATEGORIES,
+  NotFoundError,
   OrgApiKeyGrant,
+  PAYER_STANDINGS,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -147,6 +152,30 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     await this.model.updateOne({ _id: id }, spendCap === null ? { $unset: { spendCap: 1 } } : { $set: { spendCap } });
   }
 
+  async setModerationException(id: string, exception: IUserApiKeyModerationException | null) {
+    const result = await this.model.updateOne(
+      { _id: id, deletedAt: null },
+      exception === null ? { $unset: { moderationException: 1 } } : { $set: { moderationException: exception } },
+      { runValidators: true }
+    );
+    if (result.matchedCount === 0) throw new NotFoundError('API key not found');
+  }
+
+  async findModerationException(id: string) {
+    const key = await this.model
+      .findById(id)
+      .select('+moderationException userId status expiresAt')
+      .lean<Pick<IUserApiKeyDocument, 'moderationException' | 'userId' | 'status' | 'expiresAt'>>()
+      .exec();
+    if (!key?.moderationException) return null;
+    return {
+      userId: key.userId,
+      status: key.status,
+      expiresAt: key.expiresAt,
+      moderationException: key.moderationException,
+    };
+  }
+
   // Per-path $set (not a whole-subdoc $set) to stay consistent with updateUsage
   // and to leave any future sibling under rateLimit untouched.
   async setRateLimit(id: string, rateLimit: IUserApiKeyRateLimit) {
@@ -159,6 +188,11 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+  }
+
+  /** Add or remove one scope in place. Admin flows only: it bypasses the mint-time scope rules. */
+  async setScopeHeld(id: string, scope: ApiKeyScopeValue, held: boolean) {
+    await this.model.updateOne({ _id: id }, held ? { $addToSet: { scopes: scope } } : { $pull: { scopes: scope } });
   }
 
   async resetSpend(id: string) {
@@ -580,6 +614,28 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // blocks all spend - enforcement must guard with `spendCap !== undefined`,
     // never a truthy check.
     spendCap: { type: Number, default: undefined },
+    // Admin-set prompt moderation exception; see IUserApiKey. select: false keeps the reason and
+    // the acting admin out of every key payload, the owner's own listing included.
+    moderationException: {
+      type: new mongoose.Schema(
+        {
+          categories: {
+            type: [{ type: String, enum: [...MODERATION_EXCEPTION_CATEGORIES] }],
+            required: true,
+            validate: {
+              validator: (categories: string[]) => categories.length > 0,
+              message: 'A moderation exception needs at least one category',
+            },
+          },
+          reason: { type: String, required: true },
+          setBy: { type: String, required: true },
+          setAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+      select: false,
+    },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
@@ -592,6 +648,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       createdByUserId: { type: String },
       // OAuth client that minted this key via the federated AI-token exchange. See IUserApiKeyMetadata.
       oauthClientId: { type: String },
+      payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
       baseline: {
         avgRequestsPerHour: { type: Number },
         avgRequestsPerDay: { type: Number },
@@ -612,6 +669,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
         delete ret.keyHash;
         delete ret.keyDigest;
         delete ret.callbackSigningSecret;
+        delete ret.moderationException;
         return ret;
       },
     },

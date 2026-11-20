@@ -3,6 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { COMPLETION_SOURCES, CompletionSource } from '../analytics';
+import { PAYER_STANDINGS } from './UserApiKeyTypes';
 
 export enum CreditPurchaseStatus {
   Completed = 'completed',
@@ -37,6 +38,10 @@ const BaseCreditTransaction = z.object({
    * purchases/refunds) may not have it set. See CompletionSource in analytics.ts.
    */
   source: z.enum(COMPLETION_SOURCES).optional(),
+  /** Connected app whose exchange key made this charge; stamped by the ledger repository. */
+  oauthClientId: z.string().optional(),
+  /** Payer's standing when the exchange key was minted; set only when the key's owner paid the charge. */
+  payerStanding: z.enum(PAYER_STANDINGS).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -618,14 +623,6 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
 
   /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
-
-  /**
-   * One page of admin credit adjustments across ALL users, newest first, with a
-   * total count. Cross-owner (not scoped to one holder): the generic_add /
-   * generic_deduct rows written by `adminUpdateUser` (reason `admin_adjustment`).
-   */
-  queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
-
   /** An owner's net credit delta per UTC day in [from, to], oldest first; days without rows are omitted. */
   dailyNetCreditsForOwner(
     ownerId: string,

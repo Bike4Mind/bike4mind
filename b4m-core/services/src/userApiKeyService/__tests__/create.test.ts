@@ -516,6 +516,29 @@ describe('createUserApiKey - per-user cap pools', () => {
     );
   });
 
+  it.each(['paid', 'unpaid'] as const)('stores payerStanding %s on an exchange key', async payerStanding => {
+    const repo = makeRepo();
+    const result = await createExchangeUserApiKey(
+      'user-1',
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding } },
+      adapters(repo)
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ payerStanding }) }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
+    expect(result.metadata).toMatchObject({ payerStanding });
+  });
+
+  it('rejects an unknown payerStanding at the zod boundary', async () => {
+    const error = await mintError(
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding: 'bogus' } } as never,
+      makeRepo()
+    );
+    expect(error).not.toBeNull();
+  });
+
   it('routes a dashboard mint through the standard pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', dashboardParams, adapters(repo));

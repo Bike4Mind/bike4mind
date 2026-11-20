@@ -131,7 +131,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/sessions/{id}/messages/{messageId}\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
-  \`/api/v1/artifacts/types\`
+  \`/api/v1/artifacts/types\`, \`/api/v1/artifacts/{id}/publish\` (publish, unpublish),
+  \`/api/v1/artifacts/{id}/republish\`
 - Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
   \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
   and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,
@@ -143,7 +144,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
-  \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
+  \`/api/v1/music-*\`, \`/api/v1/scene-compositions\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,

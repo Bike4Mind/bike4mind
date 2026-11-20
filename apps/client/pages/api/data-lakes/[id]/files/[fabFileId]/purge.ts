@@ -16,7 +16,7 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { createHmac } from 'crypto';
-import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -44,7 +44,7 @@ const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
   const { fileName, ...rest } = receipt;
   return {
     ...rest,
-    fileNameHash: createHmac('sha256', Resource.SECRET_ENCRYPTION_KEY.value)
+    fileNameHash: createHmac('sha256', signingKey('purge-receipt'))
       .update(fileName ?? '')
       .digest('hex'),
   };

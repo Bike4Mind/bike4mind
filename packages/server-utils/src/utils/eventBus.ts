@@ -18,8 +18,8 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
-// Self-host has no EventBridge. email.send goes straight to the mailer (it already throws
-// on failure); everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
+// Self-host has no EventBridge. email.send goes straight to the mailer, which logs a failed
+// delivery itself; everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
 // (apps/workers/src/selfhost/eventDispatch.ts).
 // Enrichment remains best-effort by default. Submission endpoints and billing webhooks
 // requireAcceptance so failed delivery reaches the caller and can be retried.
@@ -28,21 +28,30 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
 
   if (eventName === 'email.send') {
     const { default: mailer } = await import('./mailer/index');
-    const { to, subject, body, attachments } = detail as {
-      to: string;
-      subject: string;
-      body: string;
-      attachments?: { filename: string; content: string; contentType: string }[];
-    };
-    await mailer.sendEmail(to, {
-      subject,
-      html: body,
-      attachments: attachments?.map(att => ({
-        filename: att.filename,
-        content: Buffer.from(att.content, 'base64'),
-        contentType: att.contentType,
-      })),
-    });
+    const { to, subject, body, text, attachments, category, mirror, logRecipient, ref } = detail as z.infer<
+      typeof EmailEvents.Send.schema
+    >;
+    const result = await mailer.sendEmail(
+      to,
+      {
+        subject,
+        html: body,
+        ...(text !== undefined && { text }),
+        attachments: attachments?.map(att => ({
+          filename: att.filename,
+          content: Buffer.from(att.content, 'base64'),
+          contentType: att.contentType,
+        })),
+      },
+      { category, mirror, logRecipient }
+    );
+    if (ref) {
+      const { recordEmailDeliveryOutcome } = await import('./mailer/deliveryOutcome');
+      await recordEmailDeliveryOutcome(
+        ref,
+        result ? { ok: true, at: new Date() } : { ok: false, error: 'The mail transport did not accept the message' }
+      );
+    }
     return;
   }
 
@@ -112,6 +121,20 @@ const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
 });
 
+/**
+ * What an email.send event delivers for, so the email-send worker can write the delivery outcome
+ * back to it (./mailer/deliveryOutcome.ts). Mail without one is fire-and-forget.
+ */
+export const EmailDeliveryRef = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('emailAttempt'), attemptId: z.string().min(1) }),
+  z.object({
+    kind: z.literal('incidentAlert'),
+    incidentId: z.string().min(1),
+    alert: z.enum(['review', 'escalation']),
+  }),
+]);
+export type EmailDeliveryRef = z.infer<typeof EmailDeliveryRef>;
+
 export const EmailEvents = {
   Send: event(
     'email.send',
@@ -119,7 +142,13 @@ export const EmailEvents = {
       to: z.string(),
       subject: z.string(),
       body: z.string(),
+      /** Plain-text alternative to the HTML body. */
+      text: z.string().optional(),
       category: z.literal('otc').optional(),
+      /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
+      mirror: z.boolean().optional(),
+      logRecipient: z.boolean().optional(),
+      ref: EmailDeliveryRef.optional(),
       attachments: z
         .array(
           z.object({
@@ -141,7 +170,7 @@ export const EmailEvents = {
  */
 export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
-  /** Live activity progress for a quest; publish via apps/client/server/utils/liveActivityPush.ts. */
+  /** Live activity progress for a quest; publish via packages/server-utils/src/utils/liveActivityPush.ts. */
   LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
 };
 
@@ -165,6 +194,17 @@ export const StripeEvents = {
     'stripe.cus.sub.updated',
     z.object({
       subscriptionId: z.string(),
+    })
+  ),
+};
+
+/** Published by POST /api/v1/briefs; consumed by apps/workers/src/events/briefCompose.ts. */
+export const BriefEvents = {
+  Compose: event(
+    'brief.compose',
+    z.object({
+      briefId: z.string(),
+      userId: z.string(),
     })
   ),
 };

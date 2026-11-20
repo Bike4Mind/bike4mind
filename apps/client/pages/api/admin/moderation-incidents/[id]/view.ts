@@ -54,9 +54,17 @@ const handler = adminApi({
     fabFileId: incident.fabFileId ?? null,
     ncmecReportId: incident.ncmecReportId ?? null,
     alertedAt: incident.alertedAt ?? null,
+    alertQueuedAt: incident.alertQueuedAt ?? null,
+    alertFailedAt: incident.alertFailedAt ?? null,
     lastReminderAt: incident.lastReminderAt ?? null,
+    escalatedAt: incident.escalatedAt ?? null,
+    escalationTrigger: incident.escalationTrigger ?? null,
+    escalationAlertedAt: incident.escalationAlertedAt ?? null,
+    escalationAlertQueuedAt: incident.escalationAlertQueuedAt ?? null,
+    escalationAlertFailedAt: incident.escalationAlertFailedAt ?? null,
     reportedAt: incident.reportedAt ?? null,
     falsePositiveAt: incident.falsePositiveAt ?? null,
+    noActionAt: incident.noActionAt ?? null,
     image,
   });
 });

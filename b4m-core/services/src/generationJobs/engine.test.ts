@@ -230,6 +230,47 @@ describe('GenerationJobEngine', () => {
     expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
   });
 
+  it('a submit cut off by the step deadline logs one warning and still fails as orphaned_submit', async () => {
+    const t = setup({ submitMode: 'sync' });
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    vi.mocked(t.handler.submit).mockImplementationOnce(
+      (_job, context) =>
+        new Promise((_resolve, reject) =>
+          context.signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }))
+          )
+        )
+    );
+    expect(await t.engine.step(job.id, { stepBudgetMs: 5 })).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error).toMatchObject({ code: 'orphaned_submit', cutOffByStepDeadline: true });
+    expect(t.handler.submit).toHaveBeenCalledTimes(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toEqual([
+      [
+        'generation_job_submit_deadline',
+        expect.objectContaining({ jobId: job.id, kind: 'video', elapsedMs: expect.any(Number) }),
+      ],
+    ]);
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(0);
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a submit that throws before the step deadline still logs an orphaned-submit error', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    t.results.submit.push(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }));
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error?.code).toBe('orphaned_submit');
+    expect(final.error?.cutOffByStepDeadline).toBeUndefined();
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toHaveLength(0);
+  });
+
   it('a definitive submit rejection clears the attempt and retries with backoff', async () => {
     const t = setup();
     const job = await t.create();
@@ -764,6 +805,24 @@ describe('step time budget', () => {
     await t.engine.step(first.id);
     await t.engine.step(second.id, { remainingMs: 24 * 3_600_000 });
     expect(timeout.mock.calls).toEqual([[LEASE_MS - 30_000], [LEASE_MS - 30_000]]);
+  });
+
+  it('narrows the step signal to a caller step budget, never widening it', async () => {
+    const t = setup();
+    const first = await t.create();
+    const second = await t.create();
+    t.results.submit.push(running, running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(first.id, { stepBudgetMs: 12_000 });
+    await t.engine.step(second.id, { remainingMs: 40_000, stepBudgetMs: 60_000 });
+    expect(timeout.mock.calls).toEqual([[12_000], [10_000]]);
+  });
+
+  it('refuses a step whose caller budget is spent, leaving the job unleased', async () => {
+    const t = setup();
+    const job = await t.create();
+    await expect(t.engine.step(job.id, { stepBudgetMs: 0 })).rejects.toThrow(/no time budget/);
+    expect(t.repository.jobs.get(job.id)?.leaseUntil ?? null).toBeNull();
   });
 
   it.each([20_000, 30_000, Number.NaN])(

@@ -1,4 +1,417 @@
 {
+  "packages/database/src/models/billing/SpendFreezeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/ai-operations.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/context-telemetry/[id]/analyze.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/email/jobs/[id]/check-status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/feedback/[id]/ai.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/feedback/[id]/status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/generate-highlights.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/published-artifacts/[id]/takedown.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/pages/api/admin/release-notes/config.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/signup-domain-holds.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/subscriptions/[id]/comp.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/users/[userId]/role.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/whats-new-highlights-config.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/auth/impersonation.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/auth/okta/callback.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/auth/unlink.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/business-links/import.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/cc-bridge/redeem.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/feedback/[id]/update.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/disconnect.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/token.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/help/chat-feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/help/feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/integrations/[integration]/rotate-token.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/jupyter/execute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/jupyter/progress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/mcp-servers/[id]/webhooks/github/secret.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/mcp-servers/[id]/webhooks/github.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/mcp-servers/notion/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/oauth/device/verify.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/feedback-summary.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/github/connection.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/integrations/slack/feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/integrations/slack/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/library.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/mfa-policy.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/upload-logo.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/[publicId]/restore.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/pages/api/publish/[publicId]/revise.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "apps/client/pages/api/publish/[publicId]/share-token.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/artifact/finalize.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/publish/artifacts/[id]/report.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/publish/serve/[...path].ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/view.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/skills/market/[id]/moderate.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "apps/client/pages/api/skills/market/[id]/rating.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/skills/market/[id]/report.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/skills/market/versions/[vid]/review.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/feedback/status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/interactive.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/slack/oauth/org-connect/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/oauth/user-link/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/stripe/portal.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/test/admin-approval.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/test/expire-account-deletion.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/usage/fleet-export.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/users/[id]/confirm-photo.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/users/[id]/docx-template.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/client/pages/api/v1/personas/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/v1/sessions/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/adminRoles/adapters.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/ai/feedbackTriage.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/campaignWatches.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/admin/stripeWrite/adminStripeWrite.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/agents/deleteAgent.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/analytics/funnel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/analytics/oauthSignupCredit.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/auth/networkMeta.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/auth/samlRequestCache.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/auth/withAccountNotPurging.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/credits/orgInviteBonus.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/credits/recordActiveSession.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/feedback/bulk.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/integrations/slack/reactionFeedback.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/integrations/stripe/attachOrgStripeCustomer.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/memory/reembedMementos.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/middlewares/clientUsage.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/modelAccess/modelAccessStore.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/qa/evaluateAlarm.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/services/publish/restrictDuplicatePublications.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/services/publish/settlePublication.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/skillMarket/author.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/skillMarket/bundles.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/skillMarket/importListing.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/skillMarket/submitVersion.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "apps/client/server/users/accountDeletion.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/users/recordUserActivity.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/utils/auth/oauthSourceTag.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/utils/feedbackText.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/utils/helpFeedbackRouting.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/utils/telemetryDeletion.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/dataUnsubscribeRequest.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/disconnect.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/jupyterNotebookProgress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/cron/businessMetrics/deliver.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/workers/src/cron/organizationRetention.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/cron/telemetryCleanup.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/events/createMemento.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/events/spider.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/jobs/dataSyncerHandler.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/queueHandlers/accountExportLease.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/workers/src/queueHandlers/fabFileChunk.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/workers/src/queueHandlers/orgFeedbackSummary.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/s3/moderationRescueSweep.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/s3/objectCreated.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/skillMarket/reviewSla.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/services/src/llm/questHeartbeat.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/services/src/organizationService/reassignMemberContent.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/slack/src/handlers/globalShortcutHandlers.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "b4m-core/slack/src/handlers/modelConfigHandlers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "b4m-core/slack/src/handlers/notebook-manager.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "b4m-core/slack/src/imageGeneration.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/ActiveCodeAgentModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/AgentModel.ts": { "b4m/require-update-validators": { "count": 18 } },
+  "packages/database/src/models/ai/DataLakeAccessGrantModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DataLakeFindingModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/DataLakeHealthSnapshotModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DataLakeModel.ts": { "b4m/require-update-validators": { "count": 42 } },
+  "packages/database/src/models/ai/DataLakeOwnershipOfferModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/DataLakeProposalModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DataLakeResearchConfigModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/ai/DataLakeResearchRunModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DataLakeSpendNotificationModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/DeepAgentCharterModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DeepAgentEpisodeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DeepAgentHandoffModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/EmbedConversationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/EmbeddingCacheModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/GenerationJobModel.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/models/ai/LakeMembershipRemovalModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/LatticeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpConnectionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/ai/McpOAuthClientRegistrationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpOAuthPendingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpServerModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/MemoryLedgerEventModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/MemoryPrincipalKeyModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ModelDiscoveryStateModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/ai/PlatformEndUserModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/RapidReplyMappingModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/RapidReplyPromptModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/ai/RapidReplyResultModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/RepoHistoricalInsightsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ResearchTaskModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SessionAgentConfigModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SessionToolApprovalModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SkillListingModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/ai/SkillListingVersionModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ToolDefinitionOverrideModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/TransformBatchModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/WorkItemModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/analytics/AnalyticsDailyModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/analytics/AnalyticsHopModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/AccountDeletionNoticeModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ApiKeyAlertModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ApiKeyModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/ApiKeyUsageLogModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/AuthSessionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/auth/BlockedIPModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/auth/CcBridgeDeviceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/CcBridgePairingTokenModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/DeviceAuthorizationModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/DisposableDomainModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ErasureRecordModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/IdentityProviderModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/OAuthAuthorizationCodeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/OAuthGrantModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/OAuthRefreshTokenModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/PasskeyChallengeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/PasskeyCredentialModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/PendingOtcTokenModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/auth/RegistrationInviteModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/SessionModel.ts": { "b4m/require-update-validators": { "count": 16 } },
+  "packages/database/src/models/auth/SideAppRefusalCounterModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/SignupGrantBudgetModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/SignupGrantReleaseBatchModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/SignupProtectionModel.ts": { "b4m/require-update-validators": { "count": 9 } },
+  "packages/database/src/models/auth/SubscriberModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/TrustedDeviceModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 51 } },
+  "packages/database/src/models/auth/UserUsagePatternSignalsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/WsConnectTicketModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/oauthClientAdmin.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/billing/AgentExecutionModel.ts": { "b4m/require-update-validators": { "count": 39 } },
+  "packages/database/src/models/billing/BillingEventModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/billing/BillingMismatchModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/billing/CreditTransactionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/GrantPackageModel.ts": { "b4m/require-update-validators": { "count": 9 } },
+  "packages/database/src/models/billing/HeldCreditRewardModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/billing/PaymentAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/PaymentRiskActionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/PendingCreditHoldModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/billing/ReferralSubscriptionRewardModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/SpendAlertModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/billing/StripeDisputeModel.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/models/billing/UserLimitEventModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/AnnotationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/BriefcasePromptModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/content/DungeonInstanceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/GearStampModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/ImageGenerationTemplateModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/ImageModerationIncidentModel.ts": { "b4m/require-update-validators": { "count": 11 } },
+  "packages/database/src/models/content/ImportHistoryJobModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/ProjectModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/content/PublishedArtifactModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/QuestMasterPlanModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/content/QuestModel.ts": { "b4m/require-update-validators": { "count": 19 } },
+  "packages/database/src/models/content/QuestNodeModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/ReportModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/content/SharableDocumentModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/StockPortfolioModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/SystemPromptHistoryModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/SystemPromptModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/TavernMapModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/TavernQuestModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/TavernWorldModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/purgeOwnerPublishedArtifacts.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/hearth/MongoHearthStore.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/admin/AdminAccessReviewModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminApprovalModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminAuditAlertStateModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminMorningBriefModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/admin/OrgAdminNotificationPrefModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/OrgAlertNotificationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/OrgDomainClaimModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 15 } },
+  "packages/database/src/models/infra/admin/SpaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/email/EmailJobModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/EmailPreferencesModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/EmailSendAttemptModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/IngestedEmailModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/GitHubLakeAuthGrantModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/IntegrationHealthCheckModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/IntegrationRequestModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/integrations/JiraWebhookConfigModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/JiraWebhookSubscriptionModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/integrations/LakeConnectorClaimModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/OrgGitHubConnectionModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/integrations/OrgGitHubLakeConnectionModel.ts": { "b4m/require-update-validators": { "count": 14 } },
+  "packages/database/src/models/infra/integrations/OrgGoogleDriveConnectionModel.ts": { "b4m/require-update-validators": { "count": 11 } },
+  "packages/database/src/models/infra/integrations/OrgWebhookConfigModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/SlackChannelConfigModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/integrations/SlackDevWorkspaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/integrations/SlackExportJobModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/ops/AdminSettingsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/ops/CacheModel.ts": { "b4m/require-update-validators": { "count": 16 } },
+  "packages/database/src/models/infra/ops/FallbackLakeSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/LiveopsTriageConfigModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/ops/LiveopsTriageRunModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/ops/OverwatchProductModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/ScopedSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/SreErrorPatternModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/ops/SreErrorTrackingModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/infra/ops/TaskScheduleModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/TeamMetricsCacheModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/security/AbuseAssessmentModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/security/AbuseEvalSetModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/security/AutoContainmentDecisionModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/CampaignWatchModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/SecretRotationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/security/SecurityFindingModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/security/SecurityScanScheduleModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/ShadowDetectionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/infra/webhooks/DlqFailureModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/DlqReplayLogModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/DlqTriageDeliveryModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/WebhookAuditLogModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/WebhookSubscriptionModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/social/ArenaPairModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/ArenaVoteModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/social/FriendshipModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/InboxModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/social/InviteModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/social/OverwatchAmplifyPostModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/OverwatchSocialConnectionModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/social/realtimeConnectionRepository.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/seeds/runSeedOnce.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/seeds/seedSignupGrantPools.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/utils/feedbackNotes.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/utils/orgAlertUsers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/utils/organizationRetention.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/datalake/documentDateBackfill.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/datalake/seed-stranded-lake-member.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/encrypt-tokens-at-rest.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/feedbackTriageNoise.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/legacyQuestPlanConversion.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240312000000_add_mementos_to_users.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/2024052201905_demo_to_paid.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240524172716_create-and-populate-quests.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240909152817_migrate-counters-to-useractivitycounter-collection.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20241211100000_rename_counter_names.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250108000000_add_session_and_file_ids_to_projects.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20250108123000_add_system_prompts_to_projects.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250123223300_add-clonedsourceid-and-forkedsourceid-to-sessionmodels.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20250128133728_add-photourl-to-collection.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250210183952_change-ids-to-strings-in-quests.ts": { "b4m/require-update-validators": { "count": 12 } },
+  "packages/scripts/migrate/migrations/20250313152624_add-lastusedmodel-to-sessionmodels.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250325153205_fix-existing-organization-data.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250422132525_add-api-key-expiration.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250630185100_fix_filesize.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250704005300-add-filename-lowercase.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250906000000-create-rapid-reply-collections.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250917124558_migrate-old-credits-txn-history.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20251009000000-add-email-integration-fields.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20251014000000_enhance-questmaster-plans.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20251023130000_add-token-used-flags.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20251107195534_convert-admin-logo-values-to-filepath.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260210000000_set-agents-ispublic-false.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260518120000_backfill-subscription-source.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20260529120000_backfill-credit-transaction-source.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260602000000_briefcase-indexes-and-seed.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260702010000_backfill-policy-acceptance-grandfather.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260709120000_add-hasusablepassword-to-users.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20260709130000_base-entitlement-on-default-models.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260710120000_null-shell-account-passwords.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260710160000_base-entitlement-cover-drifted-seed-configs.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260731000000_reactivate-collateral-deactivated-api-keys.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260731100000_fix-systemprompt-live-unique-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260803000000_backfill-datalake-content-prefix-tag.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260804000000_drop-filetag-filecount.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260813000000_fix-project-live-unique-name-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260814000000_pr-report-webhook-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260825000000_feedback-derived-keys-and-text-split.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20260828000000_split-chunk-stall-markers-off-notes.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/scripts/migrate/migrations/20260904000000_encrypt-identity-provider-secrets.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260906000000_backfill-lakememoryenabled-from-ledger.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260915120000_delete-near-empty-vectorized-fabfilechunks.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921000002_modal-image-url-to-key.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921000100_backfill-data-lake-origin.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921120000_ensure-data-lake-inconsistency-scan-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921130000_backfill-share-tokens.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921140000_drop-share-token-scalar.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921235945_clear-suspension-mirrored-ismoderated.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235946_restore-legacy-xls-mime-type.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235955_encrypt-sensitive-admin-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235964_backfill-storage-limit-overrides.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235965_backfill-free-credit-claim-email.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235967_seed-staged-signup-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235975_redrop-share-token-scalar-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235983_fold-organization-manager-into-admin-user-ids.ts": { "b4m/require-update-validators": { "count": 7 } },
+  "packages/scripts/migrate/migrations/20260921235987_move-quest-answeredby-to-redirectedfrom.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236950_ensure-first-party-native-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236951_ensure-native-dev-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236952_ensure-android-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237300_queue-held-signup-grants-for-risk-review.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237400_seed-signup-grant-schedule.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237450_pin-signup-grant-initial-and-cap.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921237480_pin-signup-grant-schedule-keys.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20260921237490_drop-quest-signup-activity.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921238100_backfill-user-lane-flags.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921238400_grant-packages-from-invites.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921239850_backfill-analytics-user-day-active.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921239996_drop-retired-grant-settings.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921239998_stamp-model-access-entries.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921240020_encrypt-oauth-provider-tokens.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921240090_unset-fabfile-signed-urls.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921240100_research-config-source-tiers.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921245000_drop-referral-credits-amount.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260922000001_backfill-oauthclient-token-endpoint-auth-method.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20261116081402_revoke-project-invites-without-inviter.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/protect-stored-credentials-backfill.ts": { "b4m/require-update-validators": { "count": 7 } },
+  "packages/scripts/retrieval/answerability-replay.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/retrieval/recall-probe.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/retrieval/supersession-probe.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/src/auditPartialCreditPurchases.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/src/backfill-fabfile-moderation-status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/backfillShowCreditsUsed.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/backfillSubscriptionStripeMirror.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/clear-resume-tokens.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/src/clearStaleOrganizationPointers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/migrateSignupGrantSchedule.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/trimAiEditVersions.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/blockedEmailDomains.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/usersBulk/adapters.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/analytics/analyticsRollup.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/auth/impersonation.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/auth/revokeAppleTokens.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/integrations/google/drive/common.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/managers/sessionCrud.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/managers/sessionOperations.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/modelDiscovery/modelAccessRevision.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/modelDiscovery/modelListRevision.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/organizations/clearDeletedOrganizationReferences.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/organizations/retentionPolicy.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/s3/knowledgeModerationDeps.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/s3/moderationScan.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/s3/storageCharge.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/s3/uploadSizeGate.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/services/liveopsTriageService.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/skillMarket/market.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/tutorials/drafts/store.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/tutorials/effectiveModules.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/tutorials/progressStore.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/tutorials/routes/overridesRoute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/tutorials/routes/settingsRoute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/tutorials/sheet.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/users/accountFilePurgeLease.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/users/completeAccountDeletion.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/users/purgeAccountContent.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/server-utils/src/utils/generatedFileCleanup.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/utils/importHistoryProgress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/pendingActionExecutor.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/persistRunAsQuest.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/telemetryAnalysisCache.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "scripts/migrate-sre-v2.mjs": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/__tests__/api-unit.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 13
@@ -282,11 +695,6 @@
   "apps/client/app/components/Session/AISettings/FilesSection.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
-    }
-  },
-  "apps/client/app/components/Session/AISettings/ImageGenerationModelSelectionModal.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
     }
   },
   "apps/client/app/components/Session/AISettings/InspectableSettingsButton.tsx": {
@@ -884,11 +1292,6 @@
       "count": 1
     }
   },
-  "apps/client/app/routes/email/unsubscribe.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -952,11 +1355,6 @@
   "apps/client/app/utils/knowledgeViewerSorting.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/app/utils/performanceLogger.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
     }
   },
   "apps/client/app/utils/promise.ts": {
@@ -1116,6 +1514,7 @@
     }
   },
   "apps/client/pages/api/admin/context-telemetry/[id].ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -1181,6 +1580,7 @@
     }
   },
   "apps/client/pages/api/admin/gears/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -1221,6 +1621,7 @@
     }
   },
   "apps/client/pages/api/admin/modals/variants.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 3
     }
@@ -1390,6 +1791,7 @@
     }
   },
   "apps/client/pages/api/admin/upload-logo.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
@@ -1553,6 +1955,7 @@
     }
   },
   "apps/client/pages/api/app-files/update-tags.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -1781,6 +2184,7 @@
     }
   },
   "apps/client/pages/api/chat.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -1796,11 +2200,13 @@
     }
   },
   "apps/client/pages/api/elabs/voice/[id]/set-active.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
   "apps/client/pages/api/elabs/voice/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 2
     }
@@ -1816,6 +2222,7 @@
     }
   },
   "apps/client/pages/api/fabfiles/[id]/apply-auto-rename.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -1861,6 +2268,7 @@
     }
   },
   "apps/client/pages/api/files/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -2009,6 +2417,7 @@
     }
   },
   "apps/client/pages/api/mcp/delete-attachment.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -2019,6 +2428,7 @@
     }
   },
   "apps/client/pages/api/mementos/[id]/update.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     },
@@ -2515,6 +2925,7 @@
     }
   },
   "apps/client/pages/api/settings/update.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 4
     }
@@ -2535,11 +2946,13 @@
     }
   },
   "apps/client/pages/api/slack/commands.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
       "count": 9
     }
   },
   "apps/client/pages/api/slack/events.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 5
     }
@@ -2575,6 +2988,7 @@
     }
   },
   "apps/client/pages/api/subscribers/[id]/delete.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -3014,7 +3428,8 @@
       "count": 3
     }
   },
-  "apps/client/server/models/UserSubscription.ts": {
+  "packages/server-utils/src/models/UserSubscription.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -3055,11 +3470,13 @@
     }
   },
   "apps/client/server/tools/modalManagement.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 5
     }
   },
   "apps/client/server/tools/modalOperations.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 7
     }
@@ -3070,6 +3487,7 @@
     }
   },
   "apps/client/server/utils/auth/verifyCallback.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 5
     }
@@ -3110,6 +3528,7 @@
     }
   },
   "apps/client/services/MementoGroomingService.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
       "count": 3
     }
@@ -3127,16 +3546,6 @@
   "apps/workers/src/cli/tools.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 23
-    }
-  },
-  "apps/workers/src/cron/accountCampaignSweep.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/accountCampaignSweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
     }
   },
   "apps/workers/src/cron/accountDeletionSweep.test.ts": {
@@ -3159,27 +3568,12 @@
       "count": 1
     }
   },
-  "apps/workers/src/cron/apiProbeScoring.test.ts": {
+  "apps/workers/src/events/dlqTriage.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
   },
-  "apps/workers/src/cron/apiProbeScoring.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/personaExpirySweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/spendReconciliation.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/sessionSummarization.test.ts": {
+  "apps/workers/src/events/dlqTriage.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
@@ -3201,7 +3595,7 @@
   },
   "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 81
+      "count": 80
     }
   },
   "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {
@@ -3230,18 +3624,26 @@
     }
   },
   "apps/workers/src/organizations/retentionCleanup.ts": {
+    "b4m/require-update-validators": { "count": 7 }
+  },
+  "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 3
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExport.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 2
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountErasure.test.ts": {
@@ -3254,12 +3656,7 @@
       "count": 1
     }
   },
-  "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
+  "apps/workers/src/queueHandlers/agentExecutor.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
@@ -3267,16 +3664,6 @@
   "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
     }
   },
   "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
@@ -3287,11 +3674,6 @@
   "apps/workers/src/queueHandlers/notebookCuration.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/workers/src/queueHandlers/researchEngineQueue.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
@@ -3305,6 +3687,7 @@
     }
   },
   "apps/workers/src/queueHandlers/slackQuestProcessor.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
@@ -3317,16 +3700,6 @@
   "apps/workers/src/queueHandlers/whatsNewHighlights.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/selfhost/notebookCurationLive.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
     }
   },
   "apps/workers/src/utils/eventContext.ts": {
@@ -3410,11 +3783,13 @@
     }
   },
   "b4m-core/db-core/src/models/BaseModel.ts": {
+    "b4m/require-update-validators": { "count": 3 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
   "b4m-core/db-core/src/utils/mongo.ts": {
+    "b4m/require-update-validators": { "count": 3 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
@@ -3782,11 +4157,6 @@
   "b4m-core/services/src/llm/ImageGeneration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 52
-    }
-  },
-  "b4m-core/services/src/llm/ImageGeneration.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
     }
   },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {
@@ -4300,6 +4670,7 @@
     }
   },
   "b4m-core/slack/src/github/GitHubSlackNotifier.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
       "count": 6
     }
@@ -4320,6 +4691,7 @@
     }
   },
   "b4m-core/slack/src/handlers/notebook-messaging.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 4
     }
@@ -4530,6 +4902,7 @@
     }
   },
   "packages/database/src/models/auth/UserApiKeyModel.ts": {
+    "b4m/require-update-validators": { "count": 17 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4550,16 +4923,19 @@
     }
   },
   "packages/database/src/models/content/ArtifactContentModel.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
   "packages/database/src/models/content/ArtifactModel.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
   "packages/database/src/models/content/ArtifactVersionModel.ts": {
+    "b4m/require-update-validators": { "count": 3 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4570,6 +4946,7 @@
     }
   },
   "packages/database/src/models/content/FabFileModel.ts": {
+    "b4m/require-update-validators": { "count": 36 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4580,6 +4957,7 @@
     }
   },
   "packages/database/src/models/content/TagModel.ts": {
+    "b4m/require-update-validators": { "count": 4 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4625,6 +5003,7 @@
     }
   },
   "packages/scripts/migrate/migrations/20260702000000_hash-mfa-backup-codes.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
@@ -4700,6 +5079,7 @@
     }
   },
   "packages/server-utils/src/models/Subscription.ts": {
+    "b4m/require-update-validators": { "count": 9 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4715,6 +5095,7 @@
     }
   },
   "packages/server-utils/src/services/operationsModelService.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4725,6 +5106,7 @@
     }
   },
   "packages/server-utils/src/utils/analyticsLog.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

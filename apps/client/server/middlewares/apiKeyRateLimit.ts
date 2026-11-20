@@ -2,7 +2,11 @@ import { TooManyRequestsError } from '@bike4mind/utils';
 import { loadShadowTierSettings } from '@bike4mind/services/llm/shadowTier';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { RequestHandler } from 'express';
-import { checkApiKeyRateLimit, type RateLimitCounter } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
+import {
+  checkApiKeyRateLimit,
+  rateLimitRefusalInfo,
+  type RateLimitCounter,
+} from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES, isShadowTier } from '@bike4mind/common';
@@ -95,7 +99,7 @@ export const apiKeyRateLimit =
             StandardUnit.Count
           );
         }
-        throw new TooManyRequestsError(result.error || 'Rate limit exceeded');
+        throw new TooManyRequestsError(result.error || 'Rate limit exceeded', rateLimitRefusalInfo(result));
       }
 
       // Restricted tier: a separate counter, so the key's advertised limit never reveals it. A hit

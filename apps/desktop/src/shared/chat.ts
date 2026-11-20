@@ -336,7 +336,10 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop). */
+  /**
+   * Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop),
+   * or, in Full access, which of its stops held the call.
+   */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -498,6 +501,23 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
+
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -1408,6 +1428,8 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
   /** How the last assistant turn ended; absent when the session has no assistant message. */
   lastOutcome?: ChildOutcome;
@@ -1423,6 +1445,9 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.
@@ -2090,6 +2115,8 @@ export interface ChatReplyRound {
 export interface ChatSettledCharge {
   creditsCharged: number;
   usdCost?: number;
+  /** The server run the charge was billed under, as the `settled` event echoed it; absent outside a run. */
+  runId?: string;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

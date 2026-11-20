@@ -1,17 +1,39 @@
+import type { CompletionSource } from '../analytics';
+import type { GeneratedAssetSaveSkippedReason } from '../../generatedAsset';
 import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { StoredSceneCompositionRequest } from '../../scene';
+import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
+import type { SpeechWordTiming, VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
+import type { StudioRenderPricing } from '../../studioComposition/render';
+import type { StudioTimeline, StudioTimelineOutput } from '../../studioComposition/timeline';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const;
+/**
+ * `compose` renders a Scene (a video with a music track muxed in) from files the caller already has; `render` encodes a
+ * Studio Productions timeline to one output size.
+ */
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect', 'compose', 'render'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
-/** The kinds a chat message can start; every generation kind can now land on a quest. */
+/** The kinds a chat message can start. `render` is Studio-only: it exports a Production, it never lands on a quest. */
 export const QUEST_GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const satisfies readonly GenerationJobKind[];
 export type QuestGenerationJobKind = (typeof QUEST_GENERATION_JOB_KINDS)[number];
+
+/**
+ * The kinds an agent-mode run caps per run, one counter each on the run's Quest (QuestRepository.claimAgentGenerationSlot).
+ * Wider than QUEST_GENERATION_JOB_KINDS: speech and sound effects are capped but answer inline, so they never get a card.
+ */
+export const AGENT_GENERATION_SLOT_KINDS = [
+  ...QUEST_GENERATION_JOB_KINDS,
+  'speech',
+  'sound_effect',
+] as const satisfies readonly GenerationJobKind[];
+export type AgentGenerationSlotKind = (typeof AGENT_GENERATION_SLOT_KINDS)[number];
 
 /** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
 export type GenerationJobRef = { id: string; kind: QuestGenerationJobKind };
@@ -64,10 +86,27 @@ export const GENERATION_JOB_ERROR_CODES = [
   'enqueue_failed',
   'cancelled',
   'account_blocked',
+  /** An input file the job reads is missing, unreadable, or outside the kind's limits (a compose job's media). */
+  'unsupported_input',
 ] as const;
 export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number];
 
-export type GenerationJobError = { code: GenerationJobErrorCode; message: string };
+export type GenerationJobError = {
+  code: GenerationJobErrorCode;
+  message: string;
+  /**
+   * The provider's HTTP status, when it answered with one. Kept here because rawProviderError is never read back
+   * (select: false), and the synchronous audio routes map it to their response status.
+   */
+  providerStatus?: number;
+  /** For a provider at capacity (providerStatus 429): how long the caller should wait before retrying. */
+  retryAfterSeconds?: number;
+  /**
+   * Set on an orphaned_submit when our own step deadline aborted the submit: an expected, handled outcome that the
+   * synchronous audio routes log at warn rather than error.
+   */
+  cutOffByStepDeadline?: boolean;
+};
 
 export type VideoJobOutput = {
   location: 'files' | 'generated';
@@ -148,11 +187,130 @@ export type ImageJobPayload = {
   billedBlock?: boolean;
 };
 
+/**
+ * A clip's storage fields; its duration is known only when the audio could be measured (MP3). `filesSkipReason`:
+ * why a clip that was to be saved to Files landed in the generated bucket instead.
+ */
+export type AudioJobOutput = Omit<VideoJobOutput, 'durationSeconds'> & {
+  durationSeconds?: number;
+  filesSkipReason?: GeneratedAssetSaveSkippedReason;
+};
+
+/** The validated speech request as persisted: `provider` is the one asked for, with the default applied. */
+export type StoredSpeechRequest = {
+  text: string;
+  provider: VoiceGenerationVendor;
+  model?: string;
+  voice?: string;
+  format?: VoiceOutputFormat;
+  stability?: number;
+  similarityBoost?: number;
+  languageCode?: string;
+};
+
+/**
+ * Speech providers return the finished clip from one blocking call, so the output is stored in the submit step,
+ * as for music.
+ */
+export type SpeechJobPayload = {
+  request: StoredSpeechRequest;
+  /**
+   * Vendors to try in order, the requested one first. A later one stands in only when an earlier one has no usable
+   * key or rejects it, so nothing was generated. Fixed at create, since the hold is sized to cover each of them.
+   */
+  candidates: VoiceGenerationVendor[];
+  /** The user's stored voice preference at create; read by OpenAI only. */
+  preferredVoice?: string;
+  /** false for a throwaway preview: the clip is kept outside Files. */
+  saveToFiles: boolean;
+  /** The notebook the clip was made in, for in-chat producers. */
+  sessionId?: string;
+  /** The vendor that produced the clip and the model it is billed on; set on success. */
+  producedBy?: { provider: VoiceGenerationVendor; model: string };
+  output?: AudioJobOutput;
+  /** Per-word timing of `request.text` in the clip, when the producing vendor reported alignment. */
+  wordTimings?: SpeechWordTiming[];
+};
+
+/** The validated sound-effect request as persisted, with the default provider applied. */
+export type StoredSoundEffectRequest = {
+  text: string;
+  provider: SoundGenerationVendor;
+  durationSeconds?: number;
+  promptInfluence?: number;
+  format?: string;
+};
+
+/** As SpeechJobPayload: one blocking provider call, stored in the submit step. */
+export type SoundEffectJobPayload = {
+  request: StoredSoundEffectRequest;
+  providerId: SoundGenerationVendor;
+  /** As SpeechJobPayload.saveToFiles. */
+  saveToFiles: boolean;
+  sessionId?: string;
+  /** The client a public API request came from (cli, desktop, api), stamped on its ledger row and usage event. */
+  usageSource?: CompletionSource;
+  output?: AudioJobOutput;
+};
+
+/**
+ * Same storage fields as VideoJobOutput: the Scene is a video file. `filesSkipReason`: why Files refused the Scene
+ * (over the per-file size limit or the user's storage quota), so it landed in the generated bucket instead.
+ */
+export type ComposeJobOutput = VideoJobOutput & { filesSkipReason?: GeneratedAssetSaveSkippedReason };
+
+/**
+ * A Scene is rendered by our own worker (ffmpeg), not a provider: submit downloads the inputs, muxes them and stores
+ * the result in one step, so no provider handle or bytes ever reach this payload. Nothing is billed in v1.
+ */
+export type ComposeJobPayload = {
+  request: StoredSceneCompositionRequest;
+  output?: ComposeJobOutput;
+};
+
+/**
+ * What one render job encodes, snapshotted at create: later edits to the Production do not change an export that is
+ * already queued. The timeline is the versioned spec, stored unchanged.
+ */
+export type StoredRenderRequest = {
+  compositionId: string;
+  /** The Production's title at export time; names the output file. */
+  title: string;
+  output: StudioTimelineOutput;
+  timeline: StudioTimeline;
+};
+
+/** The price snapshot the hold was computed from, so settlement charges exactly what the hold priced. */
+export type RenderJobPricing = {
+  usdPerOutputSecond: StudioRenderPricing['usdPerOutputSecond'][keyof StudioRenderPricing['usdPerOutputSecond']];
+  billedSeconds: number;
+  usd: number;
+};
+
+/**
+ * One output size per job. The render worker encodes outside the engine and reports through a status object in the
+ * generated bucket (studioRenderStatusKey); the store step then saves the MP4 to Files.
+ */
+export type RenderJobPayload = {
+  request: StoredRenderRequest;
+  pricing: RenderJobPricing;
+  /** Shared by the jobs of one export, one per selected size. */
+  groupId: string;
+  groupSize: number;
+  /** The worker's finished encode, read from its status object, until the store step saves it to Files. */
+  rendered?: { s3Key: string; bytes: number; durationSeconds: number };
+  output?: VideoJobOutput;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
   music: MusicJobPayload;
   image: ImageJobPayload;
+  speech: SpeechJobPayload;
+  sound_effect: SoundEffectJobPayload;
+  compose: ComposeJobPayload;
+  render: RenderJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;
@@ -209,6 +367,24 @@ export type IGenerationJobDocument = IGenerationJob & IMongoDocument;
 
 export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGenerationJobDocument, { kind: K }>;
 
+/**
+ * The text a job was made from, for titles and notifications: audio kinds take `text`, a Scene (which has no prompt)
+ * its optional title, a render its title, the rest a prompt.
+ */
+export const generationJobPrompt = (job: IGenerationJob): string => {
+  switch (job.kind) {
+    case 'speech':
+    case 'sound_effect':
+      return job.payload.request.text;
+    case 'compose':
+      return job.payload.request.title ?? '';
+    case 'render':
+      return job.payload.request.title;
+    default:
+      return job.payload.request.prompt;
+  }
+};
+
 export const isGenerationJobOfKind = <K extends GenerationJobKind>(
   job: IGenerationJobDocument,
   kind: K
@@ -261,6 +437,8 @@ export type ListByRequesterQuery = {
   source?: GenerationJobSource;
   /** Exclusive: only jobs whose id sorts before this one (the previous page's last id). */
   beforeId?: string;
+  /** Only render jobs of this Production (payload.request.compositionId); meaningful with kind 'render'. */
+  compositionId?: string;
   limit: number;
 };
 

@@ -22,6 +22,32 @@ const contract = {
   escalationConditions: [],
 };
 
+it.each(['state', 'model', 'append', 'update'] as const)('resets attentionViewed on %s changes', async change => {
+  const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-task-viewed-')), 'worker');
+  const child = await store.create('worker', {
+    workerSelection: { role: 'implementation', effectiveModel: 'worker', source: 'override', rootRunId: 'run' },
+    workerTask: {
+      version: 1,
+      contract,
+      automaticUpgrades: 0,
+      resolvedDecisions: [],
+      attempts: [{ id: 'attempt', model: 'worker', startedAt: '2026-11-19', trigger: 'initial' }],
+      state: { status: 'queued' },
+      attentionViewed: true,
+    },
+  });
+  if (change === 'state') await store.updateWorkerTask(child.id, task => ({ ...task, state: { status: 'running' } }));
+  if (change === 'model') await store.setWorkerModel(child.id, 'reviewer', store.scopeKey());
+  if (change === 'append' || change === 'update') {
+    await store.appendMessage(child.id, { id: 'reply', role: 'assistant', content: 'Hello', createdAt: '2026-11-19' });
+    if (change === 'update') {
+      await store.updateWorkerTask(child.id, task => ({ ...task, attentionViewed: true }));
+      await store.updateMessage(child.id, 'reply', { content: 'New reply' });
+    }
+  }
+  expect((await store.get(child.id))?.workerTask?.attentionViewed).not.toBe(true);
+});
+
 it('isolates future defaults by account/environment, preserving root snapshots and legacy sessions across restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'b4m-role-policy-'));
   let scope: SessionScope | null = { environmentUrl: 'https://example.test', accountId: 'first' };

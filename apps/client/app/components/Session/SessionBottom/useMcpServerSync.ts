@@ -10,8 +10,11 @@ import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConne
  * - Initializes enabledMcpServers when it is null and servers are available.
  * - Cleans up stale server entries when a server is removed from the database
  *   (e.g. GitHub OAuth revoked).
- * - Drops custom connector slugs from disabledMcpConnections once that connector is gone, so a new
- *   connector that reuses the slug starts on. Only against a loaded list, never the empty placeholder.
+ * - Drops custom connector slugs from disabledMcpConnections once the user's own connector is gone,
+ *   so a new connector that reuses the slug starts on. Only against a loaded list, never the empty
+ *   placeholder. A platform connector is switched by id in enabledPlatformMcpConnections, which is
+ *   never pruned: an admin switching it off and on keeps the user's choice, and a recreated one has a
+ *   new id and starts off.
  */
 export function useMcpServerSync(): void {
   const enabledMcpServers = useLLM(s => s.enabledMcpServers);
@@ -44,7 +47,9 @@ export function useMcpServerSync(): void {
 
   useEffect(() => {
     if (!connectionsLoaded || !Array.isArray(disabledMcpConnections) || disabledMcpConnections.length === 0) return;
-    const slugs = new Set(connections.map(connection => connection.slug));
+    const slugs = new Set(
+      connections.filter(connection => connection.ownerType !== 'platform').map(connection => connection.slug)
+    );
     const stillValid = disabledMcpConnections.filter(slug => slugs.has(slug));
     if (stillValid.length !== disabledMcpConnections.length) setLLM({ disabledMcpConnections: stillValid });
   }, [connections, connectionsLoaded, disabledMcpConnections, setLLM]);

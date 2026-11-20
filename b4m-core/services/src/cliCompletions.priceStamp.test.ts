@@ -73,6 +73,7 @@ function buildDb() {
       findById: vi.fn().mockResolvedValue(user),
     },
     usageEvents: { record: vi.fn<IUsageEventRepository['record']>().mockResolvedValue(null) },
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   };
 }
 

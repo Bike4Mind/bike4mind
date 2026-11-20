@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
+import { Cache } from '@bike4mind/database';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import {
@@ -24,6 +25,7 @@ let mongoServer: MongoMemoryServer;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  await Cache.init();
 });
 
 afterAll(async () => {
@@ -33,7 +35,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await mongoose.connection.dropDatabase();
+  await Cache.deleteMany({});
 });
 
 const HOUR_MS = 60 * 60 * 1000;

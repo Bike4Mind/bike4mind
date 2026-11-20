@@ -82,14 +82,14 @@ public final class ApprovalNotificationHandler {
     return true
   }
 
-  private static func failureTitle(for decision: PendingActionDecision) -> String {
+  static func failureTitle(for decision: PendingActionDecision) -> String {
     switch decision {
     case .approve: "Couldn't approve"
     case .deny: "Couldn't deny"
     }
   }
 
-  private static func success(for result: PendingActionResult) -> (title: String, body: String) {
+  static func success(for result: PendingActionResult) -> (title: String, body: String) {
     switch result.decision {
     case .deny: ("Denied", "The agent will not run that action.")
     case .approve:

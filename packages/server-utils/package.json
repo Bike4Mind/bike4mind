@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.17",
+  "version": "0.0.19",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },
@@ -19,6 +19,7 @@
     "@aws-sdk/client-cloudfront": "^3.1150.0",
     "@aws-sdk/client-cloudtrail": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
     "@aws-sdk/client-ec2": "^3.1150.0",
     "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@aws-sdk/client-iam": "^3.1150.0",
@@ -40,7 +41,7 @@
     "@bike4mind/memory": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
-    "@bike4mind/services": "workspace:*",
+    "@bike4mind/services": "workspace:@bike4mind/services-core@*",
     "@bike4mind/slack": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",
@@ -54,6 +55,7 @@
     "axios-retry": "^4.5.0",
     "cheerio": "1.2.0",
     "dayjs": "^1.11.23",
+    "escape-string-regexp": "^5.0.0",
     "file-type": "^22.1.0",
     "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",

@@ -30,6 +30,7 @@ type Round = [string, Record<string, unknown>];
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
 }));
 

@@ -12,7 +12,10 @@ import { describe, it, expect } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { AnthropicBackend } from './anthropicBackend';
 import { OpenAIBackend } from './openaiBackend';
-import { toProviderEndUserId } from './endUserId';
+import { toPlatformEndUserProviderId, toProviderEndUserId } from './endUserId';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { getLlmByModel } from './index';
 
 const END_USER_ID = '507f1f77bcf86cd799439011';
 const HASHED = toProviderEndUserId(END_USER_ID)!;
@@ -122,5 +125,62 @@ describe('OpenAIBackend end-user attribution', () => {
     const { backend, getParams } = buildOpenAIBackend(undefined);
     await backend.complete('gpt-4o', [{ role: 'user', content: 'hi' }], { stream: true, executeTools: false }, noopCb);
     expect(getParams()).not.toHaveProperty('safety_identifier');
+  });
+});
+
+// --- getLlmByModel: platform end-user override ---
+
+describe('getLlmByModel providerEndUserId', () => {
+  const PLATFORM_ID = toPlatformEndUserProviderId(END_USER_ID, 'customer_42');
+  const modelFor = (backend: ModelBackend, adapterFamily?: ModelInfo['adapterFamily']): ModelInfo => ({
+    id: `${backend}-test`,
+    type: 'text',
+    name: `${backend} test`,
+    backend,
+    adapterFamily,
+    supportsImageVariation: false,
+    contextWindow: 1000,
+    max_tokens: 100,
+    pricing: {},
+  });
+  const fields = (backend: unknown) => backend as { _endUserId?: string; _tenantKey?: string };
+
+  it.each([undefined, 'anthropic-messages'] as const)(
+    'sends the platform id to Anthropic but keeps the owner as the semaphore tenant (family %s)',
+    family => {
+      const backend = getLlmByModel(
+        { anthropic: 'test-key' },
+        {
+          modelInfo: modelFor(ModelBackend.Anthropic, family),
+          logger: new Logger(),
+          endUserId: END_USER_ID,
+          providerEndUserId: PLATFORM_ID,
+        }
+      );
+      expect(fields(backend)._endUserId).toBe(PLATFORM_ID);
+      expect(fields(backend)._tenantKey).toBe(HASHED);
+    }
+  );
+
+  it('sends the platform id to OpenAI', () => {
+    const backend = getLlmByModel(
+      { openai: 'test-key' },
+      {
+        modelInfo: modelFor(ModelBackend.OpenAI),
+        logger: new Logger(),
+        endUserId: END_USER_ID,
+        providerEndUserId: PLATFORM_ID,
+      }
+    );
+    expect(fields(backend)._endUserId).toBe(PLATFORM_ID);
+  });
+
+  it("falls back to the owner's hash when no override is given", () => {
+    const backend = getLlmByModel(
+      { anthropic: 'test-key' },
+      { modelInfo: modelFor(ModelBackend.Anthropic), logger: new Logger(), endUserId: END_USER_ID }
+    );
+    expect(fields(backend)._endUserId).toBe(HASHED);
+    expect(fields(backend)._tenantKey).toBe(HASHED);
   });
 });

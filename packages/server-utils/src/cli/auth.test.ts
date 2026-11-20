@@ -7,6 +7,8 @@ import {
   InternalServerError,
 } from '../utils/errors';
 
+const recordSideAppRefusalMock = vi.hoisted(() => vi.fn());
+vi.mock('../auth/sideAppRefusal', () => ({ recordSideAppRefusal: recordSideAppRefusalMock }));
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
 const assertCliSessionAllowedMock = vi.hoisted(() =>
@@ -33,12 +35,14 @@ vi.mock('../utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
 
+const mockFindAdminRoles = vi.hoisted(() => vi.fn());
 const cacheStore = new Map<string, { value: number; expiresAt: number }>();
 
 vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn() },
   userApiKeyRepository: { findById: vi.fn() },
   cacheRepository: {},
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindAdminRoles(...args) },
 }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -72,16 +76,26 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 }));
 
 const resolveUntrustedKeyLimits = vi.hoisted(() =>
-  vi.fn(async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => ({
-    rateLimit: key.rateLimit,
-    ownerUntrusted: false,
-  }))
+  vi.fn(
+    async (
+      _owner: unknown,
+      key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }
+    ): Promise<{
+      rateLimit: { requestsPerMinute: number; requestsPerDay: number };
+      ownerUntrusted: boolean;
+      unpaidAccountLimits?: Record<string, number>;
+    }> => ({
+      rateLimit: key.rateLimit,
+      ownerUntrusted: false,
+    })
+  )
 );
 vi.mock('../utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 const refuseIfSuspendedOwner = vi.hoisted(() => vi.fn(async (_key: string, _logger?: unknown) => undefined));
 vi.mock('../auth/suspendedApiKeyRefusal', () => ({ refuseIfSuspendedOwner }));
 
-vi.mock('../utils/apiKeyRateLimitCheck', () => ({
+vi.mock('../utils/apiKeyRateLimitCheck', async importOriginal => ({
+  rateLimitRefusalInfo: (await importOriginal<typeof import('../utils/apiKeyRateLimitCheck')>()).rateLimitRefusalInfo,
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: vi.fn(),
 }));
@@ -98,7 +112,7 @@ import {
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '../utils/apiKeyRateLimitCheck';
-import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType, hasAdminPermission } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
@@ -402,6 +416,58 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   // A still-valid session JWT for a consented account must still be refused once the account is
   // banned/disputed/suspended: ban does not bump tokenVersion, and the WS/CLI completion surfaces
   // fall back to this primitive. Same gate verifyApiKey applies via assertOwnerAccountUsable.
+  describe('role-held admin permissions', () => {
+    const ROLE_ID = 'a'.repeat(24);
+    const DELETED_ROLE_ID = 'c'.repeat(24);
+
+    beforeEach(() => {
+      mockFindAdminRoles.mockReset().mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    });
+
+    it('returns a user whose only grant comes from a role', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+
+      const { user } = await verifyJwtToken(sign('u1'));
+
+      expect(mockFindAdminRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(true);
+    });
+
+    it('refuses the permission on the next call once the role is removed', async () => {
+      vi.mocked(User.findById).mockResolvedValueOnce(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+      expect(hasAdminPermission((await verifyJwtToken(sign('u1'))).user, 'settings:manage')).toBe(true);
+
+      vi.mocked(User.findById).mockResolvedValueOnce(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [] }));
+      expect(hasAdminPermission((await verifyJwtToken(sign('u1'))).user, 'settings:manage')).toBe(false);
+    });
+
+    it('grants nothing for a deleted or malformed role id', async () => {
+      mockFindAdminRoles.mockResolvedValue([]);
+      vi.mocked(User.findById).mockResolvedValue(
+        mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] })
+      );
+
+      const { user } = await verifyJwtToken(sign('u1'));
+
+      expect(mockFindAdminRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('rejects rather than returning a user when the role lookup throws', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+      mockFindAdminRoles.mockRejectedValue(new Error('db down'));
+
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('db down');
+    });
+
+    it('does not look up roles for a refused session', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: undefined, adminRoleIds: [ROLE_ID] }));
+
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('Policy acceptance required');
+      expect(mockFindAdminRoles).not.toHaveBeenCalled();
+    });
+  });
+
   describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
     it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
@@ -714,6 +780,22 @@ describe('verifyApiKey exchange keys', () => {
     });
   });
 
+  it('judges the exchange client and returns its unpaid account limits', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 5, requestsPerDay: 50 },
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+    });
+    const info = await verifyApiKey({}, { allowExchangeKeys: true });
+    expect(resolveUntrustedKeyLimits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' })
+    );
+    expect(info.unpaidAccountLimits).toEqual(unpaidAccountLimits);
+  });
+
   it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {
     isApiKeyAccessAllowedMock
       .mockReset()
@@ -734,6 +816,55 @@ describe('verifyApiKey exchange keys', () => {
     });
     await expect(verifyApiKey({}, { allowExchangeKeys: true })).rejects.toMatchObject({ statusCode: 403 });
     isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+  });
+
+  describe('refusal records', () => {
+    beforeEach(() => recordSideAppRefusalMock.mockClear());
+
+    it('records the wrong-route refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith({
+        verified: true,
+        clientId: 'client-1',
+        stage: 'use',
+        reason: 'insufficient_scope',
+        status: 403,
+        userId: 'u1',
+        keyId: 'k1',
+      });
+    });
+
+    it('records the missing-scope refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      await expect(
+        verifyApiKey({}, { allowExchangeKeys: true, requiredScopes: [ApiKeyScope.AI_CHAT] })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verified: true, clientId: 'client-1', reason: 'insufficient_scope', stage: 'use' })
+      );
+    });
+
+    it('records the access-gate refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      await expect(verifyApiKey({}, { allowExchangeKeys: true })).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verified: true, clientId: 'client-1', reason: 'subscription_required' })
+      );
+    });
+
+    it('records nothing for a personal key refused on route, scope or access', async () => {
+      const personal = { ...exchangeKey, oauthExchangeClientId: undefined };
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(personal);
+      await expect(verifyApiKey({}, { requiredScopes: [ApiKeyScope.AI_CHAT] })).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).not.toHaveBeenCalled();
+    });
   });
 
   it('leaves a personal key with the same scopes unchanged either way', async () => {
@@ -780,6 +911,7 @@ describe('rate-limit errors carry their status and retry window', () => {
       error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
       retryAfter: 12,
       limitType: 'minute',
+      limit: 10,
       headers,
     });
     const info = {
@@ -793,7 +925,13 @@ describe('rate-limit errors carry their status and retry window', () => {
     await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
     await expect(rejection).rejects.toMatchObject({
       statusCode: 429,
-      additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
+      additionalInfo: {
+        retryAfter: 12,
+        rateLimitHeaders: headers,
+        errorCode: 'api_key_rate_limit_exceeded',
+        limit: 10,
+        windowSeconds: 60,
+      },
     });
     await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
   });

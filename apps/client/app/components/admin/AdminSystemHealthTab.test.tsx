@@ -29,6 +29,7 @@ const HEALTH = {
     configured: false,
     secrets: { MAIL_HOST: true, MAIL_PASSWORD: false },
     missingSecrets: ['MAIL_PASSWORD'],
+    optionalSecrets: [],
   },
   database: { type: 'MongoDB', connected: true, readyState: 1 },
   oauth: {
@@ -119,6 +120,83 @@ describe('AdminSystemHealthTab', () => {
     expect(okta).toHaveAttribute('data-tone', 'warn');
     expect(okta).toHaveTextContent('Missing');
     expect(screen.getByTestId('system-health-oauth-google-status')).toHaveAttribute('data-tone', 'good');
+  });
+
+  it('lists only the sender secret on SES and names it in the hint', async () => {
+    const sesEmail = {
+      configured: false,
+      transport: 'ses',
+      secrets: { MAIL_FROM: false },
+      missingSecrets: ['MAIL_FROM'],
+      optionalSecrets: [],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-email-secret-MAIL_FROM')).toBeInTheDocument();
+    expect(screen.queryByTestId('system-health-email-secret-MAIL_HOST')).not.toBeInTheDocument();
+    expect(screen.getByTestId('system-health-email-secret-hint-MAIL_FROM')).toHaveTextContent(
+      'sst secret set MAIL_FROM'
+    );
+    expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_HOST')).not.toBeInTheDocument();
+  });
+
+  it('gives a set command for every missing SMTP secret', async () => {
+    const smtpEmail = {
+      configured: false,
+      transport: 'smtp',
+      secrets: { MAIL_HOST: false, MAIL_PORT: false, MAIL_USERNAME: true, MAIL_PASSWORD: false, MAIL_FROM: true },
+      missingSecrets: ['MAIL_HOST', 'MAIL_PORT', 'MAIL_PASSWORD'],
+      optionalSecrets: [],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: smtpEmail } }) });
+    renderTab();
+
+    for (const name of smtpEmail.missingSecrets) {
+      expect(await screen.findByTestId(`system-health-email-secret-hint-${name}`)).toHaveTextContent(
+        `sst secret set ${name}`
+      );
+    }
+    expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_FROM')).not.toBeInTheDocument();
+  });
+
+  it('points a self-host deploy at the env file and chart instead of sst secret set', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: true } }) });
+    renderTab();
+
+    const hint = await screen.findByTestId('system-health-email-hint');
+    expect(hint).toHaveTextContent('.env.selfhost');
+    expect(hint).toHaveTextContent('runtime Secret');
+    expect(hint).not.toHaveTextContent('sst secret set');
+    expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).not.toBeInTheDocument();
+  });
+
+  it('keeps the sst hint when not self-hosted', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: false } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).toHaveTextContent(
+      'sst secret set MAIL_PASSWORD'
+    );
+    expect(screen.queryByTestId('system-health-email-hint')).not.toBeInTheDocument();
+  });
+
+  it('marks unset optional SMTP credentials Optional, not Missing', async () => {
+    const noAuthEmail = {
+      configured: true,
+      transport: 'smtp',
+      secrets: { MAIL_HOST: true, MAIL_PORT: true, MAIL_USERNAME: false, MAIL_PASSWORD: false, MAIL_FROM: true },
+      missingSecrets: [],
+      optionalSecrets: ['MAIL_USERNAME', 'MAIL_PASSWORD'],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: noAuthEmail } }) });
+    renderTab();
+
+    for (const name of noAuthEmail.optionalSecrets) {
+      const row = await screen.findByTestId(`system-health-email-secret-${name}`);
+      expect(row).toHaveTextContent('Optional');
+      expect(row).not.toHaveTextContent('Missing');
+    }
   });
 
   it('maps integration and breaker states to tones', async () => {

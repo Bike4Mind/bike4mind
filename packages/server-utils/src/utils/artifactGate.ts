@@ -22,7 +22,7 @@
  * not answer differently.
  */
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { resolveArtifactsEnabled } from '@bike4mind/services/llm/artifactGating';
+import { resolveArtifactsEnabled, withArtifactDataOrigins } from '@bike4mind/services/llm/artifactGating';
 
 export interface ResolveAgentArtifactGateInput {
   /**
@@ -66,10 +66,13 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
   artifactsEnabled: boolean;
   isNewExecution?: boolean;
   readPromptSetting: () => Promise<string | undefined>;
+  /** The `pythonArtifactDataOrigins` setting; when it lists origins the prompt names them, as on chat. */
+  readDataOriginsSetting?: () => Promise<unknown>;
 }): Promise<string | undefined> {
-  const { artifactsEnabled, isNewExecution = true, readPromptSetting } = args;
+  const { artifactsEnabled, isNewExecution = true, readPromptSetting, readDataOriginsSetting } = args;
   if (!isNewExecution || !artifactsEnabled) return undefined;
-  return (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
+  const prompt = (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
+  return readDataOriginsSetting ? withArtifactDataOrigins(prompt, await readDataOriginsSetting()) : prompt;
 }
 
 /**

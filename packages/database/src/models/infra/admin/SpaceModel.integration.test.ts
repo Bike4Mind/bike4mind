@@ -23,6 +23,25 @@ describe('SpaceModel', () => {
     await Space.syncIndexes();
   });
 
+  describe('findIdsForUser / findIdsAdministeredBy', () => {
+    it('returns live Spaces the user owns or belongs to, and only admin-held ones for the admin query', async () => {
+      const owned = await createSpace();
+      const asMember = await createSpace({ ownerUserId: 'other', members: [member('u1')] });
+      const asAdmin = await createSpace({ ownerUserId: 'other', members: [member('u1', 'admin')] });
+      await createSpace({ ownerUserId: 'other', members: [member('u2', 'admin')] });
+      const gone = await createSpace({ ownerUserId: 'other', members: [member('u1', 'admin')] });
+      await spaceRepository.softDelete(String(gone.id), 'other');
+
+      expect((await spaceRepository.findIdsForUser('u1')).sort()).toEqual(
+        [String(asMember.id), String(asAdmin.id)].sort()
+      );
+      expect(await spaceRepository.findIdsForUser(OWNER)).toEqual([String(owned.id)]);
+      expect(await spaceRepository.findIdsAdministeredBy('u1')).toEqual([String(asAdmin.id)]);
+      expect(await spaceRepository.findIdsAdministeredBy(OWNER)).toEqual([String(owned.id)]);
+      expect(await spaceRepository.findIdsForUser('stranger')).toEqual([]);
+    });
+  });
+
   describe('addMember', () => {
     it('respects the cap', async () => {
       const space = await createSpace();

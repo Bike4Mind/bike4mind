@@ -165,6 +165,27 @@ describe('studioCompletionSubscriber', () => {
     expect(t.publish).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['speech', { request: { text: PROMPT, provider: 'openai' }, candidates: ['openai'], saveToFiles: true }],
+    [
+      'sound_effect',
+      { request: { text: PROMPT, provider: 'elevenlabs' }, providerId: 'elevenlabs', saveToFiles: true },
+    ],
+  ] as const)(
+    'stays silent for a saved Studio %s job, which finished while its requester waited',
+    async (kind, payload) => {
+      const t = setup();
+      const job = await t.create({
+        kind,
+        state: 'succeeded',
+        payload: payload as unknown as IGenerationJob['payload'],
+      });
+
+      expect(await t.announce(job)).toBe('no_audience');
+      expect(t.publish).not.toHaveBeenCalled();
+    }
+  );
+
   it('treats a video job as a group of one', async () => {
     const t = setup();
     const job = await t.create({ kind: 'video', state: 'succeeded', payload: videoPayload });

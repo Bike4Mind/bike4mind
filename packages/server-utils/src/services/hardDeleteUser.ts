@@ -6,6 +6,7 @@ import {
   erasureRecordRepository,
   userRepository,
   withTransaction,
+  type mongoose,
 } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -36,10 +37,10 @@ export type HardDeleteContext = {
    * also runs it just before its subscription cancel, which cannot roll back.
    */
   assertInTransaction?: () => Promise<void>;
+  /** Database-only cleanup after User removal, committed with the same transaction. */
+  afterDeleteInTransaction?: (session: mongoose.ClientSession) => Promise<void>;
   /** Runs inside the delete's transaction after the row goes, so an audit entry commits or rolls back with it. */
   recordInTransaction?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
-  /** The delete's transaction failed after the subscription cancel, which cannot roll back. */
-  onDeleteFailed?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
   /** The delete's transaction committed; anything that throws after this ran post-commit work only. */
   onDeleteCommitted?: () => void;
 };
@@ -70,8 +71,10 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
 }
 
 /**
- * The one hard-delete path for a user, shared by the admin delete route (pages/api/users/[id]/delete.ts)
- * and the self-serve deletion purge (packages/server-utils/src/users/completeAccountDeletion.ts).
+ * The one hard-delete path for a user, run by the account deletion purge
+ * (packages/server-utils/src/users/completeAccountDeletion.ts), which self-serve deletion, admin data
+ * subject erasure and the admin Delete action (apps/client/server/admin/deleteUserAsAdmin.ts) all reach.
+ * `deletePersonaAccount` (apps/client/server/personas/personaAccounts.ts) also calls it directly.
  *
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
  * repository whose `delete` captures integration grants and billing references, then deletes the row
@@ -111,35 +114,25 @@ export async function hardDeleteUser<T>(
               context.logger
             );
         subscriptionCancellation = cancellation;
-        let result: Awaited<ReturnType<typeof userRepository.delete>>;
-        try {
-          result = await withTransaction(async session => {
-            await context.assertInTransaction?.();
-            await deleteFeedbackAiForUser(id, { session });
-            await deleteOrgAlertsForUser(id, { session });
-            await eraseOrganizationRetentionForUser(id, { session });
-            const deleted = await userRepository.delete(id);
-            await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });
-            // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
-            await erasureRecordRepository.record({
-              idHash: erasureIdHash(id),
-              keyId: erasureKeyId(),
-              pseudonym: erasurePseudonym(id),
-              erasedAt: new Date(),
-              initiatedBy: context.initiatedBy,
-            });
-            await context.recordInTransaction?.(target, cancellation);
-            return deleted;
+        const result = await withTransaction(async session => {
+          await context.assertInTransaction?.();
+          await deleteFeedbackAiForUser(id, { session });
+          await deleteOrgAlertsForUser(id, { session });
+          await eraseOrganizationRetentionForUser(id, { session });
+          const deleted = await userRepository.delete(id);
+          await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });
+          // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
+          await erasureRecordRepository.record({
+            idHash: erasureIdHash(id),
+            keyId: erasureKeyId(),
+            pseudonym: erasurePseudonym(id),
+            erasedAt: new Date(),
+            initiatedBy: context.initiatedBy,
           });
-        } catch (error) {
-          // Best-effort: a failure here must not replace the delete's own error.
-          try {
-            await context.onDeleteFailed?.(target, cancellation);
-          } catch (hookError) {
-            context.logger.error(`onDeleteFailed hook failed for user ${id}: ${String(hookError)}`);
-          }
-          throw error;
-        }
+          await context.recordInTransaction?.(target, cancellation);
+          await context.afterDeleteInTransaction?.(session);
+          return deleted;
+        });
         deleteCommitted = true;
         context.onDeleteCommitted?.();
         if (cancelAfterDelete) {

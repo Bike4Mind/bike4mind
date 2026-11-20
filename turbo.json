@@ -1,6 +1,5 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "remoteCache": { "preflight": true },
   "globalEnv": ["CI"],
   "globalPassThroughEnv": ["NODE_OPTIONS"],
   // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
@@ -150,6 +149,15 @@
       "dependsOn": ["codegen", "^build"],
       "outputs": ["dist/**"],
       "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
+    // providerUsagePricing.catalog.test.ts reads the model catalog seed in packages/database.
+    "@bike4mind/services-core#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/database/src/seeds/modelCatalog.seed.json"
+      ]
     },
     "@bike4mind/local-models#test": {
       "dependsOn": ["^build"],

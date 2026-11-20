@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   shouldBlock: vi.fn(),
@@ -27,6 +27,11 @@ describe('otcRecipientRefusal', () => {
     mocks.cache.clear();
     mocks.shouldBlock.mockResolvedValue(false);
     mocks.acceptsMail.mockResolvedValue(true);
+    vi.stubEnv('B4M_SELF_HOST', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('refuses a blocked or disposable domain before any DNS lookup', async () => {
@@ -40,6 +45,20 @@ describe('otcRecipientRefusal', () => {
     expect(await otcRecipientRefusal('a@nowhere.example', logger)).toBe('no-mail-host');
     expect(await otcRecipientRefusal('b@nowhere.example', logger)).toBe('no-mail-host');
     expect(mocks.acceptsMail).toHaveBeenCalledExactlyOnceWith('nowhere.example', { timeoutMs: 2000 });
+  });
+
+  it('mails a domain with no mail host on self-host, without a DNS lookup', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    mocks.acceptsMail.mockResolvedValue(false);
+    expect(await otcRecipientRefusal('admin@nowhere.example', logger)).toBeUndefined();
+    expect(mocks.acceptsMail).not.toHaveBeenCalled();
+    expect(mocks.cache.size).toBe(0);
+  });
+
+  it('still refuses a blocked domain on self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    mocks.shouldBlock.mockResolvedValue(true);
+    expect(await otcRecipientRefusal('a@burner.example', logger)).toBe('blocked-domain');
   });
 
   it('delivers when DNS is undecided, without caching', async () => {

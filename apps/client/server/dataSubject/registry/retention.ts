@@ -59,6 +59,13 @@ export const EMAIL_SUPPRESSION = {
   retention: { expiresBy: 'condition', until: 'the person withdraws the objection by subscribing again' },
 } as const satisfies RetentionBasis;
 
+// `memoryPrincipalKeyRepository.destroy` keeps the row without its key: deleting it would let a write
+// already in flight mint a fresh key for the erased principal.
+export const ERASURE_FENCE = {
+  reason: 'Destroyed-key tombstone that stops an in-flight write from restoring erased memory (GDPR Art. 17)',
+  retention: { expiresBy: 'condition', until: 'no write that started before the erasure can still complete' },
+} as const satisfies RetentionBasis;
+
 // `CreditGrantIdentityClaim` refuses a TTL index at startup: an expired claim would re-allow the grant.
 export const SIGNUP_GRANT_CLAIM = {
   reason: 'Abuse-prevention record that stops a repeat signup credit grant (legitimate interest, GDPR Art. 6(1)(f))',

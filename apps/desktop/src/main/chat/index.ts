@@ -1,6 +1,8 @@
 import { registerOrchestrationIpc } from './orchestrationIpc';
+import { createStudioDiagnostics } from './studio/StudioDiagnostics';
+import { registerStudio } from './studio/registerStudio';
 import { randomUUID } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -74,10 +76,12 @@ import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } 
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
+import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
+import { archiveFromSidebar } from './sessionArchive';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -89,6 +93,7 @@ import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
+import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
@@ -499,7 +504,8 @@ export function registerChat(
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
-  const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
+  const attachmentsDir = join(userData, 'attachments');
+  const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
@@ -637,6 +643,11 @@ export function registerChat(
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
+    if (event.type === 'tool-end' && event.call.media?.length) {
+      void studioIntegration
+        .indexChatSession(event.sessionId)
+        .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId: event.sessionId }));
+    }
   };
 
   const videoJobs = new VideoJobScheduler({
@@ -649,7 +660,13 @@ export function registerChat(
         ? { client: new MediaApiClient(api), scope: `${scope.environmentUrl}|${scope.accountId}` }
         : null;
     },
-    emit: (sessionId, job) => broadcast({ type: 'video-job', sessionId, job }),
+    emit: (sessionId, job) => {
+      broadcast({ type: 'video-job', sessionId, job });
+      if (job.state === 'succeeded' && job.media)
+        void studioIntegration
+          .indexChatSession(sessionId, true)
+          .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId }));
+    },
     logger,
   });
 
@@ -719,20 +736,25 @@ export function registerChat(
       })
   );
 
-  const modelViews = new ModelLiveViews({
-    state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
-    // One rendering is enough: the focused app window, else the first.
-    captureTarget: () => {
-      const target = focusedAppWindow();
-      return target && !target.isDestroyed() ? target.webContents.id : null;
+  const modelViews = new ModelLiveViews(
+    {
+      state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
+      // One rendering is enough: the focused app window, else the first.
+      captureTarget: () => {
+        const target = focusedAppWindow();
+        return target && !target.isDestroyed() ? target.webContents.id : null;
+      },
+      captureRequest: (target, request) => {
+        const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+        if (!window) return false;
+        window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+        return true;
+      },
+      versionsChanged: sessionId => send(IPC_CHANNELS.modelVersions, { sessionId }),
     },
-    captureRequest: (target, request) => {
-      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
-      if (!window) return false;
-      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
-      return true;
-    },
-  });
+    {},
+    new ModelVersionStore(join(userData, 'model-versions'), { warn: message => logger.warn(message) })
+  );
 
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
@@ -798,6 +820,9 @@ export function registerChat(
     get protectedPaths() {
       return toolProtected.paths();
     },
+    // Attachments sit inside userData but hold only what the user attached, so the agent may be
+    // given a folder of them to hand to another tool; the file tools still refuse every write there.
+    shareableUnderProtected: [attachmentsDir],
     get unresolvedProtectedPaths() {
       return toolProtected.unresolved();
     },
@@ -825,6 +850,22 @@ export function registerChat(
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
+  const studioIntegration = registerStudio({
+    logger,
+    ipc: ipcMain,
+    directory: userData,
+    sessions: store,
+    service,
+    attachments,
+    media,
+    models,
+    auth,
+    videoJobs: sessionId => videoJobs.list(sessionId),
+    changed: event => send(IPC_CHANNELS.studioChanged, event),
+  });
+  service.studioDisposed = studioIntegration.dispose;
+  service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
+
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
   );
@@ -846,9 +887,13 @@ export function registerChat(
     fit: () => local.contextFit(),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
-  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
-    service.setSessionArchived(sessionId, archived)
-  );
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
+    if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
+    return archiveFromSidebar(service, store, sessionId, archived, options => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+    });
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);
     return scope ? service.listSkills(scope) : NO_SKILLS;
@@ -1114,8 +1159,8 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
-    sessionForRenderer(await service.getSession(sessionId))
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string, viewed?: boolean) =>
+    sessionForRenderer(await service.getSession(sessionId, viewed === true))
   );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
@@ -1195,6 +1240,9 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatSuggestNextPrompt, (_event, sessionId: string, model: unknown) =>
     service.suggestNextPrompt(sessionId, typeof model === 'string' && model ? model : null)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetRunSpend, (_event, rootSessionId: unknown) =>
+    typeof rootSessionId === 'string' ? service.getRunSpend(rootSessionId) : { status: 'unattributed' }
   );
   ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
@@ -1290,6 +1338,17 @@ export function registerChat(
     copyFile: (from, to) => copyFile(from, to),
     reveal: path => shell.showItemInFolder(path),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerFilePathLinkIpc(ipcMain, {
+    scopeFor: sessionId => service.fileLinkScope(sessionId),
+    protectedPaths: () => toolProtected.paths(),
+    home,
+    stat: path => stat(path),
+    openPath: path => shell.openPath(path),
+    reveal: path => shell.showItemInFolder(path),
+    copyText: async text => clipboard.writeText(text),
+    attach: (sessionId, path) => attachments.add(sessionId, [{ source: 'path', path }]),
   });
 
   registerSessionExportIpc(ipcMain, {
@@ -1399,11 +1458,12 @@ export function registerChat(
     if (
       typeof request?.sessionId !== 'string' ||
       typeof request?.title !== 'string' ||
-      typeof request?.content !== 'string'
+      typeof request?.content !== 'string' ||
+      (request.artifactKey !== undefined && typeof request.artifactKey !== 'string')
     ) {
       throw new Error('A conversation, a title and the artifact content are required.');
     }
-    return browser.openArtifact(request.sessionId, request.title, request.content);
+    return browser.openArtifact(request.sessionId, request.title, request.content, request.artifactKey);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];

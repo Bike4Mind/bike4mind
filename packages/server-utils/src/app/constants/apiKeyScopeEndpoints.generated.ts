@@ -126,6 +126,9 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/music-models',
     'GET /api/v1/quests/:id',
     'GET /api/v1/quests/:id/files',
+    'GET|POST /api/v1/scene-compositions',
+    'GET /api/v1/scene-compositions/:id',
+    'POST /api/v1/scene-compositions/:id/cancel',
     'POST /api/v1/sessions',
     'POST /api/v1/text-refinements',
     'POST /api/v1/tools/weather',
@@ -438,5 +441,9 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/user-api-keys/:id/revoke',
     'POST /api/user-api-keys/:id/rotate',
     'GET /api/user-api-keys/billing-organizations',
+  ],
+  [ApiKeyScope.ARTIFACTS_PUBLISH]: [
+    'POST|DELETE /api/v1/artifacts/:id/publish',
+    'POST /api/v1/artifacts/:id/republish',
   ],
 };
