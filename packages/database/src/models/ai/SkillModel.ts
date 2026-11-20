@@ -272,6 +272,17 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
     }
     return Array.from(bestByName.values()).map(doc => doc.toJSON());
   }
+
+  /** Accessible-scope (owned + shared + global-read) by-id lookup, in `ids` order. Malformed ids match nothing. */
+  async findAccessibleByIdsForUser(userId: string, ids: string[]): Promise<ISkill[]> {
+    const valid = ids.filter(id => mongoose.isValidObjectId(id));
+    if (valid.length === 0) return [];
+    const matches = await this.skillModel
+      .find({ _id: { $in: valid }, deletedAt: null, $or: this.accessibleOr(userId) })
+      .select('-files');
+    const byId = new Map(matches.map(doc => [String(doc._id), doc.toJSON() as ISkill]));
+    return valid.flatMap(id => byId.get(id) ?? []);
+  }
 }
 
 export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(

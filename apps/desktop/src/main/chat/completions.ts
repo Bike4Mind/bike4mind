@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { LOOP_RUN_HEADER } from '@bike4mind/common';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
@@ -169,9 +170,17 @@ export interface CompletionRequest {
   run?: CompletionRunAttribution;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /**
+   * The loop run this request works for, sent as LOOP_RUN_HEADER so the server counts its credits
+   * against the loop's daily budget. Set only in a loop runner session.
+   */
+  loopRunId?: string;
   /** Set when the tools were left out because the listed model reports no tool support. */
   toolsUnsupported?: true;
 }
+
+/** The contract's header; the server adds the call's credits to that loop run. */
+export { LOOP_RUN_HEADER };
 
 /**
  * Stream one completion, calling `onEvent` for each decoded SSE event.
@@ -277,7 +286,10 @@ async function streamOnce(
         timeout: COMPLETION_HEADER_TIMEOUT_MS,
         // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
         // so a resend under the same id would read as the same charge.
-        headers: { 'X-Request-ID': randomUUID() },
+        headers: {
+          'X-Request-ID': randomUUID(),
+          ...(request.loopRunId ? { [LOOP_RUN_HEADER]: request.loopRunId } : {}),
+        },
       }
     );
   } catch (err) {
@@ -462,6 +474,17 @@ export class RunNotFoundError extends Error {
   }
 }
 
+/** No connection to the server opened at all, so the request never reached it and nothing was billed. */
+export class Bike4MindUnreachableError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Cannot reach the Bike4Mind server. Check the environment and your connection.', options);
+    this.name = 'Bike4MindUnreachableError';
+  }
+}
+
+/** Connect-phase codes only: a reset or timeout may have reached the server, so those stay ordinary failures. */
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH']);
+
 function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
   return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
 }
@@ -504,9 +527,7 @@ function toRequestError(error: unknown, body?: string): Error {
     if (status) {
       return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
     }
-    if (error.code === 'ECONNREFUSED') {
-      return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
-    }
+    if (error.code && UNREACHABLE_CODES.has(error.code)) return new Bike4MindUnreachableError({ cause: error });
     // Not retried here: the server does not cancel on disconnect, so the abandoned request may
     // still run and bill, and a silent resend could charge the turn twice.
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {

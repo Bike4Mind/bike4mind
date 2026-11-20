@@ -45,16 +45,17 @@ function errorText(error: unknown): string {
 
 /**
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
- * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ * flight, so a call parked at the approval gate is in here with its `approvalId`. A null id loads nothing.
  */
 export function useSessionMessages(
-  agentId: string,
+  agentId: string | null,
   refreshKey: string,
   viewed = false
 ): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (agentId === null) return;
     let stale = false;
     let loading = false;
     let dirty = false;
@@ -101,7 +102,7 @@ export function useSessionMessages(
     };
   }, [agentId, refreshKey]);
   useEffect(() => {
-    if (viewed) markSessionViewed(agentId);
+    if (viewed && agentId !== null) markSessionViewed(agentId);
   }, [agentId, viewed]);
   return { messages, loadError };
 }
@@ -276,6 +277,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
 }
 
 export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true }: AgentPeekDrawerProps) {
+  const isSession = actions.isSession?.(agent.id) ?? true;
   const mode = useTheme().palette.mode;
   const palette = skin?.[mode];
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -289,7 +291,11 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
   }, [visible]);
   const [revision, setRevision] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { messages, loadError } = useSessionMessages(agent.id, `${refreshKeyOf(agent)}\n${revision}`, visible);
+  const { messages, loadError } = useSessionMessages(
+    isSession ? agent.id : null,
+    `${refreshKeyOf(agent)}\n${revision}`,
+    visible
+  );
   const refresh = () => setRevision(value => value + 1);
   const canStop = isStoppableState(agent.state);
 
@@ -436,46 +442,54 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
         />
       </Box>
 
-      <ReplyBox
-        agentId={agent.id}
-        onSent={refresh}
-        actionButton={
-          <Dropdown open={visible && actionsOpen} onOpenChange={(_event, open) => setActionsOpen(visible && open)}>
-            <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
-              <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
-                Open
-              </Button>
-              <MenuButton
-                aria-label="More agent actions"
-                data-testid="orchestrator-peek-actions-menu-btn"
-                sx={{ px: 0.75 }}
-              >
-                <CaretDownIcon />
-              </MenuButton>
-            </ButtonGroup>
-            <Menu size="sm" placement="top-start" data-testid="orchestrator-peek-actions-menu">
-              {canStop && (
-                <MenuItem
-                  color="danger"
-                  data-testid="orchestrator-peek-stop-btn"
-                  onClick={() => void actions.stop(agent.id)}
+      {!isSession && agent.lastSnippet && (
+        <Typography level="body-sm" data-testid="orchestrator-peek-snippet">
+          {agent.lastSnippet}
+        </Typography>
+      )}
+
+      {isSession && (
+        <ReplyBox
+          agentId={agent.id}
+          onSent={refresh}
+          actionButton={
+            <Dropdown open={visible && actionsOpen} onOpenChange={(_event, open) => setActionsOpen(visible && open)}>
+              <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
+                <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
+                  Open
+                </Button>
+                <MenuButton
+                  aria-label="More agent actions"
+                  data-testid="orchestrator-peek-actions-menu-btn"
+                  sx={{ px: 0.75 }}
                 >
-                  Stop
+                  <CaretDownIcon />
+                </MenuButton>
+              </ButtonGroup>
+              <Menu size="sm" placement="top-start" data-testid="orchestrator-peek-actions-menu">
+                {canStop && (
+                  <MenuItem
+                    color="danger"
+                    data-testid="orchestrator-peek-stop-btn"
+                    onClick={() => void actions.stop(agent.id)}
+                  >
+                    Stop
+                  </MenuItem>
+                )}
+                <MenuItem
+                  data-testid="orchestrator-peek-archive-btn"
+                  onClick={() => {
+                    actions.archive(agent.id);
+                    onClose();
+                  }}
+                >
+                  Archive
                 </MenuItem>
-              )}
-              <MenuItem
-                data-testid="orchestrator-peek-archive-btn"
-                onClick={() => {
-                  actions.archive(agent.id);
-                  onClose();
-                }}
-              >
-                Archive
-              </MenuItem>
-            </Menu>
-          </Dropdown>
-        }
-      />
+              </Menu>
+            </Dropdown>
+          }
+        />
+      )}
     </Box>
   );
 }

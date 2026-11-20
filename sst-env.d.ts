@@ -661,6 +661,14 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "loopDispatchQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "loopDispatchQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "mcpHandler": {
       "name": string
       "type": "sst.aws.Function"

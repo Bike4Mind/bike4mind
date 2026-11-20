@@ -145,9 +145,7 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
       store.setChildExecutions(replayId, buildChildMap(data.children));
     }
     if (data.status === 'failed') {
-      // No failure reason is persisted, only the caller-safe message, which IterationStream
-      // renders on its own when the reason is absent.
-      store.markFailed(replayId, undefined, data.error ?? undefined);
+      store.markFailed(replayId, data.failureReason, data.error ?? undefined);
       return;
     }
     if (data.status === 'aborted') {
@@ -155,7 +153,7 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
       return;
     }
     // Final state: completed with the persisted answer.
-    store.markCompleted(replayId, data.answer ?? undefined, 0);
+    store.markCompleted(replayId, data.answer ?? undefined, 0, data.failureReason);
   }, [expanded, data, replayId, sessionId]);
 
   // No explicit eviction - the synthetic replay entry sits in the in-memory

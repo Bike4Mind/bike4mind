@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_HEADER_TIMEOUT_MS,
   RunNotFoundError,
+  Bike4MindUnreachableError,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -529,6 +530,36 @@ describe('run attribution and request ids', () => {
       .catch((caught: unknown) => caught);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(RunNotFoundError);
+  });
+
+  it.each(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH'])(
+    'raises Bike4MindUnreachableError when no connection opens (%s)',
+    async code => {
+      const post = vi.fn().mockRejectedValue(Object.assign(new Error(code), { isAxiosError: true, code }));
+      const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {})
+        .then(() => null)
+        .catch((caught: unknown) => caught);
+      expect(err).toBeInstanceOf(Bike4MindUnreachableError);
+    }
+  );
+
+  it('keeps a reset connection an ordinary request error: it may have reached the server', async () => {
+    const post = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('reset'), { isAxiosError: true, code: 'ECONNRESET' }));
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).not.toBeInstanceOf(Bike4MindUnreachableError);
+  });
+
+  it('keeps a reply with a status, even a proxy 502, an ordinary request error', async () => {
+    const post = refused(502, 'Bad Gateway');
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(Bike4MindUnreachableError);
   });
 
   it('resends without the run once the server refuses it', async () => {

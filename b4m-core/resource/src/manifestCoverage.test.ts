@@ -163,6 +163,10 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   // so leaving it unregistered is the safe state: a declared queue with no consumer would only
   // pile up messages. Registered as hosted-only in packages/scripts/src/selfhostParityPolicy.ts.
   publishThumbnailQueue: 'publish thumbnail renders; consumer needs a headless Chromium the worker image lacks',
+
+  // Loop routes and the agent executor request an immediate dispatch; requestLoopDispatch skips quietly when
+  // no URL resolves, and the loop scheduler it complements is not wired on self-host either. Wire both together.
+  loopDispatchQueue: 'loop event dispatch; needs the loop scheduler wired on self-host first',
 };
 
 /**
@@ -183,7 +187,8 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
   sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
   generatedMediaPurgeQueue:
     'optional; notebook and message deletes hand it purge leftovers, logged and dropped with no URL',
-  renderJobQueue: 'optional; drained by the render-worker compose profile, a separate process from the self-host worker',
+  renderJobQueue:
+    'optional; drained by the render-worker compose profile, a separate process from the self-host worker',
 };
 
 /**

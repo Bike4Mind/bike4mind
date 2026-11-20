@@ -17,7 +17,13 @@ import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { TooManyRequestsError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
-import { agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  sessionToolApprovalRepository,
+  type IAgentExecution,
+} from '@bike4mind/database';
+import { canReadAgentExecution, toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { recordUserActivity } from '@server/users/recordUserActivity';
@@ -57,7 +63,7 @@ import { sendAgentEvent } from '@bike4mind/server-utils/agentExecution/sendAgent
 const BaseMessageSchema = z.object({
   accessToken: z.string(),
   action: z.literal('agent_execute'),
-  command: z.enum(['start', 'abort', 'permission_response', 'gate_response', 'reconnect']),
+  command: z.enum(['start', 'abort', 'permission_response', 'gate_response', 'reconnect', 'subscribe', 'unsubscribe']),
 });
 
 const StartCommandSchema = BaseMessageSchema.extend({
@@ -181,6 +187,19 @@ const ReconnectCommandSchema = BaseMessageSchema.extend({
   sessionId: z.string().optional(),
 });
 
+// Watch a run without taking it over: answered with `reconnect_result`, but adds this
+// connection as a viewer instead of re-stamping the run's `connectionId`.
+const SubscribeCommandSchema = BaseMessageSchema.extend({
+  command: z.literal('subscribe'),
+  requestId: z.string().max(128).optional(),
+  executionId: z.string(),
+});
+
+const UnsubscribeCommandSchema = BaseMessageSchema.extend({
+  command: z.literal('unsubscribe'),
+  executionId: z.string(),
+});
+
 // ---------------------------------------------------------------------------
 // Cached resources
 // ---------------------------------------------------------------------------
@@ -269,6 +288,27 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     case 'reconnect': {
       const reconnectCmd = ReconnectCommandSchema.parse(rawBody);
       await handleReconnect(reconnectCmd, userId, connectionId, endpoint, logger);
+      break;
+    }
+    case 'subscribe': {
+      const subscribeCmd = SubscribeCommandSchema.parse(rawBody);
+      try {
+        await handleSubscribe(subscribeCmd, userId, connectionId, endpoint, logger);
+      } catch (error) {
+        // Without a reply the viewer would spin forever.
+        logger.error('[Subscribe] Failed:', error);
+        await sendAgentEvent(connectionId, endpoint, {
+          action: 'reconnect_result',
+          requestId: subscribeCmd.requestId,
+          found: false,
+        });
+      }
+      break;
+    }
+    case 'unsubscribe': {
+      const unsubscribeCmd = UnsubscribeCommandSchema.parse(rawBody);
+      // Removes only this connection's own id, so no ownership check is needed.
+      await agentExecutionRepository.removeViewer(unsubscribeCmd.executionId, connectionId);
       break;
     }
   }
@@ -743,6 +783,66 @@ async function handleReconnect(
   // Update connection ID for future streaming
   await agentExecutionRepository.updateConnectionId(execution.id, connectionId);
 
+  await sendExecutionSnapshot(
+    execution,
+    cmd.requestId,
+    connectionId,
+    endpoint,
+    logger,
+    '[Reconnect] Client reconnected'
+  );
+}
+
+/**
+ * Live viewing beyond the run's owner is a Loops feature (the loop page's run viewer): a shared-session member may
+ * watch only a loop run, and only while EnableLoops is on. Access is checked at subscribe only, so a member removed
+ * mid-run keeps receiving that run's frames until it ends.
+ */
+async function mayWatchLive(execution: IAgentExecution, userId: string): Promise<boolean> {
+  if (execution.userId === userId) return true;
+  return !!execution.loopId && (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true;
+}
+
+async function handleSubscribe(
+  cmd: z.infer<typeof SubscribeCommandSchema>,
+  userId: string,
+  connectionId: string,
+  endpoint: string,
+  logger: Logger
+): Promise<void> {
+  const execution = await agentExecutionRepository.findById(cmd.executionId);
+  if (!execution || !(await canReadAgentExecution(execution, userId)) || !(await mayWatchLive(execution, userId))) {
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'reconnect_result',
+      requestId: cmd.requestId,
+      found: false,
+    });
+    return;
+  }
+
+  // Never `updateConnectionId` here: that would steal the stream from the run's own client
+  // and, for a headless run, flip `hasApprover` (see the executor's `createWsSender`).
+  await agentExecutionRepository.addViewer(execution.id, connectionId);
+  // Snapshot from a read taken after `addViewer`, so a step persisted in between is not lost;
+  // the client drops the overlap with live frames.
+  const current = (await agentExecutionRepository.findById(execution.id)) ?? execution;
+  await sendExecutionSnapshot(current, cmd.requestId, connectionId, endpoint, logger, '[Subscribe] Viewer subscribed', {
+    withOutcome: true,
+    // Only the owner can answer a permission request (`handlePermissionResponse`), so a viewer gets no prompt.
+    withPermission: execution.userId === userId,
+  });
+}
+
+/** The `reconnect_result` snapshot shared by `reconnect` and `subscribe`; callers authorize first. */
+async function sendExecutionSnapshot(
+  execution: IAgentExecution,
+  requestId: string | undefined,
+  connectionId: string,
+  endpoint: string,
+  logger: Logger,
+  logLabel: string,
+  { withOutcome = false, withPermission = true }: { withOutcome?: boolean; withPermission?: boolean } = {}
+): Promise<void> {
   // Persisted iteration trace for step replay. The checkpoint
   // carries the full step history; we include it inline when it fits in
   // `STEPS_INLINE_BUDGET_BYTES` (see the module-level constant above for
@@ -755,7 +855,15 @@ async function handleReconnect(
   // to measure the full payload before deciding to truncate.
   const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
   const persistedSteps: AgentStep[] = checkpoint?.steps ?? [];
-  const stepsJsonSize = persistedSteps.length > 0 ? Buffer.byteLength(JSON.stringify(persistedSteps), 'utf8') : 0;
+  // A viewer has no chat bubble holding the answer, so it rides with the steps and shares
+  // their budget; the client's REST fallback fills it in when the steps are truncated.
+  const answer =
+    withOutcome && execution.status === 'completed'
+      ? (execution.result as { answer?: string } | null | undefined)?.answer
+      : undefined;
+  const stepsJsonSize =
+    (persistedSteps.length > 0 ? Buffer.byteLength(JSON.stringify(persistedSteps), 'utf8') : 0) +
+    (answer ? Buffer.byteLength(answer, 'utf8') : 0);
 
   // Child subagent snapshots. Sized independently of the parent's
   // steps so a giant parent trace doesn't drop child context, and vice-versa.
@@ -769,7 +877,7 @@ async function handleReconnect(
   // Send current state to client
   await sendAgentEvent(connectionId, endpoint, {
     action: 'reconnect_result',
-    requestId: cmd.requestId,
+    requestId,
     found: true,
     executionId: execution.id,
     // Safe to echo: only sent past the ownership check above.
@@ -779,14 +887,15 @@ async function handleReconnect(
     // tool calls the executor replays on approval, and their arguments are
     // unbounded. Only what the permission card renders belongs in this envelope -
     // see the steps-budget note above, which assumes the rest of it stays under 1KB.
-    pendingPermission: execution.pendingPermission
-      ? {
-          toolName: execution.pendingPermission.toolName,
-          toolInput: execution.pendingPermission.toolInput,
-          requestedAt: execution.pendingPermission.requestedAt,
-          toolCallId: execution.pendingPermission.toolCallId,
-        }
-      : undefined,
+    pendingPermission:
+      withPermission && execution.pendingPermission
+        ? {
+            toolName: execution.pendingPermission.toolName,
+            toolInput: execution.pendingPermission.toolInput,
+            requestedAt: execution.pendingPermission.requestedAt,
+            toolCallId: execution.pendingPermission.toolCallId,
+          }
+        : undefined,
     // Confidence-gate state - clients re-render the gate UI when
     // they reconnect to a `paused` execution. `pendingGate` and `paused`
     // are written atomically by `setPendingGate`, so either both are
@@ -794,7 +903,15 @@ async function handleReconnect(
     pendingGate: execution.pendingGate,
     totalCreditsUsed: execution.totalCreditsUsed,
     iterationCount: checkpoint?.iteration ?? 0,
-    ...(includeStepsInline ? { steps: persistedSteps } : { stepsTruncated: true }),
+    ...(includeStepsInline ? { steps: persistedSteps, answer } : { stepsTruncated: true }),
+    // A blocked loop runner run is stored as completed; the run view labels it Blocked from its failureReason.
+    ...(withOutcome &&
+    (execution.status === 'failed' || (execution.status === 'completed' && execution.failureReason === 'blocked'))
+      ? { failureReason: execution.failureReason }
+      : {}),
+    ...(withOutcome && execution.status === 'failed'
+      ? { errorMessage: toCallerSafeError(execution.error) ?? undefined }
+      : {}),
     ...(childSnapshots.length === 0
       ? {}
       : includeChildrenInline
@@ -802,7 +919,7 @@ async function handleReconnect(
         : { childrenTruncated: true }),
   });
 
-  logger.info('[Reconnect] Client reconnected', {
+  logger.info(logLabel, {
     executionId: execution.id,
     status: execution.status,
     stepCount: persistedSteps.length,

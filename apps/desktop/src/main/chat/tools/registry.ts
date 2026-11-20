@@ -32,6 +32,8 @@ import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { loopTool } from './loopTool';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { setSessionPullRequest } from './pullRequestTool';
+import { LOCAL_LOOP_TICKET_TOOLS } from './localLoopTicketTools';
+import { loopMergePr } from './loopMergeTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
@@ -167,6 +169,8 @@ const BY_NAME = new Map(
     requestDirectory,
     loopTool,
     setSessionPullRequest,
+    loopMergePr,
+    ...LOCAL_LOOP_TICKET_TOOLS,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -295,6 +299,10 @@ export function toolsForRequest(options: {
    * typed may run.
    */
   pullRequest?: boolean;
+  /** A loop runner session, which merges only through loop_merge_pr. */
+  loopMerge?: boolean;
+  /** A Desktop loop run: its loop's loop_ticket_* tools, backed by the local store. */
+  localLoopTickets?: boolean;
 }): { toolSchema: ToolSchema }[] {
   // Shared families first and per-session ones last, so a spawned worker's list is a prefix of
   // its parent's and sibling workers share one cached prefix; see ChatService.promptPrefix.test.ts.
@@ -327,6 +335,8 @@ export function toolsForRequest(options: {
     // Declared on every turn of such a session, unattended ones included, so a wake keeps the
     // tool list; its run refuses when nobody typed the turn (see pullRequestTool.ts).
     ...(options.pullRequest ? [setSessionPullRequest] : []),
+    ...(options.loopMerge ? [loopMergePr] : []),
+    ...(options.localLoopTickets ? LOCAL_LOOP_TICKET_TOOLS : []),
     ...(options.mcpServers && options.ask ? MCP_MANAGE_TOOLS : []),
   ];
   const schemaOf = (tool: ToolDefinition): ToolSchema =>

@@ -1,17 +1,26 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockFindById = vi.fn();
 const mockClearPendingGate = vi.fn();
 const mockRestoreRejectedResume = vi.fn();
+const mockMarkComplete = vi.fn().mockResolvedValue(undefined);
+const mockResolveUnsure = vi.fn();
+const mockFindTicketByExecutionId = vi.fn();
+const mockResumeBlockedRun = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   agentExecutionRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
-    markComplete: vi.fn().mockResolvedValue(undefined),
+    markComplete: (...args: unknown[]) => mockMarkComplete(...args),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     restoreRejectedResume: (...args: unknown[]) => mockRestoreRejectedResume(...args),
     clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
+  },
+  loopEventRepository: { resolveUnsure: (...args: unknown[]) => mockResolveUnsure(...args) },
+  workItemRepository: {
+    findByExecutionId: (...args: unknown[]) => mockFindTicketByExecutionId(...args),
+    resumeBlockedRun: (...args: unknown[]) => mockResumeBlockedRun(...args),
   },
 }));
 
@@ -169,5 +178,118 @@ describe('gate response live activity settlement', () => {
       expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
       expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
     });
+  });
+});
+
+describe('gate response on a loop run', () => {
+  const pendingGate = { iteration: 2, confidence: 0.3, reason: 'thin results', requestedAt: new Date(1000) };
+  const gateCmd = (decision: 'continue' | 'stop') => ({ executionId: 'exec-1', decision });
+  const respond = (decision: 'continue' | 'stop') =>
+    handleGateResponse(gateCmd(decision), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClearPendingGate.mockResolvedValue(true);
+    mockFindTicketByExecutionId.mockResolvedValue({ id: 'ticket-1', title: 'Research X' });
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 202 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  const loopRun = { ...baseExecution, status: 'paused', pendingGate, loopId: 'loop-1' };
+  const expectedEvent = {
+    loopId: 'loop-1',
+    userId: 'user-1',
+    executionId: 'exec-1',
+    iteration: 2,
+    confidence: 0.3,
+    reason: 'thin results',
+    requestedAt: pendingGate.requestedAt,
+    workItemId: 'ticket-1',
+    ticketTitle: 'Research X',
+  };
+
+  it('continue records the event as resumed and moves the parked ticket back to in_progress', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    await respond('continue');
+
+    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'resumed', 'user-1', undefined);
+    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, {
+      outcome: 'resumed',
+      by: 'user-1',
+      at: expect.any(Date),
+    });
+    expect(mockResumeBlockedRun).toHaveBeenCalledWith('ticket-1', 'exec-1');
+  });
+
+  it('stop records the event as rejected and leaves the ticket blocked', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    await respond('stop');
+
+    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'rejected', 'user-1', undefined);
+    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
+    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'rejected' }));
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+  });
+
+  describe('with a held completion', () => {
+    const heldLoopRun = {
+      ...loopRun,
+      pendingCompletion: { answer: 'held answer', replyText: 'held reply', canReconsider: false },
+    };
+
+    it('stop accepts the held answer and records the event as rejected', async () => {
+      mockFindById.mockResolvedValue(heldLoopRun);
+      await respond('stop');
+
+      expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'rejected', 'user-1', { keepCompletion: true });
+      expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'rejected' }));
+      expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+    });
+
+    it('continue with nothing to reopen accepts the held answer and records the event as resumed', async () => {
+      mockFindById.mockResolvedValue(heldLoopRun);
+      await respond('continue');
+
+      expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'resumed', 'user-1', { keepCompletion: true });
+      expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'resumed' }));
+      expect(mockResumeBlockedRun).toHaveBeenCalledWith('ticket-1', 'exec-1');
+    });
+  });
+
+  it('a rejected resume dispatch writes nothing to the loop log or ticket', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    await expect(respond('continue')).rejects.toThrow('401');
+
+    expect(mockResolveUnsure).not.toHaveBeenCalled();
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+  });
+
+  it('still resolves the gate when the loop log write fails', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    mockResolveUnsure.mockRejectedValueOnce(new Error('db down'));
+    await respond('stop');
+
+    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      '[Gate] Could not record the gate answer in the loop log',
+      expect.objectContaining({ executionId: 'exec-1' })
+    );
+  });
+
+  it.each(['continue', 'stop'] as const)('%s on a chat run touches no loop event or ticket', async decision => {
+    mockFindById.mockResolvedValue({ ...loopRun, loopId: undefined });
+    await respond(decision);
+
+    expect(mockClearPendingGate).toHaveBeenCalled();
+    expect(mockFindTicketByExecutionId).not.toHaveBeenCalled();
+    expect(mockResolveUnsure).not.toHaveBeenCalled();
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
   });
 });

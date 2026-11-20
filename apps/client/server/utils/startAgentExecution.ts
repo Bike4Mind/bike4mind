@@ -22,8 +22,10 @@ import {
   userRepository,
   Quest,
   type AgentExecutionStatus,
+  type IAgentExecution,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
+import { LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES, LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
 import { readOrgModelPolicy } from '@bike4mind/common';
 import { orgDisallowedTools } from '@bike4mind/services/llm/orgToolPolicy';
 import type { Logger } from '@bike4mind/observability';
@@ -42,6 +44,8 @@ import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConn
 import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
 import { admitApiKeyCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
+
+const LOOP_RUN_TOOL_NAMES = [...LOOP_TICKET_TOOL_NAMES, ...LOOP_DIRECTIVE_TOOL_NAMES, ...LOOP_OVERSEER_TOOL_NAMES];
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -141,6 +145,23 @@ export type StartAgentExecutionInput = {
   thinking?: { enabled: boolean; budget_tokens?: number };
   enableMementos?: boolean;
   enableLattice?: boolean;
+  /** Set by the loop scheduler; the executor then offers the run the loop ticket tools. */
+  loopId?: string;
+  /** Loop scheduler only: the most credits the run may spend. Never taken from a client request. */
+  creditCap?: number;
+  /** Loop scheduler only, like `creditCap`: the run's ticket, its priority, escalation and run kind. */
+  workItemId?: string;
+  ticketPriority?: IAgentExecution['ticketPriority'];
+  loopStage?: string;
+  loopAttempt?: number;
+  escalated?: boolean;
+  loopRunKind?: IAgentExecution['loopRunKind'];
+  triageWorkItemIds?: string[];
+  /**
+   * Loop scheduler only: called with the new execution id before the executor is invoked. Returning false refuses
+   * the dispatch (`dispatch_failed`, with the id) and the run is never invoked.
+   */
+  beforeDispatch?: (executionId: string) => Promise<boolean>;
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -356,8 +377,10 @@ export async function startAgentExecution(
     // asked for still does. An interactive run ignores the dispatch payload and takes only
     // what the user chose to remember in this notebook, which is strictly better than
     // trusting a client-supplied tool list.
+    // A loop run's ticket and directive tools are added by the executor, never named in `enabledTools`.
+    // The overseer tools are approved on every loop run: an approval for a tool the run is not offered is inert.
     approvedTools: isHeadlessConnection(input.connectionId)
-      ? (input.enabledTools ?? [])
+      ? [...(input.enabledTools ?? []), ...(input.loopId ? LOOP_RUN_TOOL_NAMES : [])]
       : (remembered?.approvedTools ?? []),
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
@@ -376,6 +399,15 @@ export async function startAgentExecution(
     thinking: input.thinking,
     enableMementos: input.enableMementos,
     enableLattice: input.enableLattice,
+    loopId: input.loopId,
+    creditCap: input.creditCap,
+    workItemId: input.workItemId,
+    ticketPriority: input.ticketPriority,
+    loopStage: input.loopStage,
+    loopAttempt: input.loopAttempt,
+    escalated: input.escalated,
+    loopRunKind: input.loopRunKind,
+    triageWorkItemIds: input.triageWorkItemIds,
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,
@@ -448,6 +480,22 @@ export async function startAgentExecution(
   }
 
   await pinning;
+  let allowed: boolean;
+  try {
+    allowed = !input.beforeDispatch || (await input.beforeDispatch(executionId));
+  } catch (err) {
+    // The caller tracks no run it failed to record, so this one must not sit `pending` until the stale sweep.
+    await agentExecutionRepository
+      .markFailed(executionId, { message: 'Run start was withdrawn.', failureReason: 'abandoned' })
+      .catch(() => undefined);
+    if (persistedQuestId) await Quest.deleteOne({ _id: persistedQuestId }).catch(() => undefined);
+    throw err;
+  }
+  if (!allowed) {
+    logger.warn('[Start] Dispatch refused by the caller before invoking the executor', { executionId });
+    if (persistedQuestId) await Quest.deleteOne({ _id: persistedQuestId }).catch(() => undefined);
+    return { ok: false, reason: 'dispatch_failed', message: 'Run start was withdrawn.', executionId };
+  }
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is

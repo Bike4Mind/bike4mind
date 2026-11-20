@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 
 /**
  * Pins the "Allow/Deny for Session" write path in `handlePermissionResponse`: the
@@ -9,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 const mockFindById = vi.fn();
+const mockGetSettingsValue = vi.fn();
 const mockUpdatePermissionState = vi.fn();
 const mockMarkFailed = vi.fn();
 const mockUpdateStatus = vi.fn();
@@ -19,9 +21,12 @@ const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
 const mockFindActiveBySessionId = vi.fn();
 const mockUpdateConnectionId = vi.fn();
+const mockAddViewer = vi.fn();
+const mockRemoveViewer = vi.fn();
+const mockFindSessionById = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
   agentExecutionRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
     setAbortFlag: vi.fn().mockResolvedValue(undefined),
@@ -37,6 +42,11 @@ vi.mock('@bike4mind/database', () => ({
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
     findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
     updateConnectionId: (...args: unknown[]) => mockUpdateConnectionId(...args),
+    addViewer: (...args: unknown[]) => mockAddViewer(...args),
+    removeViewer: (...args: unknown[]) => mockRemoveViewer(...args),
+  },
+  sessionRepository: {
+    findById: (...args: unknown[]) => mockFindSessionById(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -890,6 +900,214 @@ describe('reconnect command', () => {
 
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
     expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+  });
+});
+
+describe('subscribe / unsubscribe commands', () => {
+  const wsEvent = (body: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'viewer-conn', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', ...body }),
+  });
+  const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+  const sentPayloads = () =>
+    mockApiGwSend.mock.calls.map(([cmd]) => JSON.parse((cmd as { input: { Data: Buffer } }).input.Data.toString()));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1' });
+    mockGetSettingsValue.mockResolvedValue(true);
+  });
+
+  it('adds the owner as a viewer and sends the snapshot without taking over the run', async () => {
+    const running = {
+      ...baseExecution,
+      status: 'running',
+      checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'hi' }] },
+    };
+    mockFindById.mockResolvedValueOnce(running).mockResolvedValueOnce(running);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([
+      expect.objectContaining({
+        action: 'reconnect_result',
+        requestId: 'req-1',
+        found: true,
+        executionId: 'exec-1',
+        status: 'running',
+        iterationCount: 2,
+        steps: [{ type: 'thought', content: 'hi' }],
+      }),
+    ]);
+  });
+
+  it('withholds the pending permission prompt from a non-owner viewer', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    const paused = {
+      ...baseExecution,
+      loopId: 'loop-1',
+      status: 'awaiting_permission',
+      pendingPermission: { toolName: 'bash', toolInput: {}, requestedAt: new Date(), toolCallId: 'c1' },
+    };
+    mockFindById.mockResolvedValueOnce(paused).mockResolvedValueOnce(paused);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0].pendingPermission).toBeUndefined();
+  });
+
+  it('lets a member of a shared session watch a loop run', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValueOnce({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, loopId: 'loop-1', status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(sentPayloads()[0]).toMatchObject({ found: true });
+  });
+
+  it('keeps a shared-session member off a run that is not a loop run, or with EnableLoops off', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    mockGetSettingsValue.mockResolvedValue(false);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, loopId: 'loop-1', status: 'running' });
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([
+      { action: 'reconnect_result', found: false },
+      { action: 'reconnect_result', found: false },
+    ]);
+  });
+
+  it("refuses another user's run and never adds them as a viewer", async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-2' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-2', found: false }]);
+  });
+
+  it('applies the owner check to a run without a session', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, sessionId: undefined, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it('builds the snapshot from a read taken after adding the viewer', async () => {
+    mockFindById
+      .mockResolvedValueOnce({ ...baseExecution, status: 'running', checkpoint: { iteration: 1, steps: [] } })
+      .mockResolvedValueOnce({
+        ...baseExecution,
+        status: 'running',
+        checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'late' }] },
+      });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockFindById).toHaveBeenCalledTimes(2);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, steps: [{ type: 'thought', content: 'late' }] });
+  });
+
+  it('answers found:false for a missing run', async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-3' }), {}, noopLogger);
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-3', found: false }]);
+  });
+
+  it('answers found:false when subscribing throws, so the viewer does not spin forever', async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    mockAddViewer.mockRejectedValueOnce(new Error('db down'));
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-4' }), {}, noopLogger);
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-4', found: false }]);
+  });
+
+  it("sends a finished run's answer, which a headless run has nowhere else to show", async () => {
+    const completed = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'All done' },
+      checkpoint: { iteration: 1, steps: [{ type: 'final_answer', content: 'All done' }] },
+    };
+    for (let i = 0; i < 3; i++) mockFindById.mockResolvedValueOnce(completed);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+    await invoke(wsEvent({ command: 'reconnect', executionId: 'exec-1' }), {}, noopLogger);
+
+    const [subscribed, reconnected] = sentPayloads();
+    expect(subscribed).toMatchObject({ found: true, status: 'completed', answer: 'All done' });
+    // A chat reconnect keeps today's payload: the reply bubble already holds the answer.
+    expect(reconnected).toMatchObject({ found: true, status: 'completed' });
+    expect(reconnected).not.toHaveProperty('answer');
+  });
+
+  it('drops the answer with the steps when they do not fit the frame', async () => {
+    const run = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'x'.repeat(101 * 1024) },
+      checkpoint: { iteration: 1, steps: [] },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+    vi.mocked(decideInlineBudgets).mockReturnValueOnce({ includeStepsInline: false, includeChildrenInline: true });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    // The answer counts toward the steps budget.
+    expect(decideInlineBudgets).toHaveBeenCalledWith(101 * 1024, 0);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, stepsTruncated: true });
+    expect(sentPayloads()[0]).not.toHaveProperty('answer');
+  });
+
+  it("sends a failed run's reason and a caller-safe message", async () => {
+    const run = {
+      ...baseExecution,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      error: { message: 'Out of credits', callerSafe: true },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({
+      found: true,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+  });
+
+  it("sends a blocked runner run's reason with its completed status", async () => {
+    const run = { ...baseExecution, status: 'completed', failureReason: 'blocked' };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ found: true, status: 'completed', failureReason: 'blocked' });
+    expect(sentPayloads()[0]).not.toHaveProperty('errorMessage');
+  });
+
+  it('removes this connection on unsubscribe', async () => {
+    await invoke(wsEvent({ command: 'unsubscribe', executionId: 'exec-1' }), {}, noopLogger);
+    expect(mockRemoveViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
   });
 });
 

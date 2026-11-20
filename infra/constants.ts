@@ -6,9 +6,15 @@ const isStagingStage = $app.stage === 'dev';
  * stage (PR previews, shared-dev, personal stages) skips them outright rather than deploying
  * them disabled: a disabled EventBridge rule still counts against the default bus's per-account
  * rule quota, which every preview in the account shares.
- * Crons that should also run on previews (infra/cron.ts) are created unconditionally.
+ * Crons that should also run on previews (infra/cron.ts) are created unconditionally, or gated on a
+ * preview-aware flag such as `runsLoopScheduler`.
  */
 export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
+/**
+ * The loop scheduler also runs on PR previews so loops are testable there (it idles while `EnableLoops`
+ * is off). Personal and shared-dev stages still skip it: one rule per open preview is the accepted quota cost.
+ */
+export const runsLoopScheduler = runsScheduledJobs || isPreviewStage;
 /** Stages that run at full production scale (reserved concurrency, full memory, etc.).
  * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';

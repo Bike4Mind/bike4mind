@@ -18,6 +18,8 @@ export const billingHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
       { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      // Whoever answered a confidence gate on the run.
+      { path: 'gateHistory.resolvedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // DAG node ids of other executions, not users.
     unrelatedPaths: ['blockedBy'],

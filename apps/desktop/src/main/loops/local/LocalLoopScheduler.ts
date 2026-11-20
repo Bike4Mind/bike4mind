@@ -1,0 +1,1133 @@
+import { randomUUID } from 'node:crypto';
+import { effectiveMergePolicy, nextUtcMidnight, startOfUtcDay, type LoopRunOutcome } from '@bike4mind/common';
+import {
+  advancePatch,
+  budgetHeadroom,
+  buildLoopQuery,
+  buildTriageQuery,
+  chooseRunModel,
+  laneCreditCap,
+  LOOP_PROMPT_ANSWERS,
+  LOOP_PROMPT_DIRECTIVES,
+  type LoopOversight,
+  MIN_ITERATION_CREDITS,
+  pacedLanes,
+  parseLoopMemory,
+  pickReady,
+  priorityPatch,
+  PRIORITIES_OVER_P2_CAP,
+  ticketMovePatch,
+  ticketRunLimit,
+  untriaged,
+} from '@bike4mind/common/loops';
+import { SERVER_UNREACHABLE_STOP, type ChatSession, type ChatStreamEvent } from '@shared/chat';
+import type {
+  LocalLoop,
+  LocalLoopCapReason,
+  LocalLoopEvent,
+  LocalLoopStageConfig,
+  LocalLoopSummary,
+  LocalRun,
+  LocalRunStopReason,
+  LocalTicket,
+} from '@shared/localLoops';
+import { parsePullRequestUrl } from '@shared/pullRequest';
+import type { GhRunner } from '../../pr/gh';
+import { admit, type BudgetSettings, type MachineSample } from '../budget';
+import type { SmokeDeps } from '../guards';
+import {
+  afterMergeChecks,
+  CREDIT_STOP,
+  mergeLoopPr,
+  openLoopSession,
+  opensPr,
+  pendingReason,
+  PR_URL,
+  startLoopTurn,
+  type LoopMerged,
+  type LoopMergeGithub,
+  type LoopSessionChat,
+} from '../session';
+import { localAdmission } from './admission';
+import { openDirectivesFor } from './overseerTools';
+import { applyTicketPatch, type LocalLoopStore } from './LocalLoopStore';
+import { runTicketTool, type ToolRun } from './ticketTools';
+import { idleAlarms, laneChecks, RESTART_LIMIT, RestartBudget, schedulerStalled } from './watchdog';
+
+/** The parts of ChatService the scheduler drives; every call is one a user's own click could make. */
+export interface LocalSchedulerChat extends LoopSessionChat {
+  stop(sessionId: string): void;
+  isSessionBusy(sessionId: string): boolean;
+  getSession(sessionId: string): Promise<ChatSession | null>;
+  removeWorktrees(directory: string, paths?: readonly string[]): Promise<unknown>;
+  loopRunOf(sessionId: string): string | undefined;
+  loopRunSessions(runId: string): string[];
+  endLoopRun(runId: string): void;
+}
+
+export interface LocalSchedulerDeps {
+  store: LocalLoopStore;
+  chat: LocalSchedulerChat;
+  killSessionProcesses(sessionId: string): Promise<void> | void;
+  /** The machine now and the lane/battery/busy settings it is gated by (shared with LoopRunner). */
+  machine(): Promise<{ sample: MachineSample; settings: BudgetSettings }>;
+  /** Lanes LoopRunner holds now: one lane pool for both. */
+  otherLanes(): number;
+  /** The owner's all-loops daily budget, last fetched from the server; undefined when unknown or unset. */
+  allLoopsCap(): number | undefined;
+  /**
+   * Credits the owner's web loops spent today, last fetched from the server; they count toward the all-loops cap.
+   * The server's count holds only server loop runs (local runs send no loop-run header), so nothing is counted twice.
+   */
+  cloudLoopsSpentToday(now: Date): number;
+  gh: GhRunner;
+  github: LoopMergeGithub;
+  smoke?: SmokeDeps;
+  powerSaveBlocker: { start(type: 'prevent-app-suspension'): number; stop(id: number): void };
+  /** A needs-you event the scheduler raised (capped, blocked, a question, an error): tell the owner. */
+  alert(loop: LocalLoop, event: LocalLoopEvent): void;
+  onChange(): void;
+  logger: { warn(message: string): void };
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export const SCHEDULER_MS = {
+  /**
+   * Re-check while any loop is live: the machine gate (battery, memory, load) can clear with no event to say so.
+   * Every other start (a ticket, a run ending, a reset) ticks at once.
+   */
+  recheck: 60_000,
+  /**
+   * After a run stops at its credit cap, the loop waits this long: the cap is a slice of the paced allowance, so
+   * re-admitting at once would turn it into a one-response run every tick (the server's interval does this there).
+   */
+  creditCapBackoff: 10 * 60_000,
+  /**
+   * After a run could not reach the server: such a run fails in seconds, so without a hold an outage is a run storm.
+   * Doubles per unreachable run in a row, up to the max, so a long outage does not leave a session every 2 minutes.
+   */
+  serverUnreachableBackoff: 2 * 60_000,
+  serverUnreachableBackoffMax: 30 * 60_000,
+  /** After a run's session could not be opened: its ticket goes straight back, so the next tick would retry at once. */
+  sessionOpenBackoff: 60_000,
+} as const;
+
+/** Runs in a row that error before the loop stops in `error`. */
+const ERROR_STREAK_LIMIT = 3;
+
+/** A stream error this soon after the machine wakes is the sleep's doing (dropped connections), not the run's (ms). */
+const WAKE_GRACE_MS = 60_000;
+
+interface Lane {
+  run: LocalRun;
+  sessionId: string;
+  tool: ToolRun;
+  /** Credits per message of the run's sessions, as their usage events report it. */
+  usage: Map<string, number>;
+  /** Over this the run is stopped; undefined: no cap. */
+  creditCap?: number;
+  /** A triage run: the tickets it was shown. */
+  triaged?: string[];
+  pending?: string;
+  denied: number;
+  lastDenied?: string;
+  ran: number;
+  merged?: LoopMerged;
+  prUrl?: string;
+  finished: boolean;
+  /** Last stream event from any of the run's sessions (ms), for the watchdog. */
+  lastEventAt: number;
+  /** The watchdog's long-run alarm was raised. */
+  alarmed?: boolean;
+}
+
+interface Ended {
+  outcome?: LoopRunOutcome;
+  stopReason?: LocalRunStopReason;
+  reason?: string;
+  answer?: string;
+}
+
+const UNCOUNTED: ReadonlySet<LocalRunStopReason | LoopRunOutcome | undefined> = new Set([
+  'requeued',
+  'credit_cap',
+  'budget_stopped',
+]);
+
+const CAP_TEXT: Record<LocalLoopCapReason, string> = {
+  loop_budget: 'daily budget',
+  all_loops: 'all-loops budget',
+  credits: 'account credits',
+};
+
+/**
+ * Schedules and runs Desktop-owned loops: the server's loop tick (apps/workers/src/cron/loopScheduler.ts), here
+ * and event-driven. A tick runs on every poke (ticket created or moved, run ended, loop resumed, start), at the
+ * earliest cap or pacing reset, and every SCHEDULER_MS.recheck while a loop is live. Per live loop it reopens
+ * parked tickets, lifts due caps, then fills free lanes: triage first, then ready tickets by priority, each admitted
+ * by the machine gate, the budgets and pacing.
+ *
+ * Only ever stops, kills or deletes sessions it started (and their spawned children, which ChatService marks with
+ * the same run id).
+ */
+
+/** The owner's local HH:MM, as the cap banner and alert show it. */
+const clockTime = (at: Date): string =>
+  at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+export class LocalLoopScheduler {
+  private readonly lanes = new Map<string, Lane>();
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private running = false;
+  private ticking = false;
+  private again = false;
+  private previous: MachineSample | undefined;
+  private blocker: number | null = null;
+  /** loopId -> when pacing next lets it run; in memory only, recomputed every tick. */
+  private readonly paced = new Map<string, number>();
+  /** loopId -> no run starts before this, after a run stopped at its credit cap. */
+  private readonly capBackoff = new Map<string, number>();
+  /** loopId -> no run starts before `until`, after a run could not reach the Bike4Mind server; `ms` is that hold. */
+  private readonly serverBackoff = new Map<string, { until: number; ms: number }>();
+  /** loopId -> no run starts before this, after a run's session could not be opened. */
+  private readonly openBackoff = new Map<string, number>();
+  private quitting = false;
+  /** Why no run starts now, for the whole machine (lanes busy, battery...). */
+  private waitingReason: string | undefined;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  /** Some live, uncapped loop has ready work: the Mac stays awake for it (updateBlocker). */
+  private awake = false;
+  /** When the machine went to sleep; undefined while awake. */
+  private asleepAt: number | undefined;
+  private resumedAt = 0;
+  // The watchdog's view of the tick, and its state across passes.
+  private tickStartedAt = 0;
+  private lastTickAt = 0;
+  /** Bumped by a watchdog restart; a superseded tick then neither starts runs nor touches the tick state. */
+  private generation = 0;
+  private readonly restarts = new RestartBudget();
+  private readonly idleSince = new Map<string, number>();
+  private readonly idleAlarmed = new Set<string>();
+
+  constructor(private readonly deps: LocalSchedulerDeps) {
+    this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  }
+
+  get busy(): number {
+    return this.lanes.size;
+  }
+
+  /** Re-queue runs a quit or crash cut off, then tick. Call once the store's scope is known (signed in). */
+  start(): void {
+    this.running = true;
+    this.quitting = false;
+    this.reconcileOpenRuns();
+    this.poke();
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  /** Something changed that may start a run: tick now. */
+  poke(): void {
+    if (this.running) void this.tick();
+  }
+
+  /** The owner asked for a run now: drop the server-unreachable hold so it is not waited out. */
+  runNow(loopId: string): void {
+    this.serverBackoff.delete(loopId);
+    this.openBackoff.delete(loopId);
+    this.poke();
+  }
+
+  /** The owner edited or deleted the loop: holds set under its old settings no longer apply. */
+  resetHolds(loopId: string): void {
+    this.capBackoff.delete(loopId);
+    this.openBackoff.delete(loopId);
+    this.poke();
+  }
+
+  /**
+   * A run with no end in the store was cut off (quit, crash, power loss): its session is gone with the old
+   * process, so its ticket goes back to open without counting the run.
+   */
+  private reconcileOpenRuns(): void {
+    const live = new Set(this.lanes.keys());
+    for (const run of this.deps.store.openRuns()) {
+      if (live.has(run.id)) continue;
+      const reason = 'The app stopped while this run was working';
+      this.endRun(run, { stopReason: 'requeued', reason });
+      const loop = this.deps.store.loop(run.loopId);
+      if (loop) this.raise(loop, { kind: 'requeued', reason, ticketId: run.ticketId, runId: run.id });
+      // Its session outlived the old process; a run that opened no PR has nothing in its worktree to keep.
+      if (run.sessionId && !run.prUrl) void this.removeSessionWorktree(run.sessionId);
+    }
+    // A ticket claimed by no open run (its run row went missing) would stay in progress for good.
+    const { store } = this.deps;
+    const claimed = new Set(store.openRuns().map(run => run.ticketId));
+    const now = new Date(this.now());
+    for (const loop of store.loops())
+      for (const ticket of store.tickets(loop.id))
+        if (ticket.status === 'in_progress' && !claimed.has(ticket.id))
+          store.putTicket(applyTicketPatch(ticket, { status: 'open' }, now));
+  }
+
+  /** One pass over every live loop. Exposed for tests. */
+  async tick(): Promise<void> {
+    if (this.ticking) {
+      this.again = true;
+      return;
+    }
+    const generation = this.generation;
+    this.ticking = true;
+    this.again = false;
+    this.tickStartedAt = this.now();
+    try {
+      await this.pass(generation);
+    } catch (err) {
+      this.deps.logger.warn(`LOOPS: local tick failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (generation === this.generation) this.tickDone();
+    }
+  }
+
+  private tickDone(): void {
+    this.ticking = false;
+    this.lastTickAt = this.now();
+    this.arm();
+    this.updateBlocker();
+    this.deps.onChange();
+    if (this.again && this.running) void this.tick();
+  }
+
+  private async pass(generation: number): Promise<void> {
+    // No new runs during a dark wake; resume() ticks at once.
+    if (this.asleepAt !== undefined) return;
+    const now = new Date(this.now());
+    // Recomputed by fill below; a loop it skips (paused, capped) must not keep a past readyAt that arms a 0 ms timer.
+    this.paced.clear();
+    for (const loop of this.deps.store.loops()) {
+      try {
+        this.reconcile(loop, now);
+      } catch (err) {
+        this.deps.logger.warn(`LOOPS: reconcile of ${loop.id} failed: ${String(err)}`);
+      }
+    }
+    const live = () => this.deps.store.loops().filter(loop => loop.status === 'live' && !loop.cappedUntil);
+    this.awake = false;
+    if (live().length === 0) return;
+
+    const { sample, settings } = await this.deps.machine();
+    const previous = this.previous;
+    this.previous = sample;
+    this.waitingReason = undefined;
+    for (const loop of live()) {
+      const gate = await this.fill(loop, now, sample, previous, settings, generation);
+      if (gate) {
+        this.waitingReason = gate;
+        break;
+      }
+    }
+    // Pacing waits on budget and still runs today, so it keeps the Mac awake; a machine gate (battery, busy) does not.
+    this.awake = !this.waitingReason && live().some(loop => this.hasWork(loop, now));
+  }
+
+  private hasWork(loop: LocalLoop, now: Date): boolean {
+    return (
+      this.nextWork(
+        loop,
+        now,
+        [...this.lanes.values()].filter(lane => lane.run.loopId === loop.id)
+      ) !== null
+    );
+  }
+
+  /** Reopen tickets parked on closed dependencies (closing epics), block those out of runs, lift a due cap. */
+  private reconcile(loop: LocalLoop, now: Date): void {
+    const { store } = this.deps;
+    store.transaction(() => {
+      if (loop.cappedUntil && Date.parse(loop.cappedUntil) <= now.getTime()) {
+        const { cappedUntil: _until, capReason: _reason, ...rest } = loop;
+        store.putLoop({ ...rest, updatedAt: now.toISOString() });
+        this.raise(loop, { kind: 'auto_resumed', reason: 'Resumed after the daily reset' });
+      }
+      const tickets = store.tickets(loop.id);
+      const status = new Map(tickets.map(ticket => [ticket.id, ticket.status]));
+      const limit = ticketRunLimit(loop.stages);
+      for (const ticket of tickets) {
+        if (ticket.status === 'blocked' && ticket.blockedOn === 'dependencies') {
+          if (!ticket.dependencies.every(id => (status.get(id) ?? 'closed') === 'closed')) continue;
+          const move = ticket.epic ? { status: 'closed' as const } : { status: 'open' as const };
+          store.putTicket(applyTicketPatch(ticket, ticketMovePatch(loop, ticket, move, 'scheduler'), now));
+        } else if (ticket.status === 'open' && ticket.runCount >= limit && !this.runningTicket(ticket.id)) {
+          const reason = `Ran ${ticket.runCount} times without finishing; move it to try again`;
+          store.putTicket(
+            applyTicketPatch(ticket, ticketMovePatch(loop, ticket, { status: 'blocked', reason }, 'scheduler'), now)
+          );
+          this.raise(loop, { kind: 'blocked', ticketId: ticket.id, reason });
+        }
+      }
+    });
+  }
+
+  private runningTicket(ticketId: string): boolean {
+    return [...this.lanes.values()].some(lane => lane.run.ticketId === ticketId);
+  }
+
+  /**
+   * Start what the loop's free lanes, budgets and pacing allow. Returns a machine-wide reason when the machine
+   * gate holds every run (then no other loop is tried this pass).
+   */
+  private async fill(
+    loop: LocalLoop,
+    now: Date,
+    sample: MachineSample,
+    previous: MachineSample | undefined,
+    settings: BudgetSettings,
+    generation: number
+  ): Promise<string | undefined> {
+    const { store } = this.deps;
+    this.paced.delete(loop.id);
+    const allLoopsCap = this.deps.allLoopsCap();
+    for (;;) {
+      if (!this.running || generation !== this.generation) return undefined;
+      const fresh = store.loop(loop.id);
+      if (!fresh || fresh.status !== 'live' || fresh.cappedUntil) return undefined;
+      const mine = [...this.lanes.values()].filter(lane => lane.run.loopId === loop.id);
+      const spend = {
+        loop: store.spentToday(loop.id, now),
+        allLoops: store.spentTodayAllLoops(now) + this.deps.cloudLoopsSpentToday(now),
+        ...(allLoopsCap ? { allLoopsCap } : {}),
+      };
+      const headroom = Math.min(
+        budgetHeadroom(fresh.budgetCreditsPerDay, spend.loop, now),
+        budgetHeadroom(allLoopsCap, spend.allLoops, now)
+      );
+      if (mine.length >= fresh.maxConcurrent) return undefined;
+
+      const work = this.nextWork(fresh, now, mine);
+      if (!work) return undefined;
+      const backoff = Math.max(
+        this.capBackoff.get(loop.id) ?? 0,
+        this.serverBackoff.get(loop.id)?.until ?? 0,
+        this.openBackoff.get(loop.id) ?? 0
+      );
+      if (backoff > now.getTime()) {
+        this.paced.set(loop.id, backoff);
+        return undefined;
+      }
+
+      const machine = admit(sample, previous, this.lanes.size + this.deps.otherLanes(), settings);
+      if (!machine.ok) return machine.reason;
+
+      // The floor price, not the model's; Desktop's catalog carries no max_tokens to price an iteration.
+      const admission = localAdmission(fresh, spend, MIN_ITERATION_CREDITS, now);
+      if (!admission.ok) {
+        if (admission.kind === 'paced') this.paced.set(loop.id, admission.readyAt.getTime());
+        else this.cap(fresh, admission.kind === 'user_budget' ? 'all_loops' : 'loop_budget', now);
+        return undefined;
+      }
+      // After admission, so a spent budget caps the loop rather than reading as zero headroom.
+      if (mine.length >= pacedLanes(fresh.maxConcurrent, headroom, mine.length)) return undefined;
+      // As the server: lanes started together share what is left, never each the whole of it.
+      const creditCap = laneCreditCap(admission.creditCap, fresh.maxConcurrent - mine.length, MIN_ITERATION_CREDITS);
+      if (creditCap === 'too_small') return undefined;
+      // A run that could not open its session leaves its ticket as it was: try again next tick, not now.
+      if (!(await this.startRun(fresh, work, headroom, creditCap, now))) return undefined;
+    }
+  }
+
+  /** The loop's next run: a triage run while tickets wait for a priority, else its first ready ticket. */
+  private nextWork(
+    loop: LocalLoop,
+    now: Date,
+    mine: Lane[]
+  ): { kind: 'triage'; tickets: LocalTicket[] } | { kind: 'ticket'; ticket: LocalTicket } | null {
+    const tickets = this.deps.store.tickets(loop.id);
+    const waiting = untriaged(tickets).slice(0, 20);
+    if (waiting.length > 0 && !mine.some(lane => lane.run.kind === 'triage'))
+      return { kind: 'triage', tickets: waiting };
+    const status = new Map(tickets.map(ticket => [ticket.id, ticket.status]));
+    const limit = ticketRunLimit(loop.stages);
+    const p2Left =
+      loop.p2RunsPerDay === undefined
+        ? Infinity
+        : loop.p2RunsPerDay -
+          this.deps.store.runs(loop.id, startOfUtcDay(now).toISOString()).filter(run => run.priority === 'p2').length;
+    const ready = pickReady(
+      tickets.filter(ticket => ticket.runCount < limit && !this.runningTicket(ticket.id)),
+      loop.stages,
+      id => status.get(id),
+      p2Left > 0 ? undefined : PRIORITIES_OVER_P2_CAP
+    );
+    return ready[0] ? { kind: 'ticket', ticket: ready[0] } : null;
+  }
+
+  /** Hold the loop until the next UTC midnight, when its budgets reset, and tell the owner. */
+  private cap(loop: LocalLoop, reason: LocalLoopCapReason, now: Date): void {
+    const until = nextUtcMidnight(now);
+    this.deps.store.transaction(() => {
+      this.deps.store.putLoop({
+        ...loop,
+        cappedUntil: until.toISOString(),
+        capReason: reason,
+        updatedAt: now.toISOString(),
+      });
+      this.raise(loop, { kind: 'capped', reason: `Capped until ${clockTime(until)} (${CAP_TEXT[reason]})` });
+    });
+  }
+
+  private raise(loop: LocalLoop, event: Pick<LocalLoopEvent, 'kind' | 'reason' | 'ticketId' | 'runId'>): void {
+    const stored = this.deps.store.putEvent({
+      id: randomUUID(),
+      loopId: loop.id,
+      ...event,
+      createdAt: new Date(this.now()).toISOString(),
+    });
+    this.deps.alert(loop, stored);
+  }
+
+  private async startRun(
+    loop: LocalLoop,
+    work: NonNullable<ReturnType<LocalLoopScheduler['nextWork']>>,
+    headroom: number,
+    creditCap: number | undefined,
+    now: Date
+  ): Promise<boolean> {
+    const { store } = this.deps;
+    const ticket = work.kind === 'ticket' ? work.ticket : undefined;
+    const stage: Partial<LocalLoopStageConfig> = loop.stageConfig.find(entry => entry.stage === ticket?.stage) ?? {};
+    const choice = ticket
+      ? chooseRunModel(
+          loop,
+          stage,
+          {
+            runsAfterClaim: ticket.runCount + 1,
+            ...(ticket.lastRunFallback !== undefined ? { lastRunFallback: ticket.lastRunFallback } : {}),
+            ...(ticket.lastRunAdvanced !== undefined ? { lastRunAdvanced: ticket.lastRunAdvanced } : {}),
+          },
+          ticketRunLimit(loop.stages),
+          headroom
+        )
+      : { model: loop.model, fallback: false };
+    const run: LocalRun = {
+      id: randomUUID(),
+      loopId: loop.id,
+      kind: work.kind,
+      ...(ticket ? { ticketId: ticket.id } : {}),
+      ...(ticket?.priority ? { priority: ticket.priority } : {}),
+      model: choice.model,
+      fallback: choice.fallback,
+      startedAt: now.toISOString(),
+      credits: 0,
+    };
+    store.transaction(() => {
+      store.putRun(run);
+      if (ticket) {
+        const claimed = applyTicketPatch(ticket, { status: 'in_progress', runCount: ticket.runCount + 1 }, now);
+        store.putTicket({ ...claimed, lastRunModel: choice.model, lastRunFallback: choice.fallback });
+      }
+    });
+
+    // Held before the session opens, so the lane pool, a loop delete and a quit all see this run meanwhile.
+    const lane: Lane = {
+      run,
+      sessionId: '',
+      tool: { loopId: loop.id, runId: run.id, creates: 0, ...(ticket ? { ticketId: ticket.id } : {}) },
+      usage: new Map(),
+      ...(creditCap !== undefined ? { creditCap } : {}),
+      ...(work.kind === 'triage' ? { triaged: work.tickets.map(t => t.id) } : {}),
+      denied: 0,
+      ran: 0,
+      finished: false,
+      lastEventAt: this.now(),
+    };
+    this.lanes.set(run.id, lane);
+    this.updateBlocker();
+
+    const opened = await openLoopSession(this.deps.chat, {
+      directory: loop.directory,
+      approvalMode: loop.approvalMode,
+      model: choice.model,
+    });
+    // A quit, loop delete or watchdog that ended the run meanwhile leaves the opened session as a plain chat.
+    if (lane.finished) {
+      if (opened.ok && !this.quitting) void this.removeSessionWorktree(opened.sessionId);
+      return false;
+    }
+    if (!opened.ok) {
+      this.openBackoff.set(loop.id, this.now() + SCHEDULER_MS.sessionOpenBackoff);
+      await this.finish(
+        lane,
+        opened.outcome === 'failed'
+          ? { outcome: 'failed', reason: opened.reason }
+          : { stopReason: 'requeued', reason: opened.reason }
+      );
+      return false;
+    }
+    lane.sessionId = opened.sessionId;
+    // A slow open is not silence: the dead-lane check counts from here.
+    lane.lastEventAt = this.now();
+    lane.run = store.putRun({ ...lane.run, sessionId: opened.sessionId });
+
+    const prompt = ticket
+      ? buildLoopQuery(
+          loop.goal,
+          loop.memory,
+          {
+            item: { id: ticket.id, title: ticket.title, description: ticket.description, stage: ticket.stage },
+            stages: loop.stages,
+            answers: this.answers(loop.id, ticket.id),
+            ...(stage.instructions ? { instructions: stage.instructions } : {}),
+          },
+          this.oversight(loop)
+        )
+      : buildTriageQuery(loop, work.kind === 'triage' ? work.tickets : []);
+    const started = await startLoopTurn(this.deps.chat, opened.sessionId, prompt, {
+      kind: 'local-loop',
+      loopId: loop.id,
+      ...(ticket ? { ticketId: ticket.id } : {}),
+      runId: run.id,
+      summary: ticket?.title ?? `Triage ${work.kind === 'triage' ? work.tickets.length : 0} tickets`,
+    });
+    if (!started.ok) await this.finish(lane, { outcome: 'failed', reason: started.error });
+    return true;
+  }
+
+  /** Directives sent to the loop and the loops it oversees, for its run's prompt (as the server's). */
+  private oversight(loop: LocalLoop): LoopOversight {
+    const { store } = this.deps;
+    return {
+      // Shaped as the server's directives; the prompt reads only state, text and the last reply's outcome and note.
+      directives: openDirectivesFor(store, loop.id, LOOP_PROMPT_DIRECTIVES) as unknown as LoopOversight['directives'],
+      overseen: (loop.oversees ?? []).flatMap(id => {
+        const watched = store.loop(id);
+        return watched ? [{ id: watched.id, name: watched.name }] : [];
+      }),
+    };
+  }
+
+  /** The owner's answers to the ticket's questions, newest first, for its next run's prompt. */
+  private answers(loopId: string, ticketId: string): { question: string; note: string }[] {
+    return this.deps.store
+      .events(loopId)
+      .filter(
+        event => event.ticketId === ticketId && event.kind === 'asked' && event.resolution?.outcome === 'answered'
+      )
+      .slice(0, LOOP_PROMPT_ANSWERS)
+      .map(event => ({ question: event.reason, note: event.resolution?.note ?? '' }));
+  }
+
+  private laneOf(sessionId: string): Lane | undefined {
+    const runId = this.deps.chat.loopRunOf(sessionId);
+    if (runId) return this.lanes.get(runId);
+    return [...this.lanes.values()].find(lane => lane.sessionId === sessionId);
+  }
+
+  /** Whether the session works for one of this scheduler's runs. */
+  owns(sessionId: string): boolean {
+    return this.laneOf(sessionId) !== undefined;
+  }
+
+  /** Every chat stream event, from the main-process observer. */
+  observe(event: ChatStreamEvent): void {
+    if (!('sessionId' in event)) return;
+    const lane = this.laneOf(event.sessionId);
+    if (!lane || lane.finished) return;
+    lane.lastEventAt = this.now();
+    const pending = pendingReason(event);
+    if (pending) lane.pending = pending;
+    if (event.type === 'tool-end' && event.call.preview && opensPr(event.call)) this.notePr(lane, event.call.preview);
+    if ((event.type === 'usage' || event.type === 'done') && event.usage)
+      this.spend(lane, event.messageId, event.usage.creditsUsed);
+    // A reply came back, so the server is reachable again: the next unreachable run starts from the shortest hold.
+    if (event.type === 'usage' || event.type === 'done') this.serverBackoff.delete(lane.run.loopId);
+    if (lane.finished || event.sessionId !== lane.sessionId) return;
+    if (event.type === 'tool-end' && event.call.status === 'denied') {
+      lane.denied++;
+      lane.lastDenied = event.call.approvalDetail ? lane.pending : (event.call.error ?? lane.pending);
+    }
+    if (event.type === 'tool-end' && (event.call.status === 'done' || event.call.status === 'error')) lane.ran++;
+    if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
+      const loop = this.deps.store.loop(lane.run.loopId);
+      if (loop && !loop.cappedUntil) this.cap(loop, 'credits', new Date(this.now()));
+      void this.finish(lane, { outcome: 'budget_stopped', reason: 'Out of credits' });
+    } else if (event.type === 'error' && event.stopReason === SERVER_UNREACHABLE_STOP) {
+      const held = this.serverBackoff.get(lane.run.loopId);
+      const ms = held
+        ? Math.min(held.ms * 2, SCHEDULER_MS.serverUnreachableBackoffMax)
+        : SCHEDULER_MS.serverUnreachableBackoff;
+      this.serverBackoff.set(lane.run.loopId, { until: this.now() + ms, ms });
+      void this.finish(lane, { stopReason: 'requeued', reason: 'Bike4Mind server unreachable' });
+    } else if (event.type === 'error')
+      void this.finish(
+        lane,
+        this.asleepAt !== undefined || this.now() - this.resumedAt < WAKE_GRACE_MS
+          ? { stopReason: 'requeued', reason: 'The machine slept during this run' }
+          : { outcome: 'failed', reason: event.message }
+      );
+    if (event.type !== 'done') return;
+    if (event.stopReason === 'aborted')
+      void this.finish(lane, { outcome: 'blocked', reason: 'Stopped on the desktop' });
+    else void this.turnDone(lane, event.content);
+  }
+
+  /**
+   * The run's spend so far, from its sessions' usage events. Usage lands per model response, so the
+   * per-run cap is enforced at those boundaries, not mid-response.
+   */
+  private spend(lane: Lane, messageId: string, credits: number | undefined): void {
+    if (credits === undefined) return;
+    lane.usage.set(messageId, credits);
+    const total = [...lane.usage.values()].reduce((sum, value) => sum + value, 0);
+    if (total === lane.run.credits) return;
+    lane.run = this.deps.store.putRun({ ...lane.run, credits: total });
+    if (lane.creditCap !== undefined && total > lane.creditCap)
+      void this.finish(lane, { stopReason: 'credit_cap', reason: 'Reached its credit cap for this run' });
+  }
+
+  private notePr(lane: Lane, text: string): void {
+    const repo = this.deps.store.loop(lane.run.loopId)?.repo;
+    for (const [url] of text.matchAll(PR_URL)) {
+      const ref = parsePullRequestUrl(url);
+      if (ref && (!repo || `${ref.owner}/${ref.repo}`.toLowerCase() === repo)) this.notePrUrl(lane, ref.url);
+    }
+  }
+
+  /** Stored on the run too, so a run cut off by a quit is not re-run into a second PR after relaunch. */
+  private notePrUrl(lane: Lane, url: string): void {
+    lane.prUrl = url;
+    if (lane.run.prUrl !== url) lane.run = this.deps.store.putRun({ ...lane.run, prUrl: url });
+  }
+
+  /** ApprovalGate closed a card in a run session: nobody can answer it, so the owner gets the ticket. */
+  unattended(sessionId: string): void {
+    const lane = this.laneOf(sessionId);
+    if (lane && !lane.finished)
+      void this.finish(lane, { outcome: 'blocked', reason: lane.pending ?? 'Needs approval' });
+  }
+
+  /** A run's loop_ticket_* call. */
+  ticketTool(sessionId: string, tool: string, input: Record<string, unknown>): string {
+    const lane = this.laneOf(sessionId);
+    if (!lane) throw new Error('This session is not working for a loop.');
+    // Finished covers the post-merge deploy wait too: the run's outcome is being decided, not its tickets.
+    if (lane.finished) throw new Error("This loop run has finished; it can no longer change the loop's tickets.");
+    const result = runTicketTool(
+      this.deps.store,
+      lane.tool,
+      tool,
+      input,
+      (ticket, question) => {
+        const loop = this.deps.store.loop(ticket.loopId);
+        if (loop) this.raise(loop, { kind: 'asked', ticketId: ticket.id, runId: lane.run.id, reason: question });
+      },
+      loop => this.summary(loop)
+    );
+    this.poke();
+    return result;
+  }
+
+  private async turnDone(lane: Lane, answer: string): Promise<void> {
+    // A spawned child still working reports back to this session, which then takes another turn.
+    const children = this.deps.chat.loopRunSessions(lane.run.id).filter(id => id !== lane.sessionId);
+    if (children.some(id => this.deps.chat.isSessionBusy(id))) return;
+    if (lane.finished) return;
+    lane.finished = true;
+    if (lane.denied > 0 && lane.ran === 0) {
+      await this.finish(
+        lane,
+        { outcome: 'blocked', reason: `Every action was declined: ${lane.lastDenied ?? 'no detail'}`, answer },
+        true
+      );
+      return;
+    }
+    const loop = this.deps.store.loop(lane.run.loopId);
+    const ticket = lane.run.ticketId ? this.deps.store.ticket(lane.run.ticketId) : null;
+    const stage = loop?.stageConfig.find(entry => entry.stage === ticket?.stage);
+    const checked = await afterMergeChecks(
+      { gh: this.deps.gh, ...(this.deps.smoke ? { smoke: this.deps.smoke } : {}), now: this.now, sleep: this.sleep },
+      lane.merged,
+      stage,
+      loop?.directory ?? '',
+      async () => (await this.deps.chat.getSession(lane.sessionId))?.project?.workingDirectory ?? loop?.directory ?? ''
+    ).catch((err: unknown) => ({ ok: false as const, reason: `post-merge check failed: ${String(err)}` }));
+    await this.finish(
+      lane,
+      checked.ok ? { outcome: 'done', answer } : { outcome: 'blocked', reason: checked.reason, answer },
+      true
+    );
+  }
+
+  /** loop_merge_pr in a Desktop loop run: the stage's policy, or block the ticket with why not. */
+  async merge(sessionId: string, prUrl: string): Promise<string> {
+    const lane = this.laneOf(sessionId);
+    if (!lane || lane.finished || !lane.run.ticketId) throw new Error('This session is not working on a loop ticket.');
+    const ref = parsePullRequestUrl(prUrl);
+    if (!ref) throw new Error(`Not a GitHub pull request URL: ${prUrl}`);
+    const loop = this.deps.store.loop(lane.run.loopId);
+    const ticket = this.deps.store.ticket(lane.run.ticketId);
+    const stage = loop?.stageConfig.find(entry => entry.stage === ticket?.stage);
+    const session = await this.deps.chat.getSession(sessionId);
+    const result = await mergeLoopPr({ github: this.deps.github, gh: this.deps.gh }, ref, {
+      ...(loop?.repo ? { repo: loop.repo } : {}),
+      headBranch: session?.project?.workspaceBranch,
+      mergePolicy: effectiveMergePolicy(stage?.mergePolicy),
+      ...(stage?.holdLabels ? { holdLabels: stage.holdLabels } : {}),
+    });
+    if (!result.ok) {
+      void this.finish(lane, { outcome: 'blocked', reason: result.reason });
+      throw new Error(`${result.reason} The ticket is handed to the user; stop here.`);
+    }
+    lane.merged = result.merged;
+    this.notePrUrl(lane, ref.url);
+    return result.message;
+  }
+
+  /** Record the run's end once, stop what is still going, free the lane, and tick. */
+  private async finish(lane: Lane, ended: Ended, force = false): Promise<void> {
+    if (lane.finished && !force) return;
+    lane.finished = true;
+    const sessions = this.deps.chat.loopRunSessions(lane.run.id);
+    for (const sessionId of sessions) this.deps.chat.stop(sessionId);
+    await Promise.all(
+      sessions.map(sessionId => Promise.resolve(this.deps.killSessionProcesses(sessionId)).catch(() => undefined))
+    );
+    if (ended.stopReason === 'credit_cap')
+      this.capBackoff.set(lane.run.loopId, this.now() + SCHEDULER_MS.creditCapBackoff);
+    try {
+      this.endRun(lane.run, ended, lane);
+    } catch (err) {
+      this.deps.logger.warn(`LOOPS: recording run ${lane.run.id} failed: ${String(err)}`);
+    } finally {
+      this.lanes.delete(lane.run.id);
+      this.updateBlocker();
+    }
+    await this.retire(lane).catch(err => this.deps.logger.warn(`LOOPS: local cleanup failed: ${String(err)}`));
+    this.poke();
+  }
+
+  /** Fold a run's end into the store: the run, its ticket, the loop's memory and error streak. */
+  private endRun(run: LocalRun, ended: Ended, lane?: Lane): void {
+    const { store } = this.deps;
+    const now = new Date(this.now());
+    store.transaction(() => {
+      const current = store.run(run.id) ?? run;
+      // A run stopped after it opened a PR would open a second one if re-run: hand the ticket to the owner instead.
+      if (current.prUrl && (UNCOUNTED.has(ended.stopReason ?? ended.outcome) || ended.stopReason === 'watchdog'))
+        ended = {
+          outcome: 'blocked',
+          reason: `${ended.reason ?? 'Stopped'} after opening ${current.prUrl}; continue that PR`,
+        };
+      store.putRun({
+        ...current,
+        endedAt: now.toISOString(),
+        ...(ended.outcome ? { outcome: ended.outcome } : {}),
+        ...(ended.stopReason ? { stopReason: ended.stopReason } : {}),
+        ...(ended.reason ? { reason: ended.reason.slice(0, 1000) } : {}),
+      });
+      let loop = store.loop(run.loopId);
+      if (!loop) return;
+      const failed = ended.outcome === 'failed';
+      const uncounted = UNCOUNTED.has(ended.stopReason ?? ended.outcome);
+      // An uncounted run (requeued, capped) is neither a success nor a failure, so the streak stands.
+      const errorStreak = failed ? loop.errorStreak + 1 : uncounted ? loop.errorStreak : 0;
+      const streakError =
+        failed && errorStreak >= ERROR_STREAK_LIMIT
+          ? `${errorStreak} runs in a row failed; last: ${ended.reason ?? 'unknown'}`
+          : undefined;
+      loop = {
+        ...loop,
+        errorStreak,
+        ...(ended.answer && run.kind === 'ticket' ? { memory: parseLoopMemory(ended.answer, loop.memory) } : {}),
+        // The owner's pause wins: a paused loop stays paused and only gets the error event.
+        ...(streakError && loop.status === 'live' && { status: 'error' as const, error: streakError }),
+        updatedAt: now.toISOString(),
+      };
+      store.putLoop(loop);
+      if (failed && errorStreak === ERROR_STREAK_LIMIT)
+        this.raise(loop, { kind: 'error', runId: run.id, reason: streakError! });
+
+      if (run.kind === 'triage') {
+        // As the server's defaultUntriaged, and only for a run that ended on its own (not a quit, cap or watchdog).
+        if (uncounted || ended.stopReason === 'watchdog') return;
+        for (const id of lane?.triaged ?? []) {
+          const ticket = store.ticket(id);
+          if (ticket && ticket.status === 'open' && !ticket.priority && !ticket.epic)
+            store.putTicket(applyTicketPatch(ticket, priorityPatch('p2', 'agent', now), now));
+        }
+        return;
+      }
+      const ticket = run.ticketId ? store.ticket(run.ticketId) : null;
+      // A ticket the run itself moved (blocked, closed, asked about) is where the run put it.
+      if (!ticket || ticket.status !== 'in_progress') return;
+      if (uncounted) {
+        store.putTicket(applyTicketPatch(ticket, { status: 'open', runCount: Math.max(0, ticket.runCount - 1) }, now));
+        return;
+      }
+      // Counted: a ticket whose runs always hang reaches its run limit instead of looping.
+      if (ended.stopReason === 'watchdog') {
+        store.putTicket(applyTicketPatch(ticket, { status: 'open' }, now));
+        return;
+      }
+      if (ended.outcome === 'done') {
+        const history = ticket.stageHistory.map(entry => ({ ...entry, at: new Date(entry.at) }));
+        const patch = advancePatch(loop, { stage: ticket.stage, stageHistory: history }, new Date(run.startedAt));
+        const advanced = applyTicketPatch(ticket, patch, now);
+        store.putTicket({
+          ...advanced,
+          lastRunAdvanced: advanced.stage !== ticket.stage || advanced.status === 'closed',
+        });
+        return;
+      }
+      const reason = ended.reason ?? 'The run stopped';
+      store.putTicket({
+        ...applyTicketPatch(ticket, ticketMovePatch(loop, ticket, { status: 'blocked', reason }, 'scheduler'), now),
+        lastRunAdvanced: false,
+      });
+      this.raise(loop, { kind: 'blocked', ticketId: ticket.id, runId: run.id, reason });
+    });
+  }
+
+  /**
+   * End the run's marking, so its sessions become ordinary conversations, and remove the worktrees of a run that
+   * opened no PR. A worktree with a PR stays until the owner deletes its session; G5 can collect it.
+   */
+  private async retire(lane: Lane): Promise<void> {
+    const sessions = this.deps.chat.loopRunSessions(lane.run.id);
+    this.deps.chat.endLoopRun(lane.run.id);
+    // As LoopRunner: no worktree cleanup while quitting, which would hold the quit up to 10 s per session.
+    if (lane.prUrl || this.quitting) return;
+    for (const sessionId of sessions) await this.removeSessionWorktree(sessionId);
+  }
+
+  /** Remove the worktree a run's session works in, if it has one; failures are logged. */
+  private async removeSessionWorktree(sessionId: string): Promise<void> {
+    try {
+      const project = (await this.deps.chat.getSession(sessionId))?.project;
+      if (!project?.workspace || !project.workspaceBranch) return;
+      await this.waitIdle(sessionId);
+      await this.deps.chat.removeWorktrees(project.directory, [project.workingDirectory]);
+    } catch (err) {
+      this.deps.logger.warn(`LOOPS: removing the worktree of ${sessionId} failed: ${String(err)}`);
+    }
+  }
+
+  private async waitIdle(sessionId: string): Promise<void> {
+    const deadline = this.now() + 10_000;
+    while (this.deps.chat.isSessionBusy(sessionId) && this.now() < deadline) await this.sleep(100);
+  }
+
+  /**
+   * The owner closed, blocked or reopened a running ticket: stop its run, uncounted. endRun leaves the ticket where
+   * the owner put it, since it is no longer in progress.
+   */
+  async stopTicketRun(ticketId: string): Promise<void> {
+    const lane = [...this.lanes.values()].find(candidate => candidate.run.ticketId === ticketId);
+    if (lane) await this.finish(lane, { stopReason: 'requeued', reason: 'Stopped by the owner' });
+  }
+
+  /** Quit or account switch: stop every run now; their tickets go back uncounted. */
+  async releaseAll(quitting = false): Promise<void> {
+    this.quitting = quitting;
+    this.stop();
+    const reason = quitting ? 'The app quit' : 'The account changed';
+    await Promise.all(
+      [...this.lanes.values()].map(lane => {
+        // A finishing lane already has its end; a run with a PR ends blocked (endRun), not requeued.
+        const ended = lane.finished || this.deps.store.run(lane.run.id)?.prUrl;
+        const loop = ended ? undefined : this.deps.store.loop(lane.run.loopId);
+        if (loop) this.raise(loop, { kind: 'requeued', reason, ticketId: lane.run.ticketId, runId: lane.run.id });
+        return this.finish(lane, { stopReason: 'requeued', reason });
+      })
+    );
+  }
+
+  private arm(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.running) return;
+    const loops = this.deps.store.loops().filter(loop => loop.status === 'live');
+    if (loops.length === 0) return;
+    const now = this.now();
+    const wakes = [
+      now + SCHEDULER_MS.recheck,
+      ...loops.flatMap(loop => (loop.cappedUntil ? [Date.parse(loop.cappedUntil)] : [])),
+      ...this.paced.values(),
+    ];
+    this.timer = setTimeout(() => void this.tick(), Math.max(0, Math.min(...wakes) - now));
+  }
+
+  /** Held while a run works or a live, uncapped loop has ready work. LoopRunner holds its own id. */
+  private updateBlocker(): void {
+    const hold = this.lanes.size > 0 || this.awake;
+    if (hold && this.blocker === null) {
+      this.blocker = this.deps.powerSaveBlocker.start('prevent-app-suspension');
+    } else if (!hold && this.blocker !== null) {
+      this.deps.powerSaveBlocker.stop(this.blocker);
+      this.blocker = null;
+    }
+  }
+
+  /** A loop for the list: lanes, spend, needs-you count, and why it is idle when it is. */
+  summary(loop: LocalLoop): LocalLoopSummary {
+    const now = new Date(this.now());
+    const lanesBusy = [...this.lanes.values()].filter(lane => lane.run.loopId === loop.id).length;
+    const tickets = this.deps.store.tickets(loop.id);
+    const needsYou = tickets.filter(ticket => ticket.status === 'blocked' && !ticket.blockedOn).length;
+    const paced = this.paced.get(loop.id);
+    const asleepSince = this.asleepAt !== undefined ? new Date(this.asleepAt) : undefined;
+    const idleReason =
+      loop.status === 'paused'
+        ? 'paused'
+        : loop.status === 'error'
+          ? `error: ${loop.error ?? 'unknown'}`
+          : asleepSince
+            ? `paused: machine asleep since ${clockTime(asleepSince)}`
+            : loop.cappedUntil
+              ? `capped until ${clockTime(new Date(loop.cappedUntil))} (${CAP_TEXT[loop.capReason ?? 'loop_budget']})`
+              : lanesBusy > 0
+                ? undefined
+                : (this.serverBackoff.get(loop.id)?.until ?? 0) > now.getTime()
+                  ? 'waiting: Bike4Mind server unreachable'
+                  : paced
+                    ? `paced until ${new Date(paced).toISOString()}`
+                    : this.waitingReason
+                      ? `waiting: ${this.waitingReason}`
+                      : needsYou > 0
+                        ? 'waiting on you'
+                        : 'no work';
+    return {
+      loop,
+      lanesBusy,
+      spentToday: this.deps.store.spentToday(loop.id, now),
+      needsYou,
+      ...(idleReason ? { idleReason } : {}),
+      ...(asleepSince ? { asleepSince: asleepSince.toISOString() } : {}),
+    };
+  }
+
+  /** powerMonitor 'suspend': start no run until resume. */
+  suspend(at: Date): void {
+    this.asleepAt = at.getTime();
+    this.deps.onChange();
+  }
+
+  /** powerMonitor 'resume': the sleep does not count as silence or a lost tick; check the lanes, then tick at once. */
+  resume(): void {
+    const asleepAt = this.asleepAt;
+    this.asleepAt = undefined;
+    const now = this.now();
+    // The asleep label is gone once awake, so Activity keeps the stretch.
+    if (this.running && asleepAt !== undefined) {
+      const slept = `${clockTime(new Date(asleepAt))}-${clockTime(new Date(now))}`;
+      for (const loop of this.deps.store.loops())
+        if (loop.status === 'live')
+          this.raise(loop, { kind: 'auto_resumed', reason: `Resumed after the machine slept ${slept}` });
+    }
+    this.resumedAt = now;
+    this.lastTickAt = now;
+    this.tickStartedAt = now;
+    this.idleSince.clear();
+    for (const lane of this.lanes.values()) lane.lastEventAt = now;
+    void this.watchdog();
+    this.poke();
+  }
+
+  /**
+   * Every WATCHDOG_MS.interval from main, outside the tick so it sees a hung one: restart a stalled scheduler
+   * (RESTART_LIMIT an hour, then every live loop to `error`), alarm on and abort silent runs, free lanes whose
+   * session died, and alarm on a loop with ready work and no run. Every action writes an event.
+   */
+  async watchdog(): Promise<void> {
+    if (!this.running || this.asleepAt !== undefined) return;
+    const { store } = this.deps;
+    const now = this.now();
+    // A capped loop waits on its reset, not on the scheduler: never restarted, errored or alarmed for it.
+    const live = store.loops().filter(loop => loop.status === 'live' && !loop.cappedUntil);
+    const stalled = schedulerStalled(
+      { liveLoops: live.length, ticking: this.ticking, tickStartedAt: this.tickStartedAt, lastTickAt: this.lastTickAt },
+      now
+    );
+    if (stalled) {
+      const verdict = this.restarts.next(now);
+      if (verdict === 'restart') {
+        for (const loop of live)
+          this.raise(loop, {
+            kind: 'watchdog',
+            reason: `Scheduler restarted (${this.restarts.used}/${RESTART_LIMIT} this hour)`,
+          });
+        this.generation++;
+        this.ticking = false;
+        this.again = false;
+        void this.tick();
+      } else if (verdict === 'give_up') {
+        const error = 'The loop scheduler kept stalling';
+        for (const loop of live) {
+          const stored = store.putLoop({ ...loop, status: 'error', error, updatedAt: new Date(now).toISOString() });
+          this.raise(stored, { kind: 'error', reason: error });
+        }
+        this.deps.onChange();
+      }
+    }
+
+    const lanes = [...this.lanes.values()].filter(lane => !lane.finished);
+    const checks = laneChecks(
+      lanes.map(lane => ({
+        runId: lane.run.id,
+        opening: lane.sessionId === '',
+        busy: this.deps.chat.loopRunSessions(lane.run.id).some(id => this.deps.chat.isSessionBusy(id)),
+        startedAt: Date.parse(lane.run.startedAt),
+        lastEventAt: lane.lastEventAt,
+        alarmed: lane.alarmed === true,
+      })),
+      now
+    );
+    const byRun = new Map(lanes.map(lane => [lane.run.id, lane]));
+    const title = (lane: Lane) =>
+      lane.run.ticketId ? (store.ticket(lane.run.ticketId)?.title ?? 'a ticket') : 'triage';
+    const raiseFor = (lane: Lane, kind: 'alarm' | 'watchdog', reason: string) => {
+      const loop = store.loop(lane.run.loopId);
+      if (loop) this.raise(loop, { kind, reason, runId: lane.run.id, ticketId: lane.run.ticketId });
+    };
+    for (const id of checks.alarm) {
+      const lane = byRun.get(id)!;
+      lane.alarmed = true;
+      raiseFor(lane, 'alarm', `The run on ${title(lane)} has made no progress for 15 min`);
+    }
+    for (const id of checks.abort) {
+      const lane = byRun.get(id)!;
+      if (lane.finished) continue;
+      raiseFor(lane, 'watchdog', `Stopped the run on ${title(lane)}: no progress for 45 min`);
+      await this.finish(lane, { stopReason: 'watchdog', reason: 'No progress for 45 min' });
+    }
+    for (const id of checks.dead) {
+      const lane = byRun.get(id)!;
+      if (lane.finished) continue;
+      raiseFor(lane, 'watchdog', `Freed the lane of ${title(lane)}: its session ended without finishing`);
+      await this.finish(lane, { stopReason: 'requeued', reason: 'Its session ended without finishing' });
+    }
+
+    const at = new Date(now);
+    const idle = live.map(loop => ({
+      id: loop.id,
+      stuck:
+        !this.waitingReason &&
+        !this.paced.has(loop.id) &&
+        (this.capBackoff.get(loop.id) ?? 0) <= now &&
+        (this.openBackoff.get(loop.id) ?? 0) <= now &&
+        (this.serverBackoff.get(loop.id)?.until ?? 0) <= now &&
+        !lanes.some(lane => lane.run.loopId === loop.id) &&
+        this.hasWork(loop, at),
+    }));
+    for (const id of idleAlarms(idle, this.idleSince, this.idleAlarmed, now)) {
+      const loop = store.loop(id);
+      if (loop) this.raise(loop, { kind: 'alarm', reason: 'Ready work but no run for 30 min' });
+    }
+  }
+}

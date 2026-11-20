@@ -4,6 +4,7 @@ import { IMongoDocument } from './common';
 export enum InboxType {
   COMMON = 'common', // usual message send to user nothing special
   SHARE = 'share', // for sharing files, notebooks, etc. can indicate an accept button
+  LOOP = 'loop', // a loop needs its owner; written and resolved by the loop scheduler's notice sweep
 }
 
 export interface IInbox {
@@ -16,6 +17,10 @@ export interface IInbox {
   organizationAlert?: boolean;
   readAt: Date | null;
   deletedAt: Date | null;
+  /** Dedupe key of a system notice, unique among open notices; unset when the notice is resolved. Server-only. */
+  sourceKey?: string;
+  /** App-relative path the inbox offers to open. Server-only. */
+  link?: string;
 }
 
 export interface IInboxDocument extends IInbox, IMongoDocument {}
@@ -32,4 +37,18 @@ export interface IInboxRepository extends IBaseRepository<IInboxDocument> {
     organizationAlert?: boolean;
   }): Promise<IInboxDocument>;
   deleteByReceiverId(receiverId: string, messageId: string): Promise<boolean>;
+  /** Creates a keyed notice; returns false when a notice still holds that `sourceKey`. */
+  createKeyedNotice(data: {
+    userId: string;
+    receiverId: string;
+    title: string;
+    message: string;
+    type: InboxType;
+    sourceKey: string;
+    link?: string;
+  }): Promise<boolean>;
+  /** Notices still holding a `sourceKey` that starts with `prefix`, including ones the receiver deleted. */
+  listKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]>;
+  /** Soft-deletes the notices and frees their `sourceKey` so the same key can recur. */
+  resolveKeyed(ids: string[]): Promise<void>;
 }

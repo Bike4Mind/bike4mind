@@ -1,4 +1,11 @@
-import { adminSettingsRepository, agentExecutionRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  loopEventRepository,
+  workItemRepository,
+  type IAgentExecution,
+} from '@bike4mind/database';
+import type { LoopGateOutcome } from '@bike4mind/common';
 import type { AgentCheckpoint } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import { endAgentRunLiveActivity } from '../utils/liveActivityPush';
@@ -11,6 +18,7 @@ import {
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
 } from '../utils/dispatchAgentExecution';
+import { unsureEventFields } from '../utils/loopUnsureEventFields';
 import { sendAgentEvent } from './sendAgentEvent';
 
 // The `agent_execute` WebSocket route (apps/client/server/websocket/agentExecute.ts) dispatches
@@ -68,6 +76,8 @@ export async function handleGateResponse(
     // user's abort decision.
     const cleared = await agentExecutionRepository.clearPendingGate(
       cmd.executionId,
+      'rejected',
+      userId,
       execution.pendingCompletion ? { keepCompletion: true } : undefined
     );
     if (!cleared) {
@@ -79,6 +89,7 @@ export async function handleGateResponse(
     const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
     if (execution.pendingCompletion) {
       await acceptHeldCompletion(execution, connectionId, endpoint, logger);
+      await recordLoopGateResolution(execution, cmd.executionId, 'rejected', userId, logger);
       return;
     }
     const finalAnswer = checkpoint ? extractFinalAnswer(checkpoint.steps) : undefined;
@@ -90,6 +101,7 @@ export async function handleGateResponse(
       stoppedByGate: true,
     });
     await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
+    await recordLoopGateResolution(execution, cmd.executionId, 'rejected', userId, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'completed',
       executionId: cmd.executionId,
@@ -126,8 +138,9 @@ export async function handleGateResponse(
       ? reopenLowConfidenceAnswer(execution.checkpoint as AgentCheckpoint)
       : null;
   if (execution.pendingCompletion && !reopened) {
-    if (await agentExecutionRepository.clearPendingGate(cmd.executionId, { keepCompletion: true })) {
+    if (await agentExecutionRepository.clearPendingGate(cmd.executionId, 'resumed', userId, { keepCompletion: true })) {
       await acceptHeldCompletion(execution, connectionId, endpoint, logger);
+      await recordLoopGateResolution(execution, cmd.executionId, 'resumed', userId, logger);
     } else {
       logger.warn('[Gate] Continue ignored - clearPendingGate matched 0 docs', { executionId: cmd.executionId });
     }
@@ -135,6 +148,8 @@ export async function handleGateResponse(
   }
   const cleared = await agentExecutionRepository.clearPendingGate(
     cmd.executionId,
+    'resumed',
+    userId,
     reopened ? { checkpoint: reopened } : undefined
   );
   if (!cleared) {
@@ -156,6 +171,8 @@ export async function handleGateResponse(
     await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
   } catch (error) {
     // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    // The `resumed` record this leaves in `gateHistory` is kept as an audit trail; the loop log is not
+    // told, so it never shows "Resumed" for a run that is still paused.
     if (error instanceof AgentExecutorRejectedError) {
       await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
         status: 'paused',
@@ -163,11 +180,43 @@ export async function handleGateResponse(
         ...(execution.pendingCompletion && { pendingCompletion: execution.pendingCompletion }),
         ...(reopened && { checkpoint: execution.checkpoint }),
       });
+    } else {
+      await recordLoopGateResolution(execution, cmd.executionId, 'resumed', userId, logger);
     }
     throw error;
   }
 
+  await recordLoopGateResolution(execution, cmd.executionId, 'resumed', userId, logger);
   logger.info('[Gate] Continue - executor re-invoked', { executionId: cmd.executionId });
+}
+
+/**
+ * Records the owner's gate answer in the loop log for a loop run (a no-op otherwise). A resumed run's
+ * ticket goes back to in_progress if the scheduler had already parked it as unsure; the scheduler folds
+ * it when the run ends. Best effort: the gate itself is already resolved.
+ */
+async function recordLoopGateResolution(
+  execution: IAgentExecution,
+  executionId: string,
+  outcome: LoopGateOutcome,
+  userId: string,
+  logger: Logger
+): Promise<void> {
+  if (!execution.loopId || !execution.pendingGate) return;
+  try {
+    const ticket = await workItemRepository.findByExecutionId(executionId);
+    await loopEventRepository.resolveUnsure(
+      unsureEventFields(
+        { loopId: execution.loopId, userId: execution.userId, executionId },
+        execution.pendingGate,
+        ticket
+      ),
+      { outcome, by: userId, at: new Date() }
+    );
+    if (outcome === 'resumed' && ticket) await workItemRepository.resumeBlockedRun(ticket.id, executionId);
+  } catch (error) {
+    logger.warn('[Gate] Could not record the gate answer in the loop log', { executionId, error });
+  }
 }
 
 /**

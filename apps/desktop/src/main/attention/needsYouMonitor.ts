@@ -6,6 +6,8 @@ export type NeedsYouMonitorDeps = {
   /** The signed-in scope's sessions (device-local ones when signed out): only these alert or count. */
   listSessions(): Promise<ChatSessionSummary[]>;
   sessionMessages(sessionId: string): Promise<readonly ChatMessage[]>;
+  /** Needs-you items that are not sessions (Desktop loops: shared/needsYou loopNeedsYouCount), added to the badge. */
+  extraCount?(): number;
   /** Whether plain sessions alert too; the same setting the renderer follows. */
   notifyScope(): NotifyScope;
   /** An app window is open; its renderer then announces entries and owns the badge. */
@@ -49,6 +51,11 @@ export class NeedsYouMonitor {
    * is recounted from the new one's list. With a window open its renderer does that as the chat remounts.
    */
   scopeChanged(): void {
+    this.recount();
+  }
+
+  /** Something behind `extraCount` changed: with no window open, the badge is main's to update. */
+  recount(): void {
     if (this.deps.hasWindow()) return;
     this.enqueue(() => this.update(null));
   }
@@ -69,7 +76,7 @@ export class NeedsYouMonitor {
     // A window that opened while the list was read has a renderer that took over from here.
     if (this.deps.hasWindow()) return;
     const scope = this.deps.notifyScope();
-    this.deps.setBadge(needsYouCount(this.statuses, sessions, scope));
+    this.deps.setBadge(needsYouCount(this.statuses, sessions, scope) + (this.deps.extraCount?.() ?? 0));
     if (entered === null || this.statuses.get(entered) !== 'needs-action') return;
     if (!alertableSessions(sessions, scope).has(entered)) return;
     if (this.deps.claim([entered]).length === 0) return;

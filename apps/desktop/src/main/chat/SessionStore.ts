@@ -943,8 +943,8 @@ export class SessionStore implements SessionWritesStore {
   /**
    * How much this conversation may do without asking.
    *
-   * The ONLY writer of this field, and it is reached from exactly one place: the IPC channel
-   * the composer pill calls. No tool, no MCP server and no model output has a path to it -
+   * The ONLY user-facing writer of this field (the loop runner uses setLoopRunApprovalMode), and it
+   * is reached from exactly one place: the IPC channel the composer pill calls. No tool, no MCP server and no model output has a path to it -
    * ToolContext carries no mode and HostContext has no setter - because a tool that could
    * raise its own mode would let one crafted prompt grant itself the rest of the disk.
    *
@@ -961,6 +961,22 @@ export class SessionStore implements SessionWritesStore {
     // one. The clamp on 'full' lives in the preference itself.
     if (updated) await this.approvalModes?.record(approvalMode);
     return updated;
+  }
+
+  /**
+   * A loop run's mode, set by the runner rather than picked by the user, so it is not remembered for the next
+   * conversation. With `onlyIf`, it is left alone when the session's mode is no longer that one.
+   */
+  async setLoopRunApprovalMode(
+    id: string,
+    approvalMode: ChatApprovalMode,
+    onlyIf?: ChatApprovalMode
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (onlyIf !== undefined && (session.approvalMode ?? 'ask') !== onlyIf) return false;
+      session.approvalMode = approvalMode;
+      return true;
+    });
   }
 
   /**
