@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -56,8 +57,8 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().safeDrawingPadding().padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().safeDrawingPadding().padding(Spacing.l),
+            verticalArrangement = Arrangement.spacedBy(Spacing.l),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { index ->
@@ -70,7 +71,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                     if (isLastPage) onFinish() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
                 },
             ) {
-                Text(if (isLastPage) "Continue" else "Next")
+                Text(stringResource(if (isLastPage) R.string.onboarding_continue else R.string.onboarding_next))
             }
         }
     }
@@ -79,9 +80,9 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 @Composable
 private fun OnboardingPageContent(page: OnboardingPage) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 48.dp)
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = Spacing.xxl)
             .testTag("onboarding-page-${page.id}"),
-        verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.spacedBy(Spacing.l, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(
@@ -108,9 +109,10 @@ private fun OnboardingPageContent(page: OnboardingPage) {
 
 @Composable
 private fun PageIndicator(count: Int, current: Int) {
+    val description = stringResource(R.string.onboarding_page_indicator, current + 1, count)
     Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.clearAndSetSemantics { contentDescription = "Page ${current + 1} of $count" },
+        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        modifier = Modifier.clearAndSetSemantics { contentDescription = description },
     ) {
         repeat(count) { index ->
             val color = if (index == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
