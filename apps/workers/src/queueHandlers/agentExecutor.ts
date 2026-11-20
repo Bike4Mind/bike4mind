@@ -425,9 +425,6 @@ const sqsClient = new SQSClient({});
  * (steps, status changes) re-reads the list so a new viewer never misses one. */
 const VIEWER_CACHE_MS = 2_000;
 const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
-/** How long an empty viewer list is reused for every frame (ms): most runs have no viewer, so each frame would
- * otherwise read the list. A viewer subscribing meanwhile gets its snapshot and misses at most this much. */
-const NO_VIEWERS_CACHE_MS = 10_000;
 /** Frames only the run's owner can act on: sent to the owner's own viewer connections, never to other viewers,
  * matching the subscribe snapshot (apps/client/server/websocket/agentExecute.ts, `withPermission`). */
 const OWNER_ONLY_ACTIONS = new Set(['permission_request']);
@@ -483,13 +480,7 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
 
   const viewerTargets = async (action: string): Promise<string[]> => {
     if (!viewerExecutionId) return [];
-    const age = Date.now() - viewers.at;
-    const cached =
-      viewers.at > 0 &&
-      (viewers.ids.length === 0
-        ? age <= NO_VIEWERS_CACHE_MS
-        : VIEWER_CACHED_ACTIONS.has(action) && age <= VIEWER_CACHE_MS);
-    if (!cached) {
+    if (!VIEWER_CACHED_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
       // Single-flight: frames emitted in the same tick share one read and keep their emit order.
       // A step joining a read already in flight can miss a viewer added meanwhile; the client's
       // gap re-subscribe repairs that.

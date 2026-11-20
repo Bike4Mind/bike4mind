@@ -137,15 +137,16 @@ describe('createWsSender with viewers', () => {
     expect(targetsOf()).toEqual(['conn-1', 'viewer-1', 'viewer-2']);
   });
 
-  it('reuses an empty viewer list for every frame for a while', async () => {
-    findViewers.mockResolvedValue([]);
+  it('delivers completed to a viewer that subscribed after an empty viewer read', async () => {
+    findViewers.mockResolvedValueOnce([]);
     const { createWsSender } = await import('./agentExecutor');
     const send = createWsSender('conn-1', logger as never, 'exec1');
     await send('iteration_step', {});
-    await send('iteration_step', {});
-    await send('status', {});
-    expect(findViewers).toHaveBeenCalledTimes(1);
-    expect(targetsOf()).toEqual(['conn-1', 'conn-1', 'conn-1']);
+    expect(targetsOf()).toEqual(['conn-1']);
+    findViewers.mockResolvedValue(['viewer-1']);
+    postToConnection.mockClear();
+    await send('completed', {});
+    expect(targetsOf()).toEqual(['conn-1', 'viewer-1']);
   });
 
   it("sends a permission request only to the owner's own viewer connections", async () => {
