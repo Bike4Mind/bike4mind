@@ -269,12 +269,17 @@ export const productionStoryboardTool: ToolDefinition = {
               }),
           });
           return JSON.stringify({
-            shots: shots.map(shot => ({
-              id: shot.id,
-              title: shot.title,
-              durationMs: shot.durationMs,
-              ...(shot.fileIds.length > 0 && { takesKept: true }),
-            })),
+            // Every storyboard renumbers its shots, so a kept shot reports the id it had, which is now stale.
+            shots: shots.map((shot, index) => {
+              const was = resolved[index]?.source?.id;
+              return {
+                id: shot.id,
+                ...(was && was !== shot.id && { was }),
+                title: shot.title,
+                durationMs: shot.durationMs,
+                ...(shot.fileIds.length > 0 && { takesKept: true }),
+              };
+            }),
             totalSeconds: totalMs / 1000,
             ...(lost.length > 0 && { takesDropped: lost }),
             next:
