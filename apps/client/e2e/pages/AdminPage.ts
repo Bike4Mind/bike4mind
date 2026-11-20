@@ -311,7 +311,7 @@ export class AdminPage extends BasePage {
       await this.navigateToUsersTab();
       await this.searchUser(name);
       await expect(this.getUserRow(name)).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
-    }).toPass({ timeout: TIMEOUTS.LOADER_HIDDEN, intervals: [TIMEOUTS.ELEMENT_STATE] });
+    }).toPass({ timeout: TIMEOUTS.ACCOUNT_ERASURE, intervals: [TIMEOUTS.ELEMENT_STATE] });
   }
 
   // --- Invite Codes ---

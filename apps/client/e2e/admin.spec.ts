@@ -141,7 +141,7 @@ test.describe('Admin - User Search & Sort', () => {
 test.describe('Admin - User CRUD', () => {
   test('should create, edit, and delete a user', async ({ adminPage }) => {
     // The slow-test budget plus the wait for the asynchronous erasure in the delete step.
-    test.setTimeout(TIMEOUTS.TEST * 3 + TIMEOUTS.LOADER_HIDDEN);
+    test.setTimeout(TIMEOUTS.TEST * 3 + TIMEOUTS.ACCOUNT_ERASURE);
 
     await test.step('create a new user', async () => {
       await adminPage.gotoAdmin();
