@@ -38,6 +38,7 @@ import {
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import PlatformMcpConnectorsSection from './PlatformMcpConnectorsSection';
 import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
 import { RowActionsMenu } from './shared/RowActionsMenu';
 
@@ -400,6 +401,8 @@ const ToolDefinitionsTab: React.FC = () => {
           maxHeight="none"
         />
       </Stack>
+
+      <PlatformMcpConnectorsSection />
 
       {/* View dialog */}
       <AdminDialog
