@@ -4,7 +4,8 @@ import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionB
  * The product images every shot of a production is generated against, most authoritative first: the brief's
  * product photo, then the brand kit's product images (a saved product look sits at the front of those).
  * Order matters because several image models take a single reference (Gemini, FLUX 1.x Pro), and a caller
- * slices this list to the model's cap.
+ * slices this list to the model's cap. Ids are lowercased, as the image-job API sends them, so one file never
+ * takes two reference slots.
  */
 export const productReferenceFileIds = (content: {
   brief: Pick<StudioCompositionBrief, 'productFileId'>;
@@ -14,7 +15,7 @@ export const productReferenceFileIds = (content: {
     ...(content.brief.productFileId ? [content.brief.productFileId] : []),
     ...content.brandKit.productFileIds,
   ];
-  return [...new Set(ids)];
+  return [...new Set(ids.map(fileId => fileId.toLowerCase()))];
 };
 
 /**

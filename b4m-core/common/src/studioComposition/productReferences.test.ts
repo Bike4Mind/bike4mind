@@ -27,6 +27,15 @@ describe('productReferenceFileIds', () => {
 });
 
 describe('withProductLook', () => {
+  it('treats ids that differ only in case as one file', () => {
+    expect(
+      productReferenceFileIds({
+        brief: { productFileId: id(0xab).toUpperCase() },
+        brandKit: { productFileIds: [id(0xab), id(2)] },
+      })
+    ).toEqual([id(0xab), id(2)]);
+  });
+
   it('moves the look to the front without duplicating it', () => {
     expect(withProductLook([id(1), id(2), id(3)], id(3))).toEqual([id(3), id(1), id(2)]);
   });

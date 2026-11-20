@@ -169,8 +169,7 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
         <StudioSectionLabel>Product references</StudioSectionLabel>
         {kit.productFileIds.length > 1 && (
           <Typography level="body-xs" data-testid="production-brand-kit-product-look-hint">
-            Every shot is generated against the brief&apos;s product photo, then the product look. Click an image to
-            make it the product look.
+            The first image is the product look. Click another image to make it the look.
           </Typography>
         )}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -182,7 +181,7 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
                 fileId={fileId}
                 size={56}
                 selected={isLook && kit.productFileIds.length > 1}
-                selectLabel={isLook ? 'Product look' : 'Use as the product look'}
+                selectLabel="Use as the product look"
                 onSelect={
                   isLook
                     ? undefined

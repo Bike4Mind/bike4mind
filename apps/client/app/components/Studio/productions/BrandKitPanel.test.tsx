@@ -25,6 +25,8 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 }));
 vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({ default: () => null }));
 
+// Well past the 600 ms field autosave debounce, so a loaded CI shard does not time out.
+const AUTOSAVE_WAIT_MS = 3000;
 const PHOTO = 'a'.repeat(24);
 const LOOK = 'b'.repeat(24);
 
@@ -55,14 +57,31 @@ describe('BrandKitPanel product look', () => {
     render(<BrandKitPanel composition={composition([PHOTO, LOOK])} />, { wrapper: Wrapper });
 
     expect(screen.getByTestId('production-brand-kit-product-look-badge')).toBeTruthy();
+    expect(screen.getByTestId('production-brand-kit-product-look-hint')).toBeTruthy();
     expect(screen.queryByTestId(`production-brand-kit-product-${PHOTO}-select-btn`)).toBeNull();
 
     fireEvent.click(screen.getByTestId(`production-brand-kit-product-${LOOK}-select-btn`));
 
-    await waitFor(() =>
-      expect(h.updateMutate).toHaveBeenCalledWith({
-        brandKit: expect.objectContaining({ productFileIds: [LOOK, PHOTO] }),
-      })
+    await waitFor(
+      () =>
+        expect(h.updateMutate).toHaveBeenCalledWith({
+          brandKit: expect.objectContaining({ productFileIds: [LOOK, PHOTO] }),
+        }),
+      { timeout: AUTOSAVE_WAIT_MS }
+    );
+  });
+
+  it('promotes the next image to the look when the look is removed', async () => {
+    render(<BrandKitPanel composition={composition([PHOTO, LOOK])} />, { wrapper: Wrapper });
+
+    fireEvent.click(screen.getByTestId(`production-brand-kit-product-${PHOTO}-remove-btn`));
+
+    await waitFor(
+      () =>
+        expect(h.updateMutate).toHaveBeenCalledWith({
+          brandKit: expect.objectContaining({ productFileIds: [LOOK] }),
+        }),
+      { timeout: AUTOSAVE_WAIT_MS }
     );
   });
 
