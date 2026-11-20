@@ -15,14 +15,15 @@ const MARKER: Record<PlanItemStatus, string> = {
 /**
  * The plan worth drawing, or null.
  *
- * Hidden once every item is done or cancelled and no turn is running: a finished plan left on screen reads as
- * work still owed. While a turn is open it stays, so the last tick is seen landing. Shared by this
- * bar and the session panel's Plan section so the two agree on when there is a plan at all.
+ * Hidden once every item is done or cancelled and no turn is running: a finished plan left on
+ * screen reads as work still owed. While a turn is open it stays, so the last tick is seen landing,
+ * unless every item is cancelled and there is nothing to count. Shared by this bar and the session
+ * panel's Plan section so the two agree on when there is a plan at all.
  */
 export function visiblePlan(todos: readonly PlanItem[] | null, turnOpen: boolean): readonly PlanItem[] | null {
   if (!todos || todos.length === 0) return null;
   const { done, total } = todoProgress(todos);
-  if (done === total && !turnOpen) return null;
+  if (total === 0 || (done === total && !turnOpen)) return null;
   return todos;
 }
 

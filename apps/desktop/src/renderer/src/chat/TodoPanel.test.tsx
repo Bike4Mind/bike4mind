@@ -56,10 +56,10 @@ describe('TodoPanel', () => {
     expect(render(list, true)).toContain('1 of 2 done');
   });
 
-  it('hides an all-cancelled plan once the turn ends', () => {
+  it('hides an all-cancelled plan, whatever the turn', () => {
     const list: PlanItem[] = [{ id: '1', content: 'Old idea', status: 'cancelled' }];
     expect(render(list, false)).toBe('');
-    expect(render(list, true)).toContain('0 of 0 done');
+    expect(render(list, true)).toBe('');
   });
 
   it('lists a cancelled item struck through, and the current item by its activeForm', async () => {
