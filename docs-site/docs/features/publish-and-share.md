@@ -95,13 +95,13 @@ The v1 API publishes an artifact you already stored in Bike4Mind. You send the a
 | `POST /api/v1/artifacts/{id}/republish` | Replace the page's content with the artifact's current version. Takes no body.           |
 | `DELETE /api/v1/artifacts/{id}/publish` | Take the page down. The artifact itself is unchanged and can be published again.         |
 
-All three need an API key or bearer token with the `artifacts:publish` scope, and only the artifact's owner can use them. An artifact that is shared with you, a deleted one and one that does not exist all answer `404`.
+All three need an API key or bearer token with the `artifacts:publish` scope, and only the artifact's owner can use them. For publish and republish, an artifact that is shared with you, a deleted one and one that does not exist all answer `404`. Unpublish answers `404` only when you have no published page for that id, so you can still take down a page whose artifact was deleted.
 
 ### The flow
 
-1. **Publish.** `POST /api/v1/artifacts/{id}/publish` with an optional body. An empty body publishes the page publicly under a slug generated from the artifact's title.
+1. **Publish.** `POST /api/v1/artifacts/{id}/publish` with an optional body. An empty body publishes the page publicly under a slug generated from the artifact's title. A successful publish returns `201`.
 2. **Read the response.** It carries the page's absolute `url`, its `slug`, its `visibility`, the kind of gate it has (`access_gate.kind`, or `null`), `published_version` and `published_at`. The passphrase is never returned.
-3. **Republish when the artifact changes.** `POST /api/v1/artifacts/{id}/republish` keeps the address, visibility and gate, and keeps earlier versions of the page.
+3. **Republish when the artifact changes.** `POST /api/v1/artifacts/{id}/republish` keeps the address, visibility and gate, and keeps earlier versions of the page. It returns `200` with the page.
 4. **Unpublish to take it down.** `DELETE /api/v1/artifacts/{id}/publish` returns `204`.
 
 The request body of publish accepts only these fields; any other field is rejected.
@@ -110,7 +110,7 @@ The request body of publish accepts only these fields; any other field is reject
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slug`        | The page address, 3 to 64 characters of lowercase letters, digits and single hyphens. Omitted: one is generated from the title.                      |
 | `visibility`  | `private`, `organization` or `public`. Default `public`.                                                                                             |
-| `access_gate` | `{"kind":"passphrase","passphrase":"<8 to 128 characters>"}` or `{"kind":"domain","allowed_domains":["example.com"]}`. Needs `visibility: "public"`. |
+| `access_gate` | `{"kind":"passphrase","passphrase":"<8 to 128 characters>"}` or `{"kind":"domain","allowed_domains":["example.com"]}`. `allowed_domains` takes 1 to 20 domains. Needs `visibility: "public"`. |
 
 The gate and the visibility are written in the same request, so a gated page is never reachable without its gate. The passphrase is stored only as a hash. An `allowed_domains` entry admits a viewer whose verified email is on that domain or one of its subdomains; each entry must be a registrable domain, not a public suffix such as `co.uk`.
 

@@ -173,7 +173,7 @@ Handle these answers in a script:
 
 | Status | What to do                                                                                                                  |
 | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `403`  | Add `artifacts:publish` to the key. Keys created earlier do not have it unless they use Full access. The same status is returned when your organization does not allow public links. |
+| `403`  | Add `artifacts:publish` to the key. Keys created before this scope existed do not have it, including older Full-access keys: add the scope or create a new key. The same status is returned when your organization does not allow public links. |
 | `404`  | The artifact is not yours, or it has no page to refresh. Check the id.                                                      |
 | `409`  | On publish, the artifact already has a page or the slug is taken: republish, or pick another slug. On republish, reload and retry. |
 | `422`  | Read `violations` for what the page failed on, or fix the body (for example a gate without `visibility: "public"`).         |
