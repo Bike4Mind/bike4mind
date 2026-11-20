@@ -58,7 +58,14 @@ const deliver = withEventContext(async (event, logger) => {
       await recordEmailDeliveryOutcome(ref, { ok: false, error: 'Recipient domain is not delivered on this stage' });
     return;
   }
-  const content = bodyRef ? await readOffloadedBody(bodyRef.key) : { html: body, text };
+  let content: { html?: string; text?: string };
+  try {
+    content = bodyRef ? await readOffloadedBody(bodyRef.key) : { html: body, text };
+  } catch (error) {
+    // Record before rethrowing, or the attempt stays queued; a retry that later sends overwrites this.
+    if (ref) await recordEmailDeliveryOutcome(ref, { ok: false, error: 'The queued message body could not be read' });
+    throw error;
+  }
   if (content.html === undefined) throw new Error('email.send event carries neither a body nor a bodyRef');
 
   const emailData: {

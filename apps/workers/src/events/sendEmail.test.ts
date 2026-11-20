@@ -310,6 +310,27 @@ describe('delivery outcome write-back', () => {
     });
   });
 
+  it.each([
+    [
+      'an expired body',
+      Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } }),
+    ],
+    [
+      'a throttled read',
+      Object.assign(new Error('SlowDown'), { name: 'SlowDown', $metadata: { httpStatusCode: 503 } }),
+    ],
+  ])('records a failed send when the offloaded body cannot be read (%s) and still throws', async (_, s3Error) => {
+    mocks.getMailBody.mockRejectedValue(s3Error);
+    await expect(
+      deliver({ to: 'test@example.org', subject: 'Test', bodyRef: { key: 'queued-mail/x.json' }, ref })
+    ).rejects.toThrow();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, {
+      ok: false,
+      error: 'The queued message body could not be read',
+    });
+  });
+
   it('routes an incident alert ref to the write-back unchanged', async () => {
     const incidentRef = { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'escalation' };
     await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', ref: incidentRef });
