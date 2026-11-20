@@ -5,6 +5,7 @@ import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls, { chatHeaderToolButtonSx } from './ChatPanelControls';
+import type { GetCopyMarkdown } from './useCopySessionMarkdown';
 import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 interface DockedChatPanelProps {
@@ -12,9 +13,11 @@ interface DockedChatPanelProps {
   headerActions?: React.ReactNode;
   /** Overrides the default "AI Chat" header label (e.g. /opti swaps in the Data Lakes toggle). */
   title?: React.ReactNode;
+  /** Markdown for the copy button; omit to copy the main chat's current session. */
+  getCopyMarkdown?: GetCopyMarkdown;
 }
 
-const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
+const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title, getCopyMarkdown }) => {
   const layout = useSessionLayout(s => s.layout);
 
   // "Hide chat": dismiss the panel down to the bottom-right "AI Chat" launcher (the
@@ -83,6 +86,7 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
             testIdPrefix="docked-chat"
             activeLayout={layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined}
             showFloat
+            getCopyMarkdown={getCopyMarkdown}
           />
           {headerActions}
           <Tooltip title="Hide chat" disableInteractive>
