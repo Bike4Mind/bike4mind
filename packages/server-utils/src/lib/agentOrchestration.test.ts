@@ -135,11 +135,6 @@ describe('buildDefaultOrchestrationProfile', () => {
       'audio_generation',
       'excel_generation',
       'video_generation',
-      // Studio Productions director tools, offered only with a production config.
-      'production_storyboard',
-      'production_generate_shot',
-      'production_add_audio',
-      'production_assemble',
       // Inline visualization artifacts - emit an <artifact> block, write nothing.
       'recharts',
       'mermaid_chart',
