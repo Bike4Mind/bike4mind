@@ -28,6 +28,7 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { OrchestrateMiniPayload } from '@shared/orchestrateMini';
 import type { WatchPreferences, WatchPreferencesPatch } from '@shared/watch';
 import type { GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -662,6 +663,17 @@ const api: DesktopApi = {
       const handler = (_event: unknown, preferences: WatchPreferences) => listener(preferences);
       ipcRenderer.on(IPC_CHANNELS.watchPreferences, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.watchPreferences, handler);
+    },
+  },
+  orchestrateMini: {
+    publish: (payload: OrchestrateMiniPayload | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.orchestrateMiniPublish, payload),
+    toggle: () => ipcRenderer.invoke(IPC_CHANNELS.orchestrateMiniToggle),
+    isOpen: () => ipcRenderer.invoke(IPC_CHANNELS.orchestrateMiniGetOpen),
+    onOpenChanged: listener => {
+      const handler = (_event: unknown, open: boolean) => listener(open);
+      ipcRenderer.on(IPC_CHANNELS.orchestrateMiniOpen, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.orchestrateMiniOpen, handler);
     },
   },
   devLog: {
