@@ -388,6 +388,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'lake_inactive',
   /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
   'spend_frozen',
+  /** A manager paused this schedule after the scheduler had already claimed the config. */
+  'schedule_paused',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 
@@ -417,6 +419,11 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   cadence: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See the default's comment. */
   reviewBacklogLimit: number;
+  /**
+   * A manager stopped the scheduled runs without clearing the cadence. Absent reads as false. The
+   * scheduler does not claim a paused config; run now still works.
+   */
+  schedulePaused?: boolean;
   /** When the scheduler next fires this config. Null exactly when `cadence` is `off`. */
   nextRunAt?: Date | null;
   /**
@@ -573,9 +580,10 @@ export type UpdateDataLakeResearchConfigInput = Partial<Omit<ResearchRunLevers, 
   trigger?: ResearchRunTrigger;
   cadence?: ResearchScheduleCadence;
   reviewBacklogLimit?: number;
+  schedulePaused?: boolean;
   nextRunAt?: Date | null;
   scheduleAnchorAt?: Date | null;
-  lastScheduledOutcome?: null;
+  lastScheduledOutcome?: ResearchScheduleOutcome | null;
   lastUpdatedByUserId: string;
 };
 

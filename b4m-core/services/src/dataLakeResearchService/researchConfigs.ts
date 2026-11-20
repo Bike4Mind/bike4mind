@@ -24,6 +24,7 @@ import {
   researchAutoAdmitChange,
   researchConfigChange,
   researchItemRulesChange,
+  researchSchedulePausedChange,
   researchSourceChange,
   researchTrustedSitesChange,
 } from '../dataLakeService/diffLakeConfig';
@@ -34,7 +35,7 @@ import {
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
 import { normalizeResearchLevers, type ResearchLeversDraft } from './researchLevers';
-import { firstResearchRunAt, normalizeReviewBacklogLimit } from './researchSchedule';
+import { firstResearchRunAt, nextResearchRunAfter, normalizeReviewBacklogLimit } from './researchSchedule';
 
 /**
  * CRUD for the saved run configuration (#1682). Thin on purpose: the caller has already gated the
@@ -60,6 +61,7 @@ export interface ResearchScheduleDraft {
   trigger?: ResearchRunTrigger;
   cadence?: ResearchScheduleCadence;
   reviewBacklogLimit?: number;
+  schedulePaused?: boolean;
 }
 
 /** How many saved configs one lake may hold, so a config list stays a list a human reads. */
@@ -96,6 +98,36 @@ const resolveCadence = (
   }
   return resolved;
 };
+
+const PAUSED_WITHOUT_CADENCE_MESSAGE = 'A research schedule needs a cadence before it can be paused';
+
+/**
+ * The flag after an edit. Setting cadence `off` clears it, and a request to pause an `off` config is
+ * refused rather than saved as a flag nothing reads. Any other cadence change keeps it.
+ */
+const resolveSchedulePaused = (
+  requested: boolean | undefined,
+  cadence: ResearchScheduleCadence,
+  current: boolean
+): boolean => {
+  if (requested === true && cadence === 'off') throw new BadRequestError(PAUSED_WITHOUT_CADENCE_MESSAGE);
+  return cadence === 'off' ? false : (requested ?? current);
+};
+
+/**
+ * Where a resumed schedule next fires. A future `nextRunAt` is kept: it is the first slot, a pending
+ * one-hour retry, or a lease the in-flight tick's outcome write replaces, and recomputing from the
+ * anchor would skip a period or jump past the retry. A stale one lands on the next regular slot,
+ * never on an immediate run.
+ */
+const resumedNextRunAt = (
+  existing: IDataLakeResearchConfigDocument,
+  cadence: Exclude<ResearchScheduleCadence, 'off'>,
+  now: Date
+): Date =>
+  existing.nextRunAt && existing.nextRunAt > now
+    ? existing.nextRunAt
+    : nextResearchRunAfter(cadence, existing.scheduleAnchorAt ?? existing.nextRunAt ?? now, now);
 
 /**
  * Drop with nothing listed would ignore every hit, which no one means. Refused here and not in the
@@ -204,6 +236,7 @@ export async function createResearchConfig(
   const name = normalizeName(input.name);
   const cadence = resolveCadence(input, 'off');
   const firstRunAt = firstResearchRunAt(cadence, now());
+  const schedulePaused = resolveSchedulePaused(input.schedulePaused, cadence, false);
   assertFeedSource(input);
   assertItemRulesWithinLimits(input);
   const levers = normalizeResearchLevers(usesTierFields(input) ? withoutAllowedDomains(input) : input);
@@ -215,6 +248,7 @@ export async function createResearchConfig(
     trigger: triggerFor(cadence),
     cadence,
     reviewBacklogLimit: normalizeReviewBacklogLimit(input.reviewBacklogLimit),
+    schedulePaused,
     nextRunAt: firstRunAt,
     scheduleAnchorAt: firstRunAt,
     createdByUserId: actor.userId,
@@ -327,7 +361,11 @@ export async function updateResearchConfig(
   const cadence = resolveCadence(input, currentCadence);
   // The next slot is only reset when the cadence CHANGES, so editing a query does not push a
   // config's upcoming run a whole period out. The last outcome belonged to the old schedule.
-  const firstRunAt = firstResearchRunAt(cadence, now());
+  const at = now();
+  const firstRunAt = firstResearchRunAt(cadence, at);
+  const wasPaused = existing.schedulePaused === true;
+  const nextPaused = resolveSchedulePaused(input.schedulePaused, cadence, wasPaused);
+  const resuming = wasPaused && !nextPaused && cadence === currentCadence && cadence !== 'off';
   const schedule =
     cadence !== currentCadence
       ? {
@@ -337,7 +375,15 @@ export async function updateResearchConfig(
           scheduleAnchorAt: firstRunAt,
           lastScheduledOutcome: null,
         }
-      : {};
+      : resuming
+        ? {
+            nextRunAt: resumedNextRunAt(existing, cadence, at),
+            ...(existing.lastScheduledOutcome?.outcome === 'skipped' &&
+            existing.lastScheduledOutcome.reason === 'schedule_paused'
+              ? { lastScheduledOutcome: null }
+              : {}),
+          }
+        : {};
 
   // Normalized over the MERGE of stored and incoming, not over the patch alone: normalization needs
   // the whole lever set (an absent `query` in a patch is "unchanged", but to the normalizer an
@@ -367,6 +413,7 @@ export async function updateResearchConfig(
     model: merged.model ?? null,
     ...(input.name !== undefined ? { name: nextName } : {}),
     ...schedule,
+    ...(nextPaused !== wasPaused ? { schedulePaused: nextPaused } : {}),
     ...(input.reviewBacklogLimit !== undefined
       ? { reviewBacklogLimit: normalizeReviewBacklogLimit(input.reviewBacklogLimit) }
       : {}),
@@ -378,7 +425,14 @@ export async function updateResearchConfig(
   // An idempotent PUT (the submitted body matches what is already stored) genuinely changed
   // nothing, so it earns no `researchConfig: updated: <name>` row - a resubmit-without-edits is not
   // an event a History reader needs to see.
-  if (!nothingMoved) {
+  // Outside the nothingMoved gate: a pause-only change moves no lever and must still be recorded.
+  const pauseChanges = nextPaused !== wasPaused ? [researchSchedulePausedChange(updated.name, nextPaused)] : [];
+  if (nothingMoved && pauseChanges.length > 0) {
+    await recordLakeConfigChange(
+      { actor, lake, grants, action: 'update-research-config', changes: pauseChanges },
+      { db, logger }
+    );
+  } else if (!nothingMoved) {
     await recordLakeConfigChange(
       {
         actor,
@@ -389,6 +443,7 @@ export async function updateResearchConfig(
         // reads by its current name here rather than by whatever this caller happened to submit.
         changes: [
           researchConfigChange(updated.name, 'updated'),
+          ...pauseChanges,
           ...(merged.autoAdmitTrusted !== (existing.autoAdmitTrusted === true)
             ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
             : []),
@@ -404,6 +459,58 @@ export async function updateResearchConfig(
     );
   }
 
+  return updated;
+}
+
+/**
+ * Pause or resume a config's schedule. Deliberately does not go through `updateResearchConfig`:
+ * that re-validates every lever, so a config saved before a limit tightened could not be stopped.
+ * Reads and writes propagate every repository error except a bad id (which reads as not found), so
+ * a transaction write conflict reaches `withTransaction`'s retry.
+ */
+export async function setResearchSchedulePaused(
+  configId: string,
+  lake: LakeConfigAuditLakeRef,
+  paused: boolean,
+  actor: ManageActor,
+  grants: readonly LakeGrant[],
+  { db, logger, now = () => new Date() }: ResearchConfigAdapters
+): Promise<IDataLakeResearchConfigDocument> {
+  const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
+  if (!existing) throw new NotFoundError('Research configuration not found');
+
+  const cadence = existing.cadence ?? 'off';
+  resolveSchedulePaused(paused, cadence, false);
+  if (existing.schedulePaused === paused || (!paused && cadence === 'off')) return existing;
+
+  const at = now();
+  const resume =
+    !paused && cadence !== 'off'
+      ? {
+          nextRunAt: resumedNextRunAt(existing, cadence, at),
+          ...(existing.lastScheduledOutcome?.outcome === 'skipped' &&
+          existing.lastScheduledOutcome.reason === 'schedule_paused'
+            ? { lastScheduledOutcome: null }
+            : {}),
+        }
+      : {};
+  const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
+    schedulePaused: paused,
+    ...resume,
+    lastUpdatedByUserId: actor.userId,
+  });
+  if (!updated) throw new NotFoundError('Research configuration not found');
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'update-research-config',
+      changes: [researchSchedulePausedChange(updated.name, paused)],
+    },
+    { db, logger }
+  );
   return updated;
 }
 

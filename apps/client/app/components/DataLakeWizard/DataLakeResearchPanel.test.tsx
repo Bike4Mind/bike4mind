@@ -1189,7 +1189,7 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('research-config-schedule')).toBeNull();
     });
 
-    it('names the cadence, the next run time and the pause threshold on the config card', () => {
+    it('names the cadence, the next run time and the hold threshold on the config card', () => {
       renderPanel({
         configs: [
           config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z'), reviewBacklogLimit: 7 }),
@@ -1198,17 +1198,17 @@ describe('DataLakeResearchPanel', () => {
       const line = screen.getByTestId('research-config-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
       expect(line).toMatch(/next .*2026/);
-      expect(line).toMatch(/pauses at 7\b/);
+      expect(line).toMatch(/held at 7\b/);
     });
 
-    it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
+    it('shows the held line once pending proposals reach the limit, and not one below it', () => {
       const scheduled = config({ cadence: 'daily', reviewBacklogLimit: 10 });
       const { unmount } = renderPanel({ configs: [scheduled], pendingProposals: 9 });
-      expect(screen.queryByTestId('research-config-schedule-paused')).toBeNull();
+      expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
       unmount();
 
       renderPanel({ configs: [scheduled], pendingProposals: 10 });
-      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 pending \(pauses at 10\)/);
+      expect(screen.getByTestId('research-config-schedule-held').textContent).toMatch(/10 pending \(held at 10\)/);
     });
 
     it('says why the last scheduled tick did not start a run', () => {
@@ -1227,7 +1227,7 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('research-config-schedule-outcome').textContent).toBe('Could not start.');
     });
 
-    // The paused line already carries a backlog skip; a second line would say it twice.
+    // The held line already carries a backlog skip; a second line would say it twice.
     it('adds no outcome line for a backlog skip or a started run', () => {
       const at = new Date('2026-03-02T00:00:00Z');
       renderPanel({
@@ -1263,6 +1263,72 @@ describe('DataLakeResearchPanel', () => {
         /already waiting for review/
       );
       expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+    });
+
+    describe('pause and resume', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      const pauseBtn = (id = 'config-1') => screen.getByTestId(`datalake-research-pause-btn-${id}`);
+
+      it('offers Pause on a scheduled config and sends only the flag', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly' })] });
+        expect(pauseBtn().textContent).toBe('Pause schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: true });
+      });
+
+      it('offers Resume on a paused config and sends schedulePaused false', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly', schedulePaused: true })] });
+        expect(pauseBtn().textContent).toBe('Resume schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: false });
+      });
+
+      it('has no pause button when the cadence is off', () => {
+        renderPanel({ configs: [config({ id: 'config-1' })] });
+        expect(screen.queryByTestId('datalake-research-pause-btn-config-1')).toBeNull();
+      });
+
+      it('shows the Paused line and hides the held and outcome lines', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              schedulePaused: true,
+              reviewBacklogLimit: 5,
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' },
+            }),
+          ],
+          pendingProposals: 9,
+        });
+        expect(screen.getByTestId('research-config-schedule').textContent).toBe('Paused. Runs weekly when resumed.');
+        expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
+        expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+      });
+
+      it('shows held, not paused, for an unpaused config at its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 9 });
+        expect(screen.getByTestId('research-config-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.getByTestId('research-config-schedule-held')).toBeTruthy();
+      });
+
+      it('shows the normal line for an unpaused config under its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 1 });
+        expect(screen.getByTestId('research-config-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
+      });
+
+      it('adds no outcome line for a schedule_paused skip, and never prints undefined', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'schedule_paused' },
+            }),
+          ],
+        });
+        expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+        expect(screen.getByTestId('datalake-research-panel').textContent).not.toContain('undefined');
+      });
     });
 
     it('marks a periodic run as Scheduled in the run history', () => {
