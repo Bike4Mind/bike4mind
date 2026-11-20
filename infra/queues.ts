@@ -466,7 +466,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
-    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
+    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -992,7 +992,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    link: [...allSecrets, websocketApi, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1014,7 +1014,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
-    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    link: [...allSecrets, websocketApi, lakeMemoryQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1077,7 +1077,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    link: [...allSecrets, fabFileBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Research runs resolve the web-search provider like ChatCompletion does; same wiring
@@ -1720,7 +1720,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     memory: '1024 MB',
     vpc: lambdaVpc,
     // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
-    link: [...allSecrets, websocketApi, appFilesBucket],
+    // eventBus: the org credit alert email from a run's debit is queued as an email.send event.
+    link: [...allSecrets, websocketApi, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
