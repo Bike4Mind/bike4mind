@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NotFoundError } from '@bike4mind/common';
 import { mintFileContentSig } from '@bike4mind/utils';
+import { S3Storage } from '../../../../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
 
 const h = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -192,5 +193,44 @@ describe('GET /api/files/[id]/content - response disposition', () => {
     const options = h.getSignedUrl.mock.calls[0][2];
     expect(options.ResponseContentDisposition).toBeUndefined();
     expect(options.ResponseContentType).toBe(mimeType);
+  });
+});
+
+describe('GET /api/files/[id]/content - signed redirect target', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now, toFake: ['Date'] });
+    vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret');
+    vi.stubEnv('AWS_SESSION_TOKEN', '');
+    const storage = new S3Storage('files-bucket', 'us-east-2');
+    h.getSignedUrl
+      .mockReset()
+      .mockImplementation((...args: Parameters<S3Storage['getSignedUrl']>) => storage.getSignedUrl(...args));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  const location = async (mimeType: string | undefined) => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'page.html' }));
+    const { res, error } = await call(validQuery());
+    expect(error).toBeUndefined();
+    return new URL(res.redirect.mock.calls[0][1]).searchParams;
+  };
+
+  it.each(['text/html', 'image/svg+xml', 'text/plain', undefined])(
+    'redirects %s to a link signed for attachment',
+    async mimeType => {
+      const params = await location(mimeType);
+      expect(params.get('response-content-disposition')).toBe('attachment; filename="page.html"');
+      expect(params.get('response-content-type')).toBeNull();
+    }
+  );
+
+  it.each(['image/png', 'application/pdf', 'video/mp4'])('redirects %s to an inline link', async mimeType => {
+    const params = await location(mimeType);
+    expect(params.get('response-content-disposition')).toBeNull();
+    expect(params.get('response-content-type')).toBe(mimeType);
   });
 });
