@@ -51,6 +51,7 @@ import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { PanelRightIcon } from './icons';
+import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
@@ -99,7 +100,7 @@ import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
-import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
@@ -801,6 +802,10 @@ export function ChatShell({
   const hasAgents = spawnedStates.length > 0;
   const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
+  // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
+  // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
+  // and messages, are replaced by a neutral count until it is off.
+  const presentingStage = orchestrating && orchestratorPrefs.presenter;
   const { setOrchestrate } = conversation;
   const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
   useEffect(() => {
@@ -908,6 +913,10 @@ export function ChatShell({
   const stageFocus = useMemo(
     () => ({ on: orchestratorPrefs.focus, onToggle: orchestratorPrefs.setFocus }),
     [orchestratorPrefs.focus, orchestratorPrefs.setFocus]
+  );
+  const stagePresenter = useMemo(
+    () => ({ on: orchestratorPrefs.presenter, onToggle: orchestratorPrefs.setPresenter }),
+    [orchestratorPrefs.presenter, orchestratorPrefs.setPresenter]
   );
 
   const parentReply = useMemo(() => {
@@ -1669,15 +1678,21 @@ export function ChatShell({
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {conversation.session ? (
-                    <>
-                      <SessionHeader
-                        title={activeSummary?.title ?? conversation.session.title}
-                        onRename={title =>
-                          void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                        }
-                      />
-                      {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                    </>
+                    presentingStage ? (
+                      <Typography level="title-sm" noWrap data-testid="chat-session-title">
+                        Orchestrator
+                      </Typography>
+                    ) : (
+                      <>
+                        <SessionHeader
+                          title={activeSummary?.title ?? conversation.session.title}
+                          onRename={title =>
+                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                          }
+                        />
+                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
+                      </>
+                    )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">
                       No conversation open
@@ -1823,6 +1838,7 @@ export function ChatShell({
                     ambient={stageAmbient}
                     focus={stageFocus}
                     conversationRequest={conversationRequest}
+                    presenter={stagePresenter}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -2046,15 +2062,26 @@ export function ChatShell({
                 </Box>
               )}
 
-              <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+              {presentingStage && (
+                <PresenterPendingNotice
+                  count={heldRelays.held.length + decisionsFor(persistedId, taskDecisions).length}
+                  onTurnOff={() => orchestratorPrefs.setPresenter(false)}
+                />
+              )}
 
-              <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+              {!presentingStage && (
+                <>
+                  <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-              <SpawnSuggestionTray
-                suggestions={spawnSuggestions.suggestions}
-                onStart={onStartSuggestion}
-                onDismiss={spawnSuggestions.dismiss}
-              />
+                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+
+                  <SpawnSuggestionTray
+                    suggestions={spawnSuggestions.suggestions}
+                    onStart={onStartSuggestion}
+                    onDismiss={spawnSuggestions.dismiss}
+                  />
+                </>
+              )}
 
               {/* After first use, an unbound session or a hidden panel error still needs these controls
             above the composer. Empty Code sessions render them in the transcript instead. */}
