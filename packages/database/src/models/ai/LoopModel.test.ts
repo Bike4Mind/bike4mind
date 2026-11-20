@@ -371,6 +371,23 @@ describe('LoopRepository', () => {
     expect(await loopRepository.countLanesForUser('user-3')).toBe(0);
   });
 
+  it('listInFlight reads the loops with a lane in flight through the partial activeExecutionIds index', async () => {
+    const running = await create({ activeExecutionIds: ['e1'] });
+    await create({ activeExecutionIds: [] });
+    await create();
+    expect((await loopRepository.listInFlight()).map(loop => loop.id)).toEqual([running.id]);
+
+    const plan = JSON.stringify(
+      await Loop.find({ 'activeExecutionIds.0': { $exists: true }, activeExecutionIds: { $type: 'string' } }).explain(
+        'queryPlanner'
+      )
+    );
+    expect(plan).toContain('IXSCAN');
+    expect(plan).toContain('"activeExecutionIds":1');
+    const bare = JSON.stringify(await Loop.find({ 'activeExecutionIds.0': { $exists: true } }).explain('queryPlanner'));
+    expect(bare).toContain('COLLSCAN');
+  });
+
   it('deferUntil moves a live loop on and releases the lease; a non-live loop keeps its time', async () => {
     const now = new Date();
     const later = new Date(now.getTime() + 3_600_000);

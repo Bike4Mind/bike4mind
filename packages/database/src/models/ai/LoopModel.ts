@@ -33,7 +33,9 @@ const LANE_FREE = {
   $expr: { $lt: [{ $size: { $ifNull: ['$activeExecutionIds', []] } }, { $ifNull: ['$maxConcurrent', 1] }] },
 };
 const NO_LANE_ACTIVE = { 'activeExecutionIds.0': { $exists: false } };
-const ANY_LANE_ACTIVE = { 'activeExecutionIds.0': { $exists: true } };
+// The `activeExecutionIds` predicate lets the planner use the partial index; the `.0` one alone matches its
+// partialFilterExpression but names no indexed key.
+const ANY_LANE_ACTIVE = { 'activeExecutionIds.0': { $exists: true }, activeExecutionIds: { $type: 'string' } };
 
 /**
  * Pipeline expression for a finished run's memory: its own when nothing wrote the loop's memory since the run
