@@ -1,6 +1,6 @@
 import type { ColorSchemeMode, DesignTokens } from '../../schema';
 
-// The platform-neutral model every native emitter (Swift today, Kotlin next)
+// The platform-neutral model every native emitter (Swift, Kotlin)
 // renders from. It resolves the token source to literal values once, so the
 // per-language emitters are pure formatting and cannot disagree on a color.
 //
