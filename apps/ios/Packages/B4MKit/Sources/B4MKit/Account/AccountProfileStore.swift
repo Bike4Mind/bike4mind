@@ -26,9 +26,11 @@ public final class AccountProfileStore {
   public static let defaultMaxAge: TimeInterval = 5 * 60
 
   private var stored: AccountProfile?
-  @ObservationIgnored private var storedScope: Scope?
+  // Observed: a view that rendered before any profile was stored must be told when one lands.
+  private var storedScope: Scope?
   @ObservationIgnored private var storedAt: Date?
-  @ObservationIgnored private var inFlight: (scope: Scope, task: Task<Void, Never>)?
+  @ObservationIgnored private var inFlight: (id: Int, scope: Scope, task: Task<Void, Never>)?
+  @ObservationIgnored private var nextFetchID = 0
   // Bumped by `invalidate()` so a fetch that was already running cannot repopulate the cleared store.
   @ObservationIgnored private var generation = 0
 
@@ -61,10 +63,8 @@ public final class AccountProfileStore {
 
   /// Loads the profile unless a fresh one is stored. Concurrent callers for the same account share one request.
   public func refresh(force: Bool = false) async {
-    guard let scope = await resolveScope() else {
-      invalidate()
-      return
-    }
+    // No scope can be a transient token-refresh failure; the session ending clears the store via `invalidate()`.
+    guard let scope = await resolveScope() else { return }
     if storedScope != scope {
       stored = nil
       storedAt = nil
@@ -77,17 +77,19 @@ public final class AccountProfileStore {
     }
     let startedIn = generation
     let fetch = self.fetch
+    nextFetchID += 1
+    let id = nextFetchID
     let task = Task { @MainActor [weak self] in
       let loaded = await fetch(scope)
       guard let self, self.generation == startedIn else { return }
+      if self.inFlight?.id == id { self.inFlight = nil }
       // A refresh for another account may have replaced this one while it ran; its result is not ours to keep.
       guard self.storedScope == scope else { return }
-      self.inFlight = nil
       guard let loaded else { return }
       self.stored = loaded
       self.storedAt = self.now()
     }
-    inFlight = (scope, task)
+    inFlight = (id, scope, task)
     await task.value
   }
 

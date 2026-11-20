@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 
 @testable import B4MKit
@@ -5,7 +6,7 @@ import XCTest
 private actor FetchRecorder {
   private(set) var calls: [AccountProfileStore.Scope] = []
   private var results: [String: AccountProfile] = [:]
-  private var gate: CheckedContinuation<Void, Never>?
+  private var gates: [CheckedContinuation<Void, Never>] = []
   private var isGated = false
 
   func setResult(_ profile: AccountProfile?, forUser userID: String) { results[userID] = profile }
@@ -13,15 +14,27 @@ private actor FetchRecorder {
 
   func releaseFetches() {
     isGated = false
-    gate?.resume()
-    gate = nil
+    let held = gates
+    gates = []
+    held.forEach { $0.resume() }
   }
+
+  /// Releases one held fetch (0 = the first to start), leaving the others held.
+  func releaseFetch(at index: Int) { gates.remove(at: index).resume() }
 
   func fetch(_ scope: AccountProfileStore.Scope) async -> AccountProfile? {
     calls.append(scope)
-    if isGated { await withCheckedContinuation { gate = $0 } }
-    return results[scope.userID]
+    let result = results[scope.userID]
+    if isGated { await withCheckedContinuation { gates.append($0) } }
+    return result
   }
+}
+
+private final class Flag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var raised = false
+  var value: Bool { lock.withLock { raised } }
+  func raise() { lock.withLock { raised = true } }
 }
 
 private final class Clock: @unchecked Sendable {
@@ -111,8 +124,7 @@ final class AccountProfileStoreTests: XCTestCase {
 
     async let drawer: Void = store.refresh()
     async let home: Void = store.refresh()
-    // Let both callers reach the held fetch before it completes.
-    try? await Task.sleep(for: .milliseconds(100))
+    await eventually { await recorder.calls.count == 1 }
     await recorder.releaseFetches()
     _ = await (drawer, home)
 
@@ -142,7 +154,7 @@ final class AccountProfileStoreTests: XCTestCase {
     let store = makeStore(session: Session(scope("u1")), recorder: recorder)
 
     async let pending: Void = store.refresh()
-    try? await Task.sleep(for: .milliseconds(100))
+    await eventually { await recorder.calls.count == 1 }
     store.invalidate()
     await recorder.releaseFetches()
     await pending
@@ -159,10 +171,11 @@ final class AccountProfileStoreTests: XCTestCase {
     await store.refresh()
 
     // The auth transition did not call invalidate (a path the app missed): the scope check is the backstop.
+    // The first account is dropped as soon as the refresh resolves the new one, before its fetch completes.
     session.scope = scope("u2")
     await recorder.holdFetches()
     async let pending: Void = store.refresh()
-    try? await Task.sleep(for: .milliseconds(100))
+    await eventually { await recorder.calls.count == 2 }
     XCTAssertNil(store.profile(in: production), "the previous account must be gone while the new one loads")
     await recorder.releaseFetches()
     await pending
@@ -181,7 +194,7 @@ final class AccountProfileStoreTests: XCTestCase {
     XCTAssertNil(store.profile(in: other))
   }
 
-  func testNoSessionClearsTheStore() async {
+  func testNoSessionKeepsTheStoredValue() async {
     let recorder = FetchRecorder()
     await recorder.setResult(alex, forUser: "u1")
     let session = Session(scope("u1"))
@@ -191,6 +204,56 @@ final class AccountProfileStoreTests: XCTestCase {
     session.scope = nil
     await store.refresh()
 
+    XCTAssertEqual(store.profile(in: production), alex, "a transient failure to resolve the user must not blank the profile")
+    store.invalidate()
     XCTAssertNil(store.profile(in: production))
+  }
+
+  func testAViewThatRenderedBeforeTheProfileLoadedIsToldWhenItLands() async {
+    let recorder = FetchRecorder()
+    await recorder.setResult(alex, forUser: "u1")
+    let store = makeStore(session: Session(scope("u1")), recorder: recorder)
+
+    let fired = Flag()
+    withObservationTracking { _ = store.profile(in: production) } onChange: { fired.raise() }
+    await store.refresh()
+
+    XCTAssertTrue(fired.value, "a view that rendered nil must redraw once the profile is stored")
+  }
+
+  func testAFailedFirstFetchIsRetriedOnTheNextRefresh() async {
+    let recorder = FetchRecorder()
+    await recorder.setResult(nil, forUser: "u1")
+    let store = makeStore(session: Session(scope("u1")), recorder: recorder)
+
+    await store.refresh()
+    XCTAssertNil(store.profile(in: production))
+
+    await recorder.setResult(alex, forUser: "u1")
+    await store.refresh()
+    XCTAssertEqual(store.profile(in: production), alex)
+    let calls = await recorder.calls
+    XCTAssertEqual(calls.count, 2)
+  }
+
+  func testAnInvalidatedFetchCannotOverwriteTheFetchThatReplacedIt() async {
+    let recorder = FetchRecorder()
+    await recorder.setResult(alex, forUser: "u1")
+    await recorder.holdFetches()
+    let store = makeStore(session: Session(scope("u1")), recorder: recorder)
+
+    async let stale: Void = store.refresh()
+    await eventually { await recorder.calls.count == 1 }
+    store.invalidate()
+    await recorder.setResult(sam, forUser: "u1")
+    async let fresh: Void = store.refresh()
+    await eventually { await recorder.calls.count == 2 }
+
+    await recorder.releaseFetch(at: 1)
+    await fresh
+    await recorder.releaseFetch(at: 0)
+    await stale
+
+    XCTAssertEqual(store.profile(in: production), sam, "a response from before the invalidation must not be stored")
   }
 }
