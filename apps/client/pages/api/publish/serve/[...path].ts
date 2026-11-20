@@ -1166,10 +1166,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
   // link comes first: it lands on the same tagged marketing page (signup when none is
   // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
-  // Without one, the marketing site with UTM attribution when configured, else a branded fallback. The embed pill falls
-  // back to the artifact's canonical page; the own-tab bar falls back to the app root (the
-  // viewer is already on the canonical page). The bar only renders for an own-tab
-  // open-public artifact.
+  // Without one, the marketing site with UTM attribution when configured, else a branded
+  // fallback. The embed pill falls back to the artifact's canonical page; the own-tab bar
+  // falls back to the app root (the viewer is already on the canonical page). The bar only
+  // renders for an own-tab open-public artifact.
   const leadVia: ShareLinkVia | null = isEmbed ? 'embed-badge' : isOpenPublic ? 'share-bar' : null;
   const authorLink = leadVia ? await publishedAuthorShareLink(artifact.ownerId, owner, leadVia) : null;
   const marketing = (via: ShareLinkVia) => publishMarketingUrl(via) ?? '';
