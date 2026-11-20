@@ -41,6 +41,7 @@ vi.mock('@client/app/hooks/data/admin', async importOriginal => {
 });
 
 import SecurityDashboard from '../SecurityDashboard';
+import { QUEUED_RESULT_DEADLINE_MS, QUEUED_RESULT_TIMEOUT_ERROR } from './CloudScanRequest';
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 const CLOUD_QUERY_KEY = ['admin', 'security-dashboard', 'cloud'] as const;
 
@@ -216,6 +217,32 @@ describe('connected Cloud summary and detail with real QueryClient and mutation'
     await waitFor(() => expect(summaryButton()).toHaveAttribute('aria-label', 'Cloud baseline scan queued'));
     expect(transport.post).toHaveBeenCalledTimes(3);
     expect(toast.success).toHaveBeenCalledWith('Cloud baseline scan queued. Results appear here when it finishes.');
+  });
+
+  it('stops polling and releases the request when no result arrives before the deadline', async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    renderDashboard();
+    await act(async () => {
+      fireEvent.click(summaryButton());
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(summaryButton()).toHaveAttribute('aria-label', 'Cloud baseline scan queued');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QUEUED_RESULT_DEADLINE_MS - 1);
+    });
+    expect(summaryButton()).toHaveAttribute('aria-label', 'Cloud baseline scan queued');
+    expect(transport.get).toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(summaryButton()).toHaveAttribute('aria-label', 'Run cloud baseline scan');
+    expect(summaryButton()).not.toBeDisabled();
+    expect(toast.error).toHaveBeenCalledWith(QUEUED_RESULT_TIMEOUT_ERROR);
+    const polls = transport.get.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(transport.get).toHaveBeenCalledTimes(polls);
   });
 
   it('blocks a cached overview action until the first snapshot request settles', async () => {

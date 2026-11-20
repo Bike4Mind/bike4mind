@@ -25,6 +25,12 @@ type CloudScanRequest = {
 
 const RequestContext = createContext<CloudScanRequest | null>(null);
 
+// Outlasts the worker's 5-minute timeout plus Lambda's two async retries; a run still silent after
+// this has gone to the cloud-security-scan DLQ, so stop polling for it.
+export const QUEUED_RESULT_DEADLINE_MS = 20 * 60 * 1000;
+export const QUEUED_RESULT_TIMEOUT_ERROR =
+  'Cloud baseline scan did not report a result in time. Check the scan dead-letter queue before retrying.';
+
 function checkedAt(snapshot: SecurityDashboardCloudSnapshot | null | undefined): number | null {
   const timestamp = Date.parse(snapshot?.checkedAt ?? '');
   return Number.isFinite(timestamp) ? timestamp : null;
@@ -69,6 +75,16 @@ export function CloudScanRequestProvider({ children }: { children: ReactNode }) 
   }, [queryClient, transition]);
 
   useEffect(releaseOnNewResult, [releaseOnNewResult, snapshot.data, snapshot.dataUpdatedAt, snapshot.status]);
+
+  useEffect(() => {
+    if (state.kind !== 'queued') return;
+    const timer = setTimeout(() => {
+      if (current.current !== state) return;
+      transition({ kind: 'idle', error: QUEUED_RESULT_TIMEOUT_ERROR });
+      toast.error(QUEUED_RESULT_TIMEOUT_ERROR);
+    }, QUEUED_RESULT_DEADLINE_MS);
+    return () => clearTimeout(timer);
+  }, [state, transition]);
 
   const start = useCallback(() => {
     if (!mounted.current || current.current.kind !== 'idle' || cooldownActive || snapshot.isLoading) return;
