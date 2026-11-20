@@ -6,7 +6,7 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { assertPolicyAllows, audit, toPublicView, userOwner, type ConnectionActor } from '../connectionService';
 import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { discoverConnectionTools } from '../discovery';
-import type { InvokeRemoteMcpOptions } from '../invokeRemoteMcp';
+import type { InvokeRemoteMcpOptions } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 import {
   dropRejectedRegistration,
   loadConnectionClient,

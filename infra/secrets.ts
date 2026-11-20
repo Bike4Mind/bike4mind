@@ -17,6 +17,7 @@ export const secrets = {
   SESSION_SECRET: new sst.Secret('SESSION_SECRET', 'my-secret-placeholder-value'),
   JWT_SECRET: new sst.Secret('JWT_SECRET', 'my-secret-placeholder-value'),
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
+  SLACK_FEEDBACK_DESTINATIONS: new sst.Secret('SLACK_FEEDBACK_DESTINATIONS', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
   SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
   // Cost-category alarms (apps/workers/src/events/alarmSlackMessage.ts) post here when set;
@@ -55,6 +56,9 @@ export const secrets = {
   APNS_TEAM_ID: new sst.Secret('APNS_TEAM_ID', 'not-configured'),
   APNS_KEY: new sst.Secret('APNS_KEY', 'not-configured'),
   APNS_TOPIC: new sst.Secret('APNS_TOPIC', 'not-configured'),
+  // FCM push delivery to the Android client: the Firebase service account JSON, verbatim. Left on
+  // 'not-configured', Android push is off (APNs is unaffected). It is a secret because it holds a private key.
+  FCM_SERVICE_ACCOUNT: new sst.Secret('FCM_SERVICE_ACCOUNT', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -67,6 +71,7 @@ export const secrets = {
   ANTHROPIC_API_KEY: new sst.Secret('ANTHROPIC_API_KEY', 'not-configured'),
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
   // Cloudflare Turnstile secret key; the check stays off until a real value is set.
   TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
@@ -79,6 +84,7 @@ export const secrets = {
   OPENAI_API_KEY: new sst.Secret('OPENAI_API_KEY', 'not-configured'),
   // OpenAI admin API key for billing/spend reconciliation (usage endpoint).
   // Requires an org-admin-scoped key from platform.openai.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   OPENAI_ADMIN_API_KEY: new sst.Secret('OPENAI_ADMIN_API_KEY', 'not-configured'),
   XAI_API_KEY: new sst.Secret('XAI_API_KEY', 'not-configured'),
   MOONSHOT_API_KEY: new sst.Secret('MOONSHOT_API_KEY', 'not-configured'),
@@ -105,6 +111,11 @@ export const secrets = {
   MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
   // Previous encryption key for key rotation - set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
+  // Root secret for HMAC signatures (per-purpose keys are derived from it). Unset: signatures use
+  // SECRET_ENCRYPTION_KEY. Generate with: openssl rand -hex 32
+  HMAC_SIGNING_SECRET: new sst.Secret('HMAC_SIGNING_SECRET', 'not-configured'),
+  // The secret that signed older values while they are still honoured; set it when rotating
+  HMAC_SIGNING_SECRET_PREVIOUS: new sst.Secret('HMAC_SIGNING_SECRET_PREVIOUS', 'not-configured'),
   // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
   // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +
   // server/chatCompletion/internal/route.ts). Dedicated so the AES encryption key

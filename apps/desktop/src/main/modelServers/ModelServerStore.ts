@@ -21,6 +21,7 @@ import type {
 } from '@shared/modelServers';
 import { LOCAL_SERVER_NAME, readLaunchShape, specsBlank, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import { resealed } from '../secrets/reseal';
 import { loopbackLaunchPort } from './loopbackPort';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
@@ -282,6 +283,22 @@ export class ModelServerStore {
         applied: () => this.secrets.delete(id),
         result: undefined,
       };
+    });
+  }
+
+  /** Re-saves credentials the cipher reports as an older format; one it cannot open stays as it is. */
+  async reencrypt(): Promise<void> {
+    if (!this.cipher.needsReencrypt) return;
+    return this.commit(document => {
+      if (this.readOnly || !this.credentialPersisted()) return { document, result: undefined };
+      let changed = false;
+      const servers = document.servers.map(server => {
+        const secret = server.secret ? resealed(this.cipher, server.secret) : null;
+        if (secret === null) return server;
+        changed = true;
+        return { ...server, secret };
+      });
+      return { document: changed ? { ...document, servers } : document, result: undefined };
     });
   }
 

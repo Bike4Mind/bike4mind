@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ classify: vi.fn(), verdicts: vi.fn() }));
-vi.mock('./activationFunnel', async importOriginal => ({
-  ...(await importOriginal<typeof import('./activationFunnel')>()),
+vi.mock('@bike4mind/server-utils/analytics/activationFunnel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/analytics/activationFunnel')>()),
   classifyFunnelCohort: mocks.classify,
 }));
-vi.mock('./realSignup', () => ({ signupVerdictUserIds: mocks.verdicts }));
+vi.mock('@bike4mind/server-utils/analytics/realSignup', () => ({ signupVerdictUserIds: mocks.verdicts }));
 
 import { getActivationFunnel, summarizeFunnel } from './activationFunnelSummary';
 

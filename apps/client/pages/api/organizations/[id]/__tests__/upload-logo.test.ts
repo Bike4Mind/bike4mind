@@ -73,6 +73,9 @@ vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,
 }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 import '../upload-logo';
 
 const ORG = {
@@ -116,6 +119,7 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(appFileFindByIdAndDelete).not.toHaveBeenCalled();
     expect(orgUpdateOne).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -130,6 +134,14 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/put', fileId: 'newfile1' });
     expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
     expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.logo.updated',
+        actorScope: 'organization',
+        changes: [{ field: 'logoFileId', before: 'oldfile1', after: 'newfile1' }],
+      })
+    );
   });
 
   it('still invalidates the old logo when the transaction fails after its bytes were deleted', async () => {

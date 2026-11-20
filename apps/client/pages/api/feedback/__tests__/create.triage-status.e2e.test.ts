@@ -23,8 +23,9 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  type Chain = { get: () => Chain; post: (fn: (req: unknown, res: unknown) => unknown) => Chain };
+  type Chain = { use: () => Chain; get: () => Chain; post: (fn: (req: unknown, res: unknown) => unknown) => Chain };
   const chain: Chain = {
+    use: () => chain,
     get: () => chain,
     post: fn => {
       mockRefs.postHandler = fn;
@@ -149,5 +150,20 @@ describe('POST /api/feedback - initial triage status', () => {
       tags: [WAITLIST_FEEDBACK_TAG, 'marketing'],
     });
     expect(status).toBe(FeedbackStatus.Closed);
+  });
+});
+
+// The list's has-comment filter is an equality on contentStored, so this pins what it partitions on:
+// whether text was submitted, not hasFeedbackComment().
+describe('POST /api/feedback - contentStored', () => {
+  it('counts the legacy placeholder as stored text and blank content as none', async () => {
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: NO_FEEDBACK_DETAILS_PLACEHOLDER });
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: '   ' });
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: 'It broke' });
+
+    const rows = await FeedbackModel.find().sort({ _id: 1 }).select({ contentStored: 1 }).lean();
+    expect(rows.map(row => row.contentStored)).toEqual([true, false, true]);
+    expect(await FeedbackModel.countDocuments({ contentStored: true })).toBe(2);
+    expect(await FeedbackModel.countDocuments({ contentStored: false })).toBe(1);
   });
 });

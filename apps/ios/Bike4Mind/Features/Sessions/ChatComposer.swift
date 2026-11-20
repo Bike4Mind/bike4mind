@@ -12,6 +12,8 @@ struct ChatComposer: View {
   /// Non-nil only when the account can start agent runs; `nil` hides the toggle and its hint.
   var agentRun: Binding<Bool>?
   let onDictate: () -> Void
+  /// Starts the hands-free voice conversation; `nil` hides the button.
+  var onVoiceConversation: (() -> Void)?
   let onSend: () -> Void
 
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -46,6 +48,7 @@ struct ChatComposer: View {
           messageField
           HStack(spacing: Tokens.Spacing.s) {
             micButton
+            voiceConversationButton
             agentButton
             Spacer(minLength: 0)
             sendButton
@@ -55,6 +58,7 @@ struct ChatComposer: View {
         HStack(alignment: .bottom, spacing: Tokens.Spacing.xs) {
           messageField
           micButton
+          voiceConversationButton
           agentButton
           sendButton
         }
@@ -69,6 +73,19 @@ struct ChatComposer: View {
     .frame(minWidth: 44, minHeight: 44)
     .accessibilityLabel("Dictate a message")
     .accessibilityIdentifier("chat-composer-mic")
+  }
+
+  @ViewBuilder
+  private var voiceConversationButton: some View {
+    if let onVoiceConversation {
+      Button(action: onVoiceConversation) {
+        icon("waveform")
+      }
+      .frame(minWidth: 44, minHeight: 44)
+      .accessibilityLabel("Start a voice conversation")
+      .accessibilityHint("Talk hands-free and hear the replies")
+      .accessibilityIdentifier("chat-composer-voice-conversation")
+    }
   }
 
   @ViewBuilder

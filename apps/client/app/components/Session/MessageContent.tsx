@@ -678,6 +678,7 @@ const MessageContent: React.FC<ContentProps> = memo(
       void publishAndShareReply({
         publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
         resolvePublished: () => findPublishedByReply(replyId),
+        policySource: { sessionId },
         ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown,

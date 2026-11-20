@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
 import {
+  INCIDENT_ESCALATION_TRIGGERS,
   INCIDENT_OVERRIDABLE_REVIEW_STATUSES,
   INCIDENT_REPORT_CHANNELS,
   INCIDENT_REVIEW_STATUSES,
@@ -59,6 +60,11 @@ const ImageModerationIncidentSchema = new Schema(
     noActionAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
     lastReminderAt: { type: Date, required: false },
+    escalatedAt: { type: Date, required: false },
+    escalatedBy: { type: String, required: false },
+    escalationTrigger: { type: String, enum: INCIDENT_ESCALATION_TRIGGERS, required: false },
+    escalationAlertedAt: { type: Date, required: false },
+    escalationLastReminderAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -89,6 +95,20 @@ const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_re
 // Incidents with a final verdict, for looking past verdicts up. confirmed_csam is a claim in
 // flight, not a verdict, so it is neither here nor in the unreviewed set.
 export const CLOSED_REVIEW_STATUSES: IncidentReviewStatus[] = ['false_positive', 'no_action', 'reported'];
+
+/** Counts for the review page summary; never ids, users or labels. */
+export interface ImageModerationIncidentSummary {
+  /** reviewStatus absent or 'pending_review'. */
+  needsReview: number;
+  /** Of needsReview, the ones moved to the second review step. */
+  escalated: number;
+  /** In 'confirmed_csam': a report submission claimed and not yet resolved. */
+  stuck: number;
+  closed: { noAction: number; falsePositive: number; reported: number };
+  oldestPendingCreatedAt: Date | null;
+}
+
+const SUMMARY_MAX_TIME_MS = 2000;
 
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
@@ -142,6 +162,27 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
+   * One count per status, each led by reviewStatus so it runs on the {reviewStatus, createdAt}
+   * index; only the escalated count reads documents, and only the unreviewed ones.
+   */
+  async summarize(): Promise<ImageModerationIncidentSummary> {
+    const count = (filter: Record<string, unknown>) =>
+      this.model.countDocuments(filter).maxTimeMS(SUMMARY_MAX_TIME_MS).exec();
+    const unreviewed = { reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } };
+    const [needsReview, escalated, stuck, noAction, falsePositive, reported, oldestPendingCreatedAt] =
+      await Promise.all([
+        count(unreviewed),
+        count({ ...unreviewed, escalatedAt: { $ne: null } }),
+        count({ reviewStatus: 'confirmed_csam' }),
+        count({ reviewStatus: 'no_action' }),
+        count({ reviewStatus: 'false_positive' }),
+        count({ reviewStatus: 'reported' }),
+        this.oldestPendingReviewAt(),
+      ]);
+    return { needsReview, escalated, stuck, closed: { noAction, falsePositive, reported }, oldestPendingCreatedAt };
+  }
+
+  /**
    * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
    * for, oldest first. A missing alertedAt is the only signal: none configured, or the send failed.
    */
@@ -167,6 +208,83 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Unreviewed incidents created at or before `createdBefore` that are not escalated yet, oldest first. */
+  async findDueForEscalation(createdBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalatedAt: null,
+        createdAt: { $lte: createdBefore },
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Escalated incidents still awaiting a verdict with no delivered escalation email, oldest first. */
+  async findEscalationUnalerted(limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalatedAt: { $ne: null },
+        escalationAlertedAt: null,
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Moves an unreviewed incident to the second review step without touching reviewStatus. Atomic on
+   * its filter: only an unreviewed, not yet escalated incident matches, so of two concurrent
+   * escalations one wins and the other gets null, as does an incident with a verdict or none at all.
+   */
+  async escalate(
+    id: string,
+    escalation: { trigger: 'manual'; by: string } | { trigger: 'timeout' },
+    at = new Date()
+  ): Promise<IImageModerationIncidentDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES }, escalatedAt: null },
+      {
+        $set: {
+          escalatedAt: at,
+          escalationTrigger: escalation.trigger,
+          ...(escalation.trigger === 'manual' ? { escalatedBy: escalation.by } : {}),
+        },
+      },
+      { new: true, runValidators: true }
+    );
+  }
+
+  /** Stamps the time the escalation email for this incident was delivered. */
+  async markEscalationAlerted(id: string, escalationAlertedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { escalationAlertedAt } });
+  }
+
+  /**
+   * Escalated incidents still awaiting a verdict that are due another reminder to the second
+   * reviewers: both the escalation email and the last escalation reminder (when there is one) are at
+   * or before `notifiedBefore`. Oldest first.
+   */
+  async findDueForEscalationReminder(notifiedBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalationAlertedAt: { $ne: null, $lte: notifiedBefore },
+        $or: [{ escalationLastReminderAt: null }, { escalationLastReminderAt: { $lte: notifiedBefore } }],
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Stamps the time a reminder digest to the second reviewers covered these incidents. */
+  async markEscalationReminded(ids: string[], escalationLastReminderAt = new Date()): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany({ _id: { $in: ids } }, { $set: { escalationLastReminderAt } });
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */

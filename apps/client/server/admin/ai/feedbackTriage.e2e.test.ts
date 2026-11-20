@@ -29,13 +29,13 @@ const mocks = vi.hoisted(() => ({
   decide: vi.fn<(call: DecisionCall) => Promise<DecisionResult>>(),
 }));
 vi.mock('./embedAdminAi', () => ({ loadFeedbackAiConfig: mocks.config, embedAdminAi: mocks.embed }));
-vi.mock('@server/decisions/platformDecision', () => ({
+vi.mock('@bike4mind/server-utils/decisions/platformDecision', () => ({
   callablePlatformModel: async () => 'jev/decision',
   resolveJsonInput: vi.fn(),
   decisionFailureCode: () => undefined,
   toMicroUsd: (n: number) => Math.ceil(n * 1_000_000),
 }));
-vi.mock('@server/decisions/executeDecision', () => ({ executeDecision: mocks.decide }));
+vi.mock('@bike4mind/server-utils/decisions/executeDecision', () => ({ executeDecision: mocks.decide }));
 import { triageFeedback } from './feedbackTriage';
 
 let mongo: MongoMemoryReplSet;

@@ -5,7 +5,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 **The standard path, at a glance** (each step is a section below):
 
 1. Clone the repo and copy the env template.
-2. Generate the three security secrets and set your LLM provider key(s).
+2. Generate the six security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
 4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
@@ -35,13 +35,28 @@ Copy the template and fill it in:
 cp .env.selfhost.example .env.selfhost
 ```
 
-**Generate the three security secrets** (each a fresh 32-byte hex string):
+**Generate the six security secrets** (each a fresh 32-byte hex string):
 
 ```bash
 openssl rand -hex 32   # -> JWT_SECRET
 openssl rand -hex 32   # -> SESSION_SECRET
 openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
+openssl rand -hex 32   # -> CHAT_COMPLETION_INTERNAL_SECRET
+openssl rand -hex 32   # -> INTERNAL_WS_SECRET
+openssl rand -hex 32   # -> INTERNAL_S3_WEBHOOK_SECRET
 ```
+
+Or replace every `change-me` value in one step:
+
+```bash
+for key in JWT_SECRET SESSION_SECRET SECRET_ENCRYPTION_KEY CHAT_COMPLETION_INTERNAL_SECRET INTERNAL_WS_SECRET INTERNAL_S3_WEBHOOK_SECRET; do
+  sed -i.bak "s|^$key=change-me.*|$key=$(openssl rand -hex 32)|" .env.selfhost
+done && rm -f .env.selfhost.bak
+```
+
+The app refuses to run with the template values: JWT signing and verification fail, the
+ChatCompletion service exits at startup, and the internal websocket, upload webhook and quest
+dispatch calls are rejected until each secret holds a generated value.
 
 > **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
 
@@ -49,7 +64,7 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
-**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
+**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the six secrets above.
 
 **Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin.
 
@@ -167,7 +182,7 @@ MAIL_HOST=localhost                             # was mail (so sign-in codes rea
 # every *_QUEUE url: swap the `sqs` host for `localhost`, keep the path
 FAB_FILE_CHUNK_QUEUE=http://localhost:9324/000000000000/fabFileChunkQueue
 # ...the other *_QUEUE vars the same way
-# copy the rest verbatim from .env.selfhost: the three secrets, AWS creds, bucket names, LLM keys
+# copy the rest verbatim from .env.selfhost: the six secrets, AWS creds, bucket names, LLM keys
 ```
 
 Then start the app from the repo root:
@@ -635,7 +650,7 @@ This is a separate corpus from your uploaded files: the **Help** panel and the H
 | Half                                           | Built by                                          | Needs a key        |
 | ---------------------------------------------- | ------------------------------------------------- | ------------------ |
 | The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
-| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+| The embedding vectors (`help-embeddings.json` + `help-embeddings.bin`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
 
@@ -654,7 +669,9 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
+**Upgrading from an older build:** the vectors used to live entirely in `help-embeddings.json`. An install that built them then and rebuilds without a key keeps serving keyword results until you re-run `help:vectorize`, which writes the new JSON + binary pair.
+
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` + `help-embeddings.bin` pair still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -704,7 +721,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > AI > Models**, in the **Settings** section: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). The **Discovery** section of the same page shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -1109,13 +1126,13 @@ docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 **Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
 
 ```caddyfile
-@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+@completions path /api/ai/v1/completions
 handle @completions {
 	reverse_proxy chatcompletion:8080
 }
 ```
 
-It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the path 404s from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -1137,14 +1154,14 @@ Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure l
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
-| Setup | `TRUSTED_PROXY_HOPS` |
-| --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
-| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
-| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
-| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
-| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+| Setup                                                         | `TRUSTED_PROXY_HOPS`                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No proxy (direct `:3000`)                                     | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket                                                                                                                                                                                                   |
+| Tailscale sidecar (Path A, including the Headscale variant)   | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
+| Bundled Caddy (`compose.caddy.yaml`)                          | `1` - set for you                                                                                                                                                                                                                                                                                                                            |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1`                                                                                                                                                                                                                                                                                                                                          |
+| Kubernetes chart via `kubectl port-forward`                   | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front                                                                                                                                                                   |
+| A CDN or load balancer in front of your proxy                 | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For`                                                                                                                                                                                                                                                                      |
 
 With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
@@ -1312,7 +1329,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
@@ -1349,9 +1366,9 @@ Object storage is outside the Mongo transaction. A failed attempt without a rece
 
 The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
 
-Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+Verification includes the notebook curation service the API route calls (`startNotebookCuration`), both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
 
-The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+The live test calls that service directly, so route validation and the 401 stay with the route tests (`curate.e2e.test.ts`); it does not go through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
 
 ```sh
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts
@@ -1380,6 +1397,10 @@ Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/
 
 The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
 
+### Admin data subject erasure
+
+`ACCOUNT_ERASURE_QUEUE` and `ACCOUNT_ERASURE_QUEUE_DLQ` enable the admin data subject erasure, which runs the account purge for one user at once instead of waiting for the daily account deletion sweep. The consumer uses the same redrive admission, one-at-a-time receive and visibility renewal as account data exports.
+
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
@@ -1401,7 +1422,8 @@ Covered shapes (inventory kind in brackets):
 - `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
 - `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
 - bucket `notify()` notifications to a Function or queue (`notification`)
-- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`); a target that is a
+  not-covered storage resource such as a log group delivers to no function
 - `aws.ses.ReceiptRule` (`sesRule`)
 - `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
 - `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
@@ -1418,7 +1440,8 @@ in `b4mContributions.infraResources`: their constructors are listed by name expr
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
-covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, KMS keys and aliases, Secrets Manager secrets and
+their resource policies, log groups and their resource policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 

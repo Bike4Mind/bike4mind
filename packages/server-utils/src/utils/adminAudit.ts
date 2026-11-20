@@ -28,7 +28,7 @@ type RequestAuditActor = AuditActor & { userId: string };
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default. The
 // extra fields are a structural slice of the Express augmentation in apps/client/global.d.ts,
 // which a program outside apps/client does not load.
-type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>> & {
+export type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>> & {
   user?: ActorIdentity;
   apiKeyInfo?: { keyId: string };
   logger?: { error: (message: string, meta?: Record<string, unknown>) => void };
@@ -120,6 +120,18 @@ const writerAdapters = async (
     ? await (preloadedPolicy ?? loadCreditGrantPolicy)()
     : undefined,
   logger: req.logger,
+});
+
+/**
+ * The `{ actor, context }` pair recordAdminActionFromRequest stamps on an entry, for services that
+ * write the audit entry themselves (they take the pair as input).
+ */
+export const resolveAdminAuditFromRequest = async (
+  req: AuditRequest,
+  actorScope: AuditActor['scope'] = 'platform'
+): Promise<{ actor: AuditActor; context: StoredAuditContext }> => ({
+  actor: await resolveActor(req, actorScope),
+  context: buildContext(req),
 });
 
 /**

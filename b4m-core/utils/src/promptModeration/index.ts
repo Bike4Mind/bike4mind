@@ -97,7 +97,13 @@ export class BedrockGuardrailsService implements ModerationService {
         );
         return;
       }
-      this.logger.error('Prompt flagged by Bedrock Guardrails:', { guardrailId: this.guardrailId, categories });
+      // An expected user refusal, so warn (not error): the caller surfaces it and the route skips its own log.
+      this.logger.warn('Prompt flagged by moderation', {
+        provider: 'bedrock',
+        categories,
+        guardrailId: this.guardrailId,
+        guardrailVersion: this.guardrailVersion,
+      });
       throw new FlaggedContentError(
         `We're sorry, your prompt has been flagged for potential harmful content on the following categories: ${categories.join(', ')}`,
         categories
@@ -105,6 +111,8 @@ export class BedrockGuardrailsService implements ModerationService {
     }
   }
 }
+
+const OPENAI_MODERATION_MODEL = 'omni-moderation-latest';
 
 export class OpenaiModerationsService implements ModerationService {
   private openai: OpenAI;
@@ -122,7 +130,7 @@ export class OpenaiModerationsService implements ModerationService {
    */
   async checkPrompt(prompt: string): Promise<void> {
     const moderation = await this.openai.moderations.create({
-      model: 'text-moderation-latest',
+      model: OPENAI_MODERATION_MODEL,
       input: prompt,
     });
 
@@ -136,7 +144,12 @@ export class OpenaiModerationsService implements ModerationService {
         return acc;
       }, []);
 
-      this.logger.error(`Prompt has been flagged for potential harmful content:`, JSON.stringify(moderation, null, 2));
+      // Category names and model only: the prompt text and the per-category scores stay out of the logs.
+      this.logger.warn('Prompt flagged by moderation', {
+        provider: 'openai',
+        categories: flaggedCategories,
+        model: moderation.model || OPENAI_MODERATION_MODEL,
+      });
 
       throw new FlaggedContentError(
         `We're sorry, your prompt has been flagged for potential harmful content on the following categories: ${flaggedCategories.join(

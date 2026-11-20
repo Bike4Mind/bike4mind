@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 import { createMocks } from 'node-mocks-http';
@@ -33,7 +33,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => m.models,
   getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({
     admits: async (id: string) => !m.denied.has(id),

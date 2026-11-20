@@ -1,7 +1,7 @@
 // What differs between a repo that ships tutorials and the next: where modules live, how their versions are kept,
 // and which owner string its bundles carry. The apply library takes one of these and names no repo itself.
 import type { TutorialDraftContent, TutorialStep, ValidationIssue } from '@bike4mind/common';
-import type { OverridePolicy } from '../overrides';
+import type { OverridePolicy } from '@bike4mind/server-utils/tutorials/overrides';
 
 export interface ModuleFiles {
   dir: string;

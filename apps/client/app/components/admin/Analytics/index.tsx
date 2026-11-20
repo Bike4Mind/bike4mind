@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
+import { ACQUISITION_NONE, type AcquisitionQuery, type AcquisitionRow } from '@client/app/utils/acquisitionConversion';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type {
@@ -29,6 +30,7 @@ import { adminTabToSlug } from '../adminTabSlugs';
 import { AdminTab } from '../adminSidebarConfig';
 import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { AcquisitionSection } from './AcquisitionSection';
 import { ActivationFunnelSection } from './ActivationFunnelSection';
 import { CohortsSection } from './CohortsSection';
 import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
@@ -36,8 +38,16 @@ import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageS
 import { TopAccountsSection } from './TopAccountsSection';
 import { downloadAnalyticsExport } from './analyticsExport';
 import { useAnalyticsTopAccounts } from './useAnalyticsTopAccounts';
-import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
+import {
+  ANALYTICS_SEARCH_KEYS,
+  readAcquisitionControls,
+  readAnalyticsFilters,
+  writeAcquisitionControls,
+  writeAnalyticsFilters,
+  type AcquisitionControls,
+} from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
+import { useAcquisitionConversion } from './useAcquisitionConversion';
 import { useActivationFunnel } from './useActivationFunnel';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -179,6 +189,7 @@ const AnalyticsTab = () => {
   const navigate = useNavigate();
   const [urlState, updateUrl] = useAdminListUrlState(ANALYTICS_SEARCH_KEYS);
   const query = readAnalyticsFilters(urlState.filters);
+  const acquisitionControls = readAcquisitionControls(urlState.filters);
   const [showMissing, setShowMissing] = useState(false);
 
   const customIncomplete = query.range === 'custom' && (!query.from || !query.to);
@@ -194,8 +205,21 @@ const AnalyticsTab = () => {
       ? getErrorMessage(funnelQuery.error)
       : undefined;
 
+  const acquisitionQuery = useAcquisitionConversion(query, acquisitionControls, queryReady);
+  const acquisitionStatus = isAxiosError(acquisitionQuery.error) ? acquisitionQuery.error.response?.status : undefined;
+  const acquisitionRefused = acquisitionStatus === 422 ? getErrorMessage(acquisitionQuery.error) : undefined;
+
   const setQuery = (patch: Partial<AnalyticsOverviewQuery>) =>
-    updateUrl({ filters: writeAnalyticsFilters({ ...query, ...patch }) });
+    updateUrl({
+      filters: { ...writeAnalyticsFilters({ ...query, ...patch }), ...writeAcquisitionControls(acquisitionControls) },
+    });
+  const setAcquisitionControls = (patch: Partial<AcquisitionControls>) =>
+    updateUrl({
+      filters: {
+        ...writeAnalyticsFilters(query),
+        ...writeAcquisitionControls({ ...acquisitionControls, ...patch }),
+      },
+    });
   const setRange = (range: AnalyticsRange) => {
     if (range !== 'custom') return setQuery({ range, from: undefined, to: undefined });
     // Seed the date inputs with the range on screen, so Custom starts from what the admin is looking at.
@@ -230,7 +254,9 @@ const AnalyticsTab = () => {
     if (!data) return;
     setExporting(true);
     try {
-      await downloadAnalyticsExport(data, topAccounts.data);
+      // Another range's placeholder rows must not ride into this range's zip.
+      const acquisition = acquisitionQuery.isPlaceholderData ? undefined : acquisitionQuery.data;
+      await downloadAnalyticsExport(data, topAccounts.data, acquisition);
     } catch {
       toast.error("Couldn't export the analytics. Try again.");
     } finally {
@@ -247,6 +273,33 @@ const AnalyticsTab = () => {
         ...funnel.window,
         funnelStep: step,
         verdict: funnel.signups === 'legit' ? ('legit' as const) : undefined,
+      }),
+    });
+  };
+
+  const openAcquisitionRow = (row: AcquisitionRow, converted: boolean) => {
+    const acquisition = acquisitionQuery.data;
+    if (acquisition?.status !== 'ok' || row.kind === 'other') return;
+    void navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG),
+        ...acquisition.window,
+        acqTouch: acquisition.touch,
+        ...(row.kind === 'unattributed'
+          ? { acqUnattributed: 'true' as const }
+          : {
+              acqSource: row.source ?? undefined,
+              acqMedium: row.medium === ACQUISITION_NONE ? undefined : (row.medium ?? undefined),
+              acqCampaign: row.campaign === ACQUISITION_NONE ? undefined : (row.campaign ?? undefined),
+            }),
+        ...(converted
+          ? {
+              acqConverted: 'true' as const,
+              acqWindow: String(acquisition.conversionWindowDays) as AcquisitionQuery['window'],
+            }
+          : {}),
+        verdict: acquisition.signups === 'legit' ? ('legit' as const) : undefined,
       }),
     });
   };
@@ -465,6 +518,21 @@ const AnalyticsTab = () => {
           />
         ))}
       </Box>
+
+      <AcquisitionSection
+        data={acquisitionQuery.data}
+        loading={acquisitionQuery.isPending && !acquisitionQuery.isError}
+        error={acquisitionQuery.isError && !acquisitionRefused && acquisitionStatus !== 504}
+        refused={acquisitionRefused}
+        timedOut={acquisitionStatus === 504}
+        updating={acquisitionQuery.isPlaceholderData}
+        fetching={acquisitionQuery.isFetching}
+        controls={acquisitionControls}
+        onControlsChange={setAcquisitionControls}
+        onRetry={() => void acquisitionQuery.refetch()}
+        onShowDefaultRange={showDefaultRange}
+        onSelectRow={openAcquisitionRow}
+      />
 
       <CohortsSection signups={query.signups} />
 

@@ -18,6 +18,8 @@ private struct GalleryContent: View {
   /// Pushed with `navigationDestination(item:)`: the shell's stack is bound to a typed `SessionsDestination`
   /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
   @State private var openItem: MediaItem?
+  @State private var turnInto: TurnIntoRequest?
+  @State private var exporter: MediaExportPresenter
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
 
@@ -28,6 +30,7 @@ private struct GalleryContent: View {
     tracker: GenerationTracker
   ) {
     _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
+    _exporter = State(initialValue: MediaExportPresenter(media: api))
     _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
     self.tracker = tracker
   }
@@ -36,8 +39,8 @@ private struct GalleryContent: View {
     content
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
-          GenerationTilesView(tracker: tracker, settings: create)
-          StudioCreateBar(model: create)
+          GenerationTilesView(tracker: tracker, settings: create, exporter: exporter)
+          StudioCreateBar(model: create, photoContext: editContext)
         }
       }
       // A finished generation is saved to the gallery server-side; pull it in.
@@ -48,10 +51,22 @@ private struct GalleryContent: View {
       .toolbar { ToolbarItem(placement: .principal) { filter } }
       .navigationDestination(item: $openItem) { item in
         MediaDetailView(item: item, api: services.media)
-          .environment(\.studioEdit, StudioEditContext(api: services.studio, media: services.media, tracker: tracker))
+          .environment(\.studioEdit, editContext)
       }
+      .turnIntoFlow(request: $turnInto, context: editContext)
+      .mediaExport(exporter)
       .task { await model.load() }
       .refreshable { await model.refresh() }
+  }
+
+  private var editContext: StudioEditContext {
+    StudioEditContext(
+      api: services.studio, media: services.media, tracker: tracker, frames: services.frameUploader,
+      currentInputs: { create.videoInputs },
+      apply: { seed in
+        openItem = nil
+        Task { await create.apply(seed) }
+      })
   }
 
   private var filter: some View {
@@ -110,6 +125,11 @@ private struct GalleryContent: View {
             MediaCell(item: item)
           }
           .buttonStyle(.plain)
+          .contextMenu {
+            MediaExportButtons(item: item, presenter: exporter)
+            Divider()
+            TurnIntoButtons(item: item) { turnInto = $0 }
+          }
           .task { await model.loadMoreIfNeeded(currentItem: item) }
           .accessibilityIdentifier("media-cell-\(item.id)")
         }
@@ -150,12 +170,8 @@ private struct MediaCell: View {
   private var tile: some View {
     switch item.kind {
     case .image:
-      AsyncImage(url: item.url) { phase in
-        switch phase {
-        case .success(let image): image.resizable().scaledToFill()
-        case .failure: placeholder("photo")
-        default: Tokens.Palette.groupedBackground
-        }
+      CachedThumbnail(url: item.url) { failed in
+        if failed { placeholder("photo") } else { Tokens.Palette.groupedBackground }
       }
     case .video: placeholder("play.rectangle.fill")
     case .audio: placeholder("waveform")

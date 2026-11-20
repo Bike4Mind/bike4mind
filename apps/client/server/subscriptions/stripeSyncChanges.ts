@@ -9,6 +9,7 @@ const SYNCED_FIELDS = [
   'periodStartsAt',
   'periodEndsAt',
   'canceledAt',
+  'endedAt',
   'unitAmount',
   'currency',
   'interval',

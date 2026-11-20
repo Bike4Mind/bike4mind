@@ -55,7 +55,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
 
-import { queryDataLakeArticles } from './index';
+import { queryDataLakeArticles } from '@bike4mind/server-utils/dataLakes/index';
 import { fabFileRepository, dataLakeRepository } from '@bike4mind/database';
 
 const findById = fabFileRepository.findById as ReturnType<typeof vi.fn>;

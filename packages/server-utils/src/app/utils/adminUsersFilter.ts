@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ACQUISITION_FOLDED_FIELD_LIMIT } from '../../lib/subscriptions/acquisitionLimits';
 import type { AdminUserListItem } from './adminUserProjection';
 import type { EmailDomainGroup } from './signupAnomaly';
 import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
@@ -21,6 +22,9 @@ export const USER_VERDICT_FILTERS = ['suspected', 'legit'] as const;
 /** Activation funnel steps in order; a filter on one selects users who reached it and not the next. */
 export const USER_FUNNEL_STEP_FILTERS = ['signedUp', 'firstAction', 'cameBack', 'paid'] as const;
 export type UserFunnelStep = (typeof USER_FUNNEL_STEP_FILTERS)[number];
+export const USER_ACQUISITION_TOUCH_FILTERS = ['first', 'last'] as const;
+export const USER_ACQUISITION_WINDOW_FILTERS = ['7', '30', '90'] as const;
+const acquisitionPart = z.string().trim().min(1).max(ACQUISITION_FOLDED_FIELD_LIMIT);
 
 export const ADMIN_USERS_SORT_FIELDS = ['createdAt', 'name', 'currentCredits', 'lastActiveAt'] as const;
 export type AdminUsersSortField = (typeof ADMIN_USERS_SORT_FIELDS)[number];
@@ -97,8 +101,23 @@ export const AdminUsersFilterFieldsSchema = z.object({
   // Classified live over the created window, which both need.
   verdict: z.enum(USER_VERDICT_FILTERS).optional(),
   funnelStep: z.enum(USER_FUNNEL_STEP_FILTERS).optional(),
+  // An Analytics acquisition row: signups whose first or last campaign touch is the source/medium/campaign
+  // (absent medium or campaign means none), or that carry no touch; acqConverted keeps those who paid.
+  acqTouch: z.enum(USER_ACQUISITION_TOUCH_FILTERS).optional(),
+  acqSource: acquisitionPart.optional(),
+  acqMedium: acquisitionPart.optional(),
+  acqCampaign: acquisitionPart.optional(),
+  acqUnattributed: z.literal('true').optional(),
+  acqConverted: z.literal('true').optional(),
+  acqWindow: z.enum(USER_ACQUISITION_WINDOW_FILTERS).optional(),
   // Accounts the AI advisory currently flags (see listAiAbuseAdvisories); needs no window of its own.
   aiVerdict: z.enum(USER_AI_VERDICT_FILTERS).optional(),
+  // Holders of one admin role (AdminRole id, b4m-core/common adminRoles.ts).
+  adminRole: z
+    .string()
+    .regex(/^[0-9a-f]{24}$/i, 'Expected an id')
+    .transform(id => id.toLowerCase())
+    .optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),
@@ -106,7 +125,26 @@ export const AdminUsersFilterFieldsSchema = z.object({
 
 /** Rules across fields, shared by every schema built on AdminUsersFilterFieldsSchema. */
 export function refineAdminUsersFilter(filter: z.infer<typeof AdminUsersFilterFieldsSchema>, ctx: z.RefinementCtx) {
-  const cohortKeys = (['verdict', 'funnelStep'] as const).filter(key => filter[key] !== undefined);
+  const cohortKeys = (['verdict', 'funnelStep', 'acqSource', 'acqUnattributed'] as const).filter(
+    key => filter[key] !== undefined
+  );
+  if (filter.acqSource !== undefined && filter.acqUnattributed !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['acqUnattributed'], message: 'acqUnattributed excludes acqSource' });
+  }
+  if (filter.acqSource === undefined && filter.acqUnattributed === undefined) {
+    for (const key of ['acqTouch', 'acqMedium', 'acqCampaign', 'acqConverted', 'acqWindow'] as const) {
+      if (filter[key] !== undefined) {
+        ctx.addIssue({ code: 'custom', path: [key], message: `${key} needs acqSource or acqUnattributed` });
+      }
+    }
+  }
+  if (filter.acqUnattributed !== undefined) {
+    for (const key of ['acqMedium', 'acqCampaign'] as const) {
+      if (filter[key] !== undefined) {
+        ctx.addIssue({ code: 'custom', path: [key], message: `${key} excludes acqUnattributed` });
+      }
+    }
+  }
   if (cohortKeys.length > 0) {
     if (!filter.createdFrom || !filter.createdTo) {
       for (const key of cohortKeys) {

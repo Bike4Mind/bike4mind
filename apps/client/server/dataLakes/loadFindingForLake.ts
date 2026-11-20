@@ -3,7 +3,7 @@ import { dataLakeAccessGrantRepository, dataLakeFindingRepository, dataLakeRepos
 import { dataLakeService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import type { Request } from 'express';
-import { assertDataLakeWriteScope } from './dataLakeScopes';
+import { assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 
 /**
  * Authorize a caller to WRITE against one finding, and hand back the finding with the lake it

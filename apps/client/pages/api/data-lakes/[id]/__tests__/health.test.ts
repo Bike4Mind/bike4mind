@@ -27,6 +27,10 @@ const HEALTH = {
 };
 
 const h = vi.hoisted(() => ({
+  adminSettings: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   assertLakeAccess: vi.fn(),
   computeLakeHealth: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
@@ -57,13 +61,10 @@ vi.mock('@bike4mind/services', async () => ({
     ).recordLakeAccessEvent,
   },
 }));
-vi.mock('@server/dataLakes', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: h.record },
-  adminSettingsRepository: {
-    findBySettingNames: vi.fn().mockResolvedValue([]),
-    findAll: vi.fn().mockResolvedValue([]),
-  },
+  adminSettingsRepository: h.adminSettings,
   scopedSettingsRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -99,6 +100,17 @@ beforeEach(() => {
 });
 
 describe('GET /api/data-lakes/:id/health', () => {
+  it('wires admin settings and the request logger into the read gate so reader grants are honored', async () => {
+    const { res } = makeRes();
+    const req = makeReq();
+    await invoke(req, res);
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      'lake1',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }), logger: req.logger })
+    );
+  });
+
   it('resolves access through the shared not-found-style gate, then reports that lake health', async () => {
     const { res, json } = makeRes();
     await invoke(makeReq(), res);

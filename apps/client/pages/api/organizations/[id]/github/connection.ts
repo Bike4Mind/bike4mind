@@ -19,8 +19,10 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { encryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { validatePrivateKeyFormat } from '@bike4mind/server-utils/utils/validators';
@@ -160,7 +162,7 @@ const handler = baseApi()
     const user = req.user!;
 
     // owner or platform admin only
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const parseResult = ConnectSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -233,6 +235,17 @@ const handler = baseApi()
       },
       data.allowedRepositories?.length
     );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.github_connection.created',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: `connected GitHub (${data.connectionType})`,
+      details: {
+        connectionId: connection.id,
+        connectionType: data.connectionType,
+        allowedRepositories: data.allowedRepositories ?? [],
+      },
+    });
 
     logger.info('[Org] Created GitHub connection', {
       connectionId: connection.id,
@@ -271,12 +284,12 @@ const handler = baseApi()
         if (connection.connectionType === 'github_app') {
           const connWithCreds = await orgGitHubConnectionRepository.findByOrganizationIdAnyWithCredentials(orgId);
           if (connWithCreds?.privateKey && isEncrypted(connWithCreds.privateKey)) {
-            decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+            decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
           }
         } else if (connection.connectionType === 'service_account') {
           const connWithCreds = await orgGitHubConnectionRepository.findByOrganizationIdAnyWithCredentials(orgId);
           if (connWithCreds?.accessToken && isEncrypted(connWithCreds.accessToken)) {
-            decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+            decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
           }
         }
       } catch (error) {
@@ -300,7 +313,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const parseResult = UpdateSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -358,6 +371,18 @@ const handler = baseApi()
         changedFields,
         auditChanges
       );
+      await recordAdminActionFromRequest(req, {
+        action: 'org.github_connection.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: org.id, displayName: org.name },
+        summary: `updated the GitHub connection (${changedFields.join(', ')})`,
+        changes: changedFields.map(field =>
+          field === 'enabled'
+            ? { field, before: connection.enabled, after: data.enabled }
+            : { field, before: connection.allowedRepositories, after: data.allowedRepositories }
+        ),
+        details: { connectionId: connection.id },
+      });
     }
 
     logger.info('[Org] Updated GitHub connection', {
@@ -380,13 +405,13 @@ const handler = baseApi()
           connWithCreds.privateKey &&
           isEncrypted(connWithCreds.privateKey)
         ) {
-          decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+          decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
         } else if (
           connWithCreds?.connectionType === 'service_account' &&
           connWithCreds.accessToken &&
           isEncrypted(connWithCreds.accessToken)
         ) {
-          decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+          decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
         }
       } catch (error) {
         logger.error('[Org] Failed to decrypt credentials for masking', {
@@ -409,7 +434,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     // findByOrganizationIdAny so disabled connections can be deleted too
     const connection = await orgGitHubConnectionRepository.findByOrganizationIdAny(orgId);
@@ -424,6 +449,13 @@ const handler = baseApi()
       organizationId: orgId,
       actorUserId: user.id,
       connectionType: connection.connectionType,
+    });
+    await recordAdminActionFromRequest(req, {
+      action: 'org.github_connection.deleted',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: 'disconnected GitHub',
+      details: { connectionId: connection.id, connectionType: connection.connectionType },
     });
 
     logger.info('[Org] Deleted GitHub connection', {

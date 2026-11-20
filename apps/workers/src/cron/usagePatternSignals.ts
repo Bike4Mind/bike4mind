@@ -126,7 +126,7 @@ const isUsageType = (type: string) => {
 
 type LeanFreshUser = {
   createdAt?: Date;
-  mfa?: { totpEnabled?: boolean; setupAt?: Date } | null;
+  mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean; setupAt?: Date } | null;
   loginRecords?: { loginTime?: Date; logoutTime?: Date | null }[];
 };
 type LeanLedgerRow = { type: string; credits: number; reason?: string; source?: string; createdAt: Date };
@@ -147,6 +147,7 @@ export async function gatherGrantDrainFacts(
   const user = await User.findById(userId, {
     createdAt: 1,
     'mfa.totpEnabled': 1,
+    'mfa.passkeyEnabled': 1,
     'mfa.setupAt': 1,
     'loginRecords.loginTime': 1,
     'loginRecords.logoutTime': 1,
@@ -173,7 +174,7 @@ export async function gatherGrantDrainFacts(
     .sort((a, b) => (b.loginTime?.getTime() ?? 0) - (a.loginTime?.getTime() ?? 0))[0];
   return {
     signedUpAt,
-    mfaEnabledAt: user.mfa?.totpEnabled ? (user.mfa.setupAt ?? null) : null,
+    mfaEnabledAt: user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (user.mfa.setupAt ?? null) : null,
     activityUnlockAt: rows.find(row => row.reason === ACTIVITY_UNLOCK_REASON)?.createdAt ?? null,
     grantedCredits: rows
       .filter(row => row.type === 'generic_add' && SIGNUP_GRANT_REASON.test(row.reason ?? ''))

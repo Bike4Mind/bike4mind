@@ -12,6 +12,18 @@ export const oauthClientRateLimitSchema = z
   })
   .strict();
 
+/** Bounds mirror the apiKeyUntrusted* admin settings; 0 means no limit of that kind, except requestsPerMinute. */
+export const oauthClientUnpaidAccountLimitsSchema = z
+  .object({
+    requestsPerMinute: z.number().int().min(1).max(10000),
+    requestsPerDay: z.number().int().min(0).max(1000000),
+    tokensPerMinute: z.number().int().min(0).max(100000000),
+    maxConcurrent: z.number().int().min(0).max(1000),
+  })
+  .strict();
+
+export type OAuthClientUnpaidAccountLimits = z.infer<typeof oauthClientUnpaidAccountLimitsSchema>;
+
 export const OAUTH_CLIENT_TYPES = ['first-party', 'relying-party'] as const;
 export type OAuthClientType = (typeof OAUTH_CLIENT_TYPES)[number];
 
@@ -131,6 +143,12 @@ const redirectUrisList = <T extends z.ZodType<string>>(item: T) =>
 
 const redirectUrisSchema = redirectUrisList(oauthRedirectUriSchema);
 
+// RP-Initiated Logout targets: same per-URI rules as redirectUris, but a client may register none.
+export const postLogoutRedirectUrisSchema = z
+  .array(oauthRedirectUriSchema)
+  .max(20, 'Too many post-logout redirect URIs')
+  .refine(uris => new Set(uris).size === uris.length, 'Post-logout redirect URIs must be unique');
+
 // Update keeps URIs a legacy client already stores, so only the shape is checked here;
 // updateOAuthClient applies oauthRedirectUriSchema to the newly-added ones.
 const storedRedirectUriSchema = redirectUriBaseSchema;
@@ -143,9 +161,12 @@ export const createOAuthClientSchema = z
   .object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name is too long'),
     redirectUris: redirectUrisSchema,
+    postLogoutRedirectUris: postLogoutRedirectUrisSchema.optional(),
     clientType: z.enum(OAUTH_CLIENT_TYPES).default('relying-party'),
     federatedIdp: oauthFederatedIdpInputSchema.optional(),
     rateLimit: oauthClientRateLimitSchema.optional(),
+    unpaidAccountLimits: oauthClientUnpaidAccountLimitsSchema.optional(),
+    unpaidAccountsAllowed: z.boolean().optional(),
   })
   .strict()
   .refine(data => !data.rateLimit || !!data.federatedIdp, 'A rate-limit profile requires a federated client');
@@ -171,10 +192,13 @@ export const oauthOverwatchProductIdSchema = z
 export const updateOAuthClientSchema = z
   .object({
     redirectUris: redirectUrisList(storedRedirectUriSchema).optional(),
+    postLogoutRedirectUris: postLogoutRedirectUrisSchema.optional(),
     isActive: z.boolean().optional(),
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
     rateLimit: oauthClientRateLimitSchema.nullable().optional(),
+    unpaidAccountLimits: oauthClientUnpaidAccountLimitsSchema.nullable().optional(),
+    unpaidAccountsAllowed: z.boolean().optional(),
     // null removes it: the client's new sign-ups stop being credited to a product.
     overwatchProductId: oauthOverwatchProductIdSchema.nullable().optional(),
     expectedUpdatedAt: z.string().datetime().nullable().optional(),
@@ -196,10 +220,14 @@ export interface OAuthClientView {
   clientType: OAuthClientType;
   tokenEndpointAuthMethod: 'none' | 'client_secret_post';
   redirectUris: string[];
+  postLogoutRedirectUris: string[];
   allowedScopes: string[];
   isActive: boolean;
   federatedIdp?: OAuthFederatedIdpConfig;
   rateLimit?: IUserApiKeyRateLimit;
+  unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
+  /** Unset means allowed. False keeps the app's exchange keys paid-only under the paid API key switch. */
+  unpaidAccountsAllowed?: boolean;
   overwatchProductId?: string;
   // Null for legacy documents written before timestamps were enabled.
   createdAt: string | null;

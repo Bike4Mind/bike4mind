@@ -50,16 +50,34 @@ const NOT_COVERED =
 
 export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
   {
+    id: 'where-feature-adoption',
+    category: 'where-is',
+    question: 'Where can I see observed successful feature users and repeat use by external or internal audience?',
+    expectViewIds: ['admin.event_metrics'],
+  },
+  {
     id: 'where-credit-economy',
     category: 'where-is',
     question: 'Where can I see platform credit issuance, consumption and accounting coverage?',
     expectViewIds: ['admin.credit_analytics'],
   },
   {
+    id: 'where-legacy-api-keys',
+    category: 'where-is',
+    question: 'Where can I see who still uses legacy API keys before legacy access ends?',
+    expectViewIds: ['admin.legacy_api_keys'],
+  },
+  {
     id: 'where-ai-operations',
     category: 'where-is',
     question: 'Where can I check admin AI spend and agreement or turn all admin AI off?',
     expectViewIds: ['admin.ai_operations'],
+  },
+  {
+    id: 'where-roles',
+    category: 'where-is',
+    question: 'Where can I create an admin role and choose which permissions it grants?',
+    expectViewIds: ['admin.roles'],
   },
   // where-is: the answer is a navigate_view hand-off to the right admin tab.
   {
@@ -152,6 +170,14 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
   },
 
   // what-is: an explanation plus the tab it lives on.
+  {
+    id: 'what-roles',
+    category: 'what-is',
+    question: 'What does the Roles page do?',
+    expectViewIds: ['admin.roles'],
+    expectTools: ['admin_search_guide'],
+    expect: ['\\broles?\\b', '\\b(?:permissions?|templates?|members?)\\b'],
+  },
   {
     id: 'what-domain-holds',
     category: 'what-is',

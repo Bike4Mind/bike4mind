@@ -12,6 +12,7 @@
  */
 
 import {
+  accountDeletionSweep,
   disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
@@ -30,7 +31,6 @@ import {
   heartbeatRoute,
   voiceSendTranscriptRoute,
   voiceEndedRoute,
-  cliCompletionRoute,
   cliToolRoute,
   keepCommandRequestRoute,
   keepCommandResponseRoute,
@@ -277,7 +277,7 @@ if (isMonitoredStage) {
    */
   new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
     name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
-    alarmDescription: "What's New generation Lambda has errors",
+    alarmDescription: "What's New Lambda (release notes and highlights) has errors",
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'Errors',
@@ -825,7 +825,6 @@ if (isMonitoredStage) {
     { key: 'heartbeat', metricName: 'HeartbeatRouteOutOfMemory', route: heartbeatRoute },
     { key: 'voice-send-transcript', metricName: 'VoiceSendTranscriptOutOfMemory', route: voiceSendTranscriptRoute },
     { key: 'voice-ended', metricName: 'VoiceEndedOutOfMemory', route: voiceEndedRoute },
-    { key: 'cli-completion', metricName: 'CliCompletionOutOfMemory', route: cliCompletionRoute },
     { key: 'cli-tool', metricName: 'CliToolOutOfMemory', route: cliToolRoute },
     { key: 'keep-command-request', metricName: 'KeepCommandRequestOutOfMemory', route: keepCommandRequestRoute },
     { key: 'keep-command-response', metricName: 'KeepCommandResponseOutOfMemory', route: keepCommandResponseRoute },
@@ -1251,19 +1250,23 @@ if (isMonitoredStage) {
     });
   }
 
+  // One stale client should not page; single stale pins are visible on the per-model dashboard.
+  const DEPRECATED_MODEL_REQUESTS_PER_HOUR_THRESHOLD = 20;
+  const DEPRECATED_MODEL_ALARM_PERIODS = 3;
+
   /**
    * Alarm: requests pinned to a deprecated model
    *
    * A model that 404s upstream reports itself; a stored pin on a deprecated
    * model is silent - the resolver upgrades it and the user sees a plausible
-   * answer either way, so nobody files a ticket. This is the only signal that
-   * stale pins are still arriving, so it fires on the first one rather than a
-   * volume threshold. Notify, do not page.
+   * answer either way, so nobody files a ticket. It fires only on a sustained
+   * rate: the resolver already serves every stale pin on its successor, so one
+   * stale client is not worth an alarm, while a stale caller with real traffic
+   * is. Notify, do not page.
    *
-   * Not latching: with treatMissingData=notBreaching and a single 1h period, it
-   * returns to OK after any hour with no stale pin, so an occasional offender
-   * flaps rather than holding ALARM until the pin is rewritten. The dashboard
-   * carries the history.
+   * With treatMissingData=notBreaching it returns to OK after any hour below
+   * the rate. Single stale pins stay visible per model on the model-sunset
+   * dashboard.
    *
    * Metric emitted by: b4m-core/llm-adapters/src/modelSunsetMetrics.ts, from
    * resolveDeprecatedModelId - the last point that still sees the id the caller
@@ -1272,14 +1275,16 @@ if (isMonitoredStage) {
    */
   new aws.cloudwatch.MetricAlarm('deprecatedModelRequest', {
     name: `${$app.name}-${$app.stage}-deprecated-model-request`,
-    alarmDescription: 'A request arrived pinned to a deprecated model - a session or agent pin needs upgrading',
+    alarmDescription:
+      'Requests pinned to a deprecated model are arriving at a sustained rate - a session or agent pin needs upgrading',
     comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
+    evaluationPeriods: DEPRECATED_MODEL_ALARM_PERIODS,
+    datapointsToAlarm: DEPRECATED_MODEL_ALARM_PERIODS,
     metricName: 'DeprecatedModelRequest',
     namespace: 'Lumina5/ModelSunset',
     period: 3600, // 1 hour - stale pins are chronic, not a spike
     statistic: 'Sum',
-    threshold: 0,
+    threshold: DEPRECATED_MODEL_REQUESTS_PER_HOUR_THRESHOLD,
     treatMissingData: 'notBreaching',
     dimensions: {
       Stage: $app.stage,
@@ -2005,6 +2010,52 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Auth',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Account deletion nearing the erasure deadline
+   *
+   * Pages when any deletion request 25 days old or more is still open. The daily sweep emits the count
+   * every run, so a healthy day is a 0 datapoint. The period is two days because one datapoint a day
+   * can land minutes off the window edge, and FILL(m, 1) turns a window with no datapoint into a breach:
+   * a stopped sweep must page, and CloudWatch can otherwise reuse an older healthy datapoint. The same
+   * window means a cleared request keeps the alarm in ALARM for up to about two days. A newly created
+   * alarm also pages once until the first sweep run emits.
+   *
+   * Metric emitted by: apps/workers/src/cron/accountDeletionSweep.ts
+   * Namespace: Lumina5/AccountDeletion / OverdueDeletionRequests
+   * Runbook: infra/account-deletion-deadline-alarm.md
+   */
+  // The sweep only exists on scheduled stages; an ENABLE_MONITORING preview has no sweep to emit.
+  if (accountDeletionSweep) {
+    new aws.cloudwatch.MetricAlarm('accountDeletionDeadline', {
+      name: `${$app.name}-${$app.stage}-account-deletion-deadline`,
+      alarmDescription:
+        'An account deletion request is 25+ days old and still open, or the sweep has stopped reporting. See infra/account-deletion-deadline-alarm.md',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      threshold: 0,
+      metricQueries: [
+        {
+          id: 'm',
+          returnData: false,
+          metric: {
+            metricName: 'OverdueDeletionRequests',
+            namespace: 'Lumina5/AccountDeletion',
+            period: 172800, // 2 days
+            stat: 'Maximum',
+            dimensions: { Stage: $app.stage },
+          },
+        },
+        { id: 'e', returnData: true, label: 'Overdue deletion requests', expression: 'FILL(m, 1)' },
+      ],
+      treatMissingData: 'breaching',
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'AccountDeletion',
         Severity: 'High',
       },
     });

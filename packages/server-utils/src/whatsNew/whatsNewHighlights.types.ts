@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
-/**
- * Payload schema for the What's New Highlights queue
- */
+/** Highlights job fields; on the What's New queue the message is `WhatsNewHighlightsJobSchema`, which adds `kind`. */
 export const WhatsNewHighlightsPayloadSchema = z.object({
   /** Unique ID for tracking this generation request */
   correlationId: z.string(),

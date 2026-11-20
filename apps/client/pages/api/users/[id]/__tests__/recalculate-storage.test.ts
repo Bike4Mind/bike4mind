@@ -8,13 +8,36 @@ const { mockRecalculate, mockFindById, mockRecordAdminAction } = vi.hoisted(() =
   mockRecordAdminAction: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
-    return chain;
-  },
-}));
-vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
+type Handler = (req: { method?: string }, res: unknown, next: () => void) => unknown;
+type Invocable = (req: unknown, res: unknown) => unknown;
+
+const mockRefs = vi.hoisted(() => ({ getHandler: null as null | Invocable, postHandler: null as null | Invocable }));
+
+// The chain runs adminApi's real permission guard (and any other use() middleware) ahead of the handler.
+vi.mock('@server/middlewares/baseApi', () => {
+  const guards: Handler[] = [];
+  const gated = (method: string, fn: Invocable) => async (req: { method?: string }, res: unknown) => {
+    req.method = method;
+    for (const guard of guards) guard(req, res, () => {});
+    return fn(req, res);
+  };
+  const chain = {
+    use: (fn: Handler) => {
+      guards.push(fn);
+      return chain;
+    },
+    get: (fn: Invocable) => {
+      mockRefs.getHandler = gated('GET', fn);
+      return chain;
+    },
+    post: (fn: Invocable) => {
+      mockRefs.postHandler = gated('POST', fn);
+      return chain;
+    },
+  };
+  return { baseApi: () => chain };
+});
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Invocable) => fn }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
   fabFileRepository: {},
@@ -28,12 +51,12 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
 }));
 
 import errorHandler from '@server/middlewares/errorHandler';
-import handler from '../recalculate-storage';
+import '../recalculate-storage';
 
-async function call(user: { id: string; isAdmin?: boolean }) {
+async function call(user: { id: string; isAdmin?: boolean; adminPermissions?: string[] }) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'target1' } });
-  (req as any).user = user;
-  await (handler as any)(req, res);
+  (req as unknown as { user: unknown }).user = user;
+  await mockRefs.postHandler!(req, res);
   return res;
 }
 
@@ -63,17 +86,29 @@ describe('POST /api/users/:id/recalculate-storage', () => {
   });
 
   it('records nothing for a non-admin or a failed recalculation', async () => {
-    await call({ id: 'u1', isAdmin: false });
+    await expect(call({ id: 'u1', isAdmin: false })).rejects.toThrow();
     mockRecalculate.mockRejectedValue(new ConflictError('storage counter kept changing'));
     await expect(call({ id: 'admin1', isAdmin: true })).rejects.toThrow();
 
     expect(mockRecordAdminAction).not.toHaveBeenCalled();
   });
 
-  it('rejects a non-admin without touching the counter', async () => {
-    const res = await call({ id: 'u1', isAdmin: false });
+  it('refuses a signed-in non-admin without touching the counter', async () => {
+    await expect(call({ id: 'u1', isAdmin: false })).rejects.toThrow('Missing permission: settings:manage');
+    expect(mockRecalculate).not.toHaveBeenCalled();
+  });
 
-    expect(res._getStatusCode()).toBe(403);
+  it('admits a delegate holding settings:manage', async () => {
+    const res = await call({ id: 'u2', isAdmin: false, adminPermissions: ['settings:manage'] });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecalculate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a delegate holding an unrelated permission', async () => {
+    await expect(call({ id: 'u3', isAdmin: false, adminPermissions: ['users:moderate'] })).rejects.toThrow(
+      'Missing permission: settings:manage'
+    );
     expect(mockRecalculate).not.toHaveBeenCalled();
   });
 
@@ -89,10 +124,11 @@ describe('POST /api/users/:id/recalculate-storage', () => {
     mockRecalculate.mockRejectedValue(new ConflictError('storage counter kept changing'));
 
     const { req, res } = createMocks({ method: 'POST', query: { id: 'target1' } });
-    (req as any).user = { id: 'admin1', isAdmin: true };
-    (req as any).logger = { warn: vi.fn(), error: vi.fn() };
+    const request = req as unknown as { user: unknown; logger: unknown };
+    request.user = { id: 'admin1', isAdmin: true };
+    request.logger = { warn: vi.fn(), error: vi.fn() };
 
-    await (handler as any)(req, res).catch((error: unknown) => errorHandler(error, req, res));
+    await Promise.resolve(mockRefs.postHandler!(req, res)).catch((error: unknown) => errorHandler(error, req, res));
 
     expect(res._getStatusCode()).toBe(409);
   });

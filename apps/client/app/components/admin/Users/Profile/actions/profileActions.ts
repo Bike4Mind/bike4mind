@@ -18,12 +18,14 @@ export type ProfileAction =
   | 'newAccountSpendCap'
   | 'fileEmbeddingWindowReset'
   | 'internalAccount'
+  | 'partnerAccount'
   | 'subscription'
   | 'loginAs'
   | 'message'
   | 'scheduleDeletion'
   | 'cancelDeletion'
   | 'dataExport'
+  | 'erase'
   | 'delete';
 
 /**

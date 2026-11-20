@@ -21,6 +21,38 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertNil(navigator.takeOpeningTurn(forSession: "s1"))
   }
 
+  func testBriefRoutePushesTheBriefAndReportsItShowing() {
+    let navigator = AppNavigator()
+    navigator.isDrawerOpen = true
+    navigator.apply(.brief(id: "b1"))
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: "b1")])
+    XCTAssertFalse(navigator.isDrawerOpen)
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b1")))
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testOpenLatestBriefPushesAnIdlessBrief() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
+  }
+
+  func testTheLatestBriefIsNotAssumedToBeThePushedBrief() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testPushSessionKeepsTheBriefBelowIt() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: "b1"))
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+    XCTAssertEqual(navigator.sessionPath.last?.sessionID, "s1")
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+  }
+
   func testSameSessionDoesNotStackTwice() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))
@@ -212,5 +244,56 @@ final class AppNavigatorTests: XCTestCase {
     handler.didTapNotification(NotificationPayload(sessionID: "t1"))
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["t1"])
     XCTAssertFalse(handler.handle(url: URL(string: "https://evil.example/sessions/x")!))
+  }
+}
+
+@MainActor
+final class VoiceNavigationTests: XCTestCase {
+  func testStartingFromTheDrawerLandsOnHomeAndPresentsTheConversation() {
+    let navigator = AppNavigator()
+    navigator.apply(.settings)
+    navigator.isDrawerOpen = true
+
+    navigator.startVoiceConversation(.newConversation)
+
+    XCTAssertEqual(navigator.voiceRequest?.target, .newConversation)
+    XCTAssertTrue(navigator.isShowing(.home))
+    XCTAssertFalse(navigator.isDrawerOpen)
+  }
+
+  func testAConversationInASessionLeavesTheStackAlone() {
+    let navigator = AppNavigator()
+    navigator.apply(.session(id: "s1"))
+
+    navigator.startVoiceConversation(.session("s1"))
+
+    XCTAssertTrue(navigator.isShowing(.session(id: "s1")))
+  }
+
+  func testEndingANewConversationOpensTheSessionItStarted() {
+    let navigator = AppNavigator()
+    navigator.startVoiceConversation(.newConversation)
+
+    navigator.endVoiceConversation(startedSessionID: "fresh")
+
+    XCTAssertNil(navigator.voiceRequest)
+    XCTAssertTrue(navigator.isShowing(.session(id: "fresh")))
+  }
+
+  func testEndingWithoutAReplyStaysOnHome() {
+    let navigator = AppNavigator()
+    navigator.startVoiceConversation(.newConversation)
+
+    navigator.endVoiceConversation(startedSessionID: nil)
+
+    XCTAssertNil(navigator.voiceRequest)
+    XCTAssertTrue(navigator.isShowing(.home))
+  }
+
+  func testResetDropsTheConversation() {
+    let navigator = AppNavigator()
+    navigator.startVoiceConversation(.newConversation)
+    navigator.reset()
+    XCTAssertNil(navigator.voiceRequest)
   }
 }

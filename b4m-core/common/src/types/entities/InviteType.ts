@@ -25,7 +25,7 @@ export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
    * Record `email` as accepted (leaving pending/refused) and spend one slot. Null when no slot is left,
    * the email (case-insensitive) already accepted, or a named invite (`isLinkOnly: false`) no longer has it pending.
    */
-  acceptRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
+  acceptRecipient: (id: string, email: string, options?: { allowRepeat?: boolean }) => Promise<IInviteDocument | null>;
   /** Move `email` (case-insensitive) from pending to refused and spend one slot; null when not pending. */
   refusePendingRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
   /** Drop `email` (case-insensitive) from pending, capping `remaining` at the pending left; null when not pending. */
@@ -34,6 +34,8 @@ export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
   closeInvite: (id: string) => Promise<IInviteDocument | null>;
   /** Spend every slot and stamp `revokedAt` (kept if already set). Null for an unknown id. */
   markRevoked: (id: string) => Promise<IInviteDocument | null>;
+  /** Revoke every live invite for one document and type, as `markRevoked` does. Returns how many changed. */
+  revokeAllForDocument: (documentId: string, type: InviteType) => Promise<number>;
   searchInvites: (
     query: Record<string, unknown>,
     limit: number,
@@ -48,6 +50,7 @@ export enum InviteType {
   FabFile = 'FabFile',
   Organization = 'Organization',
   Project = 'Project',
+  Space = 'Space',
 }
 
 export type IBaseInvite = {

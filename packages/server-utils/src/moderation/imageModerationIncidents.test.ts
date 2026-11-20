@@ -1,23 +1,45 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   record: vi.fn(),
   markAlerted: vi.fn(),
+  markEscalationAlerted: vi.fn(),
   getSettingsMap: vi.fn(),
   sendEmail: vi.fn(),
+  publish: vi.fn(),
+  smtpSendEmail: vi.fn(),
+  queueFailureLog: vi.fn(),
   logger: { warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  imageModerationIncidentRepository: { record: mocks.record, markAlerted: mocks.markAlerted },
+  imageModerationIncidentRepository: {
+    record: mocks.record,
+    markAlerted: mocks.markAlerted,
+    markEscalationAlerted: mocks.markEscalationAlerted,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: mocks.logger } }));
-vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.sendEmail } }));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: { globalInstance: mocks.logger, error: mocks.queueFailureLog },
+}));
+// The alert path imports the queued mailer once and keeps it, so a single case swaps in the real one
+// by forwarding this stub to it.
+vi.mock('../utils/mailer/queuedMailer', () => ({
+  queuedMailer: { sendEmail: (...args: unknown[]) => mocks.sendEmail(...args) },
+}));
+vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
+vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.smtpSendEmail } }));
 
-import { createReviewerAlertDelivery, imageModerationIncidents, resolveAdminAppUrl } from './imageModerationIncidents';
+import {
+  createReviewerAlertDelivery,
+  getReviewerListStatus,
+  imageModerationIncidents,
+  resolveAdminAppUrl,
+  sendIncidentEscalationAlert,
+} from './imageModerationIncidents';
 
 describe('resolveAdminAppUrl', () => {
   it('prefers APP_URL', () => {
@@ -98,11 +120,138 @@ describe('imageModerationIncidents', () => {
     });
   });
 
+  describe('through the real queued mailer', () => {
+    beforeEach(async () => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      mocks.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
+      const { queuedMailer } =
+        await vi.importActual<typeof import('../utils/mailer/queuedMailer')>('../utils/mailer/queuedMailer');
+      mocks.sendEmail.mockImplementation((to, mail, options) => queuedMailer.sendEmail(to, mail, options));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('publishes the alert as an email.send event that skips the mirror and the recipient log', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.publish).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: 'reviewer@example.com',
+          subject: 'Moderation review pending',
+          body: expect.stringContaining('incident-1'),
+          mirror: false,
+          logRecipient: false,
+        })
+      );
+      expect(mocks.smtpSendEmail).not.toHaveBeenCalled();
+      expect(mocks.markAlerted).toHaveBeenCalledWith('incident-1');
+    });
+
+    it('leaves the incident unstamped when the event cannot be queued', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+      mocks.publish.mockRejectedValue(new Error('bus unreachable'));
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.queueFailureLog).toHaveBeenCalledTimes(1);
+      expect(mocks.queueFailureLog.mock.calls[0][0]).not.toContain('reviewer@example.com');
+      expect(mocks.markAlerted).not.toHaveBeenCalled();
+    });
+  });
+
   it('reads the reviewer list past the settings cache only when the scheduled sweep asks', async () => {
     mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
 
     await createReviewerAlertDelivery({ skipSettingsCache: true }).getRecipients();
 
     expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
+  });
+});
+
+describe('sendIncidentEscalationAlert', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.sendEmail.mockResolvedValue({ messageId: 'm-1' });
+    mocks.markEscalationAlerted.mockResolvedValue(undefined);
+  });
+
+  it('emails the escalation list read past the settings cache, privately, and stamps the delivery', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: ['first@example.com'],
+      ImageModerationEscalationEmails: '["second@example.com"]',
+    });
+
+    const result = await sendIncidentEscalationAlert(INCIDENT);
+
+    expect(result).toEqual({ outcome: 'delivered', alertedAt: expect.any(Date) });
+    expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
+    expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
+      'second@example.com',
+      expect.objectContaining({ subject: 'Moderation review escalated' }),
+      PRIVATE_OPTIONS
+    );
+    expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('incident-1', result.alertedAt);
+  });
+
+  it('reports no_recipients when no escalation reviewer is configured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['first@example.com'] });
+
+    await expect(sendIncidentEscalationAlert(INCIDENT)).resolves.toEqual({
+      outcome: 'no_recipients',
+      alertedAt: null,
+    });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.markEscalationAlerted).not.toHaveBeenCalled();
+  });
+});
+
+describe('getReviewerListStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reads only the two lists, past the settings cache', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+
+    await getReviewerListStatus();
+
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: expect.anything() },
+      { skipCache: true, names: ['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] }
+    );
+  });
+
+  it.each([
+    ['absent', undefined, false],
+    ['empty', '[]', false],
+    ['unparseable', 'not json', false],
+    ['invalid entries only', '["not-an-address", ""]', false],
+    ['one valid entry among invalid ones', '["not-an-address", "reviewer@example.com"]', true],
+    ['a valid array', ['reviewer@example.com'], true],
+  ])('treats a list that is %s as configured=%s', async (_label, stored, expected) => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: stored,
+      ImageModerationEscalationEmails: stored,
+    });
+
+    await expect(getReviewerListStatus()).resolves.toEqual({
+      reviewersConfigured: expected,
+      escalationReviewersConfigured: expected,
+    });
+  });
+
+  it('judges each list on its own and never returns an address', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: '["reviewer@example.com"]',
+      ImageModerationEscalationEmails: '["nope"]',
+    });
+
+    const status = await getReviewerListStatus();
+
+    expect(status).toEqual({ reviewersConfigured: true, escalationReviewersConfigured: false });
+    expect(JSON.stringify(status)).not.toContain('@');
   });
 });

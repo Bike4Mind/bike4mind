@@ -1,5 +1,5 @@
 import { AnalyticsDaily, UsageEvent } from '@bike4mind/database';
-import { formatDay, rollupDay } from '@server/analytics/analyticsRollup';
+import { formatDay, rollupDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;

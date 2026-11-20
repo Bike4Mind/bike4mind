@@ -16,11 +16,14 @@ import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { hostingNetworkOf } from '@server/auth/datacenterAsns';
+import { hostingNetworkOf } from '@bike4mind/server-utils/auth/datacenterAsns';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { lockIfPaidWithBlockedCard } from '@bike4mind/server-utils/billing/linkedAccounts';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import type Stripe from 'stripe';
 
 const MINUTE_MS = 60_000;
@@ -329,6 +332,15 @@ export async function recordPaymentStart(
   },
   logger: Logger
 ): Promise<void> {
+  // Overlaps the write so the CloudWatch round trip does not add to the start-payment
+  // response, and a failed attempt-row write cannot drop the count. emitMetric never rejects.
+  const startCounted = emitMetric(
+    'Lumina5/Billing',
+    'PaymentStarted',
+    1,
+    { kind: 'credits', Stage: Config.STAGE },
+    StandardUnit.Count
+  );
   try {
     await paymentAttemptRepository.recordStart({
       paymentIntentId: input.paymentIntentId,
@@ -345,6 +357,7 @@ export async function recordPaymentStart(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  await startCounted;
 }
 
 /**
@@ -403,6 +416,15 @@ export async function screenPaymentOutcome(
       logger.info('[PaymentRisk] redelivered outcome, already screened', { paymentIntentId: input.paymentIntentId });
       return;
     }
+
+    // Dimension names are keyed on by dashboards and alarms; keep them stable.
+    await emitMetric(
+      'Lumina5/Billing',
+      'PaymentOutcome',
+      1,
+      { outcome: input.outcome, kind: input.kind, Stage: Config.STAGE },
+      StandardUnit.Count
+    );
 
     if (attempt.outcome === 'succeeded') {
       await lockIfPaidWithBlockedCard(

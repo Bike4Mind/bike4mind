@@ -18,8 +18,11 @@ import {
   sessionRepository,
   projectRepository,
   organizationRepository,
+  spaceRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -49,6 +52,11 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
       name = group?.name;
       break;
     }
+    case InviteType.Space: {
+      const space = await spaceRepository.findLiveById(docId);
+      name = space?.name;
+      break;
+    }
     default:
       break;
   }
@@ -74,6 +82,8 @@ export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
  * revoked) | 'denied'. Share-authorized callers still see expired invites.
  */
 export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
+  // Space routes sit behind EnableSpaces, so this read path must not reveal a Space invite with it off.
+  if (invite.type === InviteType.Space && !(await isFeatureEnabled('EnableSpaces'))) return 'denied';
   const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();
   const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
@@ -93,13 +103,20 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
   }
 
   try {
-    await sharingService.authorizeByInviteType(user, invite.type, invite.documentId, {
-      fabFiles: fabFileRepository,
-      sessions: sessionRepository,
-      projects: projectRepository,
-      organizations: organizationRepository,
-      groups: Group,
-    });
+    await sharingService.authorizeByInviteType(
+      user,
+      invite.type,
+      invite.documentId,
+      {
+        fabFiles: fabFileRepository,
+        sessions: sessionRepository,
+        projects: projectRepository,
+        organizations: organizationRepository,
+        groups: Group,
+        spaces: spaceRepository,
+      },
+      invite.type === InviteType.Space ? { requireManageGroups: true } : undefined
+    );
     return 'allowed';
   } catch {
     return isNamedRecipient && expired ? 'expired' : 'denied';
@@ -163,6 +180,22 @@ export interface SharerInviteRecipientUser {
   name: string;
 }
 
+/**
+ * Names the inviter (`inviterName`) on Organization invites, for the team's pending-invitations
+ * table. Scoped to Organization: anyone who can list them already sees the inviter on the roster.
+ */
+async function attachOrgInviterNames(plains: Record<string, unknown>[]): Promise<void> {
+  const orgInvites = plains.filter(plain => plain.type === InviteType.Organization && plain.inviterId);
+  const ids = [...new Set(orgInvites.map(plain => String(plain.inviterId)))].filter(id => isValidObjectId(id));
+  if (ids.length === 0) return;
+  const users = await User.find({ _id: { $in: ids } }, { _id: 1, name: 1, username: 1 }).lean();
+  const names = new Map(users.map(user => [String(user._id), user.name || user.username]));
+  for (const plain of orgInvites) {
+    const name = names.get(String(plain.inviterId));
+    if (name) plain.inviterName = name;
+  }
+}
+
 /** `a***@example.com`. Shown only for an address that matches no user, so there is no id to give. */
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf('@');
@@ -193,6 +226,7 @@ export async function toSharerInviteViews(
   viewer: Pick<IUserDocument, 'id' | 'email' | 'isAdmin'>
 ): Promise<Record<string, unknown>[]> {
   const plains = invites.map(invite => omitInviteToken(invite));
+  await attachOrgInviterNames(plains);
   if (viewer.isAdmin) {
     return plains;
   }

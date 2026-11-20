@@ -9,7 +9,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
 }));
-vi.mock('@server/generationJobs/wiring', () => ({ getMusicJobDeps: vi.fn(), getCreateMusicJobDeps: vi.fn() }));
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
+  getMusicJobDeps: vi.fn(),
+  getCreateMusicJobDeps: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
 
 const { buildAgentMusicToolConfig, limitMusicTracksPerRun } = await import('./agentExecutor.musicToolConfig');

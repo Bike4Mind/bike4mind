@@ -22,7 +22,8 @@ export const listModelsContract = defineEndpoint({
     "the caller has a key for, their own or the platform's. Use it to choose a `model` by capability " +
     'before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and ' +
     'for image models the `image` block, which lists the accepted `size` values (or the rule they must ' +
-    'meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the ' +
+    'meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured, plus a ' +
+    '`blurb` and `provider_label` to show on a model card. To pick the ' +
     'cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list ' +
     'is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass ' +
     '`next_cursor` back as `cursor` until it is `null`. Sorted by `id` ascending. ' +
@@ -45,6 +46,8 @@ export const listModelsContract = defineEndpoint({
             type: 'text',
             backend: 'anthropic',
             description: null,
+            blurb: null,
+            provider_label: null,
             context_window: 1_000_000,
             max_output_tokens: 128_000,
             supports_streaming: true,
@@ -67,6 +70,8 @@ export const listModelsContract = defineEndpoint({
             type: 'image',
             backend: 'openai',
             description: null,
+            blurb: 'Reliable prompt following with legible text in the image.',
+            provider_label: 'OpenAI',
             context_window: 0,
             max_output_tokens: 0,
             supports_streaming: false,

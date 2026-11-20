@@ -7,12 +7,16 @@ import {
 } from '@bike4mind/common';
 import { escapeHtml } from '../utils/mailer/emailHelpers';
 
-/** The fields of a stored incident the alert reads; anything else on the record is never rendered. */
+/**
+ * The fields of a stored incident the alerts read. The emails render only id, time and surface;
+ * anything else on the record is never rendered.
+ */
 export interface RecordedIncident {
   id: string;
   createdAt: Date | string;
   surface?: IncidentSurface;
   reviewStatus?: ImageModerationIncident['reviewStatus'];
+  escalatedAt?: Date | string;
 }
 
 export interface IncidentReviewAlertDeps {
@@ -28,9 +32,9 @@ export interface IncidentReviewAlertDeps {
   logger: { warn(msg: string, meta: unknown): void; error(msg: string, meta: unknown): void };
 }
 
-// Recording sits on the image request path, and the SMTP transport's own timeouts add up to tens
-// of seconds, so the alert gets a short budget. A send that misses it is best-effort (it may still
-// land, unstamped) until the send moves onto the email event with its retries.
+// Recording sits on the image request path, so the alert gets a short budget. Self-host sends over
+// SMTP in-process, whose own timeouts add up to tens of seconds; a send that misses the budget is
+// best-effort (it may still land, unstamped).
 export const REVIEW_ALERT_TIMEOUT_MS = 5_000;
 
 /**
@@ -42,6 +46,33 @@ export function renderIncidentReviewAlert(
   incident: RecordedIncident,
   reviewUrl: string
 ): { subject: string; html: string } {
+  return renderIncidentEmail(
+    incident,
+    reviewUrl,
+    'Moderation review pending',
+    'A moderation incident is waiting in the admin console.'
+  );
+}
+
+/** The escalation email: the same metadata allowlist as the reviewer alert, for the second review step. */
+export function renderIncidentEscalationAlert(
+  incident: RecordedIncident,
+  reviewUrl: string
+): { subject: string; html: string } {
+  return renderIncidentEmail(
+    incident,
+    reviewUrl,
+    'Moderation review escalated',
+    'A moderation incident was escalated to the second review step and is waiting in the admin console.'
+  );
+}
+
+function renderIncidentEmail(
+  incident: RecordedIncident,
+  reviewUrl: string,
+  subject: string,
+  lead: string
+): { subject: string; html: string } {
   const rows: [string, string][] = [
     ['Incident id', incident.id],
     ['Created', new Date(incident.createdAt).toISOString()],
@@ -49,9 +80,9 @@ export function renderIncidentReviewAlert(
   ];
   const table = rows.map(([k, v]) => `<tr><td><strong>${k}</strong></td><td>${escapeHtml(v)}</td></tr>`).join('');
   return {
-    subject: 'Moderation review pending',
+    subject,
     html:
-      `<p>A moderation incident is waiting in the admin console.</p><table>${table}</table>` +
+      `<p>${lead}</p><table>${table}</table>` +
       `<p><a href="${escapeHtml(reviewUrl)}">${escapeHtml(reviewUrl)}</a></p>`,
   };
 }
@@ -62,7 +93,33 @@ const needsReview = (incident: RecordedIncident) =>
 /** The deps the alert needs to render and send, without the incident store. */
 export type IncidentReviewDelivery = Omit<IncidentReviewAlertDeps, 'incidents'>;
 
+/** Delivery that can also reach the second review step. */
+export interface IncidentEscalationDelivery extends IncidentReviewDelivery {
+  /** The stored ImageModerationEscalationEmails value; validated the same way as the reviewer list. */
+  getEscalationRecipients: () => Promise<unknown>;
+}
+
 export type IncidentAlertOutcome = 'delivered' | 'no_recipients' | 'failed';
+
+/** Which reviewer list a send goes to. Warnings name the setting, never an address. */
+interface RecipientList {
+  read: () => Promise<unknown>;
+  setting: 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails';
+  /** Logged when the list holds no valid address. */
+  missing: string;
+}
+
+const firstReviewers = (deps: IncidentReviewDelivery): RecipientList => ({
+  read: () => deps.getRecipients(),
+  setting: 'ImageModerationReviewerEmails',
+  missing: 'incident needs review but no reviewer is configured',
+});
+
+const escalationReviewers = (deps: IncidentEscalationDelivery): RecipientList => ({
+  read: () => deps.getEscalationRecipients(),
+  setting: 'ImageModerationEscalationEmails',
+  missing: 'incident was escalated but no escalation reviewer is configured',
+});
 
 // Digest links land on the admin console base path.
 // TODO: link the moderation review tab directly once it is merged (see adminModerationIncidentPath).
@@ -98,24 +155,19 @@ export function renderIncidentReminderDigest(
 }
 
 async function deliverToReviewers(
+  list: RecipientList,
   buildEmail: (adminUrl: (path: string) => string) => { subject: string; html: string },
   meta: Record<string, string>,
   what: string,
   deps: IncidentReviewDelivery,
   options: { timeoutMs?: number }
 ): Promise<IncidentAlertOutcome> {
-  const { valid: recipients, invalid } = partitionEmailList(await deps.getRecipients());
+  const { valid: recipients, invalid } = partitionEmailList(await list.read());
   if (invalid.length > 0) {
-    deps.logger.warn(
-      `[ImageModeration] ignoring ${invalid.length} invalid ImageModerationReviewerEmails entries`,
-      meta
-    );
+    deps.logger.warn(`[ImageModeration] ignoring ${invalid.length} invalid ${list.setting} entries`, meta);
   }
   if (recipients.length === 0) {
-    deps.logger.warn(
-      '[ImageModeration] incident needs review but no reviewer is configured (ImageModerationReviewerEmails)',
-      meta
-    );
+    deps.logger.warn(`[ImageModeration] ${list.missing} (${list.setting})`, meta);
     return 'no_recipients';
   }
 
@@ -141,6 +193,7 @@ async function deliverToReviewers(
       deps.logger.error(`[ImageModeration] reviewer ${what} failed to send`, meta);
       return 'failed';
     }
+    // On a hosted stage this means queued for the email-send worker (see createReviewerAlertDelivery).
     return 'delivered';
   } finally {
     clearTimeout(timer);
@@ -159,9 +212,26 @@ export function deliverIncidentAlert(
   options: { timeoutMs?: number } = {}
 ): Promise<IncidentAlertOutcome> {
   return deliverToReviewers(
+    firstReviewers(deps),
     adminUrl => renderIncidentReviewAlert(incident, adminUrl(adminModerationIncidentPath(incident.id))),
     { incidentId: incident.id },
     'alert',
+    deps,
+    options
+  );
+}
+
+/** Sends the escalation email for one incident to the escalation list, without stamping anything. */
+export function deliverEscalationAlert(
+  incident: RecordedIncident,
+  deps: IncidentEscalationDelivery,
+  options: { timeoutMs?: number } = {}
+): Promise<IncidentAlertOutcome> {
+  return deliverToReviewers(
+    escalationReviewers(deps),
+    adminUrl => renderIncidentEscalationAlert(incident, adminUrl(adminModerationIncidentPath(incident.id))),
+    { incidentId: incident.id },
+    'escalation alert',
     deps,
     options
   );
@@ -173,13 +243,67 @@ export function deliverReminderDigest(
   deps: IncidentReviewDelivery,
   options: { timeoutMs?: number } = {}
 ): Promise<IncidentAlertOutcome> {
+  return deliverDigest(firstReviewers(deps), 'reminder', digest, deps, options);
+}
+
+/** Sends the same daily reminder digest to the escalation list. */
+export function deliverEscalationReminderDigest(
+  digest: IncidentReminderDigest,
+  deps: IncidentEscalationDelivery,
+  options: { timeoutMs?: number } = {}
+): Promise<IncidentAlertOutcome> {
+  return deliverDigest(escalationReviewers(deps), 'escalation reminder', digest, deps, options);
+}
+
+function deliverDigest(
+  list: RecipientList,
+  what: string,
+  digest: IncidentReminderDigest,
+  deps: IncidentReviewDelivery,
+  options: { timeoutMs?: number }
+): Promise<IncidentAlertOutcome> {
   return deliverToReviewers(
+    list,
     adminUrl => renderIncidentReminderDigest(digest, adminUrl(ADMIN_CONSOLE_PATH)),
     { pendingCount: String(digest.pendingCount) },
-    'reminder',
+    what,
     deps,
     options
   );
+}
+
+export interface IncidentEscalationAlertDeps extends IncidentEscalationDelivery {
+  incidents: { markEscalationAlerted(id: string, at: Date): Promise<void> };
+}
+
+/**
+ * Sends the escalation email for an incident a reviewer just escalated and stamps
+ * escalationAlertedAt on delivery. Never throws: an undelivered or unstamped send is left for the
+ * review sweep to retry. `alertedAt` is the stamp written, or null when none was.
+ */
+export async function alertEscalationReviewers(
+  incident: RecordedIncident,
+  deps: IncidentEscalationAlertDeps,
+  now: () => Date = () => new Date()
+): Promise<{ outcome: IncidentAlertOutcome; alertedAt: Date | null }> {
+  let outcome: IncidentAlertOutcome;
+  try {
+    outcome = await deliverEscalationAlert(incident, deps);
+  } catch {
+    deps.logger.error('[ImageModeration] escalation alert failed', { incidentId: incident.id });
+    return { outcome: 'failed', alertedAt: null };
+  }
+  if (outcome !== 'delivered') return { outcome, alertedAt: null };
+  const alertedAt = now();
+  try {
+    await deps.incidents.markEscalationAlerted(incident.id, alertedAt);
+    return { outcome, alertedAt };
+  } catch {
+    deps.logger.error('[ImageModeration] escalation alert sent but escalationAlertedAt was not recorded', {
+      incidentId: incident.id,
+    });
+    return { outcome, alertedAt: null };
+  }
 }
 
 async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAlertDeps): Promise<void> {

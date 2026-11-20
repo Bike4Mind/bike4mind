@@ -8,6 +8,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
@@ -18,6 +19,7 @@ vi.mock('./shellWrites', async importOriginal => {
 });
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -409,8 +411,8 @@ describe('shell approval in a project with a large node_modules', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      auto: runsCheckedInAuto(prompt) && (prompt.always?.directories ?? []).length === 0,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };
@@ -465,7 +467,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git status && git ls-files src | xargs wc -l', '', unasked],
     ['pgrep node | xargs kill', '', unasked],
     ['docker ps -q | xargs docker stop', '', unasked],
-    ['git branch --merged | xargs git branch -d', '', unasked],
+    ['git branch --merged | xargs git branch -d', '', { auto: false, full: false, allowed: false }],
     ["find src -name '*.ts' | xargs -d '\\n' sed -i s/a/b/", '', unasked],
     ['git diff --name-only -- src | xargs wc -l', 'srepo', unasked],
     ['git ls-files src | xargs -I{} wc -l {}', '', unasked],
@@ -482,7 +484,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ["find src -name '*.ts' 2>/dev/null | xargs cat", '', unasked],
     ['git ls-files | grep -v x | xargs wc -l', '', unasked],
     ["find src -name '*.ts' | head -5 | xargs sed -i s/a/b/", '', unasked],
-    ['git branch --merged | grep -v main | xargs git branch -d', '', unasked],
+    ['git branch --merged | grep -v main | xargs git branch -d', '', { auto: false, full: false, allowed: false }],
     ['git diff --name-only main...other | xargs sed -i s/a/b/', '', unasked],
     ['git diff --name-only main..other | xargs sed -i s/a/b/', '', unasked],
     ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
@@ -964,8 +966,19 @@ describe('shell approval in a project with a large node_modules', () => {
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
     ...SENDING_GIT.map(sending => `git ${sending}`),
-  ])('asks in auto mode for %s, which sends data out', async command => {
-    expect((await judge(command)).auto).toBe(false);
+  ])('names the outbound capability of %s on the card', async command => {
+    const prompt = await shellApproval(
+      'bash_execute',
+      { command, cwd: proj },
+      {
+        roots: [proj],
+        workingDirectory: proj,
+        signal: new AbortController().signal,
+        protectedPaths: [userData],
+        uncoverablePaths: permissionRoots,
+      }
+    );
+    expect(prompt.detail).toContain('Can send data off this computer');
   });
 
   it.each([
@@ -1610,11 +1623,10 @@ describe('shell approval in a project with a large node_modules', () => {
   );
 
   it.each(["true && bash -c 'echo x'", "true && sh -c 'echo x; ls'"])(
-    'runs %s && git st (in proj/yrepo) in full mode, as the shell string only reads, and asks in auto only for the shell',
+    'runs %s && git st (in proj/yrepo) unasked, as the shell string only reads',
     async first => {
-      const alone = await judge(first, 'yrepo');
-      expect(alone).toMatchObject({ auto: false, full: true });
-      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+      expect(await judge(first, 'yrepo')).toMatchObject({ auto: true, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: true, full: true });
     }
   );
 
@@ -1832,11 +1844,10 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   it.each(['git push -u origin HEAD', 'git remote add up https://example.invalid/r'])(
-    'runs %s && git st (in proj/yrepo) in full mode, and asks in auto only as the first command alone does',
+    'runs %s && git st (in proj/yrepo) unasked, as the first command alone does',
     async first => {
-      const alone = await judge(first, 'yrepo');
-      expect(alone).toMatchObject({ auto: false, full: true });
-      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+      expect(await judge(first, 'yrepo')).toMatchObject({ auto: true, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: true, full: true });
     }
   );
 
@@ -2114,7 +2125,13 @@ describe('shell approval in a project with a large node_modules', () => {
   it('reads a git alias for push as the push it expands to', async () => {
     const push = await judge('git push origin main', 'qrepo');
     expect(await judge('git p origin main', 'qrepo')).toMatchObject({ auto: push.auto, full: push.full });
-    expect(await judge('git p https://example.invalid/r main', 'qrepo')).toMatchObject({ auto: false, full: true });
+    const cwd = join(proj, 'qrepo');
+    const elsewhere = await shellApproval(
+      'bash_execute',
+      { command: 'git p https://example.invalid/r main', cwd },
+      { roots: [proj], workingDirectory: cwd, signal: new AbortController().signal, protectedPaths: [userData] }
+    );
+    expect(elsewhere.detail).toContain('Can send data off this computer');
   });
 
   it.each([
@@ -2283,7 +2300,7 @@ describe('shell approval in a project with a large node_modules', () => {
     'cargo build --${PROFILE}',
     'npm test --$X',
     'make --$X',
-    'git log --$X',
+
     'ls --c*',
     'npx prettier --{check,write} src',
     'rg --files',
@@ -2291,6 +2308,10 @@ describe('shell approval in a project with a large node_modules', () => {
     'rsync -a --force src/ dst/',
   ])('runs %s unasked, an option bash cannot change to another', async command => {
     expect(await judge(command, 'grepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('asks for a Git option filled at runtime, which could select verification', async () => {
+    expect(await judge('git log --$X', 'grepo')).toMatchObject({ auto: false, full: false });
   });
 
   it.each([

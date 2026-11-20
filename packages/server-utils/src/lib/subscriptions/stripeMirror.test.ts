@@ -36,6 +36,7 @@ describe('stripeMirrorFields', () => {
       intervalCount: 1,
       cancelAtPeriodEnd: false,
       cancelAt: null,
+      endedAt: null,
       trialEndsAt: null,
       stripeCustomerId: 'cus_123',
       lastSyncedAt: SYNCED_AT,
@@ -179,5 +180,14 @@ describe('stripeSubscriptionRowFields', () => {
     expect(fields.quantity).toBe(1);
     expect(fields.status).toBe('canceled');
     expect(fields.canceledAt).toEqual(new Date(1_701_000_000_000));
+  });
+  it('mirrors the effective termination separately from a scheduled cancellation request', () => {
+    const fields = stripeSubscriptionRowFields(
+      makeRowSource({ status: 'canceled', canceled_at: 1700000000, ended_at: 1701000000 }),
+      SYNCED_AT
+    );
+    expect(fields.canceledAt).toEqual(new Date(1700000000000));
+    expect(fields.endedAt).toEqual(new Date(1701000000000));
+    expect(stripeMirrorFields(makeSubscription({ ended_at: null }), SYNCED_AT).endedAt).toBeNull();
   });
 });

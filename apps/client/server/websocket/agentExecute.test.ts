@@ -52,23 +52,21 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@server/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
-}));
-vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
-  extractFinalAnswer: vi.fn(),
 }));
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
-  resolveAndPublishMementoCompletion: vi.fn(),
+vi.mock('@bike4mind/server-utils/agentExecution/gateResponse', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/agentExecution/gateResponse')>()),
+  handleGateResponse: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@server/websocket/reconnectBudget', () => ({
   decideInlineBudgets: vi.fn().mockReturnValue({ includeStepsInline: true, includeChildrenInline: true }),
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyJwtToken: vi.fn(),
   checkRateLimit: vi.fn(),
   verifyApiKey: vi.fn(),
@@ -104,16 +102,22 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import {
+  verifyApiKey,
+  verifyJwtToken,
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+} from '@bike4mind/server-utils/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 const mockRecordUserActivity = vi.hoisted(() => vi.fn());
 vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
 
-import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { handleGateResponse } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { func, handlePermissionResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -574,39 +578,6 @@ describe('container resume rejection', () => {
   });
 });
 
-describe('container confidence resume', () => {
-  it('routes through HTTP and atomically restores a rejected gate', async () => {
-    const pendingGate = { iteration: 1, confidence: 0.1, reason: 'test', requestedAt: new Date() };
-    mockFindById.mockResolvedValue({ ...baseExecution, status: 'paused', pendingGate });
-    mockClearPendingGate.mockResolvedValue(true);
-    mockRestoreRejectedResume.mockClear();
-    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
-    try {
-      await expect(
-        handleGateResponse(
-          {
-            accessToken: 'token',
-            action: 'agent_execute',
-            command: 'gate_response',
-            executionId: 'exec-1',
-            decision: 'continue',
-          },
-          'user-1',
-          'conn-1',
-          'http://ws',
-          noopLogger as never
-        )
-      ).rejects.toThrow('401');
-      expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', { status: 'paused', pendingGate });
-    } finally {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
-    }
-  });
-});
-
 describe('concurrent permission approvals', () => {
   it('allows only the approval that won the CAS to dispatch or roll back', async () => {
     mockFindById.mockResolvedValue(baseExecution);
@@ -1020,82 +991,31 @@ describe('WebSocket live activity settlement', () => {
     expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'stopped' }, noopLogger);
   });
 
-  it('ends the activity when a confidence gate is stopped', async () => {
-    const execution = { ...baseExecution, status: 'paused' };
-    mockFindById.mockResolvedValue(execution);
-    mockClearPendingGate.mockResolvedValue(true);
-    await handleGateResponse(
+  it('routes a gate_response message to handleGateResponse', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('JWT required'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const handle = func as unknown as (event: unknown, context: unknown, logger: typeof noopLogger) => Promise<unknown>;
+    await handle(
       {
-        accessToken: 'token',
-        action: 'agent_execute',
-        command: 'gate_response',
-        executionId: 'exec-1',
-        decision: 'stop',
-      },
-      'user-1',
-      'conn-1',
-      'https://endpoint',
-      noopLogger as never
-    );
-    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'completed' }, noopLogger);
-  });
-
-  describe('held low-confidence completion', () => {
-    const pendingCompletion = {
-      answer: 'held answer',
-      replyText: 'held reply',
-      totalTokens: 10,
-      totalIterations: 2,
-      reachedMaxIterations: false,
-      lowConfidence: true,
-      canReconsider: false,
-    };
-    const heldExecution = { ...baseExecution, status: 'paused', pendingCompletion };
-
-    it('ends the activity when the held completion is accepted via Stop', async () => {
-      mockFindById.mockResolvedValue(heldExecution);
-      mockClearPendingGate.mockResolvedValue(true);
-      await handleGateResponse(
-        {
+        body: JSON.stringify({
           accessToken: 'token',
           action: 'agent_execute',
           command: 'gate_response',
           executionId: 'exec-1',
           decision: 'stop',
-        },
-        'user-1',
-        'conn-1',
-        'https://endpoint',
-        noopLogger as never
-      );
-      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
-      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
-    });
-
-    it('ends the activity when Continue has nothing to reopen and accepts the held completion', async () => {
-      mockFindById.mockResolvedValue(heldExecution);
-      mockClearPendingGate.mockResolvedValue(true);
-      vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-      vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-      try {
-        await handleGateResponse(
-          {
-            accessToken: 'token',
-            action: 'agent_execute',
-            command: 'gate_response',
-            executionId: 'exec-1',
-            decision: 'continue',
-          },
-          'user-1',
-          'conn-1',
-          'https://endpoint',
-          noopLogger as never
-        );
-      } finally {
-        vi.unstubAllEnvs();
-      }
-      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
-      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
-    });
+        }),
+        requestContext: { connectionId: 'conn-1', domainName: 'example.test', stage: 'test' },
+      } as never,
+      {} as never,
+      noopLogger as never
+    );
+    expect(handleGateResponse).toHaveBeenCalledTimes(1);
+    expect(handleGateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ executionId: 'exec-1', decision: 'stop' }),
+      'user-1',
+      'conn-1',
+      'https://example.test/test',
+      noopLogger
+    );
   });
 });

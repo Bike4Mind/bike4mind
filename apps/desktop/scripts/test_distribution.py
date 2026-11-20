@@ -109,9 +109,30 @@ class DistributionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 assemble(root, '0.2.2', 'owner/dist', 'owner/source')
 
+    def test_self_signed_mode_publishes_the_mac_update_feed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage',
+                           'setup.exe', 'setup.exe.blockmap'):
+                (root / f'Bike4Mind-0.2.2-{suffix}').write_bytes(appimage() if suffix == 'x64.AppImage' else suffix.encode())
+            (root / 'install.sh').write_text('#!/bin/sh\n')
+            assemble(root, '0.2.2', 'owner/dist', 'owner/source', 'selfsigned')
+            manifest = yaml.safe_load((root / 'latest-mac.yml').read_text())
+            zip_payload = (root / 'Bike4Mind-0.2.2-arm64.zip').read_bytes()
+            self.assertEqual(manifest['path'],
+                             'https://github.com/owner/dist/releases/download/desktop-v0.2.2/Bike4Mind-0.2.2-arm64.zip')
+            self.assertEqual(manifest['sha512'], base64.b64encode(hashlib.sha512(zip_payload).digest()).decode())
+            checksums = (root / 'SHA256SUMS.txt').read_text()
+            for name in ('latest-mac.yml', 'Bike4Mind-0.2.2-arm64.zip', 'Bike4Mind-0.2.2-arm64.zip.blockmap'):
+                self.assertIn(f'  {name}\n', checksums)
+            self.assertFalse((root / 'Bike4Mind-0.2.2-arm64.dmg.blockmap').exists())
+            (root / 'Bike4Mind-0.2.2-arm64.zip').unlink()
+            with self.assertRaises(ValueError):
+                assemble(root, '0.2.2', 'owner/dist', 'owner/source', 'selfsigned')
+
     def test_missing_windows_installer_or_blockmap_fails(self):
         for missing in ('Bike4Mind-0.2.2-setup.exe', 'Bike4Mind-0.2.2-setup.exe.blockmap'):
-            for mode in ('signed', 'adhoc'):
+            for mode in ('signed', 'selfsigned', 'adhoc'):
                 with self.subTest(missing=missing, mode=mode), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     for suffix in ('arm64.dmg', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage',

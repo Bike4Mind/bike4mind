@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, MockedObject } from 'vitest';
 import { deductCreditsWithOrgSupport, DeductCreditsAdapters, DeductCreditsParams } from './deductCreditsWithOrgSupport';
 import {
   CreditHolderType,
@@ -15,6 +15,7 @@ vi.mock('./subtractCredits', () => ({
 }));
 
 import { subtractCredits } from './subtractCredits';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 const mockSubtractCredits = vi.mocked(subtractCredits);
 
@@ -130,6 +131,10 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
   });
 
   describe('organization deduction', () => {
+    const capObserver = vi.fn();
+    beforeEach(() => setOrgEventObserver(capObserver));
+    afterEach(() => setOrgEventObserver(null));
+
     it('should deduct credits from organization and update userDetails atomically', async () => {
       const params: DeductCreditsParams = {
         type: 'text_generation_usage',
@@ -153,6 +158,7 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
 
       // Member already has a userDetails row, so no self-heal seed is issued.
       expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+      expect(capObserver).toHaveBeenCalledWith({ type: 'member_cap_check', organizationId: 'org1', userId: 'user1' });
 
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -241,6 +247,7 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
       expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
       expect(mockOrgRepo.updateUserDetails).not.toHaveBeenCalled();
+      expect(capObserver).not.toHaveBeenCalled();
     });
 
     it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {

@@ -17,6 +17,8 @@ import { normalizeResearchLevers } from './researchLevers';
 describe('normalizeResearchLevers', () => {
   it('fills every lever from the shared defaults when only a query is given', () => {
     expect(normalizeResearchLevers({ query: 'coastal erosion' })).toEqual({
+      source: 'search',
+      feedUrl: null,
       query: 'coastal erosion',
       maxResults: RESEARCH_MAX_RESULTS_DEFAULT,
       maxProposals: RESEARCH_MAX_PROPOSALS_DEFAULT,
@@ -30,6 +32,7 @@ describe('normalizeResearchLevers', () => {
       minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
       costCeilingMicroUsd: RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
       proposedTags: [],
+      itemRules: [],
     });
   });
 
@@ -243,11 +246,67 @@ describe('normalizeResearchLevers', () => {
     });
   });
 
+  describe('item rules', () => {
+    it('defaults to none', () => {
+      expect(normalizeResearchLevers({ query: 'q' }).itemRules).toEqual([]);
+    });
+
+    it('trims, drops empties and bad actions, and dedupes case-insensitively', () => {
+      const rules = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [
+          { condition: ' Published by Acme ', action: 'block' },
+          { condition: 'published by acme', action: 'block' },
+          { condition: '', action: 'review' },
+          { condition: 'x', action: 'admit' as never },
+        ],
+      }).itemRules;
+      expect(rules).toEqual([{ condition: 'Published by Acme', action: 'block' }]);
+    });
+
+    it('clamps count and length without throwing', () => {
+      const many = Array.from({ length: 12 }, (_, i) => ({ condition: `r${i}`, action: 'review' as const }));
+      expect(normalizeResearchLevers({ query: 'q', itemRules: many }).itemRules).toHaveLength(10);
+      const long = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [{ condition: 'y'.repeat(500), action: 'block' }],
+      });
+      expect(long.itemRules[0].condition).toHaveLength(300);
+    });
+  });
+
   it('trims and dedupes proposed tags without touching the reserved namespace', () => {
     // Reserved-namespace stripping belongs to the queue door; duplicating it here is how the two
     // copies drift.
     expect(
       normalizeResearchLevers({ query: 'q', proposedTags: [' research ', 'research', 'datalake:x'] }).proposedTags
     ).toEqual(['research', 'datalake:x']);
+  });
+});
+
+describe('normalizeResearchLevers - feed source', () => {
+  it('keeps a trimmed feed url only for a feed config', () => {
+    const feed = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '  https://example.com/f.xml ' });
+    expect(feed.source).toBe('feed');
+    expect(feed.feedUrl).toBe('https://example.com/f.xml');
+  });
+
+  it('nulls the url on a search config and keeps the query', () => {
+    const search = normalizeResearchLevers({ query: 'q', source: 'search', feedUrl: 'https://example.com/f.xml' });
+    expect(search.source).toBe('search');
+    expect(search.feedUrl).toBeNull();
+    expect(search.query).toBe('q');
+  });
+
+  it('treats anything but the exact feed value as search', () => {
+    expect(normalizeResearchLevers({ query: 'q', source: 'Feed' as never }).source).toBe('search');
+    expect(normalizeResearchLevers({ query: 'q' }).source).toBe('search');
+  });
+
+  it('caps an oversized url and does not throw on an empty or malformed one', () => {
+    const long = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: `https://e.com/${'a'.repeat(5000)}` });
+    expect(long.feedUrl?.length).toBe(2048);
+    expect(normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '   ' }).feedUrl).toBeNull();
+    expect(() => normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: 'not a url' })).not.toThrow();
   });
 });

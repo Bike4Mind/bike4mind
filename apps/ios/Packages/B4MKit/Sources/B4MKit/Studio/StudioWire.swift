@@ -99,11 +99,27 @@ enum StudioWire {
     let audio: Bool?
     let instrumental: Bool?
     let lyrics: String?
+    /// Video only; omitted when empty so the server infers text_to_video.
+    let inputs: [Input]?
     let organizationID = PersonalBilling()
 
-    init(kind: GenerationKind, model: String, prompt: String, params: GenerationParams = GenerationParams()) {
+    struct Input: Encodable, Equatable {
+      let fileID: String
+      let role: String
+
+      enum CodingKeys: String, CodingKey {
+        case fileID = "file_id"
+        case role
+      }
+    }
+
+    init(
+      kind: GenerationKind, model: String, prompt: String, params: GenerationParams = GenerationParams(),
+      inputs: [GenerationInput] = []
+    ) {
       self.model = model
       self.prompt = prompt
+      self.inputs = kind == .video && !inputs.isEmpty ? inputs.map { Input(fileID: $0.fileID, role: $0.role) } : nil
       let isVideo = kind == .video
       // Music takes whole seconds only.
       durationSeconds = params[.duration]?.number.map { isVideo ? $0 : $0.rounded() }
@@ -116,7 +132,7 @@ enum StudioWire {
     }
 
     enum CodingKeys: String, CodingKey {
-      case model, prompt, resolution, audio, instrumental, lyrics
+      case model, prompt, resolution, audio, instrumental, lyrics, inputs
       case durationSeconds = "duration_seconds"
       case aspectRatio = "aspect_ratio"
       case organizationID = "organization_id"
@@ -484,7 +500,7 @@ public struct StudioClient: StudioAPI {
       let response = try await requester.send(method: "GET", path: StudioWire.modelsPath(kind))
       guard response.status == 200 else { throw APIError(status: response.status) }
       return try StudioWire.decode(StudioWire.JobModels.self, from: response.body).models
-        .filter { $0.deprecationDate == nil && (kind == .music || ($0.modes ?? []).contains("text_to_video")) }
+        .filter { $0.deprecationDate == nil }
         .map {
           GenerationModel(
             id: $0.id, name: $0.displayName ?? $0.id,
@@ -507,7 +523,9 @@ public struct StudioClient: StudioAPI {
         params: request.params)
     case .video, .music:
       let body = try StudioWire.encode(
-        StudioWire.JobBody(kind: request.kind, model: request.modelID, prompt: request.prompt, params: request.params))
+        StudioWire.JobBody(
+          kind: request.kind, model: request.modelID, prompt: request.prompt, params: request.params,
+          inputs: request.inputs))
       let response = try await requester.send(method: "POST", path: StudioWire.jobsPath(request.kind), jsonBody: body)
       guard response.status == 202 || response.status == 200 else {
         throw StudioWire.refusal(status: response.status, body: response.body)

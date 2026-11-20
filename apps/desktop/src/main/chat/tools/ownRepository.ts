@@ -293,7 +293,7 @@ async function githubTargetsOrigin(
 /**
  * Whether a write goes to the `origin` repository of the folder it runs in: a push to a remote
  * whose URL is origin's (and, when forced, not onto the default branch), or a gh call aimed at
- * origin on github.com. Auto mode runs these unasked when the reply has read nothing untrusted.
+ * origin on github.com. Auto mode runs these unasked.
  */
 export async function writesOwnRepository(write: RepositoryWrite, git: GitReader = runGit): Promise<boolean> {
   const originUrl = await git(write.cwd, ['config', '--get', 'remote.origin.url']);

@@ -81,6 +81,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 import {
+  ARTIFACT_VERSION_CREATED_EVENT,
   findArtifactSaveTarget,
   findExistingArtifactId,
   findReadableArtifactId,
@@ -215,6 +216,36 @@ describe('persistArtifacts - React versioning', () => {
     expect(put).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledTimes(2);
     expect(store.rows.filter(r => r.identifier === 'page')).toHaveLength(3);
+  });
+});
+
+describe('persistArtifacts - version announcement', () => {
+  const listen = () => {
+    const seen: string[] = [];
+    const handler = (event: Event) => seen.push((event as CustomEvent<{ artifactId: string }>).detail.artifactId);
+    window.addEventListener(ARTIFACT_VERSION_CREATED_EVENT, handler);
+    return { seen, stop: () => window.removeEventListener(ARTIFACT_VERSION_CREATED_EVENT, handler) };
+  };
+
+  it('announces the row that got a new version, once the save has gone through', async () => {
+    await persistArtifacts([block('react', 'todo', 'T1')], SESSION);
+    const todoId = store.rows.find(r => r.identifier === 'todo')!.id;
+    reply += 1;
+    const { seen, stop } = listen();
+
+    await persistArtifacts([block('react', 'todo', 'T2')], SESSION);
+    stop();
+
+    expect(seen).toEqual([todoId]);
+  });
+
+  it('announces nothing when a new row is created', async () => {
+    const { seen, stop } = listen();
+
+    await persistArtifacts([block('react', 'todo', 'T1')], SESSION);
+    stop();
+
+    expect(seen).toEqual([]);
   });
 });
 

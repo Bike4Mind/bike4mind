@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import {
@@ -7,6 +7,7 @@ import {
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   organizationRepository,
+  spendFreezeRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -19,7 +20,7 @@ import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchMa
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { respond } from '@server/utils/respond';
 
 const StartInput = z.object({ configId: z.string() });
@@ -87,6 +88,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
             dataLakeResearchRuns: dataLakeResearchRunRepository,
             users: userRepository,
             organizations: organizationRepository,
+            spendFreezes: spendFreezeRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

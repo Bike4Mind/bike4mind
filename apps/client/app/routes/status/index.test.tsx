@@ -66,11 +66,37 @@ beforeEach(() => {
 });
 
 describe('QaStatusPage', () => {
-  it('passes range 30d to the charts, which then plot daily buckets', () => {
+  it('plots daily buckets for a range over a week', () => {
+    search = { from: '2026-09-01', to: '2026-09-30' };
+    render(<QaStatusPage />, { wrapper: QaTestWrapper });
+    expect(useQaOverview).toHaveBeenCalledWith(
+      expect.objectContaining({ product: 'product-a', from: '2026-09-01', to: '2026-09-30' })
+    );
+    expect(failingDots()).toHaveLength(2);
+  });
+
+  it('still plots daily buckets for an older range=30d link', () => {
     search = { range: '30d' };
     render(<QaStatusPage />, { wrapper: QaTestWrapper });
-    expect(useQaOverview).toHaveBeenCalledWith(expect.objectContaining({ product: 'product-a', range: '30d' }));
     expect(failingDots()).toHaveLength(2);
+  });
+
+  it('opens on bike4mind when the URL names no product, even when it is not listed first', () => {
+    useQaFacets.mockReturnValue({
+      data: { products: ['alpha', 'bike4mind', 'gamma'], tenants: [], envs: [], branches: [] },
+    });
+    render(<QaStatusPage />, { wrapper: QaTestWrapper });
+    expect(useQaOverview).toHaveBeenCalledWith(expect.objectContaining({ product: 'bike4mind' }));
+  });
+
+  it('falls back to the first product when bike4mind has no runs, and keeps a product from the URL', () => {
+    useQaFacets.mockReturnValue({ data: { products: ['beta', 'gamma'], tenants: [], envs: [], branches: [] } });
+    const { unmount } = render(<QaStatusPage />, { wrapper: QaTestWrapper });
+    expect(useQaOverview).toHaveBeenLastCalledWith(expect.objectContaining({ product: 'beta' }));
+    unmount();
+    search = { product: 'gamma' };
+    render(<QaStatusPage />, { wrapper: QaTestWrapper });
+    expect(useQaOverview).toHaveBeenLastCalledWith(expect.objectContaining({ product: 'gamma' }));
   });
 
   it('plots one point per run when no range is chosen', () => {

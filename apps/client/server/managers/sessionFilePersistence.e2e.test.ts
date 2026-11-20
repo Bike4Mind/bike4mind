@@ -17,7 +17,7 @@ import { sessionService } from '@bike4mind/services';
 import { KnowledgeType, Permission, type IUserDocument } from '@bike4mind/common';
 import { configureSlackPackage, sendMessageToNotebookAndGetResponse } from '@bike4mind/slack';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
-import { getOrCreateSession, addMessageToSession } from '@server/managers/sessionManager';
+import { getOrCreateSession, addMessageToSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
@@ -28,7 +28,7 @@ vi.mock('@bike4mind/server-utils/managers/sessionSideEffects', async importOrigi
   notifySessionCreated: vi.fn().mockResolvedValue(undefined),
 }));
 // The agent path runs for real up to the executor hand-off, which has no deployment here.
-vi.mock('@server/utils/dispatchAgentExecution', () => ({
+vi.mock('@bike4mind/server-utils/utils/dispatchAgentExecution', () => ({
   resolveAgentExecutorTarget: () => ({ kind: 'lambda', functionName: 'agent-executor' }),
   dispatchAgentExecution: vi.fn().mockResolvedValue(undefined),
   AgentExecutorRejectedError: class extends Error {},

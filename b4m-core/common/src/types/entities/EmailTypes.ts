@@ -170,7 +170,6 @@ export interface IEmailJobRepository extends IBaseRepository<IEmailJobDocument> 
     field: 'sentCount' | 'failedCount' | 'cancelledCount' | 'openedCount' | 'clickedCount' | 'totalEmailsSent',
     amount: number
   ) => Promise<void>;
-  updateOverallStatus: (id: string, status: EmailJobOverallStatus, updates?: Partial<IEmailJob>) => Promise<void>;
 }
 
 // ================== EMAIL SEND ATTEMPT ==================
@@ -293,5 +292,4 @@ export interface IEmailPreferencesRepository extends IBaseRepository<IEmailPrefe
   findOrCreate: (email: string, userId?: string, subscriberId?: string) => Promise<IEmailPreferencesDocument>;
   unsubscribeFromCategory: (email: string, category: EmailCategory) => Promise<void>;
   globalUnsubscribe: (email: string) => Promise<void>;
-  resubscribe: (email: string, category?: EmailCategory) => Promise<void>;
 }

@@ -17,7 +17,7 @@ const mockRefs = vi.hoisted(() => ({
   submitted: null as any,
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: async () => ({ release: async () => {} }),
 }));
 
@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { create: vi.fn(async () => ({ id: 'batch-row' })) },
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ assert: async () => {} }),
   completionCeilingUsd: () => 0,
   isCreditsEnforced: async () => false,

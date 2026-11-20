@@ -7,3 +7,4 @@ export * from './estimateCost';
 export * from './enablement';
 export * from './lyricTiming';
 export * from './profiles';
+export * from './ranking';

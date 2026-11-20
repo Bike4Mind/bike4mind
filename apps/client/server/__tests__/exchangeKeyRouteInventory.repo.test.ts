@@ -39,6 +39,7 @@ const ALLOWED_CONTRACTS = new Set([
   'getAgentExecution',
   'createCompletion',
   'createCompletionRun',
+  'getCompletionRunUsage',
   'synthesizeSpeech',
   'generateMusic',
   'generateSoundEffect',
@@ -58,6 +59,10 @@ const ALLOWED_CONTRACTS = new Set([
   'createSession',
   'listCreditTransactions',
   'cancelVideoGeneration',
+  'createSceneComposition',
+  'getSceneComposition',
+  'listSceneCompositions',
+  'cancelSceneComposition',
   'createVideoGeneration',
   'getVideoGeneration',
   'listVideoGenerations',
@@ -67,36 +72,48 @@ const ALLOWED_CONTRACTS = new Set([
   'getMusicGeneration',
   'listMusicGenerations',
   'listMusicModels',
+  'listImageModels',
   'listVoices',
   'createVoiceSession',
   'endVoiceSession',
   'createTranscriptionUpload',
   'createTranscription',
+  'searchWeb',
+  'fetchWebPage',
+  'getCurrentWeather',
 ]);
 
-// Every endpoint the generated registry lists under ai:generate or me:read. The callback-secret route is
-// here because it names the scope at the door and refuses an exchange key in its handler.
+// Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
+// here because they name the scope at the door and refuse an exchange key in their handlers.
 const ALLOWED_ENDPOINTS = [
+  'GET /api/credits/transactions',
+  'GET /api/gears/status',
   'GET /api/generated-content/:ref',
+  'GET /api/identify',
   'GET /api/models',
   'GET /api/quests/:id/files',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
+  'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/credits',
   'GET /api/v1/credits/transactions',
   'GET /api/v1/decision-models',
   'GET /api/v1/embedding-models',
+  'GET /api/v1/image-models',
   'GET /api/v1/me',
   'GET /api/v1/models',
   'GET /api/v1/music-generations/:id',
   'GET /api/v1/music-models',
   'GET /api/v1/quests/:id',
   'GET /api/v1/quests/:id/files',
+  'GET /api/v1/scene-compositions/:id',
   'GET /api/v1/video-generations/:id',
   'GET /api/v1/video-models',
+  'GET /api/users/:id',
   'GET /api/v1/voice/voices',
   'GET /api/voice/v2/agents',
   'GET|POST /api/v1/music-generations',
+  'GET|POST /api/v1/scene-compositions',
   'GET|POST /api/v1/video-generations',
   'POST /api/ai/music',
   'POST /api/ai/transcribe',
@@ -117,8 +134,12 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/v1/image-edits',
   'POST /api/v1/image-generations',
   'POST /api/v1/music-generations/:id/cancel',
+  'POST /api/v1/scene-compositions/:id/cancel',
   'POST /api/v1/sessions',
   'POST /api/v1/text-refinements',
+  'POST /api/v1/tools/weather',
+  'POST /api/v1/tools/web-fetch',
+  'POST /api/v1/tools/web-search',
   'POST /api/v1/transcriptions',
   'POST /api/v1/transcriptions/uploads',
   'POST /api/v1/video-generations/:id/cancel',
@@ -133,8 +154,9 @@ const DOOR_ONLY_ROUTES = ['files/[id]/index.ts'];
 // Doors whose scope list the generator cannot resolve. Each needs a reason.
 const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
-// Scoped routes that manage credentials: each refuses an exchange key in its handler.
-const REFUSING_ROUTES = ['user-api-keys/[id]/callback-secret.ts'];
+// Scoped routes an exchange key may not use (credential management, other users' profiles,
+// gamification): each refuses an exchange key in its handler.
+const REFUSING_ROUTES = ['gears/status.ts', 'user-api-keys/[id]/callback-secret.ts', 'users/[id]/index.ts'];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
 const SCOPE_LESS_CREDENTIAL_ROUTES = [
@@ -149,9 +171,8 @@ const SCOPE_LESS_CREDENTIAL_ROUTES = [
 // still contains the identifier, so it shows up here.
 const EXCHANGE_KEY_OPT_IN_OCCURRENCES: Record<string, number> = {
   'client/server/chatCompletion/external/sseRoute.ts': 1,
-  'client/server/chatCompletion/external/wsRoute.ts': 1,
-  'client/server/cli/auth.ts': 2,
-  'client/server/cli/resolveContractAuth.ts': 3,
+  'server-utils/src/cli/auth.ts': 2,
+  'server-utils/src/cli/resolveContractAuth.ts': 3,
 };
 
 function sourceFiles(dir: string): string[] {

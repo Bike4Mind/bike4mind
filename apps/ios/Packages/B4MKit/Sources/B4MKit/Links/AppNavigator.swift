@@ -16,6 +16,8 @@ public final class AppNavigator {
   public private(set) var composeRequest: ComposeRequest?
   /// A Safari fallback the view layer should open, then clear with `consumeExternalURL()`.
   public private(set) var externalURL: URL?
+  /// The hands-free voice conversation on screen, presented over the whole stack.
+  public private(set) var voiceRequest: VoiceRequest?
 
   /// A route that arrived before the user was signed in (cold-start notification tap). Applied by
   /// `releasePendingRoute()` once the shell is on screen.
@@ -48,7 +50,24 @@ public final class AppNavigator {
     isDrawerOpen = false
     composeRequest = nil
     externalURL = nil
+    voiceRequest = nil
     openingTurns = [:]
+  }
+
+  /// Opens the voice conversation over the current screen. A request from the drawer lands on home first so
+  /// a new conversation has somewhere to go when it ends.
+  public func startVoiceConversation(_ target: ChatSendRequest.Target) {
+    isDrawerOpen = false
+    if target == .newConversation, !isShowing(.home) { sessionPath = [] }
+    voiceRequest = VoiceRequest(target: target)
+  }
+
+  /// Closes the voice conversation. One that started a new session continues in that session's screen.
+  public func endVoiceConversation(startedSessionID: String?) {
+    let request = voiceRequest
+    voiceRequest = nil
+    guard request?.target == .newConversation, let startedSessionID else { return }
+    openNewConversation(sessionID: startedSessionID, firstTurn: nil)
   }
 
   /// Opens a conversation this device just started, handing its screen the first turn.
@@ -82,6 +101,8 @@ public final class AppNavigator {
       }
     case .media:
       sessionPath = [.studio]
+    case .brief(let id):
+      sessionPath = [.brief(id: id)]
     case .lakes:
       externalURL = Self.webURLForLakes
     case .lake(let id):
@@ -89,6 +110,19 @@ public final class AppNavigator {
     case .web(let url):
       externalURL = url
     }
+  }
+
+  /// Opens the latest brief (the drawer row), which has no id to route by.
+  public func openLatestBrief() {
+    isDrawerOpen = false
+    sessionPath = [.brief(id: nil)]
+  }
+
+  /// Pushes a conversation above the current screen (the brief's approval), so Back returns to that screen.
+  public func pushSession(id: String) {
+    isDrawerOpen = false
+    guard sessionPath.last?.sessionID != id else { return }
+    sessionPath.append(.session(.placeholder(id: id)))
   }
 
   /// Pushes a session whose summary is already known (a drawer row), so it is titled at once.
@@ -144,6 +178,7 @@ public final class AppNavigator {
     case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
     case .media: return sessionPath.last == .studio
+    case .brief(let id): return sessionPath.last == .brief(id: id)
     case .lakes, .lake, .web, .compose: return false
     }
   }
@@ -157,6 +192,8 @@ public enum SessionsDestination: Hashable, Sendable {
   case settings
   /// The Studio gallery (`Route.media`).
   case studio
+  /// A brief by id; a `nil` id is the latest brief (the drawer row).
+  case brief(id: String?)
 
   public var sessionID: String? {
     guard case .session(let session) = self else { return nil }
@@ -169,5 +206,15 @@ extension SessionSummary {
   /// an empty name (see `SessionLookup.name`).
   static func placeholder(id: String, name: String = "") -> SessionSummary {
     SessionSummary(id: id, name: name, lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
+  }
+}
+
+/// A request to show the voice conversation. Identifiable so SwiftUI presents each one fresh.
+public struct VoiceRequest: Identifiable, Hashable, Sendable {
+  public let id = UUID()
+  public let target: ChatSendRequest.Target
+
+  public init(target: ChatSendRequest.Target) {
+    self.target = target
   }
 }

@@ -13,7 +13,10 @@ import { requireStepUp } from '@server/auth/stepUp';
 import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
-const handler = baseApi().post(
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
     assertNotOrgServiceAccount(req.user);

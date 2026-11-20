@@ -1,6 +1,9 @@
 import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createLiveActivityThrottle, LIVE_ACTIVITY_STAGE_LABEL_MAX } from '@server/utils/liveActivityPush';
+import {
+  createLiveActivityThrottle,
+  LIVE_ACTIVITY_STAGE_LABEL_MAX,
+} from '@bike4mind/server-utils/utils/liveActivityPush';
 import {
   type ConnectionLookup,
   hasLiveConnection,
@@ -14,7 +17,7 @@ export type ChatCompletedPushDeps = {
     status?: string;
     type?: string;
     reply?: string | null;
-    pendingAction?: { tool: string } | null;
+    pendingAction?: { tool: string; ts?: number } | null;
   } | null>;
   sessionDeepLink(sessionId: string): string;
   /** Must not throw (publishPushNotification). */
@@ -58,6 +61,7 @@ export async function publishChatCompletedPush(
         collapseId: `approval:${turn.questId}`,
         questId: turn.questId,
         sessionId: turn.sessionId,
+        pendingActionTs: quest.pendingAction.ts,
       });
       return;
     }

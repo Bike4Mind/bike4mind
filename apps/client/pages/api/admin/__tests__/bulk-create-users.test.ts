@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   recordAccountLane: vi.fn(),
   recordAdminAction: vi.fn(),
   requirePackage: vi.fn(),
+  findPackage: vi.fn(),
   reserve: vi.fn(),
   claim: vi.fn(),
 }));
@@ -29,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { update: h.update, claimFreeCreditGrant: h.claim },
-  grantPackageRepository: { reserveRedemption: h.reserve },
+  grantPackageRepository: { reserveRedemption: h.reserve, findById: h.findPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -357,6 +358,9 @@ describe('POST /api/admin/bulk-create-users', () => {
         expect.anything()
       );
       expect(h.reserve).toHaveBeenCalledWith('pkg-1', 'new-1');
+      // A package grant is not a purchase, so no write may stamp the paid-standing field.
+      const writes = [...h.createUser.mock.calls.map(([params]) => params), ...h.update.mock.calls.map(([u]) => u)];
+      expect(JSON.stringify(writes)).not.toContain('lastCreditsPurchasedAt');
     });
 
     it('stamps the package on the user, merges package and row tags, and audits the package', async () => {
@@ -415,6 +419,20 @@ describe('POST /api/admin/bulk-create-users', () => {
         'Grant package is inactive'
       );
       expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects the batch before creating anyone when the package has expired', async () => {
+      const { referService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      h.requirePackage.mockImplementation(referService.requireActiveGrantPackage);
+      h.findPackage.mockResolvedValue({ ...pkg, expiresAt: new Date(Date.now() - 60_000) });
+
+      await expect(
+        h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'c@b.test' }], { grantPackageId: 'pkg-1' }), res())
+      ).rejects.toThrow('Grant package has expired');
+      expect(h.findPackage).toHaveBeenCalledWith('pkg-1');
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.reserve).not.toHaveBeenCalled();
+      expect(h.publish).not.toHaveBeenCalled();
     });
 
     it('rejects an empty package id', async () => {

@@ -13,7 +13,7 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: (...a: unknown[]) => mocks.reserve(...a),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -100,6 +100,12 @@ describe('holdPreflightCredits', () => {
         billingOrganizationId: 'org1',
       })
     );
+  });
+
+  it('hands a key that only joins the freeze subject through to the reservation', async () => {
+    await hold({ spendFreezeApiKey: { keyId: 'key-1' } });
+
+    expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeApiKey: { keyId: 'key-1' } }));
   });
 
   it('settles the measured cost against the reservation and reports who was billed', async () => {

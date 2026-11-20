@@ -14,20 +14,16 @@ import {
   Box,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Refresh from '@mui/icons-material/Refresh';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
@@ -46,6 +42,7 @@ import {
   type DataTableGroup,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface SecretStatus {
   secretName: string;
@@ -209,35 +206,22 @@ function SecretRowMenu({
   onDelete: (secret: SecretStatus) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${secret.secretName}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`system-secrets-row-actions-${secret.secretName}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
-          Edit value
-        </MenuItem>
-        {secret.dbRecord && (
-          <>
-            <ListDivider />
-            <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
-              Delete override
-            </MenuItem>
-          </>
-        )}
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu
+      testId={`system-secrets-row-actions-${secret.secretName}`}
+      ariaLabel={`Actions for ${secret.secretName}`}
+    >
+      <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
+        Edit value
+      </MenuItem>
+      {secret.dbRecord && (
+        <>
+          <ListDivider />
+          <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
+            Delete override
+          </MenuItem>
+        </>
+      )}
+    </RowActionsMenu>
   );
 }
 

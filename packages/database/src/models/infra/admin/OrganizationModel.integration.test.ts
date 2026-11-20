@@ -48,12 +48,20 @@ describe('OrganizationModel - org-groups fields', () => {
 });
 
 describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data lakes)', () => {
-  it('returns orgs where the user is billing owner OR an appointed admin', async () => {
+  it('returns orgs where the user is billing owner OR a manager with a roster row, never a row-less admin entry', async () => {
     const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
     const appointed = await Organization.create({
       name: 'Appointed',
       userId: 'other',
       adminUserIds: ['u1'],
+      users: [{ userId: 'u1' }],
+      personal: false,
+    });
+    await Organization.create({
+      name: 'RowlessAdmin',
+      userId: 'other',
+      adminUserIds: ['u1'],
+      users: [],
       personal: false,
     });
     // A plain member (only on the users ACL, no admin role) is NOT administered.
@@ -293,5 +301,20 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
     expect(await organizationRepository.setMemberMaxCredits(org.id, 'owner-1', 40)).toBe(true);
     const reloaded = await Organization.findById(org.id);
     expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
+  });
+});
+
+describe('OrganizationModel - touchIfLive', () => {
+  it('stamps a live org and refuses a soft-deleted or missing one', async () => {
+    const org = await Organization.create({ name: 'Live', userId: 'owner', personal: false });
+    const before = (await Organization.findById(org.id).lean())!.updatedAt as Date;
+
+    expect(await organizationRepository.touchIfLive(org.id)).toBe(true);
+    const after = (await Organization.findById(org.id).lean())!.updatedAt as Date;
+    expect(after.getTime()).toBeGreaterThanOrEqual(before.getTime());
+
+    await organizationRepository.delete(org.id);
+    expect(await organizationRepository.touchIfLive(org.id)).toBe(false);
+    expect(await organizationRepository.touchIfLive(new mongoose.Types.ObjectId().toString())).toBe(false);
   });
 });

@@ -4,6 +4,8 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { ChatService } from '../chat/ChatService';
 import type { SessionStore } from '../chat/SessionStore';
 import { currentBranch } from '../chat/project/git';
+import { AutoFixAttemptsPreference } from './AutoFixAttemptsPreference';
+import { registerAutoFixAttemptsIpc } from './autoFixAttemptsIpc';
 import { runGh } from './gh';
 import { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
@@ -13,6 +15,8 @@ const OPTIONS: readonly PrOption[] = ['autoFix', 'autoMerge', 'autoArchive'];
 
 export interface RegisterPullRequestsOptions {
   path: string;
+  /** Where the Settings auto-fix attempt budget is kept. */
+  autoFixAttemptsPath: string;
   /** Lazy, because the service is built after this and is only needed once a session acts. */
   chat: () => ChatService;
   store: SessionStore;
@@ -24,7 +28,9 @@ export interface RegisterPullRequestsOptions {
 export function registerPullRequests(options: RegisterPullRequestsOptions): PrMonitor {
   const { store, logger, send, chat } = options;
   const watchedSenders = new Set<number>();
+  const autoFixAttempts = new AutoFixAttemptsPreference(options.autoFixAttemptsPath);
   const monitor = new PrMonitor({
+    autoFixAttempts: () => autoFixAttempts.read(),
     store: new PrBindingStore(options.path),
     github: new PrGithub(runGh),
     logger,
@@ -89,5 +95,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
       ? monitor.setOption(sessionId, option as PrOption, enabled === true)
       : { ok: false, error: 'Unknown option.' }
   );
+  registerAutoFixAttemptsIpc(ipcMain, {
+    preference: autoFixAttempts,
+    apply: attempts => monitor.setAutoFixAttempts(attempts),
+  });
   return monitor;
 }

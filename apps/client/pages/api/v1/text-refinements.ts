@@ -10,7 +10,7 @@ import { createTextRefinementContract } from '@bike4mind/common';
 import { getHttpStatus } from '@bike4mind/utils';
 import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 
 const handler = nextRouteForContract(createTextRefinementContract).post(async (req, res) => {
   const { text, context } = req.validated;

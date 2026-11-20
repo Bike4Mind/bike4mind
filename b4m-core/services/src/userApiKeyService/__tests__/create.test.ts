@@ -516,6 +516,29 @@ describe('createUserApiKey - per-user cap pools', () => {
     );
   });
 
+  it.each(['paid', 'unpaid'] as const)('stores payerStanding %s on an exchange key', async payerStanding => {
+    const repo = makeRepo();
+    const result = await createExchangeUserApiKey(
+      'user-1',
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding } },
+      adapters(repo)
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ payerStanding }) }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
+    expect(result.metadata).toMatchObject({ payerStanding });
+  });
+
+  it('rejects an unknown payerStanding at the zod boundary', async () => {
+    const error = await mintError(
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding: 'bogus' } } as never,
+      makeRepo()
+    );
+    expect(error).not.toBeNull();
+  });
+
   it('routes a dashboard mint through the standard pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', dashboardParams, adapters(repo));
@@ -1094,6 +1117,41 @@ describe('createUserApiKey - org-owned keys', () => {
       expect.objectContaining({ userId: 'sa-1', orgOwned: { createdByUserId: 'creator-1' }, organizationId: 'org-1' })
     );
     expect(result.orgOwned).toEqual({ createdByUserId: 'creator-1' });
+  });
+
+  it('names the per-organization cap when an org-owned mint is at the cap', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await createUserApiKey(
+      'sa-1',
+      { ...orgOwnedParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    ).catch((e: unknown) => e as BadRequestError);
+
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as BadRequestError).message).toBe(
+      `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per organization`
+    );
+    expect((error as BadRequestError).additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+  });
+
+  it('keeps the per-user cap wording for a personal key billed to an org', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await createUserApiKey(
+      'user-1',
+      {
+        name: 'personal',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        metadata: { createdFrom: 'dashboard' as const },
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+      },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    ).catch((e: unknown) => e as BadRequestError);
+
+    expect((error as BadRequestError).message).toBe(
+      `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`
+    );
   });
 
   it('refuses an org-owned key that does not bill its organization', async () => {

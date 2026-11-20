@@ -1,4 +1,4 @@
-import type { AttentionNotice } from '@shared/attention';
+import type { AttentionNotice, NotifyScope } from '@shared/attention';
 import type { ChatMessage, ChatSessionSummary } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
@@ -30,6 +30,7 @@ const parked: ChatMessage[] = [
 
 let sessions: ChatSessionSummary[];
 let hasWindow: boolean;
+let scope: NotifyScope;
 let notices: AttentionNotice[];
 const setBadge = vi.fn<(count: number) => void>();
 const claim = vi.fn<(sessionIds: readonly string[]) => string[]>();
@@ -39,6 +40,7 @@ let monitor: NeedsYouMonitor;
 beforeEach(() => {
   sessions = [session('root'), session('agent', 'root'), session('plain')];
   hasWindow = false;
+  scope = 'agents';
   notices = [];
   setBadge.mockReset();
   claim.mockReset().mockImplementation(ids => [...ids]);
@@ -46,6 +48,7 @@ beforeEach(() => {
     listSessions: vi.fn(async () => sessions),
     sessionMessages: vi.fn(async () => parked),
     hasWindow: () => hasWindow,
+    notifyScope: () => scope,
     claim,
     notify: notice => notices.push(notice),
     setBadge,
@@ -69,6 +72,20 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
+  it('recounts the badge when a worker task finishes unaccepted, without a notice', async () => {
+    sessions = [
+      session('root'),
+      session('agent', 'root', {
+        workerTask: { state: { status: 'completed', accepted: false } },
+      } as Partial<ChatSessionSummary>),
+    ];
+    monitor.observe({ sessionId: 'agent', status: 'processing' });
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    expect(notices).toEqual([]);
+  });
+
   it('announces once per entry, and again after the session left needs-action', async () => {
     await enter('agent');
     await enter('agent');
@@ -90,6 +107,17 @@ describe('NeedsYouMonitor with no window open', () => {
     await enter('gone');
     expect(notices).toEqual([]);
     expect(setBadge).toHaveBeenLastCalledWith(0);
+  });
+
+  it('with the all scope, announces and counts a plain session, but not an archived one', async () => {
+    scope = 'all';
+    sessions = [...sessions, session('shelved', undefined, { archived: true })];
+    await enter('plain');
+    await enter('shelved');
+    expect(notices).toEqual([
+      { sessionId: 'plain', rootId: 'plain', title: 'Session plain needs you', body: 'bash pnpm test' },
+    ]);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
   it('skips an entry another announcer already claimed, but still counts it', async () => {
@@ -134,12 +162,13 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toEqual([]);
   });
 
-  it('does not recount for a status change that neither enters nor leaves needs-action', async () => {
+  it('recounts the badge on a status change that neither enters nor leaves needs-action, without a notice', async () => {
     monitor.observe({ sessionId: 'agent', status: 'processing' });
     monitor.observe({ sessionId: 'agent', status: 'done' });
     await monitor.settled();
-    expect(deps.listSessions).not.toHaveBeenCalled();
-    expect(setBadge).not.toHaveBeenCalled();
+    expect(deps.listSessions).toHaveBeenCalled();
+    expect(setBadge).toHaveBeenLastCalledWith(0);
+    expect(notices).toEqual([]);
   });
 
   it('recounts when a session enters needs-action and again when it leaves', async () => {

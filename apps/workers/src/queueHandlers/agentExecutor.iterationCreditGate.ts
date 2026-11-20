@@ -1,5 +1,5 @@
 import type { AgentStep } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { SPEND_FROZEN_ERROR_CODE, type ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { nextIterationCredits, uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
@@ -155,4 +155,86 @@ export async function stopBlockedAccountIteration(
   await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
   await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
   return true;
+}
+
+/** The `failed` event reason (and subagent error) for a run stopped by a spend freeze. */
+export const SPEND_FROZEN_STOP_REASON = SPEND_FROZEN_ERROR_CODE;
+
+export interface IterationSpendFreezeArgs {
+  executionId: string;
+  /** The freeze refusal for the run's user, org or API key, re-read per iteration; null when none applies. */
+  readFreezeDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when an admin froze its user, organization or API key after the run was admitted. Terminal, like
+ * an unfunded iteration: the run is not parked for resumption. Independent of enforceCredits. Returns true when
+ * it stopped.
+ */
+export async function stopSpendFrozenIteration(
+  args: IterationSpendFreezeArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readFreezeDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[SpendFreeze] Spend is frozen; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', {
+    executionId: args.executionId,
+    reason: SPEND_FROZEN_STOP_REASON,
+    partialResult: steps,
+  });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
+  return true;
+}
+
+export const ACCOUNT_CHECK_FAILED_MESSAGE = 'Stopped: the account status could not be verified. Please retry.';
+
+/**
+ * Per-iteration account re-check for subagent runs, which the parent's own gate cannot reach while the
+ * delegating tool call is in progress. Reads at most once per (child, iteration); calls `onDenied` once with
+ * the refusal, or with ACCOUNT_CHECK_FAILED_MESSAGE when the read fails (fail-closed), and stops checking.
+ * Tracker `onStep` callbacks are not awaited by the orchestrator, so the abort lands on the next provider
+ * call already in flight rather than strictly before it.
+ */
+export function createSubagentAccountCheck(deps: {
+  readAccessDenial: () => Promise<string | null>;
+  onDenied: (reason: string) => void;
+  logger: Pick<Logger, 'warn' | 'error'>;
+}): (childExecutionId: string, iteration: number) => Promise<void> {
+  const lastCheckedIteration = new Map<string, number>();
+  let denied = false;
+  return async (childExecutionId, iteration) => {
+    if (denied || lastCheckedIteration.get(childExecutionId) === iteration) return;
+    lastCheckedIteration.set(childExecutionId, iteration);
+    let reason: string | null;
+    try {
+      reason = await deps.readAccessDenial();
+    } catch (err) {
+      deps.logger.error('[Account] Subagent account check failed; stopping fail-closed', {
+        childExecutionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      reason = ACCOUNT_CHECK_FAILED_MESSAGE;
+    }
+    if (!reason || denied) return;
+    denied = true;
+    deps.logger.warn('[Account] Account can no longer use AI; stopping subagent', { childExecutionId });
+    deps.onDenied(reason);
+  };
+}
+
+/**
+ * The parent loop's account read once an in-process subagent check may have refused the run: a latched refusal
+ * (including a failed read) is final and skips the read, so the run stops instead of continuing with its tools
+ * aborted.
+ */
+export function latchedAccountDenial(
+  latched: () => string | null,
+  read: () => Promise<string | null>
+): () => Promise<string | null> {
+  return async () => latched() ?? (await read());
 }

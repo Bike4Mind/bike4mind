@@ -1,12 +1,9 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { CREDITS_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
-const handler = baseApi().get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    return res.status(403).json({ message: 'Unauthorized. Admin access required.' });
-  }
-
+const handler = adminApi({ adminPermissions: { GET: CREDITS_PAGE_READ } }).get(async (req, res) => {
   // User subscriptions only - organization subscriptions have separate stats
   const stats = await subscriptionRepository.getSubscriptionStats(SubscriptionOwnerType.User);
 

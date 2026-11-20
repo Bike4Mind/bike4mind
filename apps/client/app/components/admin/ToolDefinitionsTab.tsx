@@ -3,15 +3,11 @@ import {
   Alert,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
-  IconButton,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Sheet,
   Stack,
@@ -19,7 +15,6 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { toast } from 'sonner';
 import {
@@ -44,6 +39,7 @@ import {
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 const PAGE_SIZE = 50;
 
@@ -74,50 +70,34 @@ function ToolRowMenu({
   onRevert: (tool: IToolDefinition) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${tool.toolName}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`tool-row-actions-${tool.toolId}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={() => onView(tool)} data-testid={`tool-row-view-${tool.toolId}`}>
-          View details
-        </MenuItem>
-        <AdminPermissionAction requirement="settings:manage">
-          {disabled => (
-            <MenuItem disabled={disabled} onClick={() => onEdit(tool)} data-testid={`tool-row-edit-${tool.toolId}`}>
-              Edit tool
-            </MenuItem>
-          )}
-        </AdminPermissionAction>
-        {tool.hasOverride && (
-          <>
-            <ListDivider />
-            <AdminPermissionAction requirement="settings:manage">
-              {disabled => (
-                <MenuItem
-                  disabled={disabled}
-                  onClick={() => onRevert(tool)}
-                  data-testid={`tool-row-revert-${tool.toolId}`}
-                >
-                  Revert to code defaults
-                </MenuItem>
-              )}
-            </AdminPermissionAction>
-          </>
+    <RowActionsMenu testId={`tool-row-actions-${tool.toolId}`} ariaLabel={`Actions for ${tool.toolName}`}>
+      <MenuItem onClick={() => onView(tool)} data-testid={`tool-row-view-${tool.toolId}`}>
+        View details
+      </MenuItem>
+      <AdminPermissionAction requirement="settings:manage">
+        {disabled => (
+          <MenuItem disabled={disabled} onClick={() => onEdit(tool)} data-testid={`tool-row-edit-${tool.toolId}`}>
+            Edit tool
+          </MenuItem>
         )}
-      </Menu>
-    </Dropdown>
+      </AdminPermissionAction>
+      {tool.hasOverride && (
+        <>
+          <ListDivider />
+          <AdminPermissionAction requirement="settings:manage">
+            {disabled => (
+              <MenuItem
+                disabled={disabled}
+                onClick={() => onRevert(tool)}
+                data-testid={`tool-row-revert-${tool.toolId}`}
+              >
+                Revert to code defaults
+              </MenuItem>
+            )}
+          </AdminPermissionAction>
+        </>
+      )}
+    </RowActionsMenu>
   );
 }
 

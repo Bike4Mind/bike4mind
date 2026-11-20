@@ -10,9 +10,9 @@ const mockDlqUrls = vi.hoisted(() => ({
   'image-edit': 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditDLQ',
   'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
+  'render-job': 'https://sqs.us-east-2.amazonaws.com/123456789/renderJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
-  'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
   'slack-export': 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueueDLQ',
@@ -20,6 +20,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'webhook-delivery': 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueueDLQ',
   'quest-export': 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueueDLQ',
   'account-data-export': 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueueDLQ',
+  'account-erasure': 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueueDLQ',
   'liveops-triage': 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueueDLQ',
   'email-ingestion': 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueueDLQ',
   'email-analysis': 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueueDLQ',
@@ -50,12 +51,15 @@ const mockDlqUrls = vi.hoisted(() => ({
     [
       'young-account-spend-alert',
       'api-probe-detector',
+      'cloud-security-scan',
       'image-moderation-review-sweep',
       'spend-monitor',
       'signup-grant-held-release',
       'revenue-snapshot',
       'subscription-reconciliation',
       'account-deletion-sweep',
+      'dlq-triage-sweep',
+      'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
       'session-enrichment',
@@ -65,6 +69,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'notebook-events',
       'completion-events',
       'business-metric-alerts',
+      'side-app-health-alerts',
       'alarm-handler',
     ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
   ),
@@ -78,9 +83,9 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   imageEditQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditQueue',
   generationCallbackQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueue',
   generationJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobQueue',
+  renderJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/renderJobQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
-  whatsNewHighlightsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueue',
   notebookCurationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueue',
   agentProactiveMessageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueue',
   slackExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueue',
@@ -88,6 +93,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   webhookDeliveryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueue',
   questExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueue',
   accountDataExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueue',
+  accountErasureQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueue',
   liveOpsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueue',
   emailIngestionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueue',
   emailAnalysisQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueue',
@@ -128,6 +134,7 @@ vi.mock('sst', () => ({
 import {
   coreDlqDescriptors,
   getDlqRegistry,
+  DLQ_STALE_WHEN,
   getDlqByLabel,
   getSourceQueueUrl,
   getDlqUrl,
@@ -138,11 +145,13 @@ import {
   describeDlqMessage,
 } from './dlqRegistry';
 
+const PARTITION = 'aws';
+
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(61);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {
@@ -197,6 +206,22 @@ describe('dlqRegistry', () => {
         .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
         .filter(({ missing }) => missing.length > 0);
       expect(incomplete).toEqual([]);
+    });
+
+    it('flags stale dead letters only with a known staleWhen value', () => {
+      const flagged = getDlqRegistry().filter(entry => entry.staleWhen !== undefined);
+      for (const entry of flagged) expect(DLQ_STALE_WHEN).toContain(entry.staleWhen);
+      const byLabel = (label: string) => getDlqRegistry().find(entry => entry.label === label)?.staleWhen;
+      expect(byLabel('session-enrichment')).toBe('self-healing');
+      // The queue also holds user-requested session.tag jobs, which nothing re-runs.
+      expect(getDlqRegistry().find(entry => entry.label === 'session-enrichment')?.staleDetailTypes).toEqual([
+        'session.summarize',
+      ]);
+      expect(byLabel('organization-retention')).toBe('superseded-schedule');
+      // These handlers read the scheduled event time, so a late replay is not covered by a later run.
+      expect(byLabel('spend-monitor')).toBeUndefined();
+      expect(byLabel('young-account-spend-alert')).toBeUndefined();
+      expect(byLabel('api-probe-detector')).toBeUndefined();
     });
 
     it('includes tavern-heartbeat entry', () => {
@@ -319,5 +344,43 @@ describe('dead-letter message describe', () => {
     expect(describeDlqMessage(entry, 'not json')).toBeNull();
     expect(describeDlqMessage(entry, undefined)).toBeNull();
     expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
+  });
+
+  it("release-notes tells the two kinds on the merged What's New DLQ apart", () => {
+    const entry = getDlqByLabel('release-notes')!;
+    expect(describeDlqMessage(entry, '{"kind":"release-notes","releaseTag":"v1.2.3.4"}')).toEqual({
+      type: 'Release',
+      id: 'v1.2.3.4',
+    });
+    expect(describeDlqMessage(entry, '{"kind":"highlights","correlationId":"c1","environment":"dev"}')).toEqual({
+      type: 'Highlights run',
+      id: 'c1',
+    });
+  });
+});
+
+describe('describeDlqMessage for scheduled events', () => {
+  const scheduledBody = JSON.stringify({
+    'detail-type': 'Scheduled Event',
+    source: 'aws.events',
+    time: '2026-03-01T04:00:00Z',
+    resources: [`arn:${PARTITION}:events:us-east-2:000000000000:rule/app-stage-Nightly`],
+  });
+
+  it('names a scheduled run by its time when the queue describes nothing', () => {
+    expect(describeDlqMessage({ describe: () => null }, scheduledBody)).toEqual({
+      type: 'Scheduled run',
+      id: '2026-03-01T04:00:00.000Z',
+    });
+    expect(describeDlqMessage({}, scheduledBody)).toEqual({ type: 'Scheduled run', id: '2026-03-01T04:00:00.000Z' });
+  });
+
+  it("keeps the queue's own entity and returns null for other bodies", () => {
+    expect(describeDlqMessage({ describe: () => ({ type: 'Job', id: 'j1' }) }, scheduledBody)).toEqual({
+      type: 'Job',
+      id: 'j1',
+    });
+    expect(describeDlqMessage({ describe: () => null }, '{"detail-type":"Other"}')).toBeNull();
+    expect(describeDlqMessage({}, 'not json')).toBeNull();
   });
 });

@@ -10,8 +10,8 @@ import {
   type OverrideBundle,
   type OverrideUnit,
 } from '@bike4mind/common';
-import { currentRepoValue, lockedReason, unitState } from '../overrides';
-import type { TutorialTurn } from '../types';
+import { currentRepoValue, lockedReason, unitState } from '@bike4mind/server-utils/tutorials/overrides';
+import type { TutorialTurn } from '@bike4mind/server-utils/tutorials/types';
 import { escapeNonAscii, identifiersOf, type TutorialRepoLayout } from './layout';
 import { checkBundleOwner } from './owner';
 

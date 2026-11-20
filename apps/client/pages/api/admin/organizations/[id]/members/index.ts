@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { adminApi } from '@server/middlewares/adminApi';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import {
@@ -40,6 +41,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:mod
     if (role) throw new ConflictError(`They are already a member of ${organization.name}.`);
     const seats = organizationSeatUsage(organization);
     if (seats.full) {
+      await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: seats.seats });
       throw new UnprocessableEntityError(organizationSeatsFullMessage(organization.name, seats.seats));
     }
 

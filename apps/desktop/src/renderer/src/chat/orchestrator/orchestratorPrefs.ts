@@ -1,16 +1,32 @@
-export type OrchestratorViewId = 'tavern' | 'board' | 'table';
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'board', 'table'];
+export type OrchestratorViewId =
+  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
+/** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
+export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
+  'tavern',
+  'aquarium',
+  'office',
+  'board',
+  'table',
+  'tile-wall',
+  'swimlanes',
+  'constellation',
+  'transit',
+];
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
 const SURFACE_KEY = 'b4m.orchestrator.surface.';
 const VIEW_KEY = 'b4m.orchestrator.view.';
+const PROJECT_VIEW_KEY = 'b4m.orchestrator.projectView.';
+const LAST_VIEW_KEY = 'b4m.orchestrator.lastView';
 const DOCK_OPEN_KEY = 'b4m.orchestrator.dockOpen';
 const DOCK_WIDTH_KEY = 'b4m.orchestrator.dockWidth';
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
 const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
 const AMBIENT_KEY = 'b4m.orchestrator.ambient';
 const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
+const FOCUS_KEY = 'b4m.orchestrator.focus';
+const SKIN_KEY = 'b4m.orchestrator.skin';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -46,18 +62,35 @@ export function writeSurface(sessionId: string, surface: SessionSurface): void {
   }
 }
 
-export function readView(sessionId: string): OrchestratorViewId {
-  const stored = readItem(VIEW_KEY + sessionId);
-  return ORCHESTRATOR_VIEWS.find(view => view === stored) ?? 'tavern';
+function parseView(stored: string | null): OrchestratorViewId | undefined {
+  return ORCHESTRATOR_VIEWS.find(view => view === stored);
 }
 
-export function writeView(sessionId: string, view: OrchestratorViewId): void {
+/**
+ * The view a session opens on: its own choice, else the last one picked in its project (the folder
+ * the session is bound to; omit for a session without one), else the last one picked anywhere, else
+ * the Tavern. A stored id that is no longer a view falls through to the next level.
+ */
+export function readView(sessionId: string, projectDirectory?: string): OrchestratorViewId {
+  return (
+    parseView(readItem(VIEW_KEY + sessionId)) ??
+    (projectDirectory ? parseView(readItem(PROJECT_VIEW_KEY + projectDirectory)) : undefined) ??
+    parseView(readItem(LAST_VIEW_KEY)) ??
+    'tavern'
+  );
+}
+
+/** Records the choice for the session, for its project when it has one, and as the global last choice. */
+export function writeView(sessionId: string, view: OrchestratorViewId, projectDirectory?: string): void {
   writeItem(VIEW_KEY + sessionId, view);
+  if (projectDirectory) writeItem(PROJECT_VIEW_KEY + projectDirectory, view);
+  writeItem(LAST_VIEW_KEY, view);
 }
 
 /**
  * Forgets a deleted session's surface and view. Called from the delete path only: the session list is
  * scoped to the signed-in account while storage is install-wide, so "not listed" never means "gone".
+ * The project and global last choices are not the session's, so they stay.
  */
 export function forgetSessionPrefs(sessionId: string): void {
   try {
@@ -134,4 +167,30 @@ export function readAmbientHintSeen(): boolean {
 
 export function writeAmbientHintSeen(): void {
   writeItem(AMBIENT_HINT_SEEN_KEY, '1');
+}
+
+/** Focus mode: every view cut down to what needs the user (FocusPanel). Off unless turned on. */
+export function readFocus(): boolean {
+  return readItem(FOCUS_KEY) === '1';
+}
+
+export function writeFocus(on: boolean): void {
+  writeItem(FOCUS_KEY, on ? '1' : '0');
+}
+
+/** The picked skin's id (main/mods), or null for Default. Install-wide, like the other look-and-feel choices. */
+export function readSkin(): string | null {
+  return readItem(SKIN_KEY);
+}
+
+export function writeSkin(id: string | null): void {
+  if (id !== null) {
+    writeItem(SKIN_KEY, id);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SKIN_KEY);
+  } catch {
+    // Unwritable storage: Default for this run only.
+  }
 }

@@ -4,14 +4,10 @@ import {
   Box,
   Button,
   Checkbox,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
-  IconButton,
   Input,
-  Menu,
-  MenuButton,
   MenuItem,
   Select,
   Option,
@@ -20,7 +16,6 @@ import {
   Textarea,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import type { ModelInfo } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -43,7 +38,8 @@ import {
   UpdatingBar,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface MetaPromptVersion {
   versionNumber: number;
@@ -343,31 +339,18 @@ const AgentOpsTab: React.FC = () => {
 
   const versionMenu = (version: MetaPromptVersion) =>
     version.isActive ? null : (
-      <Dropdown>
-        <MenuButton
-          slots={{ root: IconButton }}
-          slotProps={{
-            root: {
-              size: 'sm',
-              variant: 'plain',
-              disabled: saving,
-              'aria-label': `Actions for version ${version.versionNumber}`,
-              sx: { ...adminFocus, color: 'admin.inkMuted' },
-            },
-          }}
-          data-testid={`agent-ops-version-actions-${version.versionNumber}`}
+      <RowActionsMenu
+        testId={`agent-ops-version-actions-${version.versionNumber}`}
+        ariaLabel={`Actions for version ${version.versionNumber}`}
+        disabled={saving}
+      >
+        <MenuItem
+          onClick={() => void handleActivateVersion(version.versionNumber)}
+          data-testid={`agent-ops-activate-${version.versionNumber}`}
         >
-          <MoreHorizIcon sx={{ fontSize: 18 }} />
-        </MenuButton>
-        <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-          <MenuItem
-            onClick={() => void handleActivateVersion(version.versionNumber)}
-            data-testid={`agent-ops-activate-${version.versionNumber}`}
-          >
-            Activate version
-          </MenuItem>
-        </Menu>
-      </Dropdown>
+          Activate version
+        </MenuItem>
+      </RowActionsMenu>
     );
 
   const body = () => {

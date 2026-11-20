@@ -35,16 +35,16 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
-vi.mock('@server/decisions/runDecision', () => ({ runDecision: vi.fn() }));
+vi.mock('@bike4mind/server-utils/decisions/runDecision', () => ({ runDecision: vi.fn() }));
 // The billed web tools pull the credit-hold stack in; this suite only checks they are handed over.
-vi.mock('@server/cli/webToolExecutors', () => ({
+vi.mock('@bike4mind/server-utils/cli/webToolExecutors', () => ({
   buildWebToolExecutors: vi.fn(() => ({ web_search: vi.fn(), web_fetch: vi.fn() })),
 }));
 // decisionErrors pulls the input resolver and the data-lake access chain in at import time; this
 // handler test only needs the executor to exist.
-vi.mock('@server/decisions/decisionErrors', () => ({ describeDecisionFailure: vi.fn() }));
+vi.mock('@bike4mind/server-utils/decisions/decisionErrors', () => ({ describeDecisionFailure: vi.fn() }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   // verifyApiKey is imported by resolveContractAuth; unused on the jwtOnly tools
   // path but must exist so the mocked module doesn't throw on the missing export.
   verifyApiKey: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', async importOriginal 
 
 import { handleToolRequest } from './tools';
 import { executeToolWithLogging, SUPPORTED_TOOLS } from '@bike4mind/server-utils/cli/toolsHandler.shared';
-import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
+import { verifyJwtToken, checkRateLimit } from '@bike4mind/server-utils/cli/auth';
 import { REQUEST_ID_HEADER, ToolExecutionRequestSchema } from '@bike4mind/common';
 
 const VALID_BODY = JSON.stringify({ toolName: 'weather_info', input: { city: 'Tokyo' } });

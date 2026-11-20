@@ -36,12 +36,12 @@ vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>()),
   isProduction: () => false,
 }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById } }));
 vi.mock('@bike4mind/services', () => ({ adminAuditService: {}, userService: {} }));
-vi.mock('@server/personas/personaAccounts', async () => {
-  const actual = await vi.importActual<typeof import('@server/personas/personaAccounts')>(
-    '@server/personas/personaAccounts'
+vi.mock('@bike4mind/server-utils/personas/personaAccounts', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/personas/personaAccounts')>(
+    '@bike4mind/server-utils/personas/personaAccounts'
   );
   return { ...actual, deletePersonaAccount: h.deletePersonaAccount, loadPersonaSettings: h.loadPersonaSettings };
 });

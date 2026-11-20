@@ -15,6 +15,7 @@ import {
   Project,
   Memento,
   applySharedShareableRules,
+  applyOrganizationShareableRules,
 } from '@bike4mind/database';
 import {
   InvitePermission,
@@ -23,7 +24,6 @@ import {
   hasAdminPermission,
   hasDeveloperUserTag,
 } from '@bike4mind/common';
-import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '../models/Subscription';
 import { SubscriptionOwnerType } from '../lib/subscriptions/types';
 
@@ -88,7 +88,8 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('delete', AdminSettings);
     }
 
-    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
+    applySharedShareableRules(allow, user, [Session, FabFile, Project]);
+    applyOrganizationShareableRules(allow, user, Organization);
 
     // Org manager permissions: read and update the orgs they manage (but not billing-related fields).
     // Needs a roster row too, like canAdministerOrganization: a bare `adminUserIds` entry is not a member.
@@ -142,10 +143,6 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow(Permission.read, FeedbackModel);
       allow(Permission.delete, FeedbackModel);
       allow(Permission.update, FeedbackModel);
-
-      allow(Permission.read, SecretRotation);
-      allow(Permission.create, SecretRotation);
-      allow(Permission.update, SecretRotation);
 
       allow(Permission.create, Session);
       allow(Permission.delete, Session);

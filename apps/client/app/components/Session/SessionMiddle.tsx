@@ -92,9 +92,9 @@ const ScrollToBottomButton = memo(
           variant="plain"
           sx={theme => ({
             borderRadius: '50%',
-            '--IconButton-size': '34px',
-            minWidth: '34px',
-            minHeight: '34px',
+            '--IconButton-size': '32px',
+            minWidth: '32px',
+            minHeight: '32px',
             '--Icon-fontSize': '18px',
             color: 'text.primary',
             // Glass: the transcript stays visible through the button, blurred. The solid
@@ -184,6 +184,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     thinking,
     enabledMcpServers,
     disabledMcpConnections,
+    enabledPlatformMcpConnections,
     imageModel,
   ] = useLLM(
     useShallow(s => [
@@ -207,6 +208,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.thinking,
       s.enabledMcpServers,
       s.disabledMcpConnections,
+      s.enabledPlatformMcpConnections,
       s.imageModel,
     ])
   );
@@ -383,6 +385,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           imageConfig: imageConfig,
           mcpServers: enabledMcpServers ?? undefined,
           disabledMcpConnections,
+          enabledPlatformMcpConnections,
         });
       }
     }

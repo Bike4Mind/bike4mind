@@ -15,7 +15,10 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (u: { isPersona?: boolean }) => u.isPersona === true,
+    userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => {

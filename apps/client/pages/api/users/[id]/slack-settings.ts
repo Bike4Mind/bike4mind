@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 import { resolveNotificationDestination } from '@bike4mind/slack';
 initializeSlackPackage();
 

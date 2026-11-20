@@ -301,6 +301,7 @@ it('renders several time lines, an avatar and status chips in an entity header',
 
 it('offers all matching selection, keeps actions and clears the floating bar', () => {
   renderToolkit(<SelectionExample />);
+  expect(getComputedStyle(screen.getByTestId('admin-bulk-action-bar')).zIndex).toBe(String(theme.zIndex.table + 1));
   expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('2 selected');
   fireEvent.click(screen.getByTestId('admin-select-all-matching-btn'));
   expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('250 selected');

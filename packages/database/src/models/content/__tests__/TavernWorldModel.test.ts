@@ -90,6 +90,30 @@ describe('TavernWorldModel', () => {
   // ---------------------------------------------------------------------------
 
   describe('applyEdits', () => {
+    it('rejects an invalid history source without changing edits or version', async () => {
+      await createWorld();
+      await expect(
+        tavernWorldRepository.applyEdits('user-1', 'surface', 0, [{ key: 'ground:0,0', gid: 1 }], 'invalid' as never)
+      ).rejects.toThrow(mongoose.Error.ValidationError);
+      const doc = await createWorld();
+      expect(doc.version).toBe(0);
+      expect(doc.editHistory).toEqual([]);
+      expect(doc.edits).toEqual({});
+    });
+
+    it.each(['user', 'agent', 'system'] as const)('accepts the %s history source', async source => {
+      await createWorld();
+      const doc = await tavernWorldRepository.applyEdits(
+        'user-1',
+        'surface',
+        0,
+        [{ key: 'ground:0,0', gid: 1 }],
+        source
+      );
+      expect(doc!.editHistory[0].source).toBe(source);
+      expect(doc!.version).toBe(1);
+    });
+
     it('should apply edits and increment version', async () => {
       await createWorld();
 

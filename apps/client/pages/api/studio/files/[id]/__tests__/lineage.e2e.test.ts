@@ -38,7 +38,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: async () => 'https://objects.example.invalid/file' }),
 }));
 // Lake-granted reads are loadAccessibleFabFile's and listFilesByIds's own concern; here only the per-file ACL decides.
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ holdsDataLakeReadScope: () => false }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ holdsDataLakeReadScope: () => false }));
 
 import '@pages/api/studio/files/[id]/lineage';
 

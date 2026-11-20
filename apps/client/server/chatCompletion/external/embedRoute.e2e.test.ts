@@ -107,7 +107,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 const auth = vi.hoisted(() => ({
   info: {} as Record<string, unknown>,
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: vi.fn(async () => auth.info),
   verifyEmbedKeyById: vi.fn(async () => auth.info),
 }));
@@ -266,7 +266,7 @@ async function seed(overrides: SeedOverrides = {}) {
   });
 
   auth.info = {
-    keyId: 'key-1',
+    keyId: new mongooseDirect.Types.ObjectId().toString(),
     userId: owner.id,
     scopes: ['embed:chat'],
     rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },

@@ -15,7 +15,7 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 const ISO = 'ISO 8601 timestamp.';
 const PRIVILEGED = 'Present only for the listing author.';
 
-export const SkillListingVisibilitySchema = z.enum(['public', 'organization', 'unlisted']);
+export const SkillListingVisibilitySchema = z.enum(['public', 'organization', 'space', 'unlisted']);
 
 export const PublicSkillFileSchema = z.object({ path: z.string(), content: z.string() });
 
@@ -80,6 +80,7 @@ export const PublicSkillListingSchema = z.object({
   description: z.string(),
   visibility: SkillListingVisibilitySchema,
   organization_id: z.string().nullable(),
+  space_id: z.string().nullable(),
   tags: z.array(z.string()),
   status: z.enum(['in_review', 'approved', 'rejected', 'delisted', 'withdrawn']),
   author_name: z.string().nullable(),
@@ -125,6 +126,7 @@ export const PublishSkillListingRequestSchema = z
       .min(1)
       .optional()
       .describe('Required for `organization` visibility, unless you belong to exactly one organization.'),
+    space_id: z.string().min(1).optional().describe('Required for `space` visibility; you must belong to the Space.'),
     tags: tagsField.optional(),
   })
   .strict();
@@ -176,7 +178,12 @@ export const ImportSkillListingResponseSchema = z.object({
 export const BrowseSkillListingsQuerySchema = PaginationQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(50).default(24),
   q: z.string().max(200).optional().describe('Full-text search over name, description and summary.'),
-  scope: z.enum(['public', 'org']).optional(),
+  scope: z.enum(['public', 'org', 'space']).optional(),
+  space_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('With `scope=space`, only this Space. Empty when you do not belong to it.'),
   tags: z.string().optional().describe('Comma-separated; matches listings carrying any of the first 5.'),
   tools: z.enum(['with', 'without']).optional(),
   min_rating: z.coerce.number().min(0).max(5).optional(),

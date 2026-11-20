@@ -1,12 +1,12 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
-import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { UsageDashboard } from './components/UsageDashboard';
 import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
+import { SideAppsDashboard } from './components/SideAppsDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
-import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
+import { CreditAdjustmentsAuditLink } from './components/CreditAdjustmentsAuditLink';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
@@ -16,25 +16,17 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { CreditEconomy } from './components/CreditEconomy';
 
 export const CreditAnalyticsTab: React.FC = () => {
-  // Held in the store rather than locally so another admin tab can land the
-  // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
   const search = useSearch({ strict: false });
   const navigate = useNavigate();
-  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
-  const selectedTab = pricingModelId ? 'pricing' : search.creditView === 'economy' ? 'economy' : activeTab;
-  useEffect(() => {
-    if (pricingModelId && search.creditView === 'economy') {
-      void navigate({ to: '/admin', replace: true, search: previous => ({ ...previous, creditView: undefined }) });
-    }
-  }, [pricingModelId, search.creditView, navigate]);
+  const selectedTab = search.creditView === 'economy' ? 'economy' : activeTab;
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }}>
       <AdminPageHeader
         title="Credits"
-        description="Balances, pricing, margins and credit usage across the platform."
+        description="Balances, margins and credit usage across the platform."
         actions={<ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit analytics help" />}
       />
       <Tabs
@@ -56,9 +48,7 @@ export const CreditAnalyticsTab: React.FC = () => {
           <Tab value="users" data-testid="credit-analysis-users-tab">
             User credits
           </Tab>
-          <Tab value="pricing" data-testid="credit-analysis-pricing-tab">
-            Model pricing
-          </Tab>
+
           <Tab value="margins" data-testid="credit-analysis-margins-tab">
             Margins
           </Tab>
@@ -67,6 +57,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           </Tab>
           <Tab value="api-usage" data-testid="credit-analysis-api-usage-tab">
             API usage
+          </Tab>
+          <Tab value="side-apps" data-testid="credit-analysis-side-apps-tab">
+            Side apps
           </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
             Ledger
@@ -83,10 +76,6 @@ export const CreditAnalyticsTab: React.FC = () => {
           <UserCreditsManager />
         </TabPanel>
 
-        <TabPanel value="pricing" sx={{ p: 0 }}>
-          <ModelPricingCatalog />
-        </TabPanel>
-
         <TabPanel value="margins" sx={{ p: 0 }}>
           <MarginDashboard />
         </TabPanel>
@@ -99,12 +88,16 @@ export const CreditAnalyticsTab: React.FC = () => {
           <PlatformUsageDashboard />
         </TabPanel>
 
+        <TabPanel value="side-apps" sx={{ p: 0 }}>
+          <SideAppsDashboard />
+        </TabPanel>
+
         <TabPanel value="ledger" sx={{ p: 0 }}>
           <TransactionLedger />
         </TabPanel>
 
         <TabPanel value="adjustments" sx={{ p: 0 }}>
-          <CreditAdjustmentsLog />
+          <CreditAdjustmentsAuditLink />
         </TabPanel>
       </Tabs>
     </Stack>

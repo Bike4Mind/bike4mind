@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 import type { Request, Response } from 'express';
@@ -47,7 +47,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   }),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
-vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
   resolveShadowSubstitute: async () => undefined,

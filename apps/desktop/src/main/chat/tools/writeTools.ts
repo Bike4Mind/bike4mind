@@ -853,9 +853,17 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+/**
+ * "Allow in this chat" on a change to one file covers later changes to that same file in the
+ * conversation, as the `Edit(<path>)` rule offered beside it does for every session.
+ */
+export function fileChangeAllowance(target: string): Pick<ApprovalPrompt, 'chatKey' | 'alwaysCovers'> {
+  return { chatKey: `file-change\x00${target}`, alwaysCovers: `changes to ${target}` };
+}
+
 function toPrompt(plan: WritePlan): ApprovalPrompt {
   remember(plan.key, fingerprint(plan.state.exists, plan.state.content));
-  return { detail: summarizeDiff(plan.diff), key: plan.key, diff: plan.diff };
+  return { detail: summarizeDiff(plan.diff), key: plan.key, diff: plan.diff, ...fileChangeAllowance(plan.target) };
 }
 
 const SNIPPET_CONTEXT_LINES = 4;

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_SHARE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import {
   withTransaction,
@@ -21,6 +21,7 @@ import { groupRepository } from '@bike4mind/database/social';
 import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const BodySchema = z.object({ reassignTo: z.string().min(1).optional() }).strict();
@@ -115,6 +116,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
 
   // After the commit, so a retried transaction cannot mail twice. Shares on personal lakes are not
   // the org's to revoke; their owners are told instead.
+  await refreshSeatEntitlements(removedUserId);
   const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(removedUserId, organization, req.logger);
 
   await logEvent(

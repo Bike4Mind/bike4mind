@@ -90,6 +90,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/common', () => ({
+  ApiKeyScope: { ME_READ: 'me:read', ADMIN: 'admin:*' },
   CreditHolderType: { User: 'User' },
 }));
 
@@ -153,6 +154,18 @@ describe('GET /api/gears/status', () => {
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(401);
+  });
+
+  it('403s a key minted for a connected app without evaluating gears', async () => {
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      apiKeyInfo: { keyId: 'k1', scopes: ['me:read'], oauthExchangeClientId: 'c1' },
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.projectExists).not.toHaveBeenCalled();
   });
 
   it('reports all gears locked for a brand-new user and grants nothing', async () => {

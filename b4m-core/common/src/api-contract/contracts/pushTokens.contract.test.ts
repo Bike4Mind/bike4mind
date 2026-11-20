@@ -16,10 +16,15 @@ describe('push token contracts', () => {
     expect('sid' in PushTokenRegisterRequestSchema.shape).toBe(false);
   });
 
+  it('accepts an android (FCM) registration', () => {
+    const android = { token: 't', kind: 'device', platform: 'android', environment: 'production' };
+    expect(PushTokenRegisterRequestSchema.safeParse(android).success).toBe(true);
+  });
+
   it('rejects an unknown kind, platform or environment', () => {
     const ok = { token: 't', kind: 'device', platform: 'ios', environment: 'sandbox' };
     expect(PushTokenRegisterRequestSchema.safeParse(ok).success).toBe(true);
-    for (const bad of [{ kind: 'x' }, { platform: 'android' }, { environment: 'staging' }]) {
+    for (const bad of [{ kind: 'x' }, { platform: 'palmos' }, { environment: 'staging' }]) {
       expect(PushTokenRegisterRequestSchema.safeParse({ ...ok, ...bad }).success).toBe(false);
     }
   });

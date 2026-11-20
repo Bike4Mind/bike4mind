@@ -19,9 +19,17 @@ import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalc
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
-import { getSettingsValue, ImageModerationBlockedError, ImageProviderUnavailableError } from '@bike4mind/utils';
+import {
+  getSettingsValue,
+  ImageModerationBlockedError,
+  ImageProviderUnavailableError,
+  OpenaiModerationsService,
+} from '@bike4mind/utils';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
+
+const notFrozen = { findActiveForSubject: async () => null };
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
@@ -549,6 +557,7 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById },
         quests: { create, update, getMostRecentChatHistory, findById: questsFindById },
       },
@@ -674,6 +683,7 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
@@ -749,6 +759,7 @@ describe('ImageGenerationService.process (Gemini edit-path model passthrough)', 
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
@@ -816,6 +827,7 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
@@ -918,6 +930,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       assertModelAdmission: async () => {},
       creditHolds,
       db: {
+        spendFreezes: notFrozen,
         quests: {
           findById: vi.fn(async () => quest),
           update: vi.fn(),
@@ -1006,6 +1019,31 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     expect(quest.status).toBe('done');
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
     expect(quest.creditHolds.release).not.toHaveBeenCalled();
+  });
+
+  it('moderates the prompt with the shared admin key, not an expired user OpenAI key', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key', openai: 'expired' } as never);
+    vi.mocked(getSettingsValue).mockImplementation(((name: string) => {
+      if (name === 'enforceCredits' || name === 'ModerationEnabled') return true;
+      if (name === 'openaiDemoKey') return 'shared-key';
+      return undefined;
+    }) as never);
+    const usedKeys: string[] = [];
+    const checkPrompt = vi
+      .spyOn(OpenaiModerationsService.prototype, 'checkPrompt')
+      .mockImplementation(async function (this: { openai: { apiKey: string } }) {
+        usedKeys.push(this.openai.apiKey);
+      });
+
+    try {
+      const quest = await runCharged(vi.fn(async () => undefined));
+
+      expect(quest.status).toBe('done');
+      expect(checkPrompt).toHaveBeenCalledWith('a red bicycle');
+      expect(usedKeys).toEqual(['shared-key']);
+    } finally {
+      checkPrompt.mockRestore();
+    }
   });
 
   it('deducts the selected primary image input cost on a GPT generation', async () => {
@@ -1246,6 +1284,7 @@ describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () =>
     return new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
@@ -1317,6 +1356,7 @@ describe('ImageGenerationService.process (size normalization)', () => {
       assertModelAdmission: async () => {},
       creditHolds: makeCreditHolds(),
       db: {
+        spendFreezes: notFrozen,
         quests: {
           findById: vi.fn(async () => quest as any),
           update: vi.fn(),
@@ -1590,6 +1630,7 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
         quests: {
           update,
@@ -1664,7 +1705,11 @@ describe('ImageGenerationService quest partial writes', () => {
   } as unknown as ModelInfo;
 
   const makeService = (
-    opts: { startImageGenerationProcess?: ReturnType<typeof vi.fn>; saveGeneratedAsset?: SaveGeneratedAssetFn } = {}
+    opts: {
+      startImageGenerationProcess?: ReturnType<typeof vi.fn>;
+      saveGeneratedAsset?: SaveGeneratedAssetFn;
+      spendFreezes?: { findActiveForSubject: ReturnType<typeof vi.fn> };
+    } = {}
   ) => {
     const quest: Record<string, unknown> = {
       id: 'quest1',
@@ -1680,6 +1725,7 @@ describe('ImageGenerationService quest partial writes', () => {
       assertModelAdmission: async () => {},
       creditHolds,
       db: {
+        spendFreezes: opts.spendFreezes ?? notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
         quests: {
           findById: vi.fn(async () => quest as never),
@@ -1942,6 +1988,44 @@ describe('ImageGenerationService quest partial writes', () => {
     expect(creditHolds.hold).not.toHaveBeenCalled();
     expect(creditHolds.settle).not.toHaveBeenCalled();
     expect(callArgs(update).find(arg => arg.status === 'done')?.creditsUsed).toBe(7);
+  });
+
+  describe('spend freeze with credit enforcement off', () => {
+    const arrangeFreeze = (freeze: { scopeType: 'User'; frozenAt: Date } | null) => {
+      vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+      mockGeminiEdit.mockReset();
+      mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+      // Enforcement can only be off on self-host; hosted resolves it on regardless of the stored row.
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'false' }).mockResolvedValueOnce({});
+      const findActiveForSubject = vi.fn(async () => freeze);
+      return { findActiveForSubject, ...makeService({ spendFreezes: { findActiveForSubject } }) };
+    };
+
+    it('refuses a frozen subject with spend_frozen before the provider call', async () => {
+      const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze({
+        scopeType: 'User',
+        frozenAt: new Date('2026-11-16T10:00:00.000Z'),
+      });
+
+      await processEdit(service);
+
+      expect(findActiveForSubject).toHaveBeenCalledWith({ userId: 'user1', organizationId: null, apiKeyId: undefined });
+      expect(mockGeminiEdit).not.toHaveBeenCalled();
+      expect(creditHolds.hold).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')?.errorCode).toBe('spend_frozen');
+    });
+
+    it('generates for an unfrozen subject', async () => {
+      const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze(null);
+
+      await processEdit(service);
+
+      expect(findActiveForSubject).toHaveBeenCalledTimes(1);
+      expect(mockGeminiEdit).toHaveBeenCalledTimes(1);
+      expect(creditHolds.hold).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.status === 'done')).toBeDefined();
+    });
   });
 
   describe('saving generated images to the user files', () => {
@@ -2271,6 +2355,7 @@ describe('ImageGenerationService.process (terminal state on early failure)', () 
     const service = new ImageGenerationService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById: vi.fn(async () => quest), update, updateMany: vi.fn(async () => undefined) },
         users: { findById: usersFindById },
         organizations: { findById: vi.fn(async () => null) },

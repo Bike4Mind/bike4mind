@@ -209,6 +209,8 @@ extension Components {
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/userId`.
             public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionResponse200/organizationId`.
+            public var organizationId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/knowledgeIds`.
             public var knowledgeIds: [Swift.String]?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/artifactIds`.
@@ -269,6 +271,7 @@ extension Components {
             ///   - _id:
             ///   - name:
             ///   - userId:
+            ///   - organizationId:
             ///   - knowledgeIds:
             ///   - artifactIds:
             ///   - tags:
@@ -285,6 +288,7 @@ extension Components {
                 _id: Swift.String? = nil,
                 name: Swift.String,
                 userId: Swift.String,
+                organizationId: Swift.String? = nil,
                 knowledgeIds: [Swift.String]? = nil,
                 artifactIds: [Swift.String]? = nil,
                 tags: Components.Schemas.GetSessionResponse200.TagsPayload? = nil,
@@ -301,6 +305,7 @@ extension Components {
                 self._id = _id
                 self.name = name
                 self.userId = userId
+                self.organizationId = organizationId
                 self.knowledgeIds = knowledgeIds
                 self.artifactIds = artifactIds
                 self.tags = tags
@@ -318,6 +323,7 @@ extension Components {
                 case _id
                 case name
                 case userId
+                case organizationId
                 case knowledgeIds
                 case artifactIds
                 case tags
@@ -859,6 +865,8 @@ extension Components {
                 public var name: Swift.String
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/userId`.
                 public var userId: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/organizationId`.
+                public var organizationId: Swift.String?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/knowledgeIds`.
                 public var knowledgeIds: [Swift.String]?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/artifactIds`.
@@ -919,6 +927,7 @@ extension Components {
                 ///   - _id:
                 ///   - name:
                 ///   - userId:
+                ///   - organizationId:
                 ///   - knowledgeIds:
                 ///   - artifactIds:
                 ///   - tags:
@@ -935,6 +944,7 @@ extension Components {
                     _id: Swift.String? = nil,
                     name: Swift.String,
                     userId: Swift.String,
+                    organizationId: Swift.String? = nil,
                     knowledgeIds: [Swift.String]? = nil,
                     artifactIds: [Swift.String]? = nil,
                     tags: Components.Schemas.ListSessionsResponse200.DataPayloadPayload.TagsPayload? = nil,
@@ -951,6 +961,7 @@ extension Components {
                     self._id = _id
                     self.name = name
                     self.userId = userId
+                    self.organizationId = organizationId
                     self.knowledgeIds = knowledgeIds
                     self.artifactIds = artifactIds
                     self.tags = tags
@@ -968,6 +979,7 @@ extension Components {
                     case _id
                     case name
                     case userId
+                    case organizationId
                     case knowledgeIds
                     case artifactIds
                     case tags

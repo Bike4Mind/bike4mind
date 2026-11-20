@@ -26,18 +26,18 @@ import {
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
+import { storeGeneratedOutput, type StoreOutputResult } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
+import { finishCutout, prepareCutoutInputs, type PreparedCutout } from './cutout';
 import { estimateImageJobUsd } from './imageJobCost';
 import type { ImageJob, ImageJobDeps } from './types';
 
 const FEATURE_LABEL = 'image generation';
 const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
-// Fresh budget for the bucket fallback when the step signal already fired; fits the engine's commit margin.
-const FALLBACK_SAVE_BUDGET_MS = 10_000;
 
 type ImageStepResult = StepResult<'image'>;
 type UnsuccessfulResult = Exclude<ProviderTerminalResult, { status: 'succeeded' }>;
-type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext };
+type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext; cutout?: PreparedCutout };
 
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): ImageStepResult => ({
   next: 'failed',
@@ -86,6 +86,15 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 
+  // Never throws, like recordGeneratedImages: the badge must not fail a paid, delivered image.
+  const countNotebookImage = async (questId: string) => {
+    try {
+      await deps.countNotebookImage?.(questId);
+    } catch (error) {
+      deps.logger.warn('[imageJobs] failed to count the image on its notebook', { questId, error });
+    }
+  };
+
   const noApiKey = (job: ImageJob): ImageStepResult =>
     fail('provider_error', `No API key configured for ${job.payload.providerId}`);
 
@@ -114,21 +123,25 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     }
     const inputs = await loadInputs(job);
     if ('next' in inputs) return inputs;
-    return { provider, inputs, ctx };
+    if (job.payload.purpose !== 'cutout') return { provider, inputs, ctx };
+    // storeOutput composites the matte only on the sync path; an async store would keep the raw render.
+    if (provider.mode !== 'sync') return fail('provider_error', 'a cutout job needs a sync provider');
+    const cutout = await prepareCutoutInputs(request, inputs);
+    if ('error' in cutout) return fail('provider_error', `cutout source could not be prepared: ${cutout.error}`);
+    return { provider, inputs: cutout.inputs, ctx, cutout };
   };
 
   const saveOutput = async (
     job: ImageJob,
     params: { bytes: Buffer; contentType: string },
     { signal }: GenerationJobStepContext
-  ): Promise<ImageJobOutput> => {
+  ): Promise<StoreOutputResult> => {
     const { payload } = job;
     const { bytes, contentType } = params;
-    const common = { contentType, bytes: bytes.byteLength };
-    const derivedFrom = lineageOf(job);
-    try {
-      const files = await deps.saveToFiles({
-        userId: job.requestedBy,
+    return storeGeneratedOutput(
+      {
+        job,
+        noun: 'image',
         bytes,
         contentType,
         generation: {
@@ -139,26 +152,19 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
           prompt: payload.request.prompt,
           request: payload.request,
         },
-        ...(derivedFrom.length > 0 && { derivedFrom }),
+        derivedFrom: lineageOf(job),
+        questId: job.questId,
+        bucketFolder: 'generated-images',
+        extension: extensionFromMimeType(contentType) ?? 'bin',
+        // A sync submit cannot retry, so a throwing Files save still keeps the image in the bucket.
+        onFilesError: 'fallback',
+        // A throw here (the scan could not run) fails closed: orphaned_submit on the sync path, a retried store
+        // step on the async one (up to MAX_STEP_ATTEMPTS, then the job fails). Either way the image is not kept.
+        moderate: () => deps.moderate({ job, bytes, mimeType: contentType }),
         signal,
-      });
-      if (files.saved) return { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
-      deps.logger.warn('image saved outside Files', { jobId: job.id, reason: files.reason });
-    } catch (error) {
-      deps.logger.warn('image save to Files threw; saving outside Files', { jobId: job.id, error });
-    }
-    // Already moderated above, so the fallback cannot keep an image our scan withheld.
-    const fallbackSignal = signal.aborted ? AbortSignal.timeout(FALLBACK_SAVE_BUDGET_MS) : signal;
-    const key = `generated-images/${job.ownerId}/${job.id}.${extensionFromMimeType(contentType) ?? 'bin'}`;
-    try {
-      const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
-      return { location: 'generated', s3Key, ...common };
-    } catch (error) {
-      // Rendered and billed but cannot be kept: the throw fails a sync submit as orphaned_submit; an async store
-      // step is retried up to MAX_STEP_ATTEMPTS (not bounded by the deadline), then the job fails and the hold is released.
-      deps.logger.error('image_job_output_unsaved', { jobId: job.id, bytes: bytes.byteLength, error });
-      throw error;
-    }
+      },
+      deps
+    );
   };
 
   /** Downloads, moderates and saves the provider's image: the end of submit (sync) or the store step (async). */
@@ -167,7 +173,9 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     provider: ImageProvider,
     ctx: ProviderContext,
     providerOutput: ProviderOutput,
-    context: GenerationJobStepContext
+    context: GenerationJobStepContext,
+    // Only a sync job carries one: the cutout model (CUTOUT_MODEL) is a sync provider.
+    cutout?: PreparedCutout
   ): Promise<ImageStepResult> => {
     let bytes: Buffer;
     try {
@@ -182,18 +190,22 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     // A delivery URL carries no type, so the bytes say what they are; anything that is not an image is refused.
     const declared = providerOutput.contentType ?? sniffImageFormat(bytes)?.mimeType;
     if (!declared) return fail('provider_error', 'The provider returned something that is not an image');
-    const contentType = normalizeContentType(declared);
-    // A throw here (the scan could not run) fails closed: orphaned_submit on the sync path, a retried store
-    // step on the async one (up to MAX_STEP_ATTEMPTS, then the job fails). Either way the image is not kept.
-    const verdict = await deps.moderate({ job, bytes, mimeType: contentType });
-    if (verdict.blocked) {
+    let contentType = normalizeContentType(declared);
+    if (cutout) {
+      // Before the save (which moderates), so what is moderated is exactly what is stored.
+      const finished = await finishCutout(cutout, bytes);
+      if ('error' in finished) return fail('provider_error', `cutout matte did not line up: ${finished.error}`);
+      ({ bytes, contentType } = finished);
+    }
+    const stored = await saveOutput(job, { bytes, contentType }, context);
+    if (!stored.stored) {
       return {
         next: 'blocked',
-        // Released, not charged, as the chat image path does when this scan withholds an image.
-        error: { code: 'content_blocked', message: verdict.reason },
+        // Released, not charged, as the chat image path does when our scan withholds an image.
+        error: { code: 'content_blocked', message: stored.reason },
       };
     }
-    const output = await saveOutput(job, { bytes, contentType }, context);
+    const output: ImageJobOutput = { ...stored.location, contentType, bytes: bytes.byteLength };
     // The provider handle and delivery URL only drive the steps; the terminal payload keeps the stored output.
     const { providerHandle: _handle, providerOutput: _output, ...rest } = job.payload;
     const payload: ImageJobPayload = { ...rest, output };
@@ -217,13 +229,13 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
 
   const submitSync = async (
     job: ImageJob,
-    { provider, inputs, ctx }: PreparedSubmit & { provider: SyncImageProvider },
+    { provider, inputs, ctx, cutout }: PreparedSubmit & { provider: SyncImageProvider },
     context: GenerationJobStepContext
   ): Promise<ImageStepResult> => {
     // Not caught: a throw is an unknown outcome (the image may exist and be billed). See SyncGenerationProvider.
     const result = await provider.generate(job.payload.request, inputs, ctx);
     if (result.status !== 'succeeded') return unsuccessfulStep(job, result);
-    return storeOutput(job, provider, ctx, result.output, context);
+    return storeOutput(job, provider, ctx, result.output, context, cutout);
   };
 
   const submitAsync = async (
@@ -355,6 +367,8 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
       if (charged) await settle(job);
       else await releaseJobHold(job, deps);
+      // After the settle, so a retried terminal (the settle threw) counts once; the engine claims terminal handling once.
+      if (job.state === 'succeeded' && job.payload.output && job.questId) await countNotebookImage(job.questId);
     },
   };
 }

@@ -34,13 +34,13 @@ import {
   OperationsModelUnavailableError,
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { executeDecision } from '@server/decisions/executeDecision';
+import { executeDecision } from '@bike4mind/server-utils/decisions/executeDecision';
 import {
   DecisionSkipped,
   callablePlatformModel,
   decisionFailureCode,
   resolveJsonInput,
-} from '@server/decisions/platformDecision';
+} from '@bike4mind/server-utils/decisions/platformDecision';
 import { AdminAiSkip, type AdminAiSkipReason } from './adminAiSkip';
 import { adminAiCompletionMeter, adminAiDecisionAccounting, type AdminAiSpendLimits } from './budget';
 import { pseudonymiseEvidence } from './pseudonymiseEvidence';

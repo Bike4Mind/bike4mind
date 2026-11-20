@@ -175,6 +175,8 @@ export interface ChatToolCall {
   name: string;
   input: Record<string, unknown>;
   status: ChatToolStatus;
+  /** Trusted local skill result; retained so resumed replies preserve its provenance. */
+  ownContent?: true;
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
@@ -192,8 +194,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode because it acts as the
+   * signed-in user (`askInFull`). Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -259,12 +273,6 @@ export interface ChatToolCall {
    */
   label?: string;
   /**
-   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
-   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
-   * Kept on the row so a continued reply, which replays it, judges it the same way.
-   */
-  ownContent?: true;
-  /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
    *
@@ -328,7 +336,10 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  /**
+   * Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop),
+   * or, in Full access, which of its stops held the call.
+   */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -490,6 +501,23 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
+
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -906,7 +934,7 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
-  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  /** A Skill Market import, written by someone else, so its body is framed as theirs. */
   imported?: true;
 }
 
@@ -1209,18 +1237,16 @@ export type ChatSessionMode = 'chat' | 'code';
  * goes ahead.
  *
  * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
- * may do without stopping, and it governs one axis only: filesystem and execution. The
- * generation tools are gated on COST, not safety, and ask in every mode - approving
- * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ * may do without stopping.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
- *           opencode's permission defaults; see ChatService.autoApproves.
- *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
- *           this user can read and reach the internet with nobody looking. Chosen per
- *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *           command that writes outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, or the same call a third time in a row.
+ *           Commands that cannot be parsed or fully followed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
+ *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
+ *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
  * output can raise it; see ChatService.setApprovalMode and HostContext.
@@ -1402,6 +1428,8 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
   /** How the last assistant turn ended; absent when the session has no assistant message. */
   lastOutcome?: ChildOutcome;
@@ -1417,6 +1445,9 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.
@@ -2084,6 +2115,8 @@ export interface ChatReplyRound {
 export interface ChatSettledCharge {
   creditsCharged: number;
   usdCost?: number;
+  /** The server run the charge was billed under, as the `settled` event echoed it; absent outside a run. */
+  runId?: string;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

@@ -1,4 +1,4 @@
-import { getFavoriteSessionByUser } from '@server/managers/sessionManager';
+import { getFavoriteSessionByUser } from '@bike4mind/server-utils/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 

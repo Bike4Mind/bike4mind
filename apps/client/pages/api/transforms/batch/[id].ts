@@ -7,7 +7,7 @@ import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
-import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
+import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).

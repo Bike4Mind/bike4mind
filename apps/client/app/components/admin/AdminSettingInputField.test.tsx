@@ -638,3 +638,22 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     expect(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input')).not.toHaveAttribute('placeholder');
   });
 });
+
+describe('AdminSettingInputField locked setting', () => {
+  it('disables a locked number setting and its Save, and shows why', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField
+          setting={bandSetting}
+          index={0}
+          defaultValue={50}
+          lockedNote="Only full administrators can change this setting."
+        />
+      </TestWrapper>
+    );
+
+    expect(bandInput()).toBeDisabled();
+    expect(bandSaveButton()).toBeDisabled();
+    expect(bandHelperText()).toHaveTextContent('Only full administrators can change this setting.');
+  });
+});

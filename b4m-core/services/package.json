@@ -1,7 +1,7 @@
 {
-  "name": "@bike4mind/services",
+  "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
-  "version": "26.0.0",
+  "version": "29.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -38,6 +38,16 @@
       "require": {
         "types": "./dist/dataLakeService/lakeGateWideningRule.d.cts",
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
+      }
+    },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
       }
     },
     "./evals/lakeRag": {
@@ -130,6 +140,36 @@
         "default": "./dist/musicJobs/index.cjs"
       }
     },
+    "./sceneJobs": {
+      "import": {
+        "types": "./dist/sceneJobs/index.d.mts",
+        "default": "./dist/sceneJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/sceneJobs/index.d.cts",
+        "default": "./dist/sceneJobs/index.cjs"
+      }
+    },
+    "./audioJobs": {
+      "import": {
+        "types": "./dist/audioJobs/index.d.mts",
+        "default": "./dist/audioJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioJobs/index.d.cts",
+        "default": "./dist/audioJobs/index.cjs"
+      }
+    },
+    "./renderJobs": {
+      "import": {
+        "types": "./dist/renderJobs/index.d.mts",
+        "default": "./dist/renderJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/renderJobs/index.d.cts",
+        "default": "./dist/renderJobs/index.cjs"
+      }
+    },
     "./agentProactiveMessagingService": {
       "import": {
         "types": "./dist/agentProactiveMessagingService/index.d.mts",
@@ -188,6 +228,16 @@
       "require": {
         "types": "./dist/llm/toolFinishObserver.d.cts",
         "default": "./dist/llm/toolFinishObserver.cjs"
+      }
+    },
+    "./organizationService/orgEventObserver": {
+      "import": {
+        "types": "./dist/organizationService/orgEventObserver.d.mts",
+        "default": "./dist/organizationService/orgEventObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/orgEventObserver.d.cts",
+        "default": "./dist/organizationService/orgEventObserver.cjs"
       }
     },
     "./llm/ChatCompletionInvoke": {
@@ -298,6 +348,16 @@
       "require": {
         "types": "./dist/llm/shadowTier.d.cts",
         "default": "./dist/llm/shadowTier.cjs"
+      }
+    },
+    "./llm/orgToolPolicy": {
+      "import": {
+        "types": "./dist/llm/orgToolPolicy.d.mts",
+        "default": "./dist/llm/orgToolPolicy.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/orgToolPolicy.d.cts",
+        "default": "./dist/llm/orgToolPolicy.cjs"
       }
     },
     "./llm/refineText": {
@@ -507,7 +567,7 @@
     "diff": "^9.0.0",
     "disposable-domains": "^2.0.7",
     "file-type": "^22.1.0",
-    "glob": "^13.0.6",
+    "glob": "^14.0.2",
     "lodash": "^4.18.1",
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",

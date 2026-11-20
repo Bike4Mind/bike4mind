@@ -1,16 +1,18 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType, estimateTtsCreditCost, type ApiErrorCode } from '@bike4mind/common';
+import { ApiKeyType, estimateTtsCreditCost, resolveAudioVendorBackend, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository, spendFreezeRepository } from '@bike4mind/database';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import {
   holdPreflightCredits,
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
@@ -62,8 +64,14 @@ const handler = baseApi().post(async (req, res) => {
   // Same durable hold as pages/api/ai/tts.ts: reserve before the provider call, settle after it. Unlike
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
-  await (await createModelAdmission(req.user!)).assert(TTS_MODEL);
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
+  // The hold below runs only when credits are enforced; the freeze applies either way.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {
     try {

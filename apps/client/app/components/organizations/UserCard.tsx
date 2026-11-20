@@ -1,21 +1,26 @@
-import {
-  InviteType,
-  IUserDocument,
-  Permission,
-  IOrganizationDocument,
-  orgAclRowConfersMembership,
-} from '@bike4mind/common';
+import { IUserDocument, Permission, IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { useCancelInvite } from '@client/app/hooks/data/invites';
-import { useResendOrganizationInvite } from '@client/app/hooks/data/organizations';
 import { getAppFileUrl } from '@client/app/utils/s3';
-import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, Chip, Typography } from '@mui/joy';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import {
+  Box,
+  Avatar,
+  Stack,
+  IconButton,
+  Dropdown,
+  MenuButton,
+  Menu,
+  MenuItem,
+  Chip,
+  Typography,
+  Checkbox,
+  ListDivider,
+  Tooltip,
+} from '@mui/joy';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   useLeaveOrganization,
@@ -23,148 +28,201 @@ import {
   useSetOrganizationManager,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
+import { formatAccountAge, formatLastActiveTitle } from '@client/app/components/admin/Users/formatAccountAge';
 import CreditLimitModal from './CreditLimitModal';
 import OffboardMemberDialog from './OffboardMemberDialog';
-import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
+import { formatMemberCredits, formatMemberCreditUsage } from './memberCreditBudget';
+import { RosterMember, rosterGridColumns, ROSTER_TABLE_QUERY } from './memberRosterView';
+
+/** A roster row: the safe user shape plus its org standing. Pending invites are not rows (PendingInvitationsTable). */
+export type OrganizationRosterRow = IUserDocument & RosterMember & { permissions: Permission[] };
 
 interface OrganizationUserCardProps {
   organization: IOrganizationDocument;
-  /** `creditUsage` is null for a pending invite, which has no budget yet. */
-  user: IUserDocument & {
-    status: 'accepted' | 'pending';
-    permissions: Permission[];
-    creditUsage: MemberCreditUsage | null;
-  };
-  /** Viewer may cancel a pending invite (`isOrgMember` and `isOrgOwnerOrCurrentAdmin`, the invite routes' gates). */
-  canInviteMembers: boolean;
+  user: OrganizationRosterRow;
   /** Viewer may revoke a member (`canRevokeOrgMember`, the DELETE member route's gate). */
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
   canManageCreditBudgets: boolean;
   /** Viewer may make or remove managers (`isOrgOwnerOrPlatformAdmin`, the manager route's gate). */
   canManageManagers: boolean;
+  /** The roster has a selection column; must match the header's `rosterGridColumns` argument. */
+  selectable?: boolean;
+  /** The roster has an Email column; must match the header's `rosterGridColumns` argument. */
+  showEmails: boolean;
+  selected?: boolean;
+  /** Absent when this row cannot be bulk-removed: its selection cell stays empty. */
+  onToggleSelect?: () => void;
 }
+
+/** Below the table breakpoint each cell stacks in its own row under the name; no empty email row. */
+const narrowGridAreas = ({ selectable, showEmails }: { selectable: boolean; showEmails: boolean }): string => {
+  const stacked = [...(showEmails ? ['email'] : []), 'role', 'credits', 'active'];
+  return selectable
+    ? ['"select name actions"', ...stacked.map(area => `". ${area} ${area}"`)].join(' ')
+    : ['"name actions"', ...stacked.map(area => `"${area} ${area}"`)].join(' ');
+};
+
+/** Rows are table rows inside MemberRoster's framed list: hairline between rows, no per-row card. */
+const rowSurface = {
+  borderBottom: '1px solid',
+  borderColor: 'divider',
+  '&:last-of-type': { borderBottom: 'none' },
+  '&:hover': { backgroundColor: 'background.level1' },
+} as const;
+
+// Admin status tones, as InitialsAvatar uses (admin/shared). The admin skin repaints Joy's solid
+// neutral/success/warning as white secondary buttons, so a Joy `color` cannot give a fill here.
+// Neutral is too faint on a light surface and bad reads as an error, so neither is offered.
+const AVATAR_TONES = ['info', 'good', 'warn'] as const;
+
+/** A stable avatar tone per user, so a person keeps theirs across visits. */
+const avatarToneFor = (seed: string): (typeof AVATAR_TONES)[number] => {
+  let hash = 0;
+  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  return AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length];
+};
+
+const ExplainedDash: FC<{ explanation: string; testId: string }> = ({ explanation, testId }) => (
+  <Tooltip title={explanation} size="sm">
+    <Typography level="body-sm" component="span" sx={{ color: 'text.tertiary' }} data-testid={testId} tabIndex={0}>
+      <span aria-hidden="true">-</span>
+      <Box component="span" sx={visuallyHidden}>
+        {explanation}
+      </Box>
+    </Typography>
+  </Tooltip>
+);
 
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   organization,
   user,
-  canInviteMembers,
   canRevokeMembers,
   canManageCreditBudgets,
   canManageManagers,
+  selectable = false,
+  showEmails,
+  selected = false,
+  onToggleSelect,
 }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
   const { id: organizationId } = organization;
-  const queryClient = useQueryClient();
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
-  const resendInvite = useResendOrganizationInvite(organizationId);
-  const { mutateAsync: cancelInvite } = useCancelInvite({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId, 'pending'] });
-      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
-      toast.success('Invite cancelled successfully');
-    },
-    onError: err => {
-      toast.error(err.message);
-    },
-  });
-  const isOwner = user?.id === organization.userId;
-  const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
+  const isOwner = user.role === 'owner';
+  const isManager = user.role === 'manager';
+  const isSelf = currentUser?.id === user.id;
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
-  const chips = (
-    <Stack direction="row" spacing={1}>
-      {user.isBanned && (
-        <Chip size="sm" variant="soft" color="danger">
-          Deactivated
-        </Chip>
-      )}
-      {user.status === 'pending' ? (
-        <Chip size="sm" variant="soft" color="warning">
-          Pending
-        </Chip>
-      ) : isOwner ? (
-        <Chip size="sm" variant="soft" color="primary" data-testid="organization-user-card-owner-chip">
-          {t('organization.roles.owner')}
-        </Chip>
-      ) : isManager ? (
-        <Chip size="sm" variant="soft" color="success" data-testid="organization-user-card-manager-chip">
-          {t('organization.roles.manager')}
-        </Chip>
-      ) : (
-        <>
-          <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
-            {t('organization.roles.member')}
-          </Chip>
-          {/* Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
-              routes/organizations/$id.tsx), so the owner needs to see who holds it. */}
-          {user.permissions.some(p => p === Permission.share || p === Permission.update) && (
-            <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
-              {t('organization.access.can_edit_settings')}
-            </Chip>
-          )}
-        </>
-      )}
-    </Stack>
-  );
   const [offboarding, setOffboarding] = useState(false);
+
   const handleRemoveMember = useCallback(() => setOffboarding(true), []);
 
-  const handleLeaveOrganization = useCallback(async () => {
+  const handleLeaveOrganization = useCallback(() => {
     confirm({
-      title: 'Leave Team',
-      description: 'Are you sure you want to leave this team?',
+      title: 'Leave team',
+      description: `Leave ${organization.name}? You will lose access to its groups, data lakes and credits until you are invited again.`,
       type: 'danger',
+      okLabel: 'Leave team',
       onOk: async () => {
         await leaveOrganization({ organizationId });
         navigate({ to: '/organizations' });
       },
     });
-  }, [confirm, organizationId, leaveOrganization, navigate]);
+  }, [confirm, organization.name, organizationId, leaveOrganization, navigate]);
 
-  const canRevoke = canRevokeMembers && user.status === 'accepted';
-  const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
-  const canCancelInvite = user.status === 'pending' && canInviteMembers;
+  // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
+  // the pool is capped like anyone's. Your own row offers Leave team, never Remove member.
+  const canRevoke = canRevokeMembers && !isOwner && !isSelf;
+  const canLeave = !isOwner && isSelf;
   // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
   const canToggleManager =
-    canManageManagers &&
-    user.status === 'accepted' &&
-    (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
-  // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
-  // the pool is capped like anyone's.
-  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite || canToggleManager);
+    canManageManagers && !isOwner && (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
   const setManager = useSetOrganizationManager();
-  const canSetCreditLimit = canManageCreditBudgets && user.status === 'accepted';
+  const canSetCreditLimit = canManageCreditBudgets;
+  const hasOtherActions = canSetCreditLimit || canToggleManager || canRevoke;
 
   const [editingLimit, setEditingLimit] = useState(false);
   const setOverride = useSetMemberCreditOverride();
   const creditUsage = user.creditUsage;
-  const creditUsageLabel = creditUsage ? formatMemberCreditUsage(creditUsage) : '-';
-  const creditUsageCell = (
+  const creditUsageCell = creditUsage ? (
     <Typography
       level="body-sm"
       component="span"
-      sx={{ color: creditUsage?.tracked ? 'text.primary' : 'text.tertiary', whiteSpace: 'nowrap' }}
+      sx={{ color: creditUsage.tracked ? 'text.primary' : 'text.tertiary', whiteSpace: 'normal' }}
       data-testid="organization-user-card-credit-usage"
     >
-      {creditUsageLabel}
-      {creditUsage?.isOverride && (
+      {formatMemberCreditUsage(creditUsage)}
+      {creditUsage.isOverride && (
         <Typography level="body-xs" component="span" sx={{ color: 'text.tertiary', ml: 0.5 }}>
           (own limit)
         </Typography>
       )}
     </Typography>
+  ) : (
+    <ExplainedDash testId="organization-user-card-credit-usage" explanation="Only team managers can see member usage" />
   );
 
-  const actionsMenu = (hasRosterAction || canSetCreditLimit) && (
+  const lastActiveTitle = formatLastActiveTitle(user.lastActiveAt);
+  const lastActiveCell = lastActiveTitle ? (
+    <Typography
+      level="body-sm"
+      component="span"
+      title={lastActiveTitle}
+      data-testid="organization-user-card-last-active"
+      sx={{ whiteSpace: 'nowrap' }}
+    >
+      {formatAccountAge(user.lastActiveAt)}
+    </Typography>
+  ) : (
+    <ExplainedDash testId="organization-user-card-last-active" explanation="No activity recorded" />
+  );
+
+  const statusChips = (
+    <>
+      {user.isBanned && (
+        <Chip size="sm" variant="soft" color="danger">
+          Deactivated
+        </Chip>
+      )}
+    </>
+  );
+
+  const roleChip = (
+    <Chip
+      size="sm"
+      variant="soft"
+      color={isOwner ? 'primary' : isManager ? 'success' : 'neutral'}
+      // The neutral soft fill is close to the surface in both themes; one step up keeps the chip visible.
+      sx={!isOwner && !isManager ? { bgcolor: 'neutral.softHoverBg' } : undefined}
+      data-testid={`organization-user-card-${user.role}-chip`}
+    >
+      {t(`organization.roles.${user.role}`)}
+    </Chip>
+  );
+
+  const selectCell = selectable && (
+    <Box display="flex" alignItems="center" sx={{ gridArea: 'select', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}>
+      {onToggleSelect && (
+        <Checkbox
+          size="sm"
+          checked={selected}
+          onChange={onToggleSelect}
+          slotProps={{ input: { 'aria-label': `Select ${user.name}`, 'data-testid': 'organization-user-card-select' } }}
+        />
+      )}
+    </Box>
+  );
+
+  const actionsMenu = (hasOtherActions || canLeave) && (
     <Dropdown>
       <MenuButton
         className="organization-user-card-menu-button"
         data-testid="org-user-card-menu-btn"
+        aria-label={`Actions for ${user.name || user.email || 'member'}`}
         slots={{ root: IconButton }}
         slotProps={{ root: { variant: 'outlined', size: 'sm' } }}
       >
@@ -176,7 +234,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             Set monthly limit
           </MenuItem>
         )}
-        {!isOwner && canToggleManager && (
+        {canToggleManager && (
           <MenuItem
             onClick={() => setManager.mutate({ organizationId, userId: user.id, isManager: !isManager })}
             disabled={setManager.isPending}
@@ -185,46 +243,15 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             {isManager ? 'Remove manager' : 'Make manager'}
           </MenuItem>
         )}
-        {!isOwner && canCancelInvite && (
-          <MenuItem
-            onClick={() => resendInvite.mutate({ userId: user.id })}
-            disabled={resendInvite.isPending}
-            data-testid="organization-user-card-resend-invite"
-            aria-label={`Resend invitation to ${user.name || user.username || user.id}`}
-          >
-            Resend Invite
+        {canRevoke && (
+          <MenuItem color="danger" onClick={handleRemoveMember} data-testid="organization-user-card-remove-member">
+            Remove member
           </MenuItem>
         )}
-        {!isOwner && canCancelInvite && (
-          <MenuItem
-            onClick={() =>
-              confirm({
-                title: 'Cancel Invite',
-                description: 'Are you sure you want to cancel this invite?',
-                type: 'danger',
-                onOk: () =>
-                  cancelInvite({
-                    id: organizationId,
-                    type: InviteType.Organization,
-                    // By id: the pending-users list carries no address for non-admins, and a cancel
-                    // naming nobody would cancel every open invite to the organization.
-                    userId: user.id,
-                  }),
-              })
-            }
-            data-testid="organization-user-card-cancel-invite"
-          >
-            Cancel Invite
-          </MenuItem>
-        )}
-        {!isOwner && canRevoke && (
-          <MenuItem onClick={handleRemoveMember} data-testid="organization-user-card-revoke-access">
-            Revoke Access
-          </MenuItem>
-        )}
-        {!isOwner && canLeave && (
-          <MenuItem onClick={handleLeaveOrganization} data-testid="organization-user-card-leave">
-            Leave Team
+        {canLeave && hasOtherActions && <ListDivider data-testid="organization-user-card-leave-divider" />}
+        {canLeave && (
+          <MenuItem color="danger" onClick={handleLeaveOrganization} data-testid="organization-user-card-leave">
+            Leave team
           </MenuItem>
         )}
       </Menu>
@@ -257,34 +284,49 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     />
   );
 
+  const avatar = (
+    <Avatar
+      className="organization-user-card-avatar"
+      size="sm"
+      src={avatarUrl}
+      data-tone={avatarToneFor(user.id)}
+      sx={theme => {
+        const tone = theme.vars.palette.admin.status[avatarToneFor(user.id)];
+        return { fontWeight: 600, color: tone.foreground, bgcolor: tone.background };
+      }}
+    >
+      {user.name.charAt(0).toUpperCase()}
+    </Avatar>
+  );
+
   if (isMobile) {
     return (
       <Box
         className="organization-user-card-container"
         data-testid="organization-user-card"
         data-user-id={user.id}
-        sx={theme => ({
-          borderRadius: '8px',
-          border: '1px solid',
-          borderColor: 'divider',
-          backgroundColor: theme.palette.primary.softBg,
-          padding: '10px 12px',
-        })}
+        sx={{ ...rowSurface, padding: '8px 12px' }}
       >
         <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+          {selectCell}
           <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
-            <Avatar className="organization-user-card-avatar" size="sm" variant="soft" src={avatarUrl}>
-              {user.name?.charAt(0).toUpperCase()}
-            </Avatar>
+            {avatar}
             <Stack sx={{ minWidth: 0 }}>
               <Box
                 className="organization-user-card-name"
+                data-testid="organization-user-card-name"
                 sx={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >
                 {user.name}
               </Box>
+              {showEmails && user.email && (
+                <Typography level="body-xs" noWrap data-testid="organization-user-card-email">
+                  {user.email}
+                </Typography>
+              )}
               <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-                {chips}
+                {roleChip}
+                {statusChips}
                 {creditUsageCell}
               </Stack>
             </Stack>
@@ -302,45 +344,106 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       className="organization-user-card-container"
       data-testid="organization-user-card"
       data-user-id={user.id}
-      sx={theme => ({
-        borderRadius: '8px',
+      sx={{
+        ...rowSurface,
         display: 'grid',
-        gridTemplateColumns: '2fr 1fr 1fr',
+        gridTemplateColumns: `${selectable ? '32px ' : ''}minmax(0, 1fr) 48px`,
+        gridTemplateAreas: narrowGridAreas({ selectable, showEmails }),
+        rowGap: 0.5,
+        [ROSTER_TABLE_QUERY]: {
+          gridTemplateColumns: rosterGridColumns({ selectable, showEmails }),
+          gridTemplateAreas: 'none',
+          rowGap: 0,
+        },
+        columnGap: '12px',
         width: '100%',
-        border: '1px solid',
-        borderColor: 'divider',
-        backgroundColor: theme.palette.primary.softBg,
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '12px 15px',
+        padding: '8px 16px',
         position: 'relative',
-      })}
+      }}
     >
-      <Box
-        className="organization-user-card-user-info"
-        display="flex"
-        alignItems={'center'}
-        sx={{ justifyContent: 'space-between' }}
-        gap="10px"
-        zIndex={2}
+      {selectCell}
+      <Stack
+        className="organization-user-card-user-stack"
+        direction="row"
+        spacing={1.5}
+        alignItems="center"
+        minWidth={0}
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ gridArea: 'name', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
       >
-        <Stack className="organization-user-card-user-stack" direction="row" spacing={2} alignItems="center">
-          <Avatar className="organization-user-card-avatar" size="sm" variant="soft" src={avatarUrl}>
-            {user.name?.charAt(0).toUpperCase()}
-          </Avatar>
-          <Stack>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Box className="organization-user-card-name">{user.name}</Box>
-              {chips}
-            </Stack>
-          </Stack>
-        </Stack>
-      </Box>
-
-      <Box className="organization-user-card-credits" display="flex" justifyContent="center" alignItems="center">
+        {avatar}
+        <Box
+          className="organization-user-card-name"
+          data-testid="organization-user-card-name"
+          sx={{ minWidth: 0, flex: '1 1 100px', overflowWrap: 'anywhere' }}
+        >
+          {user.name}
+        </Box>
+        {statusChips}
+      </Stack>
+      {showEmails && (
+        <Typography
+          level="body-sm"
+          data-testid="organization-user-card-email"
+          title={user.email ?? undefined}
+          sx={{
+            gridArea: 'email',
+            overflowWrap: 'anywhere',
+            [ROSTER_TABLE_QUERY]: {
+              gridArea: 'auto',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            },
+          }}
+        >
+          {user.email}
+        </Typography>
+      )}
+      <Stack
+        direction="row"
+        spacing={0.5}
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ gridArea: 'role', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
+      >
+        {roleChip}
+      </Stack>
+      <Box
+        className="organization-user-card-credits"
+        sx={{ gridArea: 'credits', minWidth: 0, [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
+      >
+        <Typography
+          component="span"
+          level="body-sm"
+          sx={{ color: 'text.secondary', [ROSTER_TABLE_QUERY]: { display: 'none' } }}
+        >
+          Credits this month:{' '}
+        </Typography>
         {creditUsageCell}
       </Box>
-      <Box className="organization-user-card-actions" display="flex" gap="10px" justifyContent="flex-end" zIndex={2}>
+      <Box sx={{ gridArea: 'active', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}>
+        <Typography
+          component="span"
+          level="body-sm"
+          sx={{ color: 'text.secondary', [ROSTER_TABLE_QUERY]: { display: 'none' } }}
+        >
+          Last active:{' '}
+        </Typography>
+        {lastActiveCell}
+      </Box>
+      <Box
+        className="organization-user-card-actions"
+        display="flex"
+        justifyContent="flex-end"
+        sx={{
+          gridArea: 'actions',
+          alignSelf: 'start',
+          [ROSTER_TABLE_QUERY]: { gridArea: 'auto', alignSelf: 'center' },
+        }}
+      >
         {actionsMenu}
       </Box>
       {creditLimitModal}

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
 import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
+import { assessmentAiDecisionSchema } from './adminAi';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -153,7 +154,7 @@ export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema
 /**
  * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
  * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
- * names; `automation` is the stale-detection grader (apps/client/server/security/shadowDetectionAutoGrade.ts),
+ * names; `automation` is the stale-detection grader (apps/workers/src/security/shadowDetectionAutoGrade.ts),
  * which never counts as a human verdict. Absent on entries written before the field existed, which
  * were all reviews.
  */
@@ -289,6 +290,8 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   expectedRevision: z.number().int().min(0),
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.unknown(),
+  /** Set when the grade was taken from the detection's assessment suggestion (accepted or overridden). */
+  aiDecision: assessmentAiDecisionSchema.optional(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
 

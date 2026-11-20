@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   verifyMutateAsync: vi.fn(),
   verifySetupMutateAsync: vi.fn(),
   verifyPasskeyMutateAsync: vi.fn(),
+  enrollPasskeyMutateAsync: vi.fn(),
   setMfaPendingTokens: vi.fn(),
   setVerifiedSession: vi.fn(),
   setState: vi.fn(),
@@ -26,6 +27,8 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
 }));
 vi.mock('@client/app/hooks/data/passkeys', () => ({
   describePasskeyMfaError: (error: unknown) => `passkey: ${(error as Error).message}`,
+  describePasskeyError: (error: unknown, fallback: string) => `${fallback}: ${(error as Error).message}`,
+  useEnrollPasskeyFactor: () => ({ mutateAsync: mocks.enrollPasskeyMutateAsync, isPending: false }),
   passkeysSupported: () => true,
   useVerifyPasskeyMFA: () => ({ mutateAsync: mocks.verifyPasskeyMutateAsync, isPending: false }),
 }));
@@ -324,5 +327,84 @@ describe('useMfaChallenge cancel with a prior verified session', () => {
     expect(mocks.resetTokens).not.toHaveBeenCalled();
     expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
     expect(onCancel).toHaveBeenCalledWith('verify');
+  });
+});
+
+describe('useMfaChallenge passkey enrollment', () => {
+  const setupStart = { userId: 'u1', mfaToken: 'pending-tok', mode: 'setup' as const };
+  const registration = { passkey: { id: 'pk-1' }, backupCodes: ['c1', 'c2'], ...session };
+
+  it('offers passkey enrollment only in setup mode', async () => {
+    const { result } = setup();
+    await act(() => result.current.begin(verifyStart));
+    expect(result.current.modalProps.onPasskeyEnroll).toBeUndefined();
+
+    await act(() => result.current.begin(setupStart));
+    expect(result.current.modalProps.onPasskeyEnroll).toBeTypeOf('function');
+  });
+
+  it('shows the backup codes after enrolling and completes the sign-in on Continue', async () => {
+    mocks.enrollPasskeyMutateAsync.mockResolvedValue(registration);
+    const { result, onComplete } = setup();
+    await act(() => result.current.begin(setupStart));
+
+    await act(() => result.current.modalProps.onPasskeyEnroll!());
+
+    expect(result.current.modalProps.passkeyBackupCodes).toEqual(['c1', 'c2']);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    act(() => result.current.modalProps.onPasskeyEnrollDone!());
+
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full-access');
+    expect(onComplete).toHaveBeenCalledWith(session);
+    expect(result.current.modalProps.open).toBe(false);
+  });
+
+  it('completes the sign-in instead of abandoning it when the codes view is closed', async () => {
+    mocks.enrollPasskeyMutateAsync.mockResolvedValue(registration);
+    const { result, onComplete, onCancel } = setup();
+    await act(() => result.current.begin(setupStart));
+    await act(() => result.current.modalProps.onPasskeyEnroll!());
+
+    act(() => result.current.modalProps.onCancel());
+
+    expect(onComplete).toHaveBeenCalledWith(session);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(mocks.reportMfaEnrollmentAbandoned).not.toHaveBeenCalled();
+  });
+
+  it('reports a registration without a session as MFA already set up', async () => {
+    mocks.enrollPasskeyMutateAsync.mockResolvedValue({ passkey: { id: 'pk-1' } });
+    const { result, onComplete } = setup();
+    await act(() => result.current.begin(setupStart));
+
+    await act(() => result.current.modalProps.onPasskeyEnroll!());
+
+    expect(result.current.modalProps.error).toMatch(/already set up/);
+    expect(result.current.modalProps.passkeyBackupCodes).toBeUndefined();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('ends the challenge when the pending token has expired (401)', async () => {
+    mocks.enrollPasskeyMutateAsync.mockRejectedValue(Object.assign(new Error('nope'), { response: { status: 401 } }));
+    const { result, onCancel } = setup();
+    await act(() => result.current.begin(setupStart));
+
+    await act(() => result.current.modalProps.onPasskeyEnroll!());
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Your sign-in expired. Please sign in again.');
+    expect(onCancel).toHaveBeenCalledWith('setup');
+  });
+
+  it('keeps the modal open with an error when the ceremony fails', async () => {
+    mocks.enrollPasskeyMutateAsync.mockRejectedValue(new Error('cancelled'));
+    const { result, onCancel } = setup();
+    await act(() => result.current.begin(setupStart));
+
+    await act(() => result.current.modalProps.onPasskeyEnroll!());
+
+    expect(result.current.modalProps.error).toBe('Could not set up the passkey: cancelled');
+    expect(result.current.modalProps.open).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

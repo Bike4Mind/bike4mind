@@ -1,9 +1,11 @@
 import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ADMIN_USERS_LIST_MAX, AdminUsersFilterSchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
-import { exportAdminUsers } from '@server/admin/usersList/listAdminUsers';
+import { exportAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
+import { providerIdSearchAudit } from '@bike4mind/server-utils/admin/usersList/providerIdSearchAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import qs from 'qs';
 
 /** The users list's CSV source: every user the filter matches, bounded server-side. */
@@ -26,7 +28,14 @@ const handler = adminApi({
         });
       }
       res.setHeader('Cache-Control', 'private, no-store');
-      return res.json(await exportAdminUsers(parsed.data));
+      const result = await exportAdminUsers(parsed.data);
+      const [only] = result.users;
+      const input = providerIdSearchAudit(parsed.data.search, 'users_export', {
+        count: result.users.length,
+        sole: result.users.length === 1 ? { id: only.id, displayName: only.email ?? only.username } : undefined,
+      });
+      if (input) await recordAdminActionFromRequest(req, input);
+      return res.json(result);
     })
   );
 

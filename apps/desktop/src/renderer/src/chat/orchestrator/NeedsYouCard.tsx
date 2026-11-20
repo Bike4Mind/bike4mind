@@ -3,6 +3,7 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { pendingCallsIn } from '@shared/needsYou';
+import { TaskDecisionCard } from '../TaskDecisionCards';
 import { PendingRequests, refreshKeyOf, useSessionMessages } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
 
@@ -67,7 +68,7 @@ export function NeedsYouCard({
         <AgentRequests agent={agent} />
       ) : (
         <Typography level="body-sm" textColor="text.secondary">
-          The Innkeeper is waiting on your answer in the conversation.
+          {name} is waiting on your answer in the conversation.
         </Typography>
       )}
     </Box>
@@ -76,6 +77,7 @@ export function NeedsYouCard({
 
 function AgentRequests({ agent }: { agent: AgentView }) {
   const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
+  if (agent.decision) return <TaskDecisionCard sessionId={agent.id} title={agent.title} decision={agent.decision} />;
   if (loadError) {
     return (
       <Typography level="body-xs" color="danger" data-testid="orchestrator-needs-you-error">

@@ -5,6 +5,9 @@ import {
   WithId,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
+  type IOrgBudgetAlerts,
+  type OrgAlertKind,
+  type OrgAlertKindPrefs,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { AxiosResponse } from 'axios';
@@ -147,6 +150,11 @@ export function useGetOrganization(orgId: string | null | undefined) {
       return response.data;
     },
     enabled: !!orgId,
+    retry: (count, error) => {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      return status !== 400 && status !== 403 && status !== 404 && count < 2;
+    },
+    refetchOnMount: 'always',
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 }
@@ -191,8 +199,8 @@ export function useUpdateOrganization() {
       const response = await api.put<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, data);
       return response.data;
     },
-    onSuccess: data => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    onSuccess: async data => {
+      await queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.setQueryData(['organizations', data.id], data);
       toast.success('Organization updated successfully');
     },
@@ -323,9 +331,32 @@ export function useGetUserOrganizations(
   });
 }
 
-function keptSharesMessage(kept: number): string {
-  const isSingle = kept === 1;
-  return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
+/**
+ * Success text for one or more removals, given each response's `personalLakeSharesKept`. Notification
+ * is best-effort and already attempted server-side (the route awaits it ahead of res.json), so this
+ * never claims delivery. `null` means the post-departure read failed, so no owner was notified; an
+ * ABSENT field is an API response from before the count existed, which keeps the plain message.
+ */
+export function removedMembersMessage(kept: readonly (number | null | undefined)[]): string {
+  const single = kept.length === 1;
+  const shares = kept.reduce<number>((sum, k) => sum + (k ?? 0), 0);
+  const unchecked = kept.filter(k => k === null).length;
+  if (!shares && !unchecked) return single ? 'Member removed successfully' : `${kept.length} members removed`;
+  const parts = [single ? 'Member removed.' : `${kept.length} members removed.`];
+  if (shares) {
+    const one = shares === 1;
+    parts.push(
+      `${shares} share${one ? '' : 's'} on personal data lakes ${one ? 'was' : 'were'} kept; the lake owners are being notified.`
+    );
+  }
+  if (unchecked) {
+    parts.push(
+      single
+        ? 'Personal data lake shares could not be checked, so the lake owners were not notified.'
+        : `Personal data lake shares could not be checked for ${unchecked} of them, so those lake owners were not notified.`
+    );
+  }
+  return parts.join(' ');
 }
 
 export interface OffboardingInventoryEntry {
@@ -349,6 +380,8 @@ const memberOffboardingKey = (organizationId: string, userId: string) =>
 const removeMemberKey = ['organizations', 'remove-member'] as const;
 
 interface RemoveMemberVariables {
+  /** Bulk callers show one summary rather than a toast for each member. */
+  quiet?: boolean;
   organizationId: string;
   userId: string;
   /** Member who takes over the departing member's org content; omitted keeps it with them. */
@@ -424,22 +457,13 @@ export function useRemoveMemberFromOrganization() {
         }
       }
 
-      // Notification is best-effort and already attempted server-side before this response arrives
-      // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
-      // that it was kept and owners are being told. `null` means the post-departure read itself
-      // failed, so no owner was notified either; an ABSENT field is an API response from before the
-      // count existed, which must keep the plain message.
-      toast.success(
-        kept === null
-          ? 'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
-          : kept
-            ? keptSharesMessage(kept)
-            : 'Member removed successfully'
-      );
+      if (!variables.quiet) toast.success(removedMembersMessage([kept]));
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
       console.error('Failed to remove member:', error);
-      toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (!variables.quiet) {
+        toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     },
   });
 }
@@ -499,6 +523,95 @@ export function useSetMemberCreditOverride() {
     },
     'Member credit limit updated'
   );
+}
+
+const orgAlertSettingsKey = (organizationId: string) => ['organizations', organizationId, 'alert-settings'];
+const myOrgNotificationPrefsKey = (organizationId: string) => [
+  'organizations',
+  organizationId,
+  'my-notification-prefs',
+];
+
+/** The org's budget and low-balance alert thresholds; null when never configured. */
+export function useOrgAlertSettings(organizationId: string | null) {
+  return useQuery({
+    queryKey: orgAlertSettingsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<{ budgetAlerts: IOrgBudgetAlerts | null }>(
+        `/api/organizations/${organizationId}/alert-settings`
+      );
+      return response.data.budgetAlerts;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateOrgAlertSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      budgetAlerts,
+    }: {
+      organizationId: string;
+      budgetAlerts: IOrgBudgetAlerts;
+    }) => {
+      const response = await api.put<{ budgetAlerts: IOrgBudgetAlerts }>(
+        `/api/organizations/${organizationId}/alert-settings`,
+        budgetAlerts
+      );
+      return response.data.budgetAlerts;
+    },
+    onSuccess: (budgetAlerts, { organizationId }) => {
+      queryClient.setQueryData(orgAlertSettingsKey(organizationId), budgetAlerts);
+      // budgetAlerts is also on the org document.
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId], exact: true });
+      toast.success('Budget alerts saved');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to save budget alerts: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+export interface MyOrgNotificationPrefs {
+  role: 'owner' | 'manager';
+  kinds: Record<OrgAlertKind, boolean>;
+}
+
+/** The caller's effective alert opt-ins. Enable only for the owner or a current manager (the route 404s others). */
+export function useMyOrgNotificationPrefs(organizationId: string | null) {
+  return useQuery({
+    queryKey: myOrgNotificationPrefsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`
+      );
+      return response.data;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateMyOrgNotificationPrefs() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ organizationId, kinds }: { organizationId: string; kinds: OrgAlertKindPrefs }) => {
+      const response = await api.put<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`,
+        { kinds }
+      );
+      return response.data;
+    },
+    onSuccess: (prefs, { organizationId }) => {
+      queryClient.setQueryData(myOrgNotificationPrefsKey(organizationId), prefs);
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to update alert preferences: ${getErrorMessage(error)}`);
+    },
+  });
 }
 
 /** Make one member a manager, or remove them as one (owner or platform admin only). */
@@ -582,6 +695,8 @@ export function useLeaveOrganization() {
 interface OrganizationSeatsInfo {
   maxSeats: number;
   pendingSeats: number;
+  /** Members who have joined; currentSeats adds the pending invitations. */
+  activeSeats: number;
   currentSeats: number;
   availableSeats: number;
 }
@@ -607,17 +722,19 @@ export const useOrganizationSeats = (organizationId?: string): OrganizationSeats
   const maxSeats = organization?.seats ?? 0;
   const pendingSeats =
     pendingInvites?.reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0) ?? 0;
-  const currentSeats = (users?.length ?? 0) + pendingSeats;
+  const activeSeats = users?.length ?? 0;
+  const currentSeats = activeSeats + pendingSeats;
   const availableSeats = Math.max(0, maxSeats - currentSeats);
 
   return useMemo(
     () => ({
       maxSeats,
       pendingSeats,
+      activeSeats,
       currentSeats,
       availableSeats,
     }),
-    [maxSeats, pendingSeats, currentSeats, availableSeats]
+    [maxSeats, pendingSeats, activeSeats, currentSeats, availableSeats]
   );
 };
 

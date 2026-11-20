@@ -1,14 +1,13 @@
 // Core's layout for the apply library. Imports only what the draft profile needs, never the database.
 import { join } from 'node:path';
 import type { TutorialDraftContent } from '@bike4mind/common';
-import { CORE_TUTORIAL_CONTENT } from '../content';
-import { coreDraftCore } from '../coreDraftProfile';
-import editableFields from '../editableFields.json';
-import type { FieldMap } from '../overrides';
+import { CORE_TUTORIAL_CONTENT } from '@bike4mind/server-utils/tutorials/content';
+import { coreDraftCore } from '@bike4mind/server-utils/tutorials/coreDraftProfile';
+import { CORE_EDITABLE_FIELDS } from '@bike4mind/server-utils/tutorials/coreEditableFields';
 import { escapeNonAscii, identifiersOf, type ModuleFiles, type TutorialRepoLayout } from './layout';
 
 export const CORE_OWNER = 'core';
-export const CORE_MODULES_DIR = 'apps/client/server/tutorials/modules';
+export const CORE_MODULES_DIR = 'packages/server-utils/src/tutorials/modules';
 
 /** JSON with every non-ASCII character escaped, so a captured sheet or reply keeps its text and the file stays ASCII. */
 const json = (value: unknown, indent?: number) => escapeNonAscii(JSON.stringify(value, null, indent));
@@ -79,8 +78,8 @@ export function coreModuleFiles(dir: string, authored: TutorialDraftContent): Mo
     files,
     issues,
     registration: [
-      { file: 'apps/client/server/tutorials/registry.ts', text: registry },
-      { file: 'apps/client/server/tutorials/content.ts', text: contentEntry },
+      { file: 'packages/server-utils/src/tutorials/registry.ts', text: registry },
+      { file: 'packages/server-utils/src/tutorials/content.ts', text: contentEntry },
     ],
   };
 }
@@ -91,15 +90,19 @@ export function coreLayout(root: string): TutorialRepoLayout {
     repoOf: owner => (owner === CORE_OWNER ? 'bike4mind' : undefined),
     root,
     modulesDir: CORE_MODULES_DIR,
-    version: { path: 'apps/client/server/tutorials/content.ts', arrayName: 'CORE_TUTORIAL_CONTENT', locate: 'introId' },
+    version: {
+      path: 'packages/server-utils/src/tutorials/content.ts',
+      arrayName: 'CORE_TUTORIAL_CONTENT',
+      locate: 'introId',
+    },
     repoModules: () =>
       CORE_TUTORIAL_CONTENT.map((t, index) => ({ id: t.intro.id, version: t.version, index, steps: t.steps })),
-    policy: { editable: editableFields as FieldMap },
+    policy: { editable: CORE_EDITABLE_FIELDS },
     header: '',
     moduleFiles: (content, dir) => coreModuleFiles(dir, content),
-    registers: ['apps/client/server/tutorials/registry.ts', 'apps/client/server/tutorials/content.ts'],
+    registers: ['packages/server-utils/src/tutorials/registry.ts', 'packages/server-utils/src/tutorials/content.ts'],
     fieldsCommand: 'pnpm --filter client tutorials:fields',
-    guard: { cwd: 'apps/client', test: 'server/tutorials/__tests__/validate.test.ts' },
+    guard: { cwd: 'packages/server-utils', test: 'src/tutorials/__tests__/validate.test.ts' },
     specsDir: 'apps/client/e2e',
   };
 }

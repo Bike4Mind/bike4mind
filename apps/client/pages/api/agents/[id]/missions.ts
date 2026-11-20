@@ -2,9 +2,10 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository, userRepository } from '@bike4mind/database';
-import type { IUserDocument } from '@bike4mind/common';
-import { assertOwnerCanFundWake, isInsufficientCredits } from '@server/deepAgent/wakeMetering';
+import { isSpendFrozenError, type IUserDocument } from '@bike4mind/common';
+import { assertOwnerCanFundWake, isInsufficientCredits } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@server/agents/assertAgentAccess';
@@ -19,7 +20,7 @@ import {
 } from '@bike4mind/server-utils/deepAgent/missions';
 import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { runMissionFirstWake } from '@server/deepAgent/firstWake';
+import { runMissionFirstWake } from '@bike4mind/server-utils/deepAgent/firstWake';
 
 /**
  * /api/agents/[id]/missions - Missions of an existing B4M Agent.
@@ -165,6 +166,9 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       const message = (error as Error).message;
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
       if (isInsufficientCredits(error)) return res.status(422).json({ error: message });
+      if (isAiAccessRefusal(error)) return res.status(403).json({ error: message });
+      // The shared error handler serves its 403 envelope (errorCode, frozenScope, frozenAt).
+      if (isSpendFrozenError(error)) throw error;
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }

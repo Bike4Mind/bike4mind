@@ -40,7 +40,8 @@ describe('PromptCacheTtlChip', () => {
   it('shows the current TTL and both prices, and reports a pick', () => {
     const onChange = vi.fn();
     render(<PromptCacheTtlChip value="5m" prices={prices} onChange={onChange} />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('prompt-cache-ttl-chip').textContent).toBe('Cache 5m');
+    // The word is the icon's job now; the text is the TTL alone.
+    expect(screen.getByTestId('prompt-cache-ttl-chip').textContent).toBe('5m');
 
     fireEvent.click(screen.getByTestId('prompt-cache-ttl-chip'));
     expect(screen.getByTestId('prompt-cache-ttl-option-5m-price').textContent).toBe(
@@ -51,5 +52,15 @@ describe('PromptCacheTtlChip', () => {
     );
     fireEvent.click(screen.getByTestId('prompt-cache-ttl-option-1h'));
     expect(onChange).toHaveBeenCalledWith('1h');
+  });
+
+  it('offers no hour on a model that cannot take it, and says so', () => {
+    render(<PromptCacheTtlChip value="5m" prices={prices} onChange={vi.fn()} canChoose={false} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('prompt-cache-ttl-chip'));
+    expect(screen.getByTestId('prompt-cache-ttl-option-5m')).not.toBeNull();
+    expect(screen.queryByTestId('prompt-cache-ttl-option-1h')).toBeNull();
+    expect(screen.getByTestId('prompt-cache-ttl-menu').textContent).toContain('caches the chat for 5 minutes');
   });
 });

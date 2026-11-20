@@ -12,7 +12,7 @@
 import {
   CURRENT_POLICY_VERSION,
   PERSONA_ENDPOINT_OFF_CODE,
-  PERSONA_REDEEM_PATH,
+  PERSONA_LOGIN_PAGE_PATH,
   mintPersonaContract,
 } from '@bike4mind/common';
 import { AdminSettings, isTransientTransactionError, userRepository, withTransaction } from '@bike4mind/database';
@@ -35,7 +35,7 @@ import {
   personaCapRefusal,
   personaExpiresAt,
   personaIdentity,
-} from '@server/personas/personaAccounts';
+} from '@bike4mind/server-utils/personas/personaAccounts';
 
 const isDuplicateKeyError = (error: unknown) =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
@@ -80,7 +80,8 @@ const route = nextRouteForContract(mintPersonaContract, {
       created: status === 201,
       login_code: login.code,
       login_code_expires_at: login.expiresAt.toISOString(),
-      login_path: `${PERSONA_REDEEM_PATH}?code=${login.code}`,
+      // In the fragment, which the browser never sends, so the code stays out of request logs.
+      login_path: `${PERSONA_LOGIN_PAGE_PATH}#code=${login.code}`,
     });
   };
 

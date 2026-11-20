@@ -32,7 +32,7 @@ vi.mock('@server/utils/withRequestCompletionQuota', () => ({
 vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
 vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   questRepository: {},
   sessionRepository: {},
   apiKeyRepository: {},
@@ -56,7 +56,12 @@ vi.mock('@bike4mind/services', async () => ({
   },
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {

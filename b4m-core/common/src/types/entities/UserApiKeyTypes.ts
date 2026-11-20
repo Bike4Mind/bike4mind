@@ -144,7 +144,7 @@ export enum ApiKeyScope {
    * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
    * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
    * Claude Code" dialog.
-   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * Not bound to an org: membership is re-checked on every request (`audienceIdsFor` in
    * packages/server-utils/src/skillMarket/market.ts), so a member who leaves or is removed loses that org's
    * feed and zips while the key stays valid for their other orgs.
    */
@@ -204,6 +204,32 @@ export enum ApiKeyScope {
    * the API reference, like {@link SKILLS_READ}, because customers mint it.
    */
   SLACK_POST = 'slack:post',
+  /**
+   * Manage the key owner's own API keys (`/api/user-api-keys/*`): list, create, edit, rotate and
+   * revoke them, and raise a key's rate limit. Rotating a key's callback signing secret
+   * (`/api/user-api-keys/[id]/callback-secret`) is not covered: that route requires `ai:generate`.
+   * A key minted or rotated through this scope can carry only scopes the calling key already holds
+   * (the no-escalation rule in createUserApiKey and rotateUserApiKey). Unsuffixed and left out of
+   * every New-Key preset, Full access included: a key that can mint keys outlives its own
+   * revocation, so it is granted only by ticking it.
+   */
+  API_KEYS_MANAGE = 'api-keys:manage',
+  /**
+   * Lets the key send `end_user_id` on `POST /api/ai/v1/completions` and `POST /api/ai/tts`, so a
+   * product serving many end users through one key reaches the model provider as one identifier per
+   * end user rather than one for the whole account (toPlatformEndUserProviderId in
+   * @bike4mind/llm-adapters). Admin-provisioned only: it changes how the provider attributes the
+   * key's traffic, so the owner cannot tick it. It authorizes no route by itself, and the key still
+   * needs `ai:chat`/`ai:generate`.
+   */
+  AI_END_USER_ID = 'ai:end-user-id',
+  /**
+   * Publish, republish and unpublish the key owner's own artifacts as web pages
+   * (`/api/v1/artifacts/{id}/publish`, `/republish`). Publishing creates a public URL, so it is
+   * unsuffixed to stay out of the Read-only and Read & write presets; only Full access or ticking it
+   * grants it. Holding it does not let the key read artifacts; that stays `notebooks:read`. Not confined.
+   */
+  ARTIFACTS_PUBLISH = 'artifacts:publish',
 }
 
 /**
@@ -314,6 +340,10 @@ export interface IUserApiKeyBaseline {
   lastCalculatedAt: Date;
 }
 
+/** Whether a key owner held paid standing when an exchange key was minted. */
+export const PAYER_STANDINGS = ['paid', 'unpaid'] as const;
+export type PayerStanding = (typeof PAYER_STANDINGS)[number];
+
 export interface IUserApiKeyMetadata {
   clientIP?: string;
   userAgent?: string;
@@ -329,6 +359,8 @@ export interface IUserApiKeyMetadata {
    * once a client had >20 concurrent federated users.
    */
   oauthClientId?: string;
+  /** Owner's paid standing at mint, exchange keys only. Absent when the standing read failed. */
+  payerStanding?: PayerStanding;
   baseline?: IUserApiKeyBaseline;
 }
 
@@ -336,6 +368,17 @@ export interface IUserApiKeyMetadata {
 export const isExchangeKeyMetadata = (
   metadata: IUserApiKeyMetadata | undefined
 ): metadata is IUserApiKeyMetadata & { createdFrom: 'oauth-exchange' } => metadata?.createdFrom === 'oauth-exchange';
+
+/**
+ * One unit of an org-owned key's reach, read-only. Resolved on every request
+ * (apps/client/server/organizations/orgApiKeyReach.ts), so it never outlives the share it rides on:
+ * - `organization`: everything shared with any of the org's groups, plus the org's data lakes.
+ * - `group`: everything shared with that one org group.
+ * Never a member's personal content: a share to an individual member (`users[]`) is not reached.
+ */
+export type OrgApiKeyGrant =
+  | { resourceType: 'organization'; resourceId: string; permission: 'read' }
+  | { resourceType: 'group'; resourceId: string; permission: 'read' };
 
 /**
  * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
@@ -346,6 +389,7 @@ export interface IOrgApiKeyView {
   name: string;
   keyPrefix: string;
   scopes: ApiKeyScopeValue[];
+  grants: OrgApiKeyGrant[];
   status: ApiKeyStatus;
   createdAt?: Date;
   expiresAt?: Date;
@@ -417,6 +461,23 @@ export interface IEmbedBranding {
  * and drops any bcrypt hash, so conditioning a write on this value makes it miss after a rotation.
  */
 export type ApiKeyStoredSecret = { keyDigest: string } | { keyHash: string };
+
+/**
+ * The only prompt moderation categories a key can be excepted from: the violence labels of the
+ * OpenAI check and the matching content filter of the Bedrock one. Matched exactly. Every other
+ * label, including any a provider adds later, always blocks; widening this list is a code change.
+ */
+export const MODERATION_EXCEPTION_CATEGORIES = ['violence', 'violence/graphic', 'VIOLENCE'] as const;
+export type ModerationExceptionCategory = (typeof MODERATION_EXCEPTION_CATEGORIES)[number];
+
+/** An admin-set prompt moderation exception on one key; see IUserApiKey.moderationException. */
+export interface IUserApiKeyModerationException {
+  categories: ModerationExceptionCategory[];
+  reason: string;
+  /** The admin who set it. */
+  setBy: string;
+  setAt: Date;
+}
 
 export interface IUserApiKey {
   id: string;
@@ -507,8 +568,11 @@ export interface IUserApiKey {
    * member, so it outlives whoever created it. Records that creator for audit. Deliberately not
    * `metadata.createdByUserId`, which marks a platform-admin-provisioned key and bypasses the paid
    * access gate. Rotation never re-owns an org-owned key to the rotating admin.
+   *
+   * `grants` is the key's reach into content shared with the org (see {@link OrgApiKeyGrant}).
+   * Absent or empty = default deny: the key reaches only what the service account itself created.
    */
-  orgOwned?: { createdByUserId: string };
+  orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**
@@ -517,6 +581,12 @@ export interface IUserApiKey {
    * `spendCap !== undefined`, never a truthy check.
    */
   spendCap?: number;
+  /**
+   * Lets a turn sent with this key continue when prompt moderation flags it for nothing but the
+   * listed categories. Admin-set only, `select: false`, and absent from every read except
+   * findModerationException. Enforced in ChatCompletionProcess via moderationException.ts.
+   */
+  moderationException?: IUserApiKeyModerationException;
   /**
    * Whether this embed key's billing OWNER holds the white-label entitlement.
    * Computed server-side on GET /api/user-api-keys only (never persisted) so the
@@ -545,7 +615,44 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  */
 export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
+/**
+ * A key as the owner list (GET /api/user-api-keys) returns it, with its legacy status
+ * computed server-side by `getApiKeyLegacyStatus`.
+ */
+export type IUserApiKeyListItem = IUserApiKeyDocument & {
+  /** Rides the legacy window: routes that grandfather legacy keys admit it without their scopes. */
+  legacy: boolean;
+  /** When legacy access ends; `null` when the key is not legacy or no end date is set yet. */
+  legacyEndsAt: Date | null;
+};
+
+/** Filter for {@link IUserApiKeyRepository.findLegacyCandidatesPage}. */
+export type LegacyApiKeyCandidateQuery = {
+  /** Keys created before this; `null` matches any creation date (no legacy cutoff set yet). */
+  createdBefore: Date | null;
+  /** Keys last used at or after this. */
+  usedSince: Date;
+  /** Keys holding any of these scopes are left out (confined keys are never legacy). */
+  excludeScopes: readonly string[];
+  skip: number;
+  limit: number;
+};
+
+export type LegacyApiKeyCandidatePage = {
+  keys: IUserApiKeyDocument[];
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+};
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
+  /**
+   * Active, unexpired, non-exchange keys that may still ride the legacy window, most recently
+   * used first. A query primitive only: the legacy rule itself is `getApiKeyLegacyStatus` in
+   * server-utils, which callers apply to every row.
+   */
+  findLegacyCandidatesPage: (query: LegacyApiKeyCandidateQuery) => Promise<LegacyApiKeyCandidatePage>;
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
@@ -558,6 +665,15 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   incrementSpend: (id: string, credits: number) => Promise<void>;
   /** Sets the spend ceiling; `null` clears it ($unset), so the key becomes uncapped. */
   setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
+  /** Sets the prompt moderation exception; `null` clears it ($unset). */
+  setModerationException: (id: string, exception: IUserApiKeyModerationException | null) => Promise<void>;
+  /** The key's exception with the fields that decide whether it applies; null when the key has none. */
+  findModerationException: (id: string) => Promise<
+    | (Pick<IUserApiKey, 'userId' | 'status' | 'expiresAt'> & {
+        moderationException: IUserApiKeyModerationException;
+      })
+    | null
+  >;
   /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
   resetSpend: (id: string) => Promise<void>;
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
@@ -588,6 +704,14 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
+  /**
+   * Disables every not-yet-DISABLED key of the user, stamping the revoke and `batchId`. Resolves the
+   * flipped keys with their prior status.
+   */
+  revokeLiveByUserId: (
+    userId: string,
+    stamp: { revokedBy: string; revokedReason: string; batchId: string }
+  ) => Promise<{ id: string; status: ApiKeyStatus }[]>;
   /**
    * Disables the user's not-yet-DISABLED keys that are billed to `organizationId`, stamping
    * revokedAt/revokedBy/revokedReason. Personal keys are untouched. Resolves the revoked ids.

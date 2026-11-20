@@ -26,7 +26,4 @@ export interface ISecretRotationRepository extends IBaseRepository<ISecretRotati
    * first. A no-op while the rotation is still inside `graceMs`.
    */
   expirePreviousKey(keyName: string, graceMs: number): Promise<void>;
-  findActiveKeys(): Promise<ISecretRotationDocument[]>;
-  /** Active rotations among `keyNames` whose nextRotation has passed; `limit` stops counting there. */
-  countOverdue(input: { now: Date; keyNames: readonly string[]; limit?: number }): Promise<number>;
 }

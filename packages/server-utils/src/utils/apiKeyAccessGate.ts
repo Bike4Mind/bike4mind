@@ -4,7 +4,7 @@ import {
   hasDeveloperUserTag,
   type AdminApiKeyAccess,
 } from '@bike4mind/common';
-import { adminSettingsRepository, authSessionRepository } from '@bike4mind/database';
+import { adminSettingsRepository, authSessionRepository, oauthClientRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError, UnauthorizedError } from './errors';
 import { SubscriptionOwnerType } from '../lib/subscriptions/types';
@@ -31,6 +31,8 @@ export type ApiKeyBillingRef = {
   organizationId?: string;
   /** Trusted validation metadata, never accepted from a mint request. */
   createdByUserId?: string;
+  /** Federated exchange client of this key: trusted key metadata, or a client just verified by secret. Never request input. */
+  oauthExchangeClientId?: string;
 };
 
 const MODE_TTL_MS = 30_000;
@@ -61,6 +63,40 @@ async function readMode(): Promise<ApiKeyAccessMode> {
     return await modeRead;
   } finally {
     modeRead = undefined;
+  }
+}
+
+const CLIENT_TTL_MS = 30_000;
+const clientAdmits = new Map<string, { value: boolean; expiresAt: number }>();
+const clientReads = new Map<string, Promise<boolean>>();
+
+/** Drops the cached exchange-client lookups in this process. */
+export function clearExchangeClientAdmitsCache(): void {
+  clientAdmits.clear();
+}
+
+/**
+ * Whether the exchange client lets owners without paid standing use its keys. Deliberately skips
+ * isActive (a mint-time check) and federatedIdp. Lookup failures propagate and are never cached.
+ */
+async function exchangeClientAdmitsUnpaid(clientId: string): Promise<boolean> {
+  const cached = clientAdmits.get(clientId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const inFlight = clientReads.get(clientId);
+  if (inFlight) return inFlight;
+
+  const read = (async () => {
+    const clients = await oauthClientRepository.findByClientIds([clientId]);
+    const client = clients.get(clientId);
+    const value = client != null && client.unpaidAccountsAllowed !== false;
+    clientAdmits.set(clientId, { value, expiresAt: Date.now() + CLIENT_TTL_MS });
+    return value;
+  })();
+  clientReads.set(clientId, read);
+  try {
+    return await read;
+  } finally {
+    clientReads.delete(clientId);
   }
 }
 
@@ -101,7 +137,8 @@ async function hasPaidApiKeyAccess(
 
 /**
  * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid mode admits paid
- * standing (`packages/server-utils/src/entitlements/paidStanding.ts`) or a key billed to an org on a paid plan. Read
+ * standing (`packages/server-utils/src/entitlements/paidStanding.ts`), a key billed to an org on a paid plan, or a
+ * federated exchange key whose OAuth client has not opted out of unpaid accounts. Read
  * failures propagate so clients get a retryable 5xx.
  */
 export async function isApiKeyAccessAllowed(
@@ -115,7 +152,9 @@ export async function isApiKeyAccessAllowed(
   if (mode === 'all') return true;
   if (mode === 'disabled') return false;
 
-  return hasPurchasedCredits(user) || hasPaidApiKeyAccess(user, billing, req);
+  if (hasPurchasedCredits(user) || (await hasPaidApiKeyAccess(user, billing, req))) return true;
+
+  return billing?.oauthExchangeClientId ? exchangeClientAdmitsUnpaid(billing.oauthExchangeClientId) : false;
 }
 
 /**

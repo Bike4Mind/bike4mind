@@ -1,4 +1,5 @@
-import type { VideoModelId } from './catalog';
+import type { ModelProfile } from '../generation/types';
+import { VIDEO_MODEL_CATALOG, type VideoModelId } from './catalog';
 import type { VideoProviderId } from './types';
 
 /** How Studio introduces each video model on its model card. Kept beside VIDEO_MODEL_CATALOG for the same keys. */
@@ -17,3 +18,8 @@ export const VIDEO_PROVIDER_LABELS: Record<VideoProviderId, string> = {
   veo: 'Google',
   bfl: 'Black Forest Labs',
 };
+
+export const videoModelProfile = (modelId: VideoModelId): ModelProfile => ({
+  blurb: VIDEO_MODEL_STRENGTHS[modelId],
+  providerLabel: VIDEO_PROVIDER_LABELS[VIDEO_MODEL_CATALOG[modelId].provider],
+});

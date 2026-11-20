@@ -20,6 +20,7 @@ export function secretUserFields() {
     loginRecords: [{ ip: SECRET_VALUE }],
     signupMeta: { ip: SECRET_VALUE },
     freeCreditClaimEmail: SECRET_VALUE,
+    freeQuestStartId: SECRET_VALUE,
     grantPackageId: SECRET_VALUE,
     signupGrantAssessment: { policyVersion: SECRET_VALUE },
     authProviders: [
@@ -66,6 +67,7 @@ export function secretUserFields() {
     stripeCustomerId: SECRET_VALUE,
     personaLoginCodeHash: SECRET_VALUE,
     personaLoginCodeExpiresAt: new Date('2026-01-01'),
+    accountFilePurge: { startedAt: new Date('2026-01-01'), leaseId: SECRET_VALUE, afterAuditId: SECRET_VALUE },
     accountDataExportLease: { id: SECRET_VALUE, jobId: SECRET_VALUE, expiresAt: new Date('2026-01-01') },
     providerEndUserId: SECRET_VALUE,
     riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },

@@ -59,20 +59,6 @@ export default function FeedbackAiPanel({ feedbackId }: { feedbackId: string }) 
           Labels: {data.labels.area}, {data.labels.severity}
         </Typography>
       )}
-      {data.similar.length > 0 && <Typography level="title-sm">Similar reports</Typography>}
-      {data.similar.map(item => (
-        <Button
-          key={item.id}
-          component="a"
-          href={`/admin?tab=feedback&feedbackId=${item.id}`}
-          variant="plain"
-          size="sm"
-          data-testid={`feedback-ai-similar-${item.id}`}
-        >
-          {item.id}
-          {suggestion.labels.duplicateId === item.id ? ' (suggested duplicate)' : ''}
-        </Button>
-      ))}
       <ActionDialog
         open={Boolean(draft)}
         onClose={() => setDraft(null)}

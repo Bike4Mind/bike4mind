@@ -10,13 +10,13 @@ import {
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { UserApiKeyEvents, attachOrgApiKeyReach, isOrgServiceAccountOf } from '@bike4mind/common';
 import ability from '@bike4mind/server-utils/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
-import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
+import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import type { z } from 'zod';
@@ -31,9 +31,12 @@ import {
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
-import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
+import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
+import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
+import { resolveOrgApiKeyReach } from '@server/organizations/orgApiKeyReach';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -162,6 +165,7 @@ export const apiKeyAuth = (
           requiredScopes,
           alsoRequiredScopes,
           endpoint: endpointPath,
+          ...(validation.oauthExchangeClientId ? { oauthClientId: validation.oauthExchangeClientId } : {}),
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
@@ -169,6 +173,18 @@ export const apiKeyAuth = (
           if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
+          if (validation.oauthExchangeClientId) {
+            recordSideAppRefusal({
+              verified: true,
+              clientId: validation.oauthExchangeClientId,
+              stage: 'use',
+              reason: 'insufficient_scope',
+              status: 403,
+              userId: validation.userId,
+              keyId: validation.keyId,
+              endpoint: endpointPath,
+            });
+          }
           throw new ForbiddenError(
             'Insufficient API key permissions',
             scopeForbiddenDetail(requiredScopes, alsoRequiredScopes)
@@ -192,6 +208,8 @@ export const apiKeyAuth = (
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+      // Before withholdAdminRole, which then hides the role permissions too for a key without the admin scope.
+      await resolveRoleAdminPermissions(user);
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (
@@ -201,6 +219,7 @@ export const apiKeyAuth = (
             billingOwnerType: validation.billingOwnerType,
             organizationId: validation.organizationId,
             createdByUserId: validation.createdByUserId,
+            oauthExchangeClientId: validation.oauthExchangeClientId,
           },
           req
         ))
@@ -209,7 +228,20 @@ export const apiKeyAuth = (
           keyId: validation.keyId,
           userId: validation.userId,
           endpoint: endpointPath,
+          ...(validation.oauthExchangeClientId ? { oauthClientId: validation.oauthExchangeClientId } : {}),
         });
+        if (validation.oauthExchangeClientId) {
+          recordSideAppRefusal({
+            verified: true,
+            clientId: validation.oauthExchangeClientId,
+            stage: 'use',
+            reason: 'subscription_required',
+            status: 403,
+            userId: validation.userId,
+            keyId: validation.keyId,
+            endpoint: endpointPath,
+          });
+        }
         throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
       }
 
@@ -218,20 +250,36 @@ export const apiKeyAuth = (
 
       // Judged before the admin role is withheld: trust is about the account, not the key's
       // authority, so an admin's key without the admin scope is still an admin-owned key.
-      const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(
+      const { rateLimit, ownerUntrusted, unpaidAccountLimits } = await resolveUntrustedKeyLimits(
         user,
-        { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+        {
+          rateLimit: validation.rateLimit!,
+          billingOwnerType: validation.billingOwnerType,
+          oauthExchangeClientId: validation.oauthExchangeClientId,
+        },
         req
       );
 
       // Admin authority over an API key comes from the key's scope, not from who minted it.
       if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
+      // An org-owned key reads org-shared content only through its own grants, resolved live here
+      // and attached before the ability below is built from this user (orgApiKeyReach.ts).
+      if (
+        validation.orgOwnedGrants &&
+        validation.organizationId &&
+        isOrgServiceAccountOf(user, validation.organizationId)
+      ) {
+        attachOrgApiKeyReach(user, await resolveOrgApiKeyReach(validation.organizationId, validation.orgOwnedGrants));
+      }
+
       req.apiKeyInfo = {
         keyId: validation.keyId!,
+        userId: validation.userId,
         scopes: validation.scopes!,
         rateLimit,
         ownerUntrusted,
+        unpaidAccountLimits,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
@@ -239,6 +287,7 @@ export const apiKeyAuth = (
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
         createdAt: validation.createdAt,
         oauthExchangeClientId: validation.oauthExchangeClientId,
+        payerStanding: validation.payerStanding,
       };
 
       // Create CASL ability for the user
@@ -295,6 +344,7 @@ export const apiKeyAuth = (
         // credit sections can disagree with this view.
         source: resolveApiCompletionSource(flattenHeaders(req.headers)),
         ownerType: resolveApiKeyOwnerType(validation),
+        ...exchangeAttribution(validation),
       };
       req._apiKeyUsageInfo = usageInfo;
 
@@ -323,6 +373,8 @@ export const apiKeyAuth = (
           statusCode,
           source: usageInfo.source,
           ownerType: usageInfo.ownerType,
+          oauthClientId: usageInfo.oauthClientId,
+          payerStanding: usageInfo.payerStanding,
           logger: req.logger,
         }).catch(err => {
           req.logger?.warn('Failed to log detailed API key usage', err);

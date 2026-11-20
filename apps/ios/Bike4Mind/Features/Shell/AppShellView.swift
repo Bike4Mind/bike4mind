@@ -25,10 +25,19 @@ struct AppShellView: View {
               SettingsView()
             case .studio:
               MediaGalleryView()
+            case .brief(let id):
+              BriefView(briefID: id)
             }
           }
       }
       HomeDrawer()
+    }
+    .fullScreenCover(
+      item: Binding(
+        get: { navigator.voiceRequest },
+        set: { if $0 == nil { navigator.endVoiceConversation(startedSessionID: nil) } })
+    ) { request in
+      VoiceConversationView(request: request)
     }
     .inAppSafari(
       url: Binding(

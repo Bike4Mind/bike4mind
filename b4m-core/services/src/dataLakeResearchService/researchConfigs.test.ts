@@ -6,6 +6,7 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
+  RESEARCH_FEED_URL_MAX_CHARS,
   RESEARCH_MAX_RESULTS_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
 } from '@bike4mind/common';
@@ -736,6 +737,118 @@ describe('research config auto-admit', () => {
   });
 });
 
+describe('research config feed source', () => {
+  const FEED = 'https://example.com/feeds/papers.xml?token=secret';
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+  const create = (input: Record<string, unknown>) => {
+    const made = makeAdapters();
+    return {
+      ...made,
+      run: () => createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', ...input }, made.adapters),
+    };
+  };
+
+  it('stores a feed config with its topic and address, and defaults a search config to search', async () => {
+    const feed = create({ source: 'feed', feedUrl: `  ${FEED}  ` });
+    await feed.run();
+    expect(feed.repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'feed', feedUrl: FEED, query: 'q' });
+
+    const search = create({});
+    await search.run();
+    expect(search.repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'search', feedUrl: null });
+  });
+
+  it('nulls a stray feed address on a search config', async () => {
+    const { run, repo } = create({ source: 'search', feedUrl: FEED });
+    await run();
+    expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'search', feedUrl: null });
+  });
+
+  it.each([
+    ['no address', { source: 'feed' }, /needs a feed address/],
+    ['a blank address', { source: 'feed', feedUrl: '   ' }, /needs a feed address/],
+    ['a null address', { source: 'feed', feedUrl: null }, /needs a feed address/],
+    ['an ftp address', { source: 'feed', feedUrl: 'ftp://example.com/feed.xml' }, /http:\/\/ or https:\/\//],
+    ['a relative address', { source: 'feed', feedUrl: '/feed.xml' }, /not a valid web address/],
+    ['credentials', { source: 'feed', feedUrl: 'https://user:pass@example.com/feed.xml' }, /username or password/],
+    ['a username only', { source: 'feed', feedUrl: 'https://user@example.com/feed.xml' }, /username or password/],
+    [
+      'an address over the cap',
+      { source: 'feed', feedUrl: `https://example.com/${'a'.repeat(RESEARCH_FEED_URL_MAX_CHARS)}` },
+      /longer than/,
+    ],
+  ])('refuses %s on create with a 400 naming the problem', async (_label, input, message) => {
+    const { run, repo } = create(input);
+    await expect(run()).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(message) });
+    expect(repo.createConfig).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch to feed with no address, and a stored feed whose address is edited to a bad one', async () => {
+    const toFeed = update(storedConfig(), { source: 'feed' });
+    await expect(toFeed.run()).rejects.toThrow(/needs a feed address/);
+    expect(toFeed.repo.updateConfig).not.toHaveBeenCalled();
+
+    const bad = update(storedConfig({ source: 'feed', feedUrl: FEED }), { feedUrl: 'ftp://example.com/x' });
+    await expect(bad.run()).rejects.toThrow(/http/);
+  });
+
+  it('keeps the query and nulls the address when a feed config is toggled back to search', async () => {
+    const { run, repo } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { source: 'search' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({
+      source: 'search',
+      feedUrl: null,
+      query: 'coastal erosion',
+    });
+  });
+
+  it('never sends the stored cursor back through the lever write', async () => {
+    const cursor = { fingerprint: 'fp', newestPublishedAt: null, seenKeys: ['k'], retries: [] };
+    const { run, repo } = update(storedConfig({ source: 'feed', feedUrl: FEED, feedCursor: cursor }), { query: 'new' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2]).not.toHaveProperty('feedCursor');
+  });
+
+  it('records the source change with origin and path only, never the query string', async () => {
+    const { run, record } = update(storedConfig(), { source: 'feed', feedUrl: FEED });
+    await run();
+    const entry = record.mock.calls[0][0].changes[1];
+    expect(entry).toMatchObject({ after: 'source: feed https://example.com/feeds/papers.xml: Weekly sweep' });
+    expect(JSON.stringify(record.mock.calls[0][0].changes)).not.toContain('secret');
+  });
+
+  it('records a switch back to web search and a change of feed address', async () => {
+    const back = update(storedConfig({ source: 'feed', feedUrl: FEED }), { source: 'search' });
+    await back.run();
+    expect(back.record.mock.calls[0][0].changes[1]).toMatchObject({ after: 'source: web search: Weekly sweep' });
+
+    const moved = update(storedConfig({ source: 'feed', feedUrl: FEED }), { feedUrl: 'https://example.com/other.xml' });
+    await moved.run();
+    expect(moved.record.mock.calls[0][0].changes[1]).toMatchObject({
+      after: 'source: feed https://example.com/other.xml: Weekly sweep',
+    });
+  });
+
+  it('records nothing on a no-op resubmit of a feed config', async () => {
+    const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), {
+      source: 'feed',
+      feedUrl: FEED,
+      query: 'coastal erosion',
+    });
+    await run();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('adds no source entry when only another lever changes on a feed config', async () => {
+    const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { minRelevance: 0.9 });
+    await run();
+    expect(record.mock.calls[0][0].changes).toHaveLength(1);
+  });
+});
+
 describe('deleteResearchConfig', () => {
   it('scopes the delete to the lake', async () => {
     const { adapters, repo } = makeAdapters();
@@ -765,5 +878,112 @@ describe('deleteResearchConfig', () => {
         changes: [{ field: 'researchConfig', kind: 'literal', after: 'deleted: Weekly sweep' }],
       })
     );
+  });
+});
+
+describe('research config item rules', () => {
+  const rule = (condition: string, action: 'block' | 'review' = 'block') => ({ condition, action });
+  const stored = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) => storedConfig(overrides);
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+  const create = (itemRules: unknown[]) => {
+    const made = makeAdapters();
+    return {
+      ...made,
+      run: () =>
+        createResearchConfig(
+          lake(),
+          actor(),
+          NO_GRANTS,
+          { name: 'n', query: 'q', itemRules } as Parameters<typeof createResearchConfig>[3],
+          made.adapters
+        ),
+    };
+  };
+  const many = (count: number) => Array.from({ length: count }, (_, i) => rule(`rule ${i}`));
+  const ruleChanges = (calls: unknown[][]) =>
+    (calls[0]?.[0] as { changes: { after: string }[] } | undefined)?.changes.filter(change =>
+      change.after.startsWith('item rules')
+    ) ?? [];
+
+  it('stores trimmed rules on create', async () => {
+    const { run, repo } = create([rule('  Published by Acme  ', 'review')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toEqual([rule('Published by Acme', 'review')]);
+  });
+
+  it.each([
+    ['11 rules', many(11)],
+    ['a 301-character condition', [rule('x'.repeat(301))]],
+  ])('refuses %s on create and on update', async (_label, rules) => {
+    const created = create(rules);
+    await expect(created.run()).rejects.toThrow(/item rule/);
+    expect(created.repo.createConfig).not.toHaveBeenCalled();
+    const updated = update(stored(), { itemRules: rules as never });
+    await expect(updated.run()).rejects.toThrow(/item rule/);
+    expect(updated.repo.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts 11 entries when one is a duplicate, and a 300-character condition', async () => {
+    const { run, repo } = create([...many(10), rule('RULE 0 ')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const long = create([rule('x'.repeat(300))]);
+    await expect(long.run()).resolves.toBeDefined();
+  });
+
+  it('counts and length-checks the cleaned conditions', async () => {
+    const { run, repo } = create([...many(10), rule('\u200B\u200B')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const padded = create([rule('x'.repeat(300) + '\u200B'.repeat(20))]);
+    await expect(padded.run()).resolves.toBeDefined();
+  });
+
+  it('treats a reordered or re-cased resubmit as a no-op with no history entry', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('A one'), rule('b two', 'review')] }), {
+      itemRules: [rule('B TWO', 'review'), rule(' a one ')],
+    });
+    await run();
+    expect(record).not.toHaveBeenCalled();
+    expect(repo.updateConfig).toHaveBeenCalled();
+  });
+
+  it('writes one entry with counts when rules are added and removed', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a'), rule('b')] }), {
+      itemRules: [rule('b'), rule('c'), rule('d', 'review')],
+    });
+    await run();
+    expect(ruleChanges(record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 2 added, 1 removed: Weekly sweep' },
+    ]);
+  });
+
+  it('keeps stored rules when an edit does not mention them', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('a')] }), { query: 'other' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2].itemRules).toEqual([rule('a')]);
+    expect(ruleChanges(record.mock.calls)).toEqual([]);
+  });
+
+  it('flipping an action alone is one removed and one added', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a', 'block')] }), { itemRules: [rule('a', 'review')] });
+    await run();
+    expect(ruleChanges(record.mock.calls)[0]).toMatchObject({
+      after: 'item rules 1 added, 1 removed: Weekly sweep',
+    });
+  });
+
+  it('records the count on create when there are rules, and nothing when there are none', async () => {
+    const withRules = create([rule('a'), rule('b'), rule('c', 'review')]);
+    await withRules.run();
+    expect(ruleChanges(withRules.record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 3 added: n' },
+    ]);
+    const none = create([]);
+    await none.run();
+    expect(ruleChanges(none.record.mock.calls)).toEqual([]);
   });
 });

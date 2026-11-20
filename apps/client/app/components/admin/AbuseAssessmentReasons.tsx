@@ -4,7 +4,7 @@ import React from 'react';
 
 /**
  * The advisory model's most confident factors in the supplied evidence. A reason is a fixed key the model
- * answered yes to with a probability (questions in server/security/abuseAssessment/abuseAssessment.ts),
+ * answered yes to with a probability (questions in packages/server-utils/src/security/abuseAssessment/abuseAssessment.ts),
  * so every line shown here is worded by this file, never by the model.
  */
 export const ABUSE_ASSESSMENT_REASON_TEXT: Record<AbuseAssessmentReasonKey, string> = {

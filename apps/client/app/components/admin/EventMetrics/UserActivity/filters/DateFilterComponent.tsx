@@ -22,7 +22,7 @@ const PRESET_BUTTONS: Record<DatePresetDays, { label: string; testId: string }> 
  * back into the input resets the browser's year-typing buffer. So a prop change is only adopted
  * while the input is not focused, and on blur.
  */
-const useDateDraft = (value: string) => {
+export const useDateDraft = (value: string) => {
   const [draft, setDraft] = useState(value);
   const isFocused = useRef(false);
 

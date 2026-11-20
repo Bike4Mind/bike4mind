@@ -10,7 +10,7 @@ import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
 import { requireOAuthStartTurnstile } from '@server/utils/auth/oauthStartTurnstile';
-import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
+import { isPassportStrategyRegistered } from '@server/auth/passportStrategyRegistry';
 import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
@@ -59,9 +59,9 @@ const handler = baseApi({ auth: false })
         return res.status(400).json({ error: 'Invalid request' });
       }
 
-      // The apple strategy is only registered with passport when configured; reject here
-      // rather than let passport throw "Unknown authentication strategy" as a 500.
-      if (strategy === 'apple' && !getAppleConfig()) {
+      // Providers are registered with passport only when configured; reject here rather than let
+      // passport throw "Unknown authentication strategy" as a 500. Shared with ./callback.ts.
+      if (!isPassportStrategyRegistered(passport, strategy)) {
         return res.status(400).json({ error: 'Invalid request' });
       }
 

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Request, Response } from 'express';
 
 const m = vi.hoisted(() => ({
   findPendingReview: vi.fn(),
@@ -17,10 +18,14 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIds: m.findByIds },
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (h: (...args: unknown[]) => unknown) => h }),
-}));
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
+  baseApi: () => ({
+    use: (guard: (req: Request, res: Response, next: () => void) => void) => ({
+      get: (h: (req: Request, res: Response) => unknown) => async (req: Request, res: Response) => {
+        guard(req, res, () => {});
+        return h(req, res);
+      },
+    }),
+  }),
 }));
 
 import handler from '../index';
@@ -33,7 +38,11 @@ const makeRes = () => {
   res.json = vi.fn().mockReturnValue(res);
   return res;
 };
-const makeReq = (query: Record<string, unknown> = {}) => ({ user: { id: 'admin-1', isAdmin: true }, query });
+const makeReq = (query: Record<string, unknown> = {}) => ({
+  method: 'GET',
+  user: { id: 'admin-1', isAdmin: true },
+  query,
+});
 
 describe('admin/moderation-incidents', () => {
   beforeEach(() => {
@@ -113,9 +122,22 @@ describe('admin/moderation-incidents', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('refuses a non-admin', async () => {
-    await expect(runHandler({ user: { id: 'u', isAdmin: false }, query: {} }, makeRes())).rejects.toThrow(
-      'Admin access required'
-    );
+  it.each(['support:read', 'users:moderate'])('admits a %s delegate', async permission => {
+    const res = makeRes();
+    await runHandler({ ...makeReq(), user: { id: 'delegate', adminPermissions: [permission] } }, res);
+    expect(res.status).toHaveBeenCalledWith(200);
   });
+
+  it.each([undefined, { id: 'u', isAdmin: false }, { id: 'u', adminPermissions: ['credits:adjust'] }])(
+    'refuses an unauthorized caller %j before reading',
+    async user => {
+      await expect(runHandler({ method: 'GET', user, query: {} }, makeRes())).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      expect(m.findPendingReview).not.toHaveBeenCalled();
+      expect(m.findStaleConfirmedCsam).not.toHaveBeenCalled();
+      expect(m.findClosed).not.toHaveBeenCalled();
+      expect(m.findByIds).not.toHaveBeenCalled();
+    }
+  );
 });

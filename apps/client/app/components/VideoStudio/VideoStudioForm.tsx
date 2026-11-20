@@ -1,14 +1,16 @@
+import { useCallback, useMemo } from 'react';
 import type { CreateVideoGenerationBody, VideoModel } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
+import { useConsumeStudioRestore, type StudioRestore } from '@client/app/components/Studio/restore/studioRestore';
 import {
   useCapabilityFormState,
   type NonEmptyList,
   type StudioFormRules,
 } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
-import { videoModelCards } from './videoCreateV2';
+import { videoModelCards, withRankedVideoDefaultFirst } from './videoCreateV2';
 import { videoCapabilityFields } from './videoFields';
 import {
   canSubmit,
@@ -18,6 +20,7 @@ import {
   toCreateBody,
   type VideoFormState,
 } from './videoForm';
+import { restoreVideoForm } from './videoRestore';
 
 // Module scope: an inline object would re-run the hook's fallback effect on every render.
 const VIDEO_FORM_RULES: StudioFormRules<VideoModel, VideoFormState> = { initialFor: initialFormFor, clampToModel };
@@ -31,11 +34,22 @@ type VideoStudioFormProps = {
 };
 
 const VideoStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: VideoStudioFormProps) => {
-  const { form, model, changes, update, selectModel } = useCapabilityFormState(
-    models,
+  // Create v2 opens on the ranker's pick; legacy keeps the server's order.
+  const ordered = useMemo(() => (createV2 ? withRankedVideoDefaultFirst(models) : models), [models, createV2]);
+  const { form, model, changes, update, selectModel, replace } = useCapabilityFormState(
+    ordered,
     VIDEO_FORM_RULES,
     createV2 ? 'keep' : 'clamp'
   );
+  // Restore exists only in Create v2, whose 'keep' policy marks restored values the model does not take.
+  const applyRestore = useCallback(
+    (restore: StudioRestore) => {
+      const restored = restoreVideoForm(restore, ordered);
+      replace(restored.value, restored.notices);
+    },
+    [ordered, replace]
+  );
+  useConsumeStudioRestore(createV2 ? 'video' : null, applyRestore);
   const imageBrowser = useImageBrowser();
 
   if (!model) return null;

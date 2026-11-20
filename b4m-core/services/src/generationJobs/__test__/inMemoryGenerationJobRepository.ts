@@ -117,6 +117,21 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       return true;
     },
 
+    async findByGroup(requestedBy: string, groupId: string) {
+      return [...jobs.values()]
+        .filter(job => job.requestedBy === requestedBy && job.kind === 'image' && job.payload.groupId === groupId)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map(job => structuredClone(job));
+    },
+
+    async claimGroupCompletionNotice(id: string, at: Date) {
+      const job = jobs.get(id);
+      if (!job || job.groupCompletionNotifiedAt) return false;
+      job.groupCompletionNotifiedAt = at;
+      touch(job);
+      return true;
+    },
+
     async markTerminalHandled(id: string, at: Date) {
       const job = jobs.get(id);
       if (!job) return;
@@ -131,7 +146,7 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       touch(job);
     },
 
-    async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+    async listByRequester({ requestedBy, kind, state, source, beforeId, compositionId, limit }: ListByRequesterQuery) {
       // The Map keeps insertion (= creation) order. Ids here are `job<N>`, so a string sort would put job10 before job2.
       const newestFirst = [...jobs.values()].reverse();
       const start = beforeId === undefined ? 0 : newestFirst.findIndex(job => job.id === beforeId) + 1;
@@ -143,7 +158,9 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
             job.requestedBy === requestedBy &&
             job.kind === kind &&
             (!state || job.state === state) &&
-            (!source || job.source === source)
+            (!source || job.source === source) &&
+            (!compositionId ||
+              (job.payload as { request?: { compositionId?: string } }).request?.compositionId === compositionId)
         )
         .slice(0, limit)
         .map(job => structuredClone(job));

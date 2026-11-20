@@ -5,6 +5,7 @@ import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
+import type { SpendBreakdown, SpendBreakdownParams, SpendTimelineParams, SpendTimelineRow } from './SpendExplorerTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -104,6 +105,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'notebook_tagging',
   'context_summary',
   'memento',
+  'assistant_brief',
 ] as const;
 
 export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];
@@ -167,6 +169,8 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /** Explicit project context validated against access and billing ownership at execution time. */
+  projectId: z.string().optional(),
   /**
    * Data lake this call is 1:1 attributable to (ingestion embeds and research-run judge calls -
    * a query embedding can span multiple lakes and is never attributed here). Unset for
@@ -378,6 +382,11 @@ export interface IOwnerSpendMember extends IUsageSpendBucket {
   userId: string;
 }
 
+export interface IOwnerSpendProject extends IUsageSpendBucket {
+  /** Null means historical, missing or ambiguous attribution; never inferred from session membership. */
+  projectId: string | null;
+}
+
 /** Owner spend for one provider/model pair. */
 export interface IOwnerSpendModel extends IUsageSpendBucket {
   provider: string;
@@ -404,6 +413,7 @@ export interface IOwnerSpendFeature extends IUsageSpendBucket {
 export interface IOwnerUsageSummary {
   overTime: IOwnerSpendDay[];
   byMember: IOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   totals: IUsageSpendBucket;
@@ -414,7 +424,7 @@ export interface IOwnerUsageSummary {
  * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
  * to any owner/curator/org-admin who can view a lake's spend.
  */
-export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember' | 'byProject'>;
 
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
@@ -483,6 +493,7 @@ export interface IUsageDashboardResponse {
   days: number;
   overTime: IOwnerSpendDay[];
   byMember: NamedOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   /** API-token spend grouped by key (from the ledger; only completion_api_usage and decision_usage carry a key). */
@@ -854,6 +865,15 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * per window (current + prior) to build vs-prior KPI deltas.
    */
   spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
+
+  /**
+   * Admin Spend explorer: cost per (bucket, series key) over [from, to), one row per
+   * non-empty pair, ascending by bucket. The caller fills empty buckets and folds small series.
+   */
+  spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]>;
+
+  /** Admin Spend explorer: total, provider and segment cuts, and the top accounts over [from, to). */
+  spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown>;
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;

@@ -115,7 +115,7 @@ const SlackIntegrationSection = () => {
 
   // Fetch user's notebooks for keyword routing dropdown
   const { data: notebooksData } = useQuery({
-    queryKey: ['user-notebooks-for-routing'],
+    queryKey: ['user-notebooks-for-routing', currentUser?.id],
     queryFn: async () => {
       const response = await api.get('/api/sessions', { params: { limit: 100 } });
       return response.data as { data: Array<{ id: string; name: string }>; hasMore: boolean };
@@ -587,8 +587,11 @@ const SlackIntegrationSection = () => {
               <Select
                 disabled={updateSlackSettings.isPending}
                 placeholder="Select project (optional)"
-                value={defaultProjectId || null}
-                onChange={(_, newValue) => {
+                data-testid="slack-default-project-select"
+                value={defaultProjectId || ''}
+                onChange={(event, newValue) => {
+                  // Joy also emits changes with no event while asynchronous options register.
+                  if (!event) return;
                   setDefaultProjectId(newValue || '');
                 }}
                 sx={{
@@ -599,8 +602,11 @@ const SlackIntegrationSection = () => {
                   },
                 }}
               >
-                <Option value={null as any}>No project (default)</Option>
-                {projectsData?.map((project: any) => (
+                <Option value="">No project (default)</Option>
+                {defaultProjectId && !projectsData?.some(project => project.id === defaultProjectId) && (
+                  <Option value={defaultProjectId}>Saved project (not loaded)</Option>
+                )}
+                {projectsData?.map(project => (
                   <Option key={project.id} value={project.id}>
                     {project.name || 'Untitled Project'}
                   </Option>
@@ -628,8 +634,9 @@ const SlackIntegrationSection = () => {
                 disabled={updateSlackSettings.isPending}
                 data-testid="slack-custom-agent-select"
                 placeholder="Use default general-purpose agent"
-                value={customAgentId || null}
-                onChange={(_, newValue) => {
+                value={customAgentId || ''}
+                onChange={(event, newValue) => {
+                  if (!event) return;
                   setCustomAgentId(newValue || '');
                 }}
                 sx={{
@@ -640,7 +647,10 @@ const SlackIntegrationSection = () => {
                   },
                 }}
               >
-                <Option value={null as any}>Use default general-purpose agent</Option>
+                <Option value="">Use default general-purpose agent</Option>
+                {customAgentId && !customAgents.some(agent => agent.id === customAgentId) && (
+                  <Option value={customAgentId}>Saved agent (not loaded)</Option>
+                )}
                 {customAgents.map(agent => (
                   <Option key={agent.id} value={agent.id}>
                     {agent.name}
@@ -675,8 +685,10 @@ const SlackIntegrationSection = () => {
                   <Select
                     disabled={updateSlackSettings.isPending}
                     placeholder="Use default routing"
-                    value={agentNotebookRouting[agent.key] || null}
-                    onChange={(_, newValue) => {
+                    data-testid={`slack-agent-notebook-select-${agent.key}`}
+                    value={agentNotebookRouting[agent.key] || ''}
+                    onChange={(event, newValue) => {
+                      if (!event) return;
                       setAgentNotebookRouting(prev => ({
                         ...prev,
                         [agent.key]: newValue || undefined,
@@ -690,7 +702,11 @@ const SlackIntegrationSection = () => {
                       },
                     }}
                   >
-                    <Option value={null as any}>Use default routing</Option>
+                    <Option value="">Use default routing</Option>
+                    {agentNotebookRouting[agent.key] &&
+                      !notebooks.some(notebook => notebook.id === agentNotebookRouting[agent.key]) && (
+                        <Option value={agentNotebookRouting[agent.key]}>Saved notebook (not loaded)</Option>
+                      )}
                     {notebooks.map(notebook => (
                       <Option key={notebook.id} value={notebook.id}>
                         {notebook.name || 'Untitled Notebook'}
@@ -737,6 +753,7 @@ const SlackIntegrationSection = () => {
                           variant="plain"
                           color="neutral"
                           disabled={updateSlackSettings.isPending}
+                          aria-label={`Edit routing rule ${index + 1}`}
                           onClick={() => openEditRuleModal(index)}
                         >
                           <EditIcon />
@@ -746,6 +763,7 @@ const SlackIntegrationSection = () => {
                           variant="plain"
                           color="danger"
                           disabled={updateSlackSettings.isPending}
+                          aria-label={`Delete routing rule ${index + 1}`}
                           onClick={() => handleRemoveKeywordRule(index)}
                         >
                           <DeleteIcon />
@@ -797,17 +815,23 @@ const SlackIntegrationSection = () => {
 
             <FormControl sx={{ mt: 2 }}>
               <FormLabel>Route to Notebook</FormLabel>
-              {notebooks.length === 0 ? (
+              {notebooks.length === 0 && !ruleNotebookId ? (
                 <Alert color="warning" variant="soft" size="sm">
                   No notebooks found. Create a notebook first to set up routing rules.
                 </Alert>
               ) : (
                 <Select
                   disabled={updateSlackSettings.isPending}
-                  value={ruleNotebookId}
-                  onChange={(_, value) => setRuleNotebookId(value as string)}
+                  data-testid="slack-rule-notebook-select"
+                  value={ruleNotebookId || null}
+                  onChange={(event, value) => {
+                    if (event) setRuleNotebookId(value ?? '');
+                  }}
                   placeholder="Select notebook..."
                 >
+                  {ruleNotebookId && !notebooks.some(notebook => notebook.id === ruleNotebookId) && (
+                    <Option value={ruleNotebookId}>Saved notebook (not loaded)</Option>
+                  )}
                   {notebooks.map(notebook => (
                     <Option key={notebook.id} value={notebook.id}>
                       {notebook.name}
@@ -820,7 +844,7 @@ const SlackIntegrationSection = () => {
             <Button
               sx={{ mt: 2 }}
               onClick={handleSaveKeywordRule}
-              disabled={updateSlackSettings.isPending || !ruleKeywords || !ruleNotebookId || notebooks.length === 0}
+              disabled={updateSlackSettings.isPending || !ruleKeywords || !ruleNotebookId}
             >
               {editingRuleIndex !== null ? 'Save Changes' : 'Add Rule'}
             </Button>

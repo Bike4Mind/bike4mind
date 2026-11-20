@@ -59,8 +59,8 @@ vi.mock('@bike4mind/services/llm', () => ({
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ SQSService: vi.fn() }));
-vi.mock('@server/auth/turnAuth', () => ({ requestTurnAuth: vi.fn(() => ({})) }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({ requestTurnAuth: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: vi.fn(() => ({})),
   getSharedTokenizer: vi.fn(),
 }));
@@ -68,7 +68,7 @@ vi.mock('@server/rapidReply/generateRapidReply', () => ({
   generateRapidReply: h.generate,
   saveRapidReplyResult: h.save,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 import testRun from '../test';
 
@@ -190,5 +190,4 @@ describe('rapid reply admin test run', () => {
     expect(h.process).not.toHaveBeenCalled();
     expect(h.deleteResult).toHaveBeenCalledWith('result-1');
   });
-
 });

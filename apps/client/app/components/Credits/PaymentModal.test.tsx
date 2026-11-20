@@ -14,8 +14,21 @@ vi.mock('./CheckoutForm', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+// jsdom does not apply the @media rules emotion emits for a breakpoint object, so the dialog's
+// responsive sx values never reach getComputedStyle. Read the rules emotion emitted for xs instead.
+const phoneRules = () => {
+  const classNames = [...screen.getByTestId('payment-modal-dialog').classList];
+  const emitted = [...document.querySelectorAll('style')].map(style => style.textContent ?? '').join('\n');
+  return emitted
+    .split('}')
+    .filter(rule => rule.includes('@media (min-width:0px)') && classNames.some(name => rule.includes(`.${name}`)));
+};
+
+const declares = (rules: string[], declaration: string) =>
+  rules.some(rule => rule.includes(`{${declaration}`) || rule.includes(`;${declaration}`));
+
 describe('PaymentModal', () => {
-  it('scrolls inside the dialog so the form stays reachable in a short window', () => {
+  const renderModal = () =>
     render(
       <CssVarsProvider theme={appTheme}>
         <PaymentModal
@@ -29,8 +42,25 @@ describe('PaymentModal', () => {
       </CssVarsProvider>
     );
 
+  it('scrolls inside the dialog so the form stays reachable in a short window', () => {
+    renderModal();
+
     const dialog = screen.getByTestId('payment-modal-dialog');
     expect(getComputedStyle(dialog).overflowY).toBe('auto');
     expect(dialog).toContainElement(screen.getByTestId('checkout-form-pay-btn'));
+  });
+
+  it('never forces the dialog wider than a phone screen', () => {
+    renderModal();
+
+    const rules = phoneRules();
+    expect(declares(rules, 'min-width:auto')).toBe(true);
+    expect(declares(rules, 'max-width:calc(100vw - 32px)')).toBe(true);
+  });
+
+  it('fills the phone width instead of shrinking to the card form', () => {
+    renderModal();
+
+    expect(declares(phoneRules(), 'width:calc(100vw - 32px)')).toBe(true);
   });
 });

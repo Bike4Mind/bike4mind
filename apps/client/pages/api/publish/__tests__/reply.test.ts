@@ -32,6 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  projectRepository: { findAllBySessionId: async () => [] },
   Quest: {
     findOne: (filter: unknown) => {
       dbMocks.questFindOne(filter);
@@ -39,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
+  sessionRepository: { findById: () => dbMocks.sessionLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       dbMocks.publishedFindOne(filter);

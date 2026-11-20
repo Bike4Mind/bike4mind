@@ -2,7 +2,8 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { EndUserIdSchema } from './schemas/endUserId';
 import {
   extendGeneratedAudioResponseSchema,
   generatedAudioRequestFields,
@@ -28,6 +29,18 @@ export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
   openai: 'OpenAI',
   elevenlabs: 'ElevenLabs',
 };
+
+/**
+ * When one spoken word (a whitespace-separated token of the input text) starts and ends, in ms from the start of
+ * the generated clip. Recorded on a speech job when its provider reports alignment (ElevenLabs does).
+ */
+export const SpeechWordTimingSchema = z.object({
+  text: z.string().min(1),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+});
+
+export type SpeechWordTiming = z.infer<typeof SpeechWordTimingSchema>;
 
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
@@ -102,10 +115,25 @@ export const ttsRequestSchema = z.object({
         "organization: omit this or set it to the key's organization; any other value, null included, is " +
         'rejected with a 403 (`errorCode: billing_organization_mismatch`).'
     ),
+  end_user_id: EndUserIdSchema.optional(),
   ...generatedAudioRequestFields,
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
+
+/** A speech job's request: the synthesis fields of ttsRequestSchema, without a route's delivery and billing options. */
+export const speechJobRequestSchema = ttsRequestSchema.pick({
+  text: true,
+  provider: true,
+  model: true,
+  voice: true,
+  format: true,
+  stability: true,
+  similarityBoost: true,
+  languageCode: true,
+});
+
+export type SpeechJobRequest = z.infer<typeof speechJobRequestSchema>;
 
 /**
  * JSON body of `POST /api/ai/tts` for `encoding: 'base64'`: the shared generated-audio
@@ -136,10 +164,14 @@ export const TTS_ERROR_CODES = [
   'insufficient_credits',
   'provider_not_configured',
   'provider_rejected',
+  'end_user_id_not_allowed',
+  'invalid_end_user_id',
+  // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
+  'request_timeout',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**
- * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429 and 502; the 413
+ * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429, 502 and 504; the 413
  * has a shape of its own (`ttsResponseTooLargeSchema`). `errorCode` is present only
  * on the conditions that carry a classifier; an ordinary validation 422 has none.
  *
@@ -165,13 +197,16 @@ export const TTS_ERROR_CODES = [
  * enshrine in a schema.
  */
 /** 403 body: the `ai:generate` scope refusal (`required_scopes`), or a billing refusal. */
-export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchema.extend({
+export const ttsForbiddenResponseSchema = MeteredBillingOrganizationForbiddenErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
 });
 
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(TTS_ERROR_CODES).optional(),
+  /** The job a 504 left running (see unretrievableAudioResponse). */
+  jobId: z.string().optional(),
+  message: z.string().optional(),
 });
 
 /**

@@ -5,7 +5,7 @@
  * every route a scope opens is listed under it).
  *
  * Node-only and test-only: it walks pages/ with node:fs and imports the server scope modules. A caller
- * must `vi.mock('@bike4mind/services')` and `vi.mock('@server/auth/turnAuth')`, so the data-lake
+ * must `vi.mock('@bike4mind/services')` and `vi.mock('@bike4mind/server-utils/auth/turnAuth')`, so the data-lake
  * scope module does not load the services graph for a few gate lists.
  *
  * A gate is the set of scopes one check admits (any-of). In-handler checks are attributed per verb
@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { ApiKeyScope, CONTRACTS, isBuiltInApiKeyScope } from '@bike4mind/common';
 import * as agentScopes from '@server/agents/agentScopes';
-import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
+import * as dataLakeScopes from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import * as fileScopes from '@bike4mind/server-utils/files/fileScopes';
 import * as projectScopes from '@server/projects/projectScopes';
 
@@ -43,10 +43,10 @@ export const isOverlayPath = (p: string) => OVERLAY_PATH_PREFIXES.some(prefix =>
 // Files whose exported functions are scope-check helpers a route may call instead of naming a list.
 const HELPER_SOURCES = [
   'server/agents/agentScopes.ts',
-  'server/dataLakes/dataLakeScopes.ts',
+  '../../packages/server-utils/src/dataLakes/dataLakeScopes.ts',
   '../../packages/server-utils/src/files/fileScopes.ts',
   'server/projects/projectScopes.ts',
-  'server/cli/auth.ts',
+  '../../packages/server-utils/src/cli/auth.ts',
 ];
 
 // Helpers that check scopes by hand (`.includes` + throw) rather than through an enforcing site, so

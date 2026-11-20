@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { replaceQueryData, stableSubscriptionKey, updateSingleQueryDataFast } from './react-query';
+import { replaceQueryData, stableSubscriptionKey, updateAllQueryData, updateSingleQueryDataFast } from './react-query';
 
 type CacheItem = {
   id: string;
@@ -110,6 +110,23 @@ describe('updateSingleQueryDataFast', () => {
     expect(result?.pages[0].data[0]).not.toHaveProperty('_optimistic');
   });
 
+  it('leaves a paged entry whose pages carry no data array untouched instead of throwing', () => {
+    const queryClient = new QueryClient();
+    const pages = [{ items: [{ id: 'item-1' }], cursor: 'next' }];
+    queryClient.setQueryData(queryKey, { pages, pageParams: [undefined] });
+
+    expect(() =>
+      updateSingleQueryDataFast(queryClient, queryKey, 'write', { id: 'item-1', value: 'server value' }, options)
+    ).not.toThrow();
+    expect(() => updateSingleQueryDataFast(queryClient, queryKey, 'delete', { id: 'item-1' }, options)).not.toThrow();
+    expect(() =>
+      updateSingleQueryDataFast(queryClient, queryKey, 'write', { id: 'item-2' }, { keysAllowedToCreate: [queryKey] })
+    ).not.toThrow();
+
+    const result = queryClient.getQueryData<{ pages: typeof pages }>(queryKey);
+    expect(result?.pages[0]).toEqual(pages[0]);
+  });
+
   it('keeps the newer document when both cache entries are authoritative', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<CacheItem[]>(queryKey, [
@@ -187,6 +204,20 @@ describe('updateSingleQueryDataFast', () => {
     );
 
     expect(queryClient.getQueryData<CacheItem[]>(queryKey)?.[0].value).toBe('newer');
+  });
+});
+
+describe('updateAllQueryData', () => {
+  it('writes an org doc without touching an invite-links page under the same prefix', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['organizations', 'org-1'], { id: 'org-1', name: 'Old' });
+    const linksPage = { pages: [{ links: [], nextCursor: undefined }], pageParams: [undefined] };
+    queryClient.setQueryData(['organizations', 'org-1', 'invite-links'], linksPage);
+
+    expect(() => updateAllQueryData(queryClient, 'organizations', 'write', { id: 'org-1', name: 'New' })).not.toThrow();
+
+    expect(queryClient.getQueryData(['organizations', 'org-1'])).toMatchObject({ id: 'org-1', name: 'New' });
+    expect(queryClient.getQueryData(['organizations', 'org-1', 'invite-links'])).toEqual(linksPage);
   });
 });
 

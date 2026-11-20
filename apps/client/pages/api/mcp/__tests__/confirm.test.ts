@@ -10,7 +10,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -25,7 +25,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
 });
 
 vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', () => ({ assertCustomMcpEnabled: vi.fn() }));
-vi.mock('@server/mcpConnections/customMcpToolHost', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({
   customMcpToolHost: { callTool: vi.fn() },
   isCustomToolStillOffered: vi.fn(),
 }));
@@ -52,7 +52,7 @@ import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionE
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
+import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { RemoteMcpProtocolError } from '@bike4mind/mcp/remote';
 import handler from '../confirm';
@@ -513,7 +513,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
     vi.mocked(isCustomToolStillOffered).mockResolvedValue(true);
   });
 
-  it('Confirm claims the action and calls the host with approved: true and the stored params', async () => {
+  it('Confirm claims the action and calls the host with approved: true, the stored params and the card connector as switched on', async () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
 
     expect(res._getJSONData()).toMatchObject({ success: true });
@@ -524,6 +524,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
       toolName: 'create',
       args: { title: 't' },
       approved: true,
+      platformConnectionIds: ['c1'],
     });
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });

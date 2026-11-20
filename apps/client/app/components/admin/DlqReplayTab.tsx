@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Sheet, Stack } from '@mui/joy';
 import { useSearch } from '@tanstack/react-router';
 import { DLQ_QUEUE_PARAM } from '@bike4mind/common';
 import {
+  applyDlqCountCeiling,
   useDlqAllMessages,
+  useDlqCountCeilings,
   useDlqQueues,
   type DlqListedMessage,
   type DlqQueueInfo,
@@ -14,13 +16,23 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  SegmentedControl,
   StatStrip,
   StatTile,
 } from '@client/app/components/admin/shared';
+import { useAdminListUrlState } from '@client/app/components/admin/shared/useAdminListUrlState';
 import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import { DlqMessageDrawer } from './DlqMessageDrawer';
 import { DlqHistoryView } from './DlqHistoryView';
 import { DlqMessagesTable } from './DlqMessagesTable';
+import { DlqGroupsTable } from './DlqGroupsTable';
+import { DLQ_SEARCH_KEYS } from './dlqSearch';
+
+type DlqViewMode = 'groups' | 'messages';
+const VIEW_OPTIONS = [
+  { value: 'groups', label: 'By failure' },
+  { value: 'messages', label: 'All messages' },
+] as const;
 
 /** Messages the listing could not reach: SQS only samples a queue, and a queue's read can fail. */
 function listingGaps(queues: readonly DlqQueueListing[]) {
@@ -52,9 +64,11 @@ const isOnStage = (queue: DlqQueueInfo) => queue.deployed !== false;
 const DlqReplayTab: React.FC = () => {
   const [openMessage, setOpenMessage] = useState<DlqListedMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [listState, setListState] = useAdminListUrlState(DLQ_SEARCH_KEYS);
+  const { data: ceilings } = useDlqCountCeilings();
 
   const {
-    data: queues,
+    data: serverQueues,
     isLoading: queuesLoading,
     isError: queuesError,
     dataUpdatedAt: queuesCheckedAt,
@@ -63,6 +77,22 @@ const DlqReplayTab: React.FC = () => {
   const listing = useDlqAllMessages();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const queueParam = typeof search[DLQ_QUEUE_PARAM] === 'string' ? search[DLQ_QUEUE_PARAM] : null;
+  // A link to a queue, a failure group or one message (an alarm, a shared URL) means its messages.
+  const [view, setView] = useState<DlqViewMode>(() =>
+    queueParam || typeof search.dlqMessage === 'string' || listState.filters.failure || listState.filters.feature
+      ? 'messages'
+      : 'groups'
+  );
+
+  // SQS counts trail a discard by about a minute; cap them at what the discard left meanwhile.
+  const queues = useMemo(
+    () =>
+      serverQueues?.map(queue => ({
+        ...queue,
+        approximateMessageCount: applyDlqCountCeiling(ceilings, queue.label, queue.approximateMessageCount),
+      })),
+    [serverQueues, ceilings]
+  );
 
   // Totals and the all-clear cover only queues this stage creates; a queue that exists but could
   // not be read (-1) still counts, so it keeps the all-clear from showing.
@@ -84,8 +114,28 @@ const DlqReplayTab: React.FC = () => {
   // An alarm deep-links to one queue (adminDlqReplayPath); explain a label this page cannot show.
   const linkedQueue = queueParam ? queues?.find(queue => queue.label === queueParam) : undefined;
   const unknownQueue = queueParam && queues && !(linkedQueue && isOnStage(linkedQueue)) ? queueParam : null;
-  const gaps = listingGaps(listing.data?.queues ?? []);
+  const gaps = listingGaps(
+    (listing.data?.queues ?? []).map(queue => ({
+      ...queue,
+      approximateMessageCount: applyDlqCountCeiling(ceilings, queue.label, queue.approximateMessageCount),
+    }))
+  );
+  const notOnStage = (queues?.length ?? 0) - stageQueues.length;
+  const unreadable = stageQueues.filter(queue => queue.approximateMessageCount < 0).length;
   const messages = listing.data?.messages ?? [];
+  const openedLink = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof search.dlqMessage !== 'string') return;
+    const link = `${queueParam}:${search.dlqMessage}`;
+    if (openedLink.current === link) return;
+    const message = listing.data?.messages.find(
+      message => message.messageId === search.dlqMessage && (!queueParam || message.queueLabel === queueParam)
+    );
+    if (message) {
+      setOpenMessage(message);
+      openedLink.current = link;
+    }
+  }, [listing.data, search.dlqMessage, queueParam]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
@@ -136,7 +186,19 @@ const DlqReplayTab: React.FC = () => {
         <StatStrip aria-label="Dead-letter queue totals">
           <StatTile
             label="Dead-letter queues"
+            help="Queues this stage creates. The rest of the registry are stage-gated queues (for example scheduled jobs) that this stage does not create."
             value={<span data-testid="dlq-stats-total">{stageQueues.length.toLocaleString()}</span>}
+            comparison={
+              <span data-testid="dlq-stats-registry">
+                {[
+                  `of ${(queues?.length ?? 0).toLocaleString()} registered`,
+                  notOnStage > 0 && `${notOnStage.toLocaleString()} not on this stage`,
+                  unreadable > 0 && `${unreadable.toLocaleString()} unreadable`,
+                ]
+                  .filter(Boolean)
+                  .join('; ')}
+              </span>
+            }
           />
           <StatTile
             label="Queues with messages"
@@ -176,6 +238,36 @@ const DlqReplayTab: React.FC = () => {
       )}
 
       {!allClear && (
+        <SegmentedControl
+          options={VIEW_OPTIONS}
+          value={view}
+          onChange={setView}
+          aria-label="Dead-letter view"
+          data-testid="dlq-view"
+        />
+      )}
+
+      {!allClear && view === 'groups' && (
+        <DlqGroupsTable
+          messages={messages}
+          queues={queues ?? []}
+          loading={listing.isLoading}
+          error={listing.isError ? 'Dead-letter messages failed to load.' : undefined}
+          onRetry={() => void listing.refetch()}
+          onShowMessages={group => {
+            setListState({
+              filters: {
+                feature: '',
+                queue: group.queueLabel,
+                failure: group.discardable ? group.signature : '',
+              },
+            });
+            setView('messages');
+          }}
+        />
+      )}
+
+      {!allClear && view === 'messages' && (
         <DlqMessagesTable
           messages={messages}
           queues={queues ?? []}

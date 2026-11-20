@@ -37,6 +37,15 @@ beforeEach(() => {
   useSelectedAccount.setState({ selectedAccount: null });
 });
 
+// Opens the model panel on every model (the shortlist hides the rest), then finds one model's option.
+const modelOption = (suffix: string) => {
+  if (!screen.queryByTestId('music-form-model-panel'))
+    fireEvent.click(screen.getByTestId('music-form-model-change-btn'));
+  const showAll = screen.queryByTestId('music-form-model-show-all-btn');
+  if (showAll?.textContent?.startsWith('Show all')) fireEvent.click(showAll);
+  return screen.getByTestId(`music-form-model-option-${suffix}`);
+};
+
 describe('MusicStudioForm submit', () => {
   it('is disabled until there is a prompt', () => {
     render(tree([musicV2, clip]));
@@ -124,9 +133,9 @@ describe('MusicStudioForm in Create v2', () => {
     render(v2Tree([musicV2, clip]));
     expect(screen.queryByTestId('music-form-model-select')).not.toBeInTheDocument();
     typePrompt('a happy tune');
-    fireEvent.click(screen.getByTestId(`music-form-model-card-${clip.id}-radio`));
+    fireEvent.click(modelOption(`${clip.id}-radio`));
 
-    expect(screen.getByTestId(`music-form-model-card-${clip.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(modelOption(`${clip.id}`)).toHaveAttribute('data-selected', 'true');
     expect(screen.queryByTestId('music-form-changes')).not.toBeInTheDocument();
     expect(screen.getByTestId('music-form-duration-invalid')).not.toBeEmptyDOMElement();
     expect(screen.getByTestId('music-form-submit-btn')).toBeDisabled();

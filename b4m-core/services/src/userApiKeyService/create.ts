@@ -15,6 +15,10 @@ import {
   isBuiltInApiKeyScope,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
+  OrgApiKeyGrant,
+  OrgApiKeyGrantsSchema,
+  PAYER_STANDINGS,
+  type PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -36,6 +40,7 @@ export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 
 export const MAX_ACTIVE_KEYS_PER_USER = 10;
+export const MAX_ACTIVE_KEYS_PER_ORG = MAX_ACTIVE_KEYS_PER_USER;
 /** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
 export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
 /** Longest lifetime of a federated-exchange key, measured from mint time. */
@@ -75,6 +80,7 @@ const createUserApiKeySchema = z.object({
     createdByUserId: z.string().optional(),
     // Tags a key minted by the federated AI-token exchange to its (user, client) pair.
     oauthClientId: z.string().optional(),
+    payerStanding: z.enum(PAYER_STANDINGS).optional(),
   }),
   productId: z.string().optional(),
   productName: z.string().optional(),
@@ -94,7 +100,7 @@ const createUserApiKeySchema = z.object({
   // rather than gated by a scope.
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
   // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
-  orgOwned: z.object({ createdByUserId: z.string().min(1) }).optional(),
+  orgOwned: z.object({ createdByUserId: z.string().min(1), grants: OrgApiKeyGrantsSchema.optional() }).optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -112,7 +118,7 @@ export type CreateExchangeUserApiKeyParameters = Omit<
   'metadata' | 'expiresAt' | 'orgOwned'
 > & {
   expiresAt: Date;
-  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
+  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string; payerStanding?: PayerStanding };
 };
 
 interface CreateUserApiKeyAdapters {
@@ -170,6 +176,7 @@ export interface CreateUserApiKeyResult {
     createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin' | 'oauth-exchange';
     createdByUserId?: string;
     oauthClientId?: string;
+    payerStanding?: PayerStanding;
   };
   productId?: string;
   productName?: string;
@@ -180,7 +187,7 @@ export interface CreateUserApiKeyResult {
   branding?: IEmbedBranding;
   spendCap?: number;
   preauthorizedLakeIds?: string[];
-  orgOwned?: { createdByUserId: string };
+  orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
   createdAt: Date;
 }
 
@@ -275,7 +282,7 @@ const mintUserApiKey = async (
   // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
   // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
   // request bypassing the admin UI). Must match assertEmbedCredential in
-  // apps/client/server/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
+  // packages/server-utils/src/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
   if (isEmbedKey && (params.billingOwnerType !== CreditHolderType.Organization || !params.organizationId)) {
     throw new BadRequestError(
       'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
@@ -404,9 +411,12 @@ const mintUserApiKey = async (
     const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
     if (result === 'at_cap') {
       if (untrusted) throw apiKeyTrustRequiredError(untrusted);
+      // Org-owned keys all live on the org's one service account, so its per-user cap is a per-org cap.
       const message = isExchangeKey
         ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
-        : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
+        : params.orgOwned
+          ? `Maximum ${MAX_ACTIVE_KEYS_PER_ORG} active API keys allowed per organization`
+          : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
       throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
     }
     apiKeyDocument = result;

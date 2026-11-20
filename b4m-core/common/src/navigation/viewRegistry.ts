@@ -327,7 +327,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, the model pricing catalog, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
     keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
@@ -357,12 +357,22 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.llm_dashboard',
     section: 'admin',
-    label: 'LLM Dashboard',
-    description:
-      'Enable or disable LLM models, set model rank and fallback, and choose which user tags and entitlements can use each model',
+    label: 'Models',
+    description: 'Models users can pick: status, access, rank, prices and discovery',
     navigationType: 'tab',
-    target: '24', // AdminTab.LLMDashboard
-    keywords: ['llm', 'model', 'ai', 'enable model', 'model access', 'entitlements'],
+    target: '24', // AdminTab.Models
+    keywords: [
+      'llm',
+      'models',
+      'model access',
+      'model pricing',
+      'prices',
+      'rank',
+      'ai',
+      'dashboard',
+      'enable model',
+      'entitlements',
+    ],
     requiresAdmin: true,
   },
   {
@@ -509,16 +519,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '30', // AdminTab.SlackWorkspaces
     keywords: ['slack', 'workspaces', 'integrations', 'messaging'],
-    requiresAdmin: true,
-  },
-  {
-    id: 'admin.secrets_rotation',
-    section: 'admin',
-    label: 'Secrets Rotation',
-    description: 'Manage API key rotation and secret lifecycle',
-    navigationType: 'tab',
-    target: '16', // AdminTab.SecretsRotation
-    keywords: ['secrets', 'rotation', 'API keys', 'credentials'],
     requiresAdmin: true,
   },
   {
@@ -814,11 +814,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.secops_triage',
     section: 'admin',
-    label: 'SecOps triage',
+    label: 'Security scan issue filing',
     description:
-      'Configure the SecOps triage pipeline: enablement, dry-run, GitHub issue filing and Slack alerts for security findings',
+      'Security page, Scans view: GitHub issue filing status, recent filing runs and its settings (dry run, repository, Slack)',
     navigationType: 'tab',
-    target: '51', // AdminTab.SecOpsTriage
+    target: '51', // AdminTab.SecOpsTriage, retired: opens the Security page's Scans view
     keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
     requiresAdmin: true,
   },
@@ -831,6 +831,28 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '66', // AdminTab.AuditLog
     keywords: ['audit log', 'audit trail', 'who changed', 'change history', 'activity log', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.access_review',
+    section: 'admin',
+    label: 'Access review',
+    description:
+      'Quarterly review of who holds admin access: confirm or revoke each admin, flag dormant and no-MFA accounts, export the signed-off review as CSV',
+    navigationType: 'tab',
+    target: '81', // AdminTab.AccessReview
+    keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.spend_explorer',
+    section: 'admin',
+    label: 'Spend explorer',
+    description:
+      'AI provider cost per day or hour with spikes against the rolling median, split by provider, model, feature or account type, and the accounts that drove any day',
+    navigationType: 'tab',
+    target: '82', // AdminTab.SpendExplorer
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs'],
     requiresAdmin: true,
   },
   {
@@ -874,6 +896,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.legacy_api_keys',
+    section: 'admin',
+    label: 'Legacy API keys',
+    description: 'See which recently used API keys still rely on legacy access, and their owners',
+    navigationType: 'tab',
+    target: '79', // AdminTab.LegacyApiKeys
+    keywords: ['legacy api keys', 'legacy keys', 'api keys', 'grandfathered', 'scoped key', 'key owners'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.published_pages',
     section: 'admin',
     label: 'Published pages',
@@ -898,9 +930,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.model_lifecycle',
     section: 'admin',
     label: 'Model lifecycle',
-    description: 'Review detected LLM model deprecations, accept successor models and see stale model references',
+    description: 'Models > Discovery: discovery runs, lifecycle suggestions and stale model references',
     navigationType: 'tab',
-    target: '58', // AdminTab.ModelLifecycle
+    // AdminTab.ModelLifecycle, whose slug aliases to the Models tab's Discovery section.
+    target: '58',
     keywords: [
       'model lifecycle',
       'deprecation',
@@ -1002,6 +1035,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '78',
     keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.roles',
+    section: 'admin',
+    label: 'Roles',
+    description:
+      'Create admin roles from templates, edit the permissions each role grants, and delete roles nobody holds',
+    navigationType: 'tab',
+    target: '80', // AdminTab.Roles
+    keywords: ['roles', 'admin roles', 'permissions', 'role templates', 'delegated admin', 'access', 'support role'],
     requiresAdmin: true,
   },
   {

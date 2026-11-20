@@ -60,6 +60,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
     clientType: doc.clientType,
     tokenEndpointAuthMethod: doc.tokenEndpointAuthMethod,
     redirectUris: [...(doc.redirectUris ?? [])],
+    postLogoutRedirectUris: [...(doc.postLogoutRedirectUris ?? [])],
     allowedScopes: [...(doc.allowedScopes ?? [])],
     isActive: doc.isActive,
     ...(doc.federatedIdp
@@ -82,6 +83,17 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
           },
         }
       : {}),
+    ...(doc.unpaidAccountLimits
+      ? {
+          unpaidAccountLimits: {
+            requestsPerMinute: doc.unpaidAccountLimits.requestsPerMinute,
+            requestsPerDay: doc.unpaidAccountLimits.requestsPerDay,
+            tokensPerMinute: doc.unpaidAccountLimits.tokensPerMinute,
+            maxConcurrent: doc.unpaidAccountLimits.maxConcurrent,
+          },
+        }
+      : {}),
+    ...(doc.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: doc.unpaidAccountsAllowed } : {}),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -108,12 +120,17 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     throw new BadRequestError(error instanceof Error ? error.message : String(error));
   }
 
+  if (data.unpaidAccountLimits && !federatedIdp) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
+  }
+
   const clientSecret = generateOAuthClientSecret();
   const doc = await OAuthClientModel.create({
     clientId,
     clientSecretHash: await bcrypt.hash(clientSecret, OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS),
     name: data.name,
     redirectUris: data.redirectUris,
+    postLogoutRedirectUris: data.postLogoutRedirectUris ?? [],
     allowedScopes: federatedIdp ? FEDERATED_SCOPES : IDENTITY_SCOPES,
     // Always confidential: the client is handed a secret, so it must present it at /token.
     tokenEndpointAuthMethod: 'client_secret_post',
@@ -121,6 +138,8 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
     ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountLimits ? { unpaidAccountLimits: data.unpaidAccountLimits } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
   });
 
   return { client: toOAuthClientView(doc), clientSecret };
@@ -192,6 +211,11 @@ export async function updateOAuthClient(
   if (finalRateLimit && !finalFederated) {
     throw new BadRequestError('A rate-limit profile requires a federated client');
   }
+  const finalUnpaidAccountLimits =
+    data.unpaidAccountLimits === undefined ? before.unpaidAccountLimits : data.unpaidAccountLimits;
+  if (finalUnpaidAccountLimits && !finalFederated) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
+  }
   const finalScopes = data.allowedScopes ?? before.allowedScopes;
   const grantsOptIn = nonOptInScopes(finalScopes).length < finalScopes.length;
   if (scopesOrTrustChanged && grantsOptIn) {
@@ -202,16 +226,20 @@ export async function updateOAuthClient(
 
   const $set: Record<string, unknown> = {
     ...(data.redirectUris ? { redirectUris: data.redirectUris } : {}),
+    ...(data.postLogoutRedirectUris ? { postLogoutRedirectUris: data.postLogoutRedirectUris } : {}),
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
     ...(data.allowedScopes ? { allowedScopes: data.allowedScopes } : {}),
     ...(federatedIdp ? { federatedIdp } : {}),
     ...(data.overwatchProductId ? { overwatchProductId: data.overwatchProductId } : {}),
     ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountLimits ? { unpaidAccountLimits: data.unpaidAccountLimits } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
   };
   const $unset: Record<string, ''> = {
     ...(data.federatedIdp === null ? { federatedIdp: '' } : {}),
     ...(data.overwatchProductId === null ? { overwatchProductId: '' } : {}),
     ...(data.rateLimit === null ? { rateLimit: '' } : {}),
+    ...(data.unpaidAccountLimits === null ? { unpaidAccountLimits: '' } : {}),
   };
   const update = { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) };
 
@@ -238,11 +266,18 @@ export async function updateOAuthClient(
     if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
   }
 
+  if (data.unpaidAccountLimits !== undefined || data.federatedIdp !== undefined) {
+    for (const key of ['requestsPerMinute', 'requestsPerDay', 'tokensPerMinute', 'maxConcurrent'] as const) {
+      filter[`unpaidAccountLimits.${key}`] = before.unpaidAccountLimits?.[key] ?? null;
+    }
+    if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
+  }
+
   const doc = await OAuthClientModel.findOneAndUpdate(filter, update, { new: true, runValidators: true }).exec();
   if (!doc) {
     if (Object.keys(filter).length > 1 && (await OAuthClientModel.exists({ _id: id }))) {
       throw new ConflictError(
-        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined
+        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined || data.unpaidAccountLimits !== undefined
           ? 'OAuth client changed while saving; reload and try again'
           : 'Redirect URIs changed while saving; reload and try again'
       );

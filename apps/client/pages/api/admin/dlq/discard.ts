@@ -3,9 +3,11 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { changeMessageVisibility, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { acquireDlqMessagesById } from '@bike4mind/server-utils/utils/dlqMessages';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
+import { triageActionSchema } from '@server/admin/dlq/triagePolicy';
+import { discardDlqMessages } from '@server/admin/dlq/discardMessages';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -18,6 +20,10 @@ const TARGETED_VISIBILITY_SECONDS = 60;
 const BodySchema = z
   .object({
     queueLabel: z.string().min(1),
+    aiSuggestionId: z
+      .string()
+      .regex(/^[0-9a-f]{24}$/)
+      .optional(),
     reason: z.unknown().optional(),
     // Messages with receipt handles from a prior receive.
     messages: z
@@ -54,6 +60,36 @@ const handler = adminApi({
   if (!entry) throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   const dlqUrl = getDlqUrl(entry.label);
 
+  const aiSuggestionId = parsed.data.aiSuggestionId;
+  if (aiSuggestionId) {
+    if (parsed.data.messages || messageIds?.length !== 1)
+      throw new BadRequestError('Suggestion approval requires one message ID');
+    const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
+    const action = triageActionSchema.safeParse(suggestion?.proposedAction);
+    if (
+      !suggestion ||
+      suggestion.id !== aiSuggestionId ||
+      !action.success ||
+      action.data.action !== 'discard' ||
+      action.data.queueLabel !== queueLabel ||
+      action.data.messageId !== messageIds[0]
+    )
+      throw new BadRequestError('Suggestion does not match this discard');
+    await withTransaction(async () => {
+      const decided = await adminAiSuggestionRepository.transition(aiSuggestionId, ['pending'], 'accepted', {
+        decidedBy: { userId: adminUserId, name: req.user!.name || req.user!.username },
+      });
+      if (!decided) throw new BadRequestError('Suggestion has already been decided');
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.dlq.triage.accepted',
+        target: { kind: 'system', id: queueLabel, displayName: 'DLQ triage' },
+        summary: 'approved a dead-letter discard recommendation',
+        reason,
+        details: { aiSuggestionId, queueLabel, messageId: messageIds[0] },
+      });
+    });
+  }
+
   let messages = parsed.data.messages ?? [];
   let notFound: string[] = [];
   if (messageIds) {
@@ -75,80 +111,16 @@ const handler = adminApi({
     }
   }
 
-  const results: Array<{
-    messageId: string;
-    status: 'discarded' | 'failed';
-    reason?: string;
-    historyPending?: boolean;
-  }> = [];
-  for (const message of messages) {
-    let logId: string;
-    try {
-      const log = await dlqReplayLogRepository.logReplay({
-        queueLabel,
-        messageId: message.messageId,
-        messageBody: message.body,
-        sourceQueue: entry.displayName,
-        operation: 'discard',
-        status: 'pending',
-        reason,
-        replayedBy: adminUserId,
-      });
-      logId = log.id;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      Logger.error('[DLQ Discard] Failed to retain message before deletion', {
-        messageId: message.messageId,
-        queueLabel,
-        error: errorMessage,
-      });
-      results.push({ messageId: message.messageId, status: 'failed', reason: errorMessage });
-      // A message acquired by ID is hidden; release it so it reappears for a retry right away.
-      if (messageIds) {
-        await changeMessageVisibility(dlqUrl, message.receiptHandle, 0).catch(releaseError =>
-          Logger.warn('[DLQ Discard] Could not release message; it reappears when its visibility expires', {
-            messageId: message.messageId,
-            queueLabel,
-            error: releaseError instanceof Error ? releaseError.message : String(releaseError),
-          })
-        );
-      }
-      continue;
-    }
-
-    let deleteError: string | undefined;
-    try {
-      await deleteFromQueue(dlqUrl, message.receiptHandle);
-    } catch (error) {
-      deleteError = error instanceof Error ? error.message : String(error);
-      Logger.error('[DLQ Discard] Delete request failed', {
-        messageId: message.messageId,
-        queueLabel,
-        error: deleteError,
-      });
-    }
-
-    // An acknowledged deletion remains acknowledged even if the terminal history write fails.
-    const status = deleteError === undefined ? 'discarded' : 'failed';
-    let historyPending = false;
-    try {
-      await dlqReplayLogRepository.finalizeDiscard(logId, status, deleteError);
-    } catch (error) {
-      historyPending = true;
-      Logger.error('[DLQ Discard] History finalization is unconfirmed', {
-        messageId: message.messageId,
-        queueLabel,
-        observedStatus: status,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    results.push({
-      messageId: message.messageId,
-      status,
-      ...(deleteError !== undefined ? { reason: deleteError } : {}),
-      ...(historyPending ? { historyPending: true } : {}),
-    });
-  }
+  const results = await discardDlqMessages({
+    dlqUrl,
+    queueLabel,
+    sourceQueue: entry.displayName,
+    reason,
+    adminUserId,
+    messages,
+    // A message acquired by ID is hidden; release it so it reappears for a retry right away.
+    releaseUnretained: Boolean(messageIds),
+  });
 
   const discardedIds = results.filter(result => result.status === 'discarded').map(result => result.messageId);
   await recordAdminActionFromRequest(req, {
@@ -163,6 +135,7 @@ const handler = adminApi({
       discardedMessageIds: discardedIds,
       historyPendingMessageIds: results.filter(result => result.historyPending).map(result => result.messageId),
       notFoundMessageIds: notFound,
+      ...(aiSuggestionId ? { aiSuggestionId } : {}),
     },
   });
   return res.json({

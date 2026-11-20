@@ -133,7 +133,7 @@ vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
 vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
 import { handler } from './sessionSummarization';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@bike4mind/server-utils/utils/sessionOperationCounts';
 
 const OWNER = 'user-owner';
 const STRANGER = 'user-stranger';

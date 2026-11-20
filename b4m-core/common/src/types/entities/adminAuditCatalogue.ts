@@ -53,6 +53,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'spend.freeze.applied': { category: 'credits', severity: 'critical', write: 'strict' },
+  'spend.freeze.lifted': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
@@ -66,6 +68,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.completed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.exported': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -90,6 +97,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // The request was recorded but could not be queued; the export list shows it as failed.
   'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // A data subject erasure: the dry run, the request (written before the account is locked) and the
+  // check after the user delete of what still names them (counts per collection, no personal data).
+  'user.erasure.previewed': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.erasure.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.erasure.completed': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -108,6 +120,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
+  'org.segment.changed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -117,7 +130,13 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.model_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
@@ -127,7 +146,26 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // A platform admin reading an org they do not belong to. strict, like the other staff read audits.
+  'org.viewed': { category: 'org', severity: 'info', write: 'strict' },
+  'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  // strict: written inside the delete transaction, so the delete never lands without its entry.
+  'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.slack.connected': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.secret_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deliveries_replayed': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.github_connection.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.key_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.pat_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -155,6 +193,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
@@ -259,9 +298,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.moderation_exception_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  // Adds or removes ai:end-user-id on an existing key (pages/api/admin/user-api-keys/[id]/end-user-id.ts).
+  'user.api_key.end_user_id_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
@@ -285,6 +327,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.triage.dismissed': { category: 'support', severity: 'notice', write: 'strict' },
+  'ops.dlq.triage.accepted': { category: 'support', severity: 'notice', write: 'strict' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
@@ -295,6 +339,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: platform MCP connectors
+  'settings.mcp_connector.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.api_key_rotated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.tools_refreshed': { category: 'settings', severity: 'info', write: 'bestEffort' },
   // Handler coverage: rapid reply
   'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
@@ -367,10 +417,14 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin agreeing with an abuse assessment on a user queue; records the suggestion decision only.
+  'security.ai_assessment.accepted': { category: 'access', severity: 'info', write: 'strict' },
   // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin resolving a provider end-user identifier (from a provider safety notice) to an account.
+  'user.provider_id.resolved': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
@@ -379,6 +433,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.escalated': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 
@@ -413,6 +468,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Admin roles (pages/api/admin/admin-roles). Editing a role's permissions is a grant to every member.
+  'admin.role.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.role.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.role.deleted': { category: 'access', severity: 'notice', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

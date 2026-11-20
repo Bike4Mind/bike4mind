@@ -1,4 +1,9 @@
-import { RESEARCH_SCHEDULE_CADENCES, RESEARCH_UNLISTED_SOURCES } from '@bike4mind/common';
+import {
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_SCHEDULE_CADENCES,
+  RESEARCH_SOURCES,
+  RESEARCH_UNLISTED_SOURCES,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -12,6 +17,8 @@ import { z } from 'zod';
  * belongs is a client bug, and the clamps cannot catch it.
  */
 export const ResearchLeversInput = z.object({
+  source: z.enum(RESEARCH_SOURCES).optional(),
+  feedUrl: z.string().nullable().optional(),
   query: z.string().optional(),
   // Nullable for the same reason as `recencyDays`: the UI's Default option has value '' and the
   // panel sends `model: null` for it, which is the state EVERY new configuration starts in.
@@ -32,6 +39,8 @@ export const ResearchLeversInput = z.object({
   minRelevance: z.number().optional(),
   costCeilingMicroUsd: z.number().optional(),
   proposedTags: z.array(z.string()).optional(),
+  // Length and count limits are the service's 400s, on the raw list.
+  itemRules: z.array(z.object({ condition: z.string(), action: z.enum(RESEARCH_ITEM_RULE_ACTIONS) })).optional(),
 });
 
 export type ResearchLeversInputShape = z.infer<typeof ResearchLeversInput>;

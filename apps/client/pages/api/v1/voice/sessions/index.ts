@@ -10,6 +10,7 @@ import {
   fabFileRepository,
   projectRepository,
   sessionRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -22,10 +23,15 @@ import {
   type VoiceClientBootstrap,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import {
+  billedOrganizationIdForFreeze,
+  spendFreezeSubjectForRequest,
+} from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   BadGatewayError,
   BadRequestError,
@@ -43,10 +49,10 @@ import {
   shouldReuseVoiceHold,
 } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { recordVoiceRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
 
@@ -81,6 +87,13 @@ function remapVoiceModel(modelId: ChatModelName): ChatModelName {
 
 const handler = nextRouteForContract(createVoiceSessionContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
+  const organizationId = billedOrganizationIdForFreeze(req.apiKeyInfo);
+  // The proxy checks and bills the token's org on every turn, so a frozen org must refuse here too.
+  const freezeOrganizationId = organizationId ?? (req.user.organizationId ? String(req.user.organizationId) : null);
+  // Before any gate that reads settings or the provider, and whether or not credits are enforced.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, freezeOrganizationId), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   const { sessionId, reasoningModelId: bodyModelId, isReconnect } = req.validated;
 
   const settings = await getSettingsMap(
@@ -193,6 +206,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
+      ...(req.apiKeyInfo?.billingOwnerType ? { apiKeyBillingOwnerType: req.apiKeyInfo.billingOwnerType } : {}),
       ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
@@ -259,6 +273,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
       apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      organizationId,
+      spendFreezes: spendFreezeRepository,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: holdStartedAt,
       realtime: false,

@@ -1,5 +1,6 @@
 import { Chip, FormControl, FormHelperText, FormLabel, Option, Select } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
+import { isGrantPackageExpired } from '@bike4mind/common';
 import {
   fetchGrantPackages,
   GRANT_PACKAGES_QUERY_KEY,
@@ -13,7 +14,8 @@ export const grantPackageUsage = (pkg: GrantPackageRow) => {
   const hits = pkg.capHits
     ? `cap hit ${pkg.capHits.toLocaleString()} times${pkg.lastCapHitAt ? `, last ${new Date(pkg.lastCapHitAt).toUTCString()}` : ''}`
     : 'cap never hit';
-  return `${redeemed}; ${hits}${pkg.active ? '' : ' (inactive)'}`;
+  const state = !pkg.active ? ' (inactive)' : isGrantPackageExpired(pkg) ? ' (expired)' : '';
+  return `${redeemed}; ${hits}${state}`;
 };
 
 export const useGrantPackageOptions = () =>
@@ -43,12 +45,12 @@ type Props = {
 };
 
 /**
- * Optional grant package picker. Inactive packages are listed only when already selected, so an
+ * Optional grant package picker. Inactive or expired packages are listed only when already selected, so an
  * existing link stays visible but cannot be newly chosen.
  */
 const GrantPackageSelect = ({ value, onChange, testId, helperText, disabled }: Props) => {
   const { data, isPending, isError } = useGrantPackageOptions();
-  const packages = (data?.data ?? []).filter(pkg => pkg.active || pkg.id === value);
+  const packages = (data?.data ?? []).filter(pkg => (pkg.active && !isGrantPackageExpired(pkg)) || pkg.id === value);
   const selected = packages.find(pkg => pkg.id === value);
 
   return (

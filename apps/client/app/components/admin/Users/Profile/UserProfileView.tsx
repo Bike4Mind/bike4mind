@@ -14,6 +14,7 @@ import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { DataExportDialog } from './actions/DataExportDialog';
+import { EraseUserDialog } from './actions/EraseUserDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
@@ -22,6 +23,7 @@ import {
   FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
+  PartnerAccountDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
   LoginAsDialog,
@@ -92,6 +94,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
+    case 'partnerAccount':
+      return <PartnerAccountDialog {...props} />;
     case 'subscription':
       return <GrantSubscriptionModal user={props.user} open onClose={props.onClose} />;
     case 'loginAs':
@@ -104,6 +108,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <CancelDeletionDialog {...props} />;
     case 'dataExport':
       return <DataExportDialog {...props} />;
+    case 'erase':
+      return <EraseUserDialog {...props} />;
     case 'delete':
       return <DeleteUserDialog {...props} onDeleted={onDeleted} />;
   }

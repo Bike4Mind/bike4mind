@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { AdminPermissionAction, missingAdminPermissionFor } from '../../shared/MissingPermission';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
-import { adminFocus } from '../../shared/adminStyles';
+import { adminBulkBarZIndex, adminFocus } from '../../shared/adminStyles';
 import { AnalyticsTermHelp } from '../../EventMetrics/components/AnalyticsTermHelp';
 import { USERS_BULK_ACTIONS, USERS_BULK_ACTION_COPY } from './UsersBulkActionDialog';
 
@@ -56,7 +56,7 @@ export function UsersBulkBar({
   const { currentUser } = useUser();
   return (
     // Left-aligned so the global AI Chat pill in the bottom-right corner does not cover it.
-    <Box sx={{ position: 'sticky', bottom: 8, zIndex: 2, alignSelf: 'flex-start', maxWidth: '100%' }}>
+    <Box sx={{ position: 'sticky', bottom: 8, zIndex: adminBulkBarZIndex, alignSelf: 'flex-start', maxWidth: '100%' }}>
       <BulkActionBar
         selection={selection}
         totalMatching={totalMatching}

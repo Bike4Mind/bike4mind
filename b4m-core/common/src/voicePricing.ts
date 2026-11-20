@@ -1,5 +1,5 @@
 import { usdToCredits } from './pricing';
-import { VoiceGenerationVendor } from './voiceGeneration';
+import { supportedVoiceGenerationVendor, TTS_MAX_INPUT_CHARS, type VoiceGenerationVendor } from './voiceGeneration';
 
 /**
  * Text-to-speech is billed per input CHARACTER, not per token - so it does not
@@ -39,6 +39,13 @@ const VENDOR_RATES: Record<VoiceGenerationVendor, TtsRateTable> = {
   openai: OPENAI_TTS_RATES,
   elevenlabs: ELEVENLABS_TTS_RATES,
 };
+
+/** The vendor whose rate table lists this TTS model id, or undefined for an unknown id. */
+export function ttsVendorOfModel(modelId: string): VoiceGenerationVendor | undefined {
+  return (Object.keys(VENDOR_RATES) as VoiceGenerationVendor[]).find(vendor =>
+    Object.hasOwn(VENDOR_RATES[vendor], modelId)
+  );
+}
 
 /**
  * Fallback USD per 1K chars when the exact model is not in the table. Set to the
@@ -94,4 +101,32 @@ export function estimateTtsCreditCost(
 ): number {
   if (!Number.isFinite(characters) || characters <= 0) return 0;
   return usdToCredits(computeTtsUsd(vendor, model, characters));
+}
+
+/** The vendors a speech request may be served by, in order: the requested one, then each that accepts the text. */
+export function ttsCandidates(provider: VoiceGenerationVendor, characters: number): VoiceGenerationVendor[] {
+  return [
+    provider,
+    ...supportedVoiceGenerationVendor.options.filter(
+      vendor => vendor !== provider && characters <= TTS_MAX_INPUT_CHARS[vendor]
+    ),
+  ];
+}
+
+/** Holds enough for any attempted provider; settlement refunds the unused balance. */
+export function estimateTtsHoldCredits(
+  provider: VoiceGenerationVendor,
+  model: string | undefined,
+  characters: number,
+  candidates: readonly VoiceGenerationVendor[] = ttsCandidates(provider, characters)
+): number {
+  return Math.max(
+    ...candidates.map(vendor =>
+      estimateTtsCreditCost(
+        vendor,
+        vendor === provider ? (model ?? TTS_DEFAULT_MODEL[vendor]) : TTS_DEFAULT_MODEL[vendor],
+        characters
+      )
+    )
+  );
 }

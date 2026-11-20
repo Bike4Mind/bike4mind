@@ -6,7 +6,7 @@
  */
 import { generateAgentSystemPromptContract } from '@bike4mind/common';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';

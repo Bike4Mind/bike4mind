@@ -1,10 +1,12 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { app, ipcMain, safeStorage, shell } from 'electron';
+import { app, ipcMain, shell } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { currentVersion } from '../appVersion';
 import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
+import { appSecretCipher } from '../secrets';
 import { AuthService } from './AuthService';
 import { ProfilePhotoCache, type PhotoRecordFile } from './profilePhoto';
 import { TokenVault, type VaultFile } from './tokenVault';
@@ -75,7 +77,7 @@ export function onAuthStateChanged(listener: (state: AuthState) => void): () => 
 export function registerAuth(): AuthService {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
-  const vault = new TokenVault(safeStorage, vaultFile(join(userData, 'auth-vault.json')), logger);
+  const vault = new TokenVault(appSecretCipher(), vaultFile(join(userData, 'auth-vault.json')), logger);
   // The same media directory registerChat builds its store over, and deliberately so: that is
   // the only directory the `b4m-media:` handler will serve, and the renderer's CSP admits no
   // other origin for an image. This instance owns only the reusable photo bucket; conversation
@@ -90,7 +92,7 @@ export function registerAuth(): AuthService {
     logger,
     openExternal: url => shell.openExternal(url),
     devFallback: !app.isPackaged,
-    userAgent: `b4m-desktop/${app.getVersion()}`,
+    userAgent: `b4m-desktop/${currentVersion()}`,
     profilePhotos,
     onStateChanged: state => {
       for (const window of appWindows()) {

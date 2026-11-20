@@ -10,6 +10,7 @@ import {
   type TokenStore,
 } from '@bike4mind/client-auth';
 import type { OAuthDeviceClientId } from '@bike4mind/common';
+import { z } from 'zod';
 import type {
   AccountPage,
   AuthState,
@@ -111,6 +112,13 @@ export class AuthService {
    * costs one request per 5 seconds, which the token endpoint's own rate limit tolerates.
    */
   private signInGeneration = 0;
+  private identityEpoch = 0;
+  private sessionClient: {
+    base: AuthenticatedApiClient;
+    epoch: number;
+    generation: number;
+    client: AuthenticatedApiClient;
+  } | null = null;
 
   /**
    * Bumped whenever the photo on screen stops being the right one - a sign-out, an environment
@@ -147,8 +155,45 @@ export class AuthService {
     return this.state.status === 'signed-in' ? this.api : null;
   }
 
+  /** Bind an operation to the account and environment visible when it starts. */
+  getSessionBoundApiClient(): AuthenticatedApiClient | null {
+    const base = this.api;
+    const userId = this.state.user?.id;
+    if (
+      !base ||
+      !userId ||
+      this.state.status !== 'signed-in' ||
+      this.state.busy !== 'idle' ||
+      this.state.reauthRequired
+    )
+      return null;
+    const epoch = this.identityEpoch;
+    const generation = this.signInGeneration;
+    if (
+      this.sessionClient?.base === base &&
+      this.sessionClient.epoch === epoch &&
+      this.sessionClient.generation === generation
+    )
+      return this.sessionClient.client;
+    const client = base.withSessionGuard(
+      tokens =>
+        this.api === base &&
+        this.identityEpoch === epoch &&
+        this.signInGeneration === generation &&
+        this.state.status === 'signed-in' &&
+        this.state.busy === 'idle' &&
+        !this.state.reauthRequired &&
+        this.state.user?.id === userId &&
+        (tokens === null || (tokens.userId === userId && readUserIdClaim(tokens.accessToken) === userId))
+    );
+    this.sessionClient = { base, epoch, generation, client };
+    return client;
+  }
+
   /** Read the stored environment and session. Call after the app `ready` event. */
   async initialize(): Promise<void> {
+    // First, so no read or token refresh races the re-save.
+    await this.deps.vault.reencrypt();
     const stored = await this.deps.vault.getEnvironment();
     const selection = migrateSelection(stored);
     // Stored so the pick follows the baked default if it moves, not just labelled on each read.
@@ -732,6 +777,12 @@ export class AuthService {
   }
 
   private setState(next: AuthState): void {
+    if (
+      next.environment.url !== this.state.environment.url ||
+      next.status !== this.state.status ||
+      next.user?.id !== this.state.user?.id
+    )
+      this.identityEpoch++;
     this.state = next;
     this.deps.onStateChanged(next);
   }
@@ -747,8 +798,10 @@ function readUserIdClaim(accessToken: string): string {
   if (!payload) return '';
 
   try {
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { id?: unknown };
-    return typeof claims.id === 'string' ? claims.id : '';
+    const claims = z
+      .object({ id: z.string() })
+      .safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')));
+    return claims.success ? claims.data.id : '';
   } catch {
     return '';
   }

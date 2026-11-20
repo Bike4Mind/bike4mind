@@ -12,7 +12,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { buildFileLineage } from '@server/files/fileLineage';
 import { listFilesByIds } from '@server/files/listFilesByIds';
-import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { loadAccessibleFabFile } from '@bike4mind/server-utils/files/loadAccessibleFabFile';
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireStudioFeature('createV2'))

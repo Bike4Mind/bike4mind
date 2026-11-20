@@ -1,6 +1,7 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { blockedSignInMessage, configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
@@ -66,7 +67,7 @@ import { readVisitId } from '@server/analytics/visitSession';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
-import { selfUserResponseSchema } from '@bike4mind/common';
+import { selfUserResponseSchema, signupDomainGrantRefusalNotice } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { recordAdminActionForActor, systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -99,7 +100,11 @@ const otcVerifyCredentialsSchema = z.object({
 
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
-const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
+const otcRegistrationResponseSchema = z.object({
+  user: selfUserResponseSchema,
+  accessToken: z.string(),
+  signupGrantNotice: z.string().optional(),
+});
 
 // Re-read at verify so turning the kill switch off also stops codes issued before the change. A failed
 // read keeps applying, matching what send stored.
@@ -337,6 +342,8 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
+      // Before the session is minted, so a role lookup failure leaves nothing to undo.
+      await resolveRoleAdminPermissions(existingUser);
       const { accessToken, refreshToken } = await issueSessionForRequest(req, existingUser.id, {
         createdVia: 'otc',
         tokenVersion: existingUser.tokenVersion ?? 0,
@@ -716,8 +723,11 @@ const handler = baseApi({ auth: false })
     });
     setRefreshCookie(res, registrationSession.refreshToken);
     return respond(res, otcRegistrationResponseSchema, {
-      user: redactUserSecretsForSelf(newUser),
+      user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(newUser)),
       accessToken: registrationSession.accessToken,
+      ...(domainGrant.packageRefusal && {
+        signupGrantNotice: signupDomainGrantRefusalNotice(domainGrant.packageRefusal),
+      }),
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "11.1.0",
+  "version": "11.4.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -18,6 +18,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./cache/ApplicationCache": {
+      "import": {
+        "types": "./dist/cache/ApplicationCache.d.mts",
+        "default": "./dist/cache/ApplicationCache.mjs"
+      },
+      "require": {
+        "types": "./dist/cache/ApplicationCache.d.cts",
+        "default": "./dist/cache/ApplicationCache.cjs"
       }
     },
     "./artifactParser": {
@@ -68,6 +78,16 @@
       "require": {
         "types": "./dist/imageModeration/index.d.cts",
         "default": "./dist/imageModeration/index.cjs"
+      }
+    },
+    "./imageCutout": {
+      "import": {
+        "types": "./dist/imageCutout.d.mts",
+        "default": "./dist/imageCutout.mjs"
+      },
+      "require": {
+        "types": "./dist/imageCutout.d.cts",
+        "default": "./dist/imageCutout.cjs"
       }
     },
     "./imageResize": {
@@ -240,6 +260,16 @@
         "default": "./dist/musicProviders/index.cjs"
       }
     },
+    "./audioProviders": {
+      "import": {
+        "types": "./dist/audioProviders/index.d.mts",
+        "default": "./dist/audioProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioProviders/index.d.cts",
+        "default": "./dist/audioProviders/index.cjs"
+      }
+    },
     "./security": {
       "import": {
         "types": "./dist/security/index.d.mts",
@@ -262,7 +292,8 @@
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "dev": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate:webp-wasm": "node scripts/generateWebpDecoderWasm.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
@@ -278,6 +309,7 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
+    "@jsquash/webp": "1.5.0",
     "@types/aws-lambda": "^8.10.162",
     "axios": "1.20.0",
     "cheerio": "1.2.0",

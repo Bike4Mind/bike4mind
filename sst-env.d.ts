@@ -30,6 +30,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "FCM_SERVICE_ACCOUNT": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "AgentExecutor": {
       "name": string
       "type": "sst.aws.Function"
@@ -44,11 +48,6 @@ declare module "sst" {
       "value": string
     }
     "CliToolHandler": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
-    }
-    "CliWsCompletionHandler": {
       "name": string
       "type": "sst.aws.Function"
       "url": string
@@ -142,6 +141,14 @@ declare module "sst" {
       "value": string
     }
     "GOOGLE_CLIENT_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "HMAC_SIGNING_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "HMAC_SIGNING_SECRET_PREVIOUS": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -365,6 +372,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "SLACK_FEEDBACK_DESTINATIONS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "STRIPE_PUBLISHABLE_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -398,6 +409,14 @@ declare module "sst" {
       "url": string
     }
     "accountDataExportQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountErasureQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountErasureQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
     }
@@ -471,6 +490,7 @@ declare module "sst" {
     }
     "dlqUrls": {
       "account-data-export": string
+      "account-erasure": string
       "agent-continuation": string
       "agent-proactive-message": string
       "deep-agent-wake": string
@@ -500,7 +520,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhook-delivery": string
       "release-notes": string
-      "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
       "type": "sst.aws.Queue"
@@ -716,6 +735,7 @@ declare module "sst" {
     }
     "sourceQueueUrls": {
       "accountDataExportQueue": string
+      "accountErasureQueue": string
       "agentContinuationQueue": string
       "agentProactiveMessageQueue": string
       "deepAgentWakeQueue": string
@@ -745,7 +765,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhookDeliveryQueue": string
       "whatsNewGenerationQueue": string
-      "whatsNewHighlightsQueue": string
     }
     "sreFixQueue": {
       "type": "sst.aws.Queue"
@@ -796,14 +815,6 @@ declare module "sst" {
       "url": string
     }
     "whatsNewGenerationQueueDLQ": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueue": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
     }

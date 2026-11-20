@@ -20,6 +20,8 @@ import {
   PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
+  ISpendFreezeRepository,
+  type ApiKeyBillingOwnerType,
   ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   IAdminSettingsRepository,
@@ -55,6 +57,7 @@ import {
   type ICacheRepository,
   type CompletionRunAttribution,
   isOrgServiceAccountOf,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -84,6 +87,9 @@ import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { assertSpendNotFrozen } from './spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from './spendFreezeService/spendFreezeSubjectForHold';
+import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
@@ -99,6 +105,7 @@ import {
 } from './llm/shadowTier';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { conservativeRoundInputUsd } from './llm/chatCreditCap';
 import {
   MIN_AFFORDABLE_OUTPUT_TOKENS,
   affordableRoundBudget,
@@ -200,6 +207,8 @@ export interface CompletionParams {
     cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
     /** Records each credit refusal for the admin user timeline; must not throw (see ChatCompletionFeatures). */
     recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
+    /** Required so every completion surface wires the freeze check. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
@@ -222,6 +231,18 @@ export interface CompletionParams {
    * Requires `db.organizations`.
    */
   billingOrganizationId?: string;
+  /**
+   * Model policy of an organization that governs the turn without paying for it (an org-owned embed agent
+   * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
+   */
+  governingOrgModelPolicy?: unknown;
+  /**
+   * Whether the authenticating key bills its owner or an organization. No longer read by the spend freeze check,
+   * which keeps the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The caller already ran assertSpendNotFrozen for this request (ahead of its own cap checks); skips the second lookup. */
+  spendFreezeChecked?: boolean;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -235,6 +256,11 @@ export interface CompletionParams {
    * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
    */
   run?: CompletionRunAttribution;
+  /**
+   * Opaque identifier the provider receives instead of the hash of `userId`: set for a platform key's
+   * end user (toPlatformEndUserProviderId). `userId` still owns billing and every other check.
+   */
+  providerEndUserId?: string;
   /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
@@ -339,8 +365,8 @@ export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHono
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
  * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
- * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
- * caching never lowers a hold.
+ * below discounts a Claude read only on Anthropic and only for `cache` flags (client-sent, or the
+ * first-round breakpoints withFirstRoundCacheBreakpoints adds, which only raise the hold).
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -390,6 +416,25 @@ function buildClaudeCacheStrategy(
   };
 }
 
+/**
+ * A first round's messages with the breakpoints the server's Claude cache strategy will place
+ * (system prompt, history anchor; see AnthropicCachingAdapter) marked as if the client had flagged
+ * them, so the hold prices that round's cache write. Only for a round with no assistant message:
+ * nothing is cached yet, so every breakpoint can only write. Later rounds keep pricing the client's
+ * own flags, and the per-round cap prices a cache miss on any round.
+ */
+function withFirstRoundCacheBreakpoints(messages: IMessage[], strategy: ICacheStrategy | undefined): IMessage[] {
+  if (!strategy?.enableCaching || messages.some(m => m.role === 'assistant')) return messages;
+  // Must stay in sync with the history-anchor rule in AnthropicCachingAdapter, or the hold under-prices the write.
+  let anchorIndex = strategy.cacheConversationHistory
+    ? messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0)
+    : -1;
+  while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
+  return messages.map((m, index) =>
+    index === anchorIndex || (strategy.cacheSystemPrompt && m.role === 'system') ? { ...m, cache: true } : m
+  );
+}
+
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
 const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
 
@@ -408,9 +453,11 @@ const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
  * last assistant message included); the rest is plain input. Auto-caching backends read the
  * system messages that precede the last assistant message (they preserve message order, so a later
  * one is new content) and the conversation up to the message before the last assistant, and bill
- * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
- * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
- * actual usage.
+ * the rest plain. A conversation with no assistant message yet has nothing cached: an auto-caching
+ * backend bills it plain, and on Anthropic every breakpoint writes its whole prefix (the hoisted system
+ * messages included), so that prefix is held at cache_write and the tail plain. If the provider misses
+ * (cache TTL lapsed) the real cost is higher; settlement charges actual usage, and the per-round cap
+ * (conservativeRoundInputUsd) prices that miss so it cannot overdraw.
  *
  * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
  * client-claimed or lapsed cache cannot shrink the hold below it.
@@ -427,7 +474,9 @@ function estimateReservationUsd(
   cacheTtl: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
-  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+  const hasAssistant = messages.some(m => m.role === 'assistant');
+  // A first-round Claude on Bedrock is held plain; the per-round cap prices its cache write.
+  if (!hasAssistant && modelInfo.backend !== ModelBackend.Anthropic) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   const conversation = messages.filter(m => m.role !== 'system');
@@ -457,13 +506,15 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  // Priced plain: tool schemas carry no flag here, so no discount is assumed. On a first round the
+  // server's cacheTools writes them, so the hold runs ~0.25x of tool tokens short; the cap covers it.
   let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
     if (m.role === 'system') {
-      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      if (hoistsSystem && !hasAssistant) writeTokens += tokens;
+      else if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
       else plainTokens += tokens;
       return;
     }
@@ -563,7 +614,7 @@ export function withholdReasoningFromFrame(
 }
 
 /**
- * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
+ * Shared LLM completion logic for the SSE and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -686,6 +737,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
   if (!storedActor) throw new UnauthorizedError('User not found');
   const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  const orgModelPolicy = readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy);
   await createModelAdmission({
     user: actor,
     configs: modelConfigs,
@@ -693,7 +745,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
+    orgModelPolicy,
   }).assert(model);
+
+  // After the access gate and before every cap and hold, and whether or not credits are enforced.
+  if (!params.spendFreezeChecked) {
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId: params.billingOrganizationId ?? null,
+        apiKeyId: apiKeyInfo?.keyId,
+      }),
+      { db: { spendFreezes: db.spendFreezes } }
+    );
+  }
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(
@@ -709,6 +774,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     requested: requestedModelInfo,
     models,
     adminSettings: db.adminSettings,
+    orgModelPolicy,
     logger,
   });
   // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.
@@ -736,6 +802,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
+    providerEndUserId: params.providerEndUserId,
   });
 
   if (!llm) {
@@ -931,8 +998,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
-  // Prices a round's input the way the hold does and returns the output budget `availableCredits`
-  // can pay for on top of it; see completionCreditBudget. Set only when credits are enforced.
+  // Prices a round's input at the dearest rate the provider can bill it (a cold cache writes the whole
+  // prefix) and returns the output budget `availableCredits` can pay for on top of it; see
+  // completionCreditBudget. Set only when credits are enforced.
   let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
   const refundReservation = async () => {
     const refund = async () => {
@@ -967,7 +1035,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
     const estimatedUsdCost = estimateReservationUsd(
       chargedModelInfo!,
-      messages,
+      withFirstRoundCacheBreakpoints(messages, cacheStrategy),
       estimatedInputTokens,
       estimatedOutputTokens,
       estimatedToolTokens,
@@ -998,6 +1066,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
         await recordRefusal('member_cap', capCheckCredits);
+        await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization!.id, userId, refused: true });
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
     }
@@ -1046,7 +1115,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
       return affordableRoundBudget({
         modelInfo: chargedModelInfo!,
-        inputUsd: estimateReservationUsd(chargedModelInfo!, roundMessages, inputTokens, 0, toolTokens),
+        // Not estimateReservationUsd: the hold assumes a warm cache; see the cap note above.
+        inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
         inputTokens,
         availableCredits,
         minimumOutputTokens,
@@ -1516,6 +1586,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               creditsDelta: actualCredits,
               lastCreditUsedAt: new Date(),
             });
+            await notifyOrgEvent({ type: 'member_cap_check', organizationId: holderId, userId });
           }
 
           Logger.globalInstance.debug('Credit usage:', actualCredits);

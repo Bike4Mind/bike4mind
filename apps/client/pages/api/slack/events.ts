@@ -1,5 +1,5 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -59,6 +59,7 @@ import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { forwardSlackReaction } from '@server/integrations/slack/reactionFeedback';
 
 // Slack event schemas
 const SlackEventSchema = z.object({
@@ -273,6 +274,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
 
   integrationAuditLogger.success();
+
+  if (body.event?.type === 'reaction_added') {
+    await forwardSlackReaction(teamId, apiAppId, body.event);
+    return res.status(200).json({ ok: true });
+  }
 
   // Slack retries events when it doesn't get HTTP 200 within 3 seconds.
   // These retries can bypass MongoDB dedup TTL (5 min) and cause duplicate responses.

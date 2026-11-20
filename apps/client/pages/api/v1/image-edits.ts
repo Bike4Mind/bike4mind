@@ -6,8 +6,8 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageEdit } from '@server/imageGenerations/imageEdit';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getImageEdit } from '@bike4mind/server-utils/imageGenerations/imageEdit';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
@@ -54,6 +54,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const quest = await getImageEdit().invoke({
     adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     apiKeyId: req.apiKeyInfo?.keyId,
+    apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
     userId: req.user.id,
     body: {
       ...body,

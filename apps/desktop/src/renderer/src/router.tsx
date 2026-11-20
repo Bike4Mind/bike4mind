@@ -6,6 +6,7 @@ import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
 import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
+import { MiniTavern } from './watch/MiniTavern';
 
 const rootRoute = createRootRoute();
 
@@ -49,11 +50,28 @@ const devLogsRoute = createRoute({
   component: DevLogsWindow,
 });
 
+// The always-on-top mini Tavern window (main/watch/miniWindow.ts). Its preload exposes only
+// window.b4mMini, so nothing on this route may reach for window.b4m.
+const miniTavernRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/mini-tavern',
+  component: function MiniTavernRoute() {
+    return <MiniTavern />;
+  },
+});
+
 // A packaged build loads the renderer over file://, which has no origin for the History
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, profileRoute, billingRoute, settingsRoute, devLogsRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    profileRoute,
+    billingRoute,
+    settingsRoute,
+    devLogsRoute,
+    miniTavernRoute,
+  ]),
   history: createHashHistory(),
 });
 

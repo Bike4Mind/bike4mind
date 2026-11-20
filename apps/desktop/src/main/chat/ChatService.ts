@@ -1,7 +1,10 @@
 import {
   acceptTask,
   assertReportCoversCriteria,
+  decisionQuestion,
+  MAX_RESOLVED_DECISIONS,
   modelRequestHint,
+  pendingDecisionOf,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
@@ -13,15 +16,23 @@ import {
   type RolePolicy,
   type RootPolicy,
   type SpawnOptions,
+  type TaskContract,
   type TaskAction,
+  type TaskReport,
+  type DecisionRecord,
+  type PendingTaskDecision,
+  type TaskDecisionAnswer,
+  type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
+import { localRunSettlement, type RunSpend } from '@shared/runSpend';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -101,9 +112,15 @@ import type { ModelSettings } from '@shared/modelSettings';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
-import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
-import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
+import {
+  ASK_USER_TOOL_NAME,
+  describeAnswer,
+  parseQuestions,
+  sanitizeAnswers,
+  type ChatQuestionOutcome,
+} from '@shared/questions';
 import {
   REQUEST_DIRECTORY_TOOL_NAME,
   type DirectoryRequestOutcome,
@@ -188,8 +205,10 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
-import type { CompletionRunMinter } from './completionRuns';
-import { describeAlways } from './approvalScope';
+import { PrefixWarmGate, prefixKey, sharesSiblingPrefix } from './prefixWarmGate';
+import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
+import { describeAlways, outsideFoldersReason } from './approvalScope';
+import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
 import type { ModelSettingsStore } from './ModelSettingsStore';
@@ -262,8 +281,6 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
-import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
@@ -318,12 +335,7 @@ import {
   toolStateReminder,
   type ToolStateMark,
 } from './deferredTools';
-import {
-  IMPORTED_TAINT_SOURCE,
-  importedHistoryNeedsCompaction,
-  importedTurnAsText,
-  isImportedToolTurn,
-} from '../claudeImport/continuation';
+import { importedHistoryNeedsCompaction, importedTurnAsText, isImportedToolTurn } from '../claudeImport/continuation';
 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -382,8 +394,16 @@ type BranchLease = { reservation: BranchReservation | null; launched: boolean };
 
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
+type TaskDecisionIndexLoad = {
+  scope: string | null;
+  touched: Set<string> | null;
+  ready: Promise<void>;
+};
+
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
+type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution };
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
 const MID_TURN_NOTE =
@@ -392,6 +412,24 @@ const MID_TURN_NOTE =
 /** Rides with a relay that reached a running turn; the relay's own framing says whose words they are. */
 const RELAY_MID_TURN_NOTE =
   'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
+
+const DECISION_ASKED_RESULT =
+  'Your decision is now in front of the user as a question card. End your turn now with one short line and do no more work on this task; it resumes in this conversation with their answer.';
+
+const AGENT_IDLE_POLL_MS = 100;
+const AGENT_IDLE_WAIT_MS = 60_000;
+
+/** The task state a worker's report sets; a decision becomes a question card with an id main mints. */
+function reportedState(report: TaskReport): WorkerTask['state'] {
+  if (report.status === 'completed') return { ...report, accepted: false };
+  if (report.status !== 'blocked') return report;
+  const { decision, ...blocked } = report;
+  if (!decision) return blocked;
+  return {
+    ...blocked,
+    decision: { id: randomUUID(), question: decisionQuestion(decision), askedAt: new Date().toISOString() },
+  };
+}
 
 /** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
 const CANCELED_TASK_REFUSAL =
@@ -476,6 +514,9 @@ const SUGGESTION_TIMEOUT_MS = 5_000;
  */
 const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
 
+/** A local turn has no network dependency otherwise, so its config lookup must not stall inference. */
+const LOCAL_SERVER_CONFIG_TIMEOUT_MS = 5_000;
+
 /**
  * How long a compaction may take before it is abandoned.
  *
@@ -516,8 +557,8 @@ const MAX_MESSAGE_HOPS = 5;
  * every session in the project and the total would still be "finite".
  *
  * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
- * That bound is structural and is the only one: session_send is not held at the approval gate
- * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * That bound is structural and is the only one: session_send rides the approval mode like any
+ * other tool, so these two numbers are what keeps a chain finite.
  */
 const MAX_SENDS_PER_TURN = 2;
 
@@ -615,6 +656,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Folders within protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
   /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
@@ -675,6 +718,8 @@ export interface ChatServiceDeps {
    * sidebar in a window that has the conversation closed. Absent in tests.
    */
   summaryChanged?(summary: ChatSessionSummary): void;
+  /** The decisions workers wait on the user for changed; carries the whole (small) current list. */
+  taskDecisionsChanged?(decisions: PendingTaskDecision[]): void;
   /**
    * A session was archived or deleted, by any path - the sidebar, the agent's host tools, or a
    * spawned child being cleaned up. A notification only: it is how the user's terminals
@@ -761,6 +806,8 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  studioDisposed?: () => void;
+  studioWithSessionDeletion?: <T>(sessionId: string, remove: () => Promise<T>) => Promise<T>;
   private readonly loopRequests = new Map<string, AbortController>();
   private readonly loops = new LoopScheduler(
     id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
@@ -1016,6 +1063,14 @@ export class ChatService {
   private readonly agentsSettling = new Map<string, { parentId: string; settling: symbol }>();
 
   /**
+   * Workers waiting on a user decision, by session id, for the store scope they belong to. Kept
+   * current from every task write (syncTaskDecision) so nothing ever scans sessions to find them;
+   * built from the store once per scope, for decisions asked before a restart.
+   */
+  private readonly decisionIndex = new Map<string, PendingTaskDecision & { parentId: string; scope: string | null }>();
+  private decisionIndexLoad: TaskDecisionIndexLoad | null = null;
+
+  /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
    *
    * Written at the head of every turn and deliberately NOT cleared when one ends: the entry is
@@ -1073,6 +1128,7 @@ export class ChatService {
    * round trip, and the next turn is coming anyway. Consumed once, never stored on a message.
    */
   private readonly pendingPlanReminder = new Map<string, string>();
+  private readonly prefixWarm = new PrefixWarmGate();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -1246,6 +1302,41 @@ export class ChatService {
     return updated;
   }
 
+  childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
+    const status = this.deps.activity?.statusOf(session.id);
+    if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
+    if (
+      status === 'processing' ||
+      this.hasTurnInFlight(session.id) ||
+      this.launching.has(session.id) ||
+      (this.deps.queue?.list(session.id).length ?? 0) > 0 ||
+      this.deps.background?.list(session.id).some(process => process.status === 'running')
+    )
+      return 'running';
+    return 'finished';
+  }
+
+  async archiveFinishedChildren(parentId: string, childIds: readonly string[], scope: string | null): Promise<void> {
+    for (const id of childIds) {
+      // Recheck inside the serialized mutation: a child can resume while the dialog is open.
+      const updated = await this.deps.store.setArchived(
+        id,
+        true,
+        session =>
+          this.deps.store.scopeKey() === scope &&
+          session.origin?.parentSessionId === parentId &&
+          !session.archived &&
+          this.childArchiveStatus(session) === 'finished'
+      );
+      if (!updated) continue;
+      this.archiveCleanup(id);
+      for (const entry of this.heldRelaysFor(id)) await this.resolveHeldRelay(id, entry.id, true);
+      this.dropHeldFrom(id);
+      await this.announceSuggestions(id);
+      this.deps.summaryChanged?.(updated);
+    }
+  }
+
   private archiveCleanup(sessionId: string): void {
     this.stopLoop(sessionId);
     this.wake?.forget(sessionId);
@@ -1310,11 +1401,16 @@ export class ChatService {
    * caches, so a blank chat asking for this costs no more than the next turn will.
    */
   async listCreationTools(model: string): Promise<CreationTool[]> {
-    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    if (!this.deps.media || !this.deps.getApiClient()) return [];
     const [catalog, video] = await Promise.all([
-      this.deps.models?.list().catch(() => undefined),
+      isLocalModel(model)
+        ? this.localModelsFor(model)
+            .then(models => ({ models }))
+            .catch(() => undefined)
+        : this.deps.models?.list().catch(() => undefined),
       this.deps.models?.listVideoModels().catch(() => []),
     ]);
+    if (isLocalModel(model) && !catalog?.models.find(option => option.id === model)) return [];
     if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
     return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
@@ -1706,22 +1802,33 @@ export class ChatService {
    * empty root set makes each tool refuse (paths.resolveWithinRoots and shellTools.resolveCwd
    * both reject one). `send` already refuses its turn outright; this is the second lock.
    */
-  private async resolveToolScope(
-    session: ChatSession
-  ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
+  private async resolveToolScope(session: ChatSession): Promise<{
+    roots: readonly string[];
+    /** `roots` less the worktrees of agents this session started; see AGENT_WORKTREE_LINES. */
+    listedRoots: readonly string[];
+    workingDirectory?: string;
+  }> {
     // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
     // takes these too: unlike the global grants, nobody shared them for some other conversation.
     const own = session.grantedDirectories ?? [];
     const project = await this.repairBareWorkingDirectory(session);
     if (!project) {
       const global = session.mode === 'code' ? [] : await this.deps.access.list();
-      return { roots: union(global, own) };
+      const roots = union(global, own);
+      return { roots, listedRoots: roots };
     }
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
     const agents = this.mayHaveAgentWorktrees(session) ? await this.agentWorktrees(session.id, project.directory) : [];
-    return { roots: union(union(owned, agents), granted), workingDirectory: project.workingDirectory };
+    const scratch = await ensureScratchDirectory(session.id);
+    const roots = union(union(union(owned, agents), granted), scratch ? [scratch] : []);
+    const listed = new Set(union(union(owned, granted), scratch ? [scratch] : []));
+    return {
+      roots,
+      listedRoots: roots.filter(root => listed.has(root)),
+      workingDirectory: project.workingDirectory,
+    };
   }
 
   /**
@@ -1832,6 +1939,8 @@ export class ChatService {
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
+      if (updated) this.markTaskDecisionMutation(sessionId, scope);
+      this.syncTaskDecision(updated, scope);
       if (updated) this.deps.summaryChanged?.(updated);
       return updated;
     }
@@ -1949,8 +2058,9 @@ export class ChatService {
       runId: serverRunId,
       role: session.origin ? 'worker' : 'root',
       purpose: 'turn',
-      // A worker session carries exactly one task, so its id names the task.
-      ...(session.workerTask ? { taskId: session.id } : {}),
+      // A worker session carries exactly one task, so its id names the task. Sent for a worker with
+      // no contract too, or the server folds every such worker into one id-less attempt.
+      ...(session.origin ? { taskId: session.id } : {}),
       ...(attemptId ? { attemptId } : {}),
       ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
     };
@@ -1973,6 +2083,65 @@ export class ChatService {
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * The settled spend of the orchestration rooted at `rootSessionId`: the server's total for its
+   * run beside what this device recorded under the same run, for the job summary. The run is the
+   * root's current one, or, once the root's policy has lapsed, the newest worker's copy of it.
+   */
+  async getRunSpend(rootSessionId: string): Promise<RunSpend> {
+    if (!isValidSessionId(rootSessionId)) return { status: 'unattributed' };
+    const summaries = await this.deps.store.list();
+    const run = this.currentRunOf(rootSessionId, summaries);
+    if (!run) return { status: 'unattributed' };
+    const sessions = await Promise.all(
+      summaries
+        .filter(summary => summary.id === rootSessionId || summary.orchestrationPolicy?.rootRunId === run.rootRunId)
+        .map(summary => this.deps.store.get(summary.id).catch(() => null))
+    );
+    const local = localRunSettlement(
+      sessions.flatMap(session => session?.messages ?? []),
+      run.serverRunId
+    );
+    const api = this.deps.getApiClient();
+    if (!api) {
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: 'Sign in to read the settled total.' };
+    }
+    const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId);
+    if (!read.ok) {
+      this.deps.logger.warn(`CHAT: could not read the spend of run ${run.serverRunId}: ${read.reason}`);
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
+    }
+    return {
+      status: 'settled',
+      runId: run.serverRunId,
+      local,
+      server: read.usage,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  private currentRunOf(
+    rootSessionId: string,
+    summaries: readonly ChatSessionSummary[]
+  ): { rootRunId: string; serverRunId: string } | undefined {
+    const withId = (policy: RootPolicy | undefined) => {
+      const serverRunId = policy && (policy.serverRunId ?? this.serverRuns.get(policy.rootRunId));
+      return policy && serverRunId ? { rootRunId: policy.rootRunId, serverRunId } : undefined;
+    };
+    const root = summaries.find(summary => summary.id === rootSessionId)?.orchestrationPolicy;
+    if (root?.rootSessionId === rootSessionId) return withId(root);
+    // The newest-CREATED worker belongs to the root's latest run; the list's own order is by last
+    // update, which a chat in an older run's worker would win.
+    const workers = summaries
+      .filter(summary => summary.id !== rootSessionId && summary.orchestrationPolicy?.rootSessionId === rootSessionId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const worker of workers) {
+      const found = withId(worker.orchestrationPolicy);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   /**
@@ -2010,6 +2179,219 @@ export class ChatService {
   }
 
   private taskDecisions = new Set<string>();
+  /** In-flight answers to a worker's decision, so a second card waits for the first instead of racing it. */
+  private readonly decisionAnswers = new Map<string, Promise<void>>();
+
+  /** The store's task write, keeping the decision index in step with whatever it wrote. */
+  private async updateTask(
+    sessionId: string,
+    change: (task: WorkerTask) => WorkerTask,
+    expectedScope?: string | null,
+    model?: string
+  ): Promise<ChatSessionSummary | null> {
+    const scope = expectedScope === undefined ? this.deps.store.scopeKey() : expectedScope;
+    const updated = await this.deps.store.updateWorkerTask(sessionId, change, scope, model);
+    if (updated) this.markTaskDecisionMutation(sessionId, scope);
+    this.syncTaskDecision(updated, scope);
+    return updated;
+  }
+
+  /** A successful write takes precedence over an older snapshot still loading from disk. */
+  private markTaskDecisionMutation(sessionId: string, scope: string | null): void {
+    if (this.decisionIndexLoad?.scope === scope) this.decisionIndexLoad.touched?.add(sessionId);
+  }
+
+  /** Index (or drop) the decision `session` waits on; a no-op when nothing changed. */
+  private syncTaskDecision(session: ChatSessionSummary | null, scope: string | null): void {
+    if (!session || this.deps.store.scopeKey() !== scope) return;
+    const decision = pendingDecisionOf(session.workerTask);
+    const known = this.decisionIndex.get(session.id);
+    const parentId = session.origin?.parentSessionId;
+    if (decision && parentId) {
+      const title = session.title.trim() || 'Untitled agent';
+      if (known?.decision.id === decision.id && known.title === title) return;
+      this.decisionIndex.set(session.id, {
+        sessionId: session.id,
+        rootId: session.orchestrationPolicy?.rootSessionId ?? parentId,
+        parentId,
+        title,
+        decision,
+        scope,
+      });
+      if (!known) this.deps.activity?.decisionChanged(session.id, true);
+    } else {
+      if (!known) return;
+      this.decisionIndex.delete(session.id);
+      this.deps.activity?.decisionChanged(session.id, false);
+    }
+    this.announceTaskDecisions();
+  }
+
+  private currentTaskDecisions(): PendingTaskDecision[] {
+    const scope = this.deps.store.scopeKey();
+    return [...this.decisionIndex.values()]
+      .filter(entry => entry.scope === scope)
+      .map(({ sessionId, rootId, title, decision }) => ({ sessionId, rootId, title, decision }));
+  }
+
+  private announceTaskDecisions(): void {
+    this.deps.taskDecisionsChanged?.(this.currentTaskDecisions());
+  }
+
+  /**
+   * Every decision a worker in the signed-in scope waits on. The first call for a scope reads the
+   * store once, so a decision asked before a restart still shows, counts and badges.
+   */
+  async listTaskDecisions(): Promise<PendingTaskDecision[]> {
+    const scope = this.deps.store.scopeKey();
+    if (this.decisionIndexLoad?.scope !== scope) {
+      for (const [sessionId, entry] of this.decisionIndex) {
+        if (entry.scope === scope) continue;
+        this.decisionIndex.delete(sessionId);
+        this.deps.activity?.decisionChanged(sessionId, false);
+      }
+      // Install before reading: task writes/deletes can finish while list captures its snapshots.
+      const load: TaskDecisionIndexLoad = { scope, touched: new Set<string>(), ready: Promise.resolve() };
+      this.decisionIndexLoad = load;
+      load.ready = (async () => {
+        try {
+          const sessions = await this.deps.store.list();
+          // Identity also rejects an old A load after switching A -> B -> A.
+          if (this.decisionIndexLoad !== load || this.deps.store.scopeKey() !== scope) return;
+          for (const session of sessions)
+            if (session.workerTask && !load.touched?.has(session.id)) this.syncTaskDecision(session, scope);
+        } catch (error: unknown) {
+          this.deps.logger.warn(`CHAT: could not read pending task decisions: ${String(error)}`);
+          if (this.decisionIndexLoad === load) this.decisionIndexLoad = null;
+        } finally {
+          load.touched = null;
+        }
+      })();
+    }
+    await this.decisionIndexLoad?.ready;
+    return this.currentTaskDecisions();
+  }
+
+  /**
+   * The user's answer to a decision a worker asked for: relays it and resumes the same task, or,
+   * on Skip, leaves the task blocked and reports that to the parent. Reached only from the
+   * question card's IPC; no tool can answer for the user. A card that is stale because the other
+   * copy was answered first is a no-op, so a decision never resumes the task twice.
+   */
+  async answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    const key = `${this.deps.store.scopeKey()}:${sessionId}`;
+    // The other copy of the card answered first: once it lands, this one finds the decision resolved.
+    for (let first = this.decisionAnswers.get(key); first; first = this.decisionAnswers.get(key))
+      await first.catch(() => undefined);
+    if (this.taskDecisions.has(key)) throw new Error('A task decision is already in progress.');
+    const run = this.resolveTaskDecision(sessionId, decisionId, answer);
+    this.decisionAnswers.set(key, run);
+    try {
+      await run;
+    } finally {
+      if (this.decisionAnswers.get(key) === run) this.decisionAnswers.delete(key);
+    }
+  }
+
+  private async resolveTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    const scope = this.deps.store.scopeKey();
+    const key = `${scope}:${sessionId}`;
+    this.taskDecisions.add(key);
+    let settling: symbol | null = null;
+    try {
+      if ((await this.deps.store.get(sessionId))?.workerTask?.resolvedDecisions.includes(decisionId)) return;
+      // The worker's own turn can still be writing its last line after it asked.
+      await this.untilAgentIdle(sessionId);
+      if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+      const child = await this.deps.store.get(sessionId);
+      const task = child?.workerTask;
+      if (!child || !task) throw new Error('No structured task exists.');
+      if (task.resolvedDecisions.includes(decisionId)) return;
+      const pending = pendingDecisionOf(task);
+      if (pending?.id !== decisionId) throw new Error('This decision is no longer pending.');
+      const question = pending.question;
+      const answers = answer.status === 'answered' ? sanitizeAnswers([question], answer.answers) : [];
+      const answered = describeAnswer(answers[0]);
+      if (answer.status === 'answered' && !answered) throw new Error('Pick an option or type an answer.');
+      const record: DecisionRecord = {
+        id: decisionId,
+        question: question.question,
+        outcome: answer.status,
+        ...(answered ? { answer: answered.slice(0, 5000) } : {}),
+        decidedAt: new Date().toISOString(),
+      };
+      const skipped = answer.status === 'skipped';
+      const parentId = child.origin?.parentSessionId;
+      // Dropping the decision un-indexes it; until the skip is recorded a sibling settling must still count it.
+      if (skipped && parentId) {
+        settling = Symbol();
+        this.agentsSettling.set(sessionId, { parentId, settling });
+      }
+      const updated = await this.updateTask(
+        sessionId,
+        current => {
+          if (current.resolvedDecisions.includes(decisionId)) return current;
+          if (pendingDecisionOf(current)?.id !== decisionId || current.state.status !== 'blocked')
+            throw new Error('This decision is no longer pending.');
+          const resolved = {
+            ...current,
+            resolvedDecisions: [...current.resolvedDecisions, decisionId],
+            decisions: [...(current.decisions ?? []), record].slice(-MAX_RESOLVED_DECISIONS),
+          };
+          if (!skipped) return { ...resolved, state: { status: 'running' } };
+          const { decision: _answered, ...blocked } = current.state;
+          const reason = `The user skipped the decision "${question.question}". ${blocked.reason}`.slice(0, 2000);
+          return { ...resolved, state: { ...blocked, reason } };
+        },
+        scope
+      );
+      if (!updated) throw new Error('Account or task changed. Reopen the conversation.');
+      this.deps.summaryChanged?.(updated);
+      if (!parentId) return;
+      if (skipped) {
+        const latest = (await this.deps.store.get(sessionId)) ?? child;
+        await this.reportSettledAgent(parentId, latest, isLocalModel(latest.model));
+        if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+        await this.wakeParentForAgents(parentId);
+        return;
+      }
+      const seed = `The user answered your decision.\n"${question.question}" -> ${answered}\nContinue the same task with this decision; it is recorded in the task evidence.\n\n${renderTaskBrief(task.contract)}`;
+      this.spawnWatch.set(sessionId, { parentSessionId: parentId });
+      const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
+      if (!sent.ok) {
+        this.spawnWatch.delete(sessionId);
+        await this.updateTask(
+          sessionId,
+          current =>
+            current.state.status === 'running'
+              ? {
+                  ...current,
+                  state: {
+                    status: 'blocked',
+                    reason: `The answer could not resume the task: ${sent.error}`.slice(0, 2000),
+                    evidence: [`The user answered "${question.question}" with ${answered}.`.slice(0, 2000)],
+                  },
+                }
+              : current,
+          scope
+        );
+        throw new Error(sent.error);
+      }
+    } finally {
+      if (settling && this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+      this.taskDecisions.delete(key);
+    }
+  }
+
+  /** Waits (bounded) for a worker's turn and its settling to finish, so a resume never lands inside them. */
+  private async untilAgentIdle(sessionId: string): Promise<void> {
+    const busy = () => this.hasTurnInFlight(sessionId) || this.agentsSettling.has(sessionId);
+    for (let waited = 0; busy(); waited += AGENT_IDLE_POLL_MS) {
+      if (waited >= AGENT_IDLE_WAIT_MS)
+        throw new Error('The agent is still finishing its turn. Try again in a moment.');
+      await new Promise(resolve => setTimeout(resolve, AGENT_IDLE_POLL_MS));
+    }
+  }
 
   async actOnTask(callerId: string | null, sessionId: string, value: TaskAction): Promise<ChatSessionSummary> {
     const action = taskActionSchema.parse(value);
@@ -2051,14 +2433,52 @@ export class ChatService {
         )
           return summarizeSession(child);
         if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
-        next = {
-          ...task,
-          state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,
-        };
+        next = { ...task, state: reportedState(action.report) };
       } else if (action.kind === 'accept') {
         next = acceptTask(task, action.assessment);
       } else if (action.kind === 'cancel') {
         this.stop(sessionId);
+        const pending = pendingDecisionOf(task);
+        const parentId = child.origin?.parentSessionId;
+        if (pending && parentId) {
+          // Let the original finalizer see the pending decision and skip its report first.
+          await this.untilAgentIdle(sessionId);
+          if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+          const latest = await this.deps.store.get(sessionId);
+          const assertSameDecision = (current: WorkerTask) => {
+            if (
+              pendingDecisionOf(current)?.id !== pending.id ||
+              current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id
+            )
+              throw new Error('This decision is no longer pending.');
+          };
+          if (!latest?.workerTask) throw new Error('No structured task exists.');
+          assertSameDecision(latest.workerTask);
+          const settling = Symbol();
+          this.agentsSettling.set(sessionId, { parentId, settling });
+          try {
+            const updated = await this.updateTask(
+              sessionId,
+              current => {
+                assertSameDecision(current);
+                return { ...current, state: { status: 'canceled', reason: action.reason } };
+              },
+              scope
+            );
+            if (!updated) throw new Error('Account or task changed. Reload agent details.');
+            if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+            this.deps.summaryChanged?.(updated);
+            const canceled = await this.deps.store.get(sessionId);
+            if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+            if (!canceled) throw new Error('No structured task exists.');
+            await this.reportSettledAgent(parentId, canceled, isLocalModel(canceled.model));
+            if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+            await this.wakeParentForAgents(parentId);
+            return updated;
+          } finally {
+            if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+          }
+        }
         next = { ...task, state: { status: 'canceled', reason: action.reason } };
       } else if (action.kind === 'deny' || action.kind === 'upgrade') {
         if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
@@ -2109,7 +2529,7 @@ export class ChatService {
           ],
         };
       }
-      const updated = await this.deps.store.updateWorkerTask(
+      const updated = await this.updateTask(
         sessionId,
         current => {
           if (action.kind === 'report') {
@@ -2138,7 +2558,7 @@ export class ChatService {
       if (action.kind === 'cancel') this.stop(sessionId);
       if (seed) {
         if (!child.origin) throw new Error('Task lineage is missing.');
-        await this.deps.store.updateWorkerTask(
+        await this.updateTask(
           sessionId,
           current => (current.state.status === 'canceled' ? current : { ...current, state: { status: 'running' } }),
           scope
@@ -2148,7 +2568,7 @@ export class ChatService {
         const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
         if (!sent.ok) {
           this.spawnWatch.delete(sessionId);
-          await this.deps.store.updateWorkerTask(
+          await this.updateTask(
             sessionId,
             current =>
               current.state.status === 'canceled'
@@ -2183,6 +2603,12 @@ export class ChatService {
     return this.deps.store.setApprovalMode(sessionId, mode);
   }
 
+  /** The folders this session's tools may read, for links to files a reply names; null for an unknown session. */
+  async fileLinkScope(sessionId: string): Promise<{ roots: readonly string[]; workingDirectory?: string } | null> {
+    const session = await this.deps.store.get(sessionId);
+    return session ? this.resolveToolScope(session) : null;
+  }
+
   /**
    * Share a folder the user named - from a picker (the Code chip or the Chat composer's Add folder)
    * or `/add-dir` - with this conversation, before its first message too.
@@ -2201,6 +2627,7 @@ export class ChatService {
       roots: scope.roots,
       ...(scope.workingDirectory ? { workingDirectory: scope.workingDirectory } : {}),
       ...(this.deps.protectedPaths ? { protectedPaths: this.deps.protectedPaths } : {}),
+      ...(this.deps.shareableUnderProtected ? { shareableUnderProtected: this.deps.shareableUnderProtected } : {}),
       declined: [],
     });
     if (inspection.kind === 'refused') return { status: 'refused', error: inspection.message };
@@ -2262,25 +2689,39 @@ export class ChatService {
    * Scoped the same way the tools are: a Chat session has no project binding at all, so it is
    * asked for global skills only and a repo skill is never OFFERED where it could not run. A
    * Code session passes its working directory - the worktree when it has one, which is the
-   * checkout whose `.claude/skills/` the turn would actually execute against.
+   * checkout whose `.claude/skills/` the turn would actually execute against. A draft passes the
+   * folder it will be created in (see SkillsScope).
    */
-  async listSkills(sessionId: string): Promise<SkillsState> {
+  async listSkills(scope: SkillsScope): Promise<SkillsState> {
     if (!this.deps.skills) return NO_SKILLS;
-    const session = await this.deps.store.get(sessionId);
-    if (!session) return NO_SKILLS;
-    return this.deps.skills.state(session.project?.workingDirectory ?? null);
+    const root = await this.skillsRoot(scope);
+    return root === undefined ? NO_SKILLS : this.deps.skills.state(root);
+  }
+
+  /** The project root a scope's skills come from: null for global only, undefined for no such session. */
+  private async skillsRoot(scope: SkillsScope): Promise<string | null | undefined> {
+    if ('draftDirectory' in scope) return scope.draftDirectory;
+    const session = await this.deps.store.get(scope.sessionId);
+    return session ? (session.project?.workingDirectory ?? null) : undefined;
   }
 
   /**
-   * Record that the user trusts (or no longer trusts) this session's project to contribute
-   * skills. Refused for a session with no project, so there is no path that can trust a
-   * directory the user has not bound a conversation to.
+   * Record that the user trusts (or no longer trusts) this session's or draft's project to
+   * contribute skills. Refused for a scope with no project, and for a draft folder that could not
+   * be bound as a project, so there is no path that can trust a directory the user has not
+   * chosen for a conversation.
    */
-  async setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState> {
+  async setProjectSkillsTrusted(
+    scope: SkillsScope,
+    trusted: boolean,
+    expectedProjectDirectory: string
+  ): Promise<SkillsState> {
     if (!this.deps.skills) return NO_SKILLS;
-    const session = await this.deps.store.get(sessionId);
-    const root = session?.project?.workingDirectory;
-    if (!root) return this.listSkills(sessionId);
+    const root = await this.skillsRoot(scope);
+    // A saved session can change its project without changing its id. Never trust that new root
+    // using a button which still displayed the old one.
+    if (!root || resolve(root) !== expectedProjectDirectory) return this.listSkills(scope);
+    if ('draftDirectory' in scope && (await this.workspaceBindingReason(root))) return this.listSkills(scope);
     await this.deps.skills.setTrusted(root, trusted);
     if (this.deps.capabilities) {
       if (trusted) {
@@ -2313,8 +2754,17 @@ export class ChatService {
    * when they settle, so without the live part a window opening mid-turn has nothing for the
    * next event to extend, and shows the prompt alone until the turn ends.
    */
-  async getSession(sessionId: string): Promise<ChatSession | null> {
-    const session = await this.deps.store.get(sessionId);
+  async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    let session = await this.deps.store.get(sessionId);
+    const task = session?.workerTask;
+    if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
+      const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
+        if (!isUpdateOnlyTask(current.state)) return current;
+        return { ...current, attentionViewed: true };
+      });
+      if (updated) this.deps.summaryChanged?.(updated);
+      session = await this.deps.store.get(sessionId);
+    }
     const preparing = this.preparing.get(sessionId);
     if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);
@@ -2375,10 +2825,15 @@ export class ChatService {
    * be left that could turn a forgotten dev server off.
    */
   async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
-    const historyScope = this.deps.history?.scopeKey() ?? null;
-    const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
-    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope);
-    return outcome;
+    const expectedScope = this.deps.store.scopeKey();
+    const remove = async () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+      const historyScope = this.deps.history?.scopeKey() ?? null;
+      const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
+      if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope, expectedScope);
+      return outcome;
+    };
+    return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
   async inspectSessionWorktreeRemoval(sessionId: string) {
@@ -2468,34 +2923,50 @@ export class ChatService {
   }
 
   async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
-    if (!removeWorktree) {
-      await this.cleanupDeletedSession(sessionId, true);
-      return;
-    }
-    return this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId));
+    const expectedScope = this.deps.store.scopeKey();
+    const remove = async () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+      if (!removeWorktree) {
+        await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
+        return;
+      }
+      await this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId, expectedScope));
+    };
+    return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
-  private async deleteSessionWithWorkspaceLease(sessionId: string): Promise<void> {
+  private async deleteSessionWithWorkspaceLease(sessionId: string, expectedScope: string | null): Promise<void> {
+    const assertScope = () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+    };
+    assertScope();
     if (this.abandoning.has(sessionId)) throw new Error('This conversation is already being deleted');
     this.abandoning.add(sessionId);
     let releaseTerminals: (() => void) | undefined;
     try {
       if (this.hasTurnInFlight(sessionId)) throw new Error('Stop the conversation before removing its worktree');
       const session = await this.deps.store.get(sessionId);
+      assertScope();
       if (!session?.project) throw new Error('This conversation has no worktree');
       const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
+      assertScope();
       if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
       await this.deps.background?.killSession(sessionId);
+      assertScope();
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
+      assertScope();
       this.deps.sessionClosed?.(sessionId);
       await this.deps.browser?.closeSession(sessionId);
+      assertScope();
       const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+      assertScope();
       await removeSessionWorktree(
         session.project,
         owners.map(owner => owner.project),
         { owners }
       );
-      await this.cleanupDeletedSession(sessionId, true);
+      assertScope();
+      await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
     } finally {
       releaseTerminals?.();
       this.abandoning.delete(sessionId);
@@ -2505,10 +2976,13 @@ export class ChatService {
   private async cleanupDeletedSession(
     sessionId: string,
     deleteStoredSession: boolean,
-    historyScope = this.deps.history?.scopeKey() ?? null
+    historyScope = this.deps.history?.scopeKey() ?? null,
+    expectedScope = this.deps.store.scopeKey()
   ): Promise<void> {
+    if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
+    const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
@@ -2528,6 +3002,9 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
     await forgetSessionWrites(sessionId);
+    await removeScratchDirectory(sessionId).catch(error =>
+      this.deps.logger.warn(`SCRATCH: could not remove the scratch folder: ${String(error)}`)
+    );
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
@@ -2539,12 +3016,16 @@ export class ChatService {
     this.deps.model?.forget?.(sessionId);
     // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
     const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
-    if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    if (deleteStoredSession) {
+      await this.deps.store.delete(sessionId, decisionScope);
+      this.markTaskDecisionMutation(sessionId, decisionScope);
+    }
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
       this.deps.logger.warn(
@@ -2586,6 +3067,7 @@ export class ChatService {
   }
 
   dispose(): void {
+    this.studioDisposed?.();
     this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
@@ -2851,7 +3333,7 @@ export class ChatService {
     // turn that will not go out must not cost a summary.
     let taskClosed = reconciled.workerTask?.state.status === 'canceled';
     if (reconciled.workerTask && !options.spawnSeed && !taskClosed) {
-      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+      const updated = await this.updateTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
           : {
@@ -3019,7 +3501,7 @@ export class ChatService {
     }
     // A canceled task stays canceled: the Continue carries the conversation on, not the task.
     if (session.workerTask && session.workerTask.state.status !== 'canceled') {
-      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+      const updated = await this.updateTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
           : {
@@ -3207,6 +3689,7 @@ export class ChatService {
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
+      const attributed = await this.auxiliaryRun(session, session.model, 'compaction');
       timer = setTimeout(
         () => controller.abort(),
         isLocalModel(session.model) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
@@ -3227,7 +3710,8 @@ export class ChatService {
             event => {
               if (event.type === 'content') answer += event.text ?? '';
             },
-            controller.signal
+            controller.signal,
+            attributed
           );
           break;
         } catch (err) {
@@ -3494,6 +3978,23 @@ export class ChatService {
     });
   }
 
+  /** Runs `send` through the prefix gate when `key` names a cacheable prefix; see PrefixWarmGate. */
+  private async withPrefixWarm<T>(
+    key: string | null,
+    signal: AbortSignal,
+    hold: (release: () => void) => void,
+    send: () => Promise<T>
+  ): Promise<T> {
+    if (key === null) return send();
+    const release = await this.prefixWarm.enter(key, signal);
+    hold(release);
+    try {
+      return await send();
+    } finally {
+      release();
+    }
+  }
+
   /** Only reached with `turnTiming` on; see createRoundProbe. */
   private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
     const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
@@ -3558,7 +4059,10 @@ export class ChatService {
       let scopeVersion = this.scopeVersion(sessionId);
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
-      const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+      const serverConfig =
+        api && (!localTurn || this.deps.media)
+          ? await this.resolveServerConfig(api, localTurn ? LOCAL_SERVER_CONFIG_TIMEOUT_MS : undefined)
+          : { endpoint: '', cdnUrl: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {
@@ -3573,16 +4077,15 @@ export class ChatService {
       const attended = this.attendedTurns.has(sessionId);
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
-      let { roots, workingDirectory } = await this.resolveToolScope(session);
-      const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
+      let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
+      const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
-      const web =
-        api && !localTurn
-          ? webContextFor(api, {
-              searches: this.webSearches.turn(sessionId),
-              log: line => this.deps.logger.warn(line),
-            })
-          : undefined;
+      const web = api
+        ? webContextFor(api, {
+            searches: this.webSearches.turn(sessionId),
+            log: line => this.deps.logger.warn(line),
+          })
+        : undefined;
       // Started now and awaited where the tool list is built, so it overlaps the reads below.
       // Asked every turn that can generate, from a short cache: a server with no video model gets
       // no generate_video at all rather than one that fails when called.
@@ -3609,6 +4112,7 @@ export class ChatService {
             }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
+      const warmsWithSiblings = cacheable && sharesSiblingPrefix(session);
       const modelOption = findModelOption(catalog?.models, session.model);
       if (localTurn && modelOption?.unavailable !== undefined) {
         if (modelOption.wantsCredentials && modelOption.server) {
@@ -3711,7 +4215,10 @@ export class ChatService {
       const skillRoot = session.project?.workingDirectory ?? null;
       const skillCatalog = this.deps.skills;
       const skills: SkillContext | undefined = skillCatalog
-        ? { available: () => skillCatalog.forModel(skillRoot) }
+        ? {
+            available: () => skillCatalog.forModel(skillRoot),
+            isUserOnly: async name => (await skillCatalog.get(skillRoot, name))?.disableModelInvocation === true,
+          }
         : undefined;
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
@@ -3744,27 +4251,15 @@ export class ChatService {
                 : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
-              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
+              pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
-      // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
-      // text it had already read is still in front of it: it starts out as tainted as the turn
-      // it carries on.
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
-        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
-        // Text brought in from Claude was written outside this app, so a continued import is
-        // treated as having read untrusted content for as long as it lives.
-        ...(session.importOrigin ? { untrusted: IMPORTED_TAINT_SOURCE } : {}),
-        // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
-        // Read off the stored message rather than passed in, so a resumed reply re-taints too.
-        ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
-          ? { untrusted: 'skill' }
-          : {}),
       };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
@@ -3865,7 +4360,7 @@ export class ChatService {
       }
       const systemMessage = () =>
         buildSystemMessage(
-          toolsSupported ? roots : [],
+          toolsSupported ? listedRoots : [],
           toolsSupported && !!media,
           toolsSupported && !!host,
           toolsSupported && !!explore,
@@ -3882,7 +4377,8 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen,
           toolsSupported && !!simulator,
-          orchestrating
+          orchestrating,
+          toolsSupported
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -3925,6 +4421,7 @@ export class ChatService {
         // seeded rounds were stripped before they were stored - so the earlier artifacts are
         // carried across rather than parsed again, and none of them is published twice.
         const artifacts = [...(resume?.artifacts ?? []), ...published];
+        if (published.length > 0) this.deps.browser?.refreshArtifacts?.(sessionId, published);
 
         const rounds = [
           ...(resume?.rounds ?? []),
@@ -4044,6 +4541,7 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
+        let releasePrefix: (() => void) | undefined;
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
           // `error` never reaches here (the transport throws on it); `meta` and `settled` carry no reply.
           if (event.type === 'meta') {
@@ -4056,11 +4554,15 @@ export class ChatService {
             turnSettled = {
               creditsCharged: event.creditsCharged,
               ...(event.usdCost !== undefined ? { usdCost: event.usdCost } : {}),
+              ...(event.runId ? { runId: event.runId } : {}),
             };
             return;
           }
           if (event.type === 'error') return;
-          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text || event.type === 'tool_use') {
+            timer.firstToken();
+            releasePrefix?.();
+          }
           if (event.text) {
             const split = splitThinking.push(event.text);
             // An empty split is either a bare thinking marker or text the filter is holding
@@ -4072,6 +4574,8 @@ export class ChatService {
             append(split);
           }
           if (event.toolStarted) {
+            // The response has begun, so its cache entry is readable: a tool-first reply has no text.
+            releasePrefix?.();
             probe?.frame('toolStart');
             setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
           }
@@ -4104,31 +4608,37 @@ export class ChatService {
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
-          : await streamRound(() =>
-              withRunFallback(
-                run,
-                attribution =>
-                  streamCompletion(
-                    api!.getAxiosInstance(),
-                    serverConfig.endpoint,
-                    {
-                      model: session.model,
-                      messages: cacheable ? withCacheBreakpoints(wire) : wire,
-                      tools,
-                      thinking: askForThinking,
-                      // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
-                      sessionId,
-                      ...(attribution ? { run: attribution } : {}),
-                      ...effortField,
-                      ...generationField,
-                      ...cacheTtlField,
-                      ...(maxTokens ? { maxTokens } : {}),
-                    },
-                    onCompletionEvent,
-                    controller.signal
-                  ),
-                dropRun
-              )
+          : await this.withPrefixWarm(
+              warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
+              controller.signal,
+              release => (releasePrefix = release),
+              () =>
+                streamRound(() =>
+                  withRunFallback(
+                    run,
+                    attribution =>
+                      streamCompletion(
+                        api!.getAxiosInstance(),
+                        serverConfig.endpoint,
+                        {
+                          model: session.model,
+                          messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                          tools,
+                          thinking: askForThinking,
+                          // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
+                          sessionId,
+                          ...(attribution ? { run: attribution } : {}),
+                          ...effortField,
+                          ...generationField,
+                          ...cacheTtlField,
+                          ...(maxTokens ? { maxTokens } : {}),
+                        },
+                        onCompletionEvent,
+                        controller.signal
+                      ),
+                    dropRun
+                  )
+                )
             );
         append(splitThinking.flush());
         const timing = timer.end();
@@ -4206,7 +4716,7 @@ export class ChatService {
           if (!current) return [];
           scopeVersion = version;
           const before = roots;
-          ({ roots, workingDirectory } = await this.resolveToolScope(current));
+          ({ roots, listedRoots, workingDirectory } = await this.resolveToolScope(current));
           explore = exploreFor(roots);
           tools = requestTools();
           return describeRootChange(before, roots);
@@ -4760,6 +5270,7 @@ export class ChatService {
     return {
       bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
       pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+      path: attachment => this.deps.attachments?.locate(sessionId, attachment.id) ?? Promise.resolve(null),
     };
   }
 
@@ -5108,6 +5619,7 @@ export class ChatService {
           },
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
+          shareableUnderProtected: this.deps.shareableUnderProtected,
           protectedPaths: this.deps.protectedPaths,
           uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
@@ -5215,18 +5727,6 @@ export class ChatService {
           });
         }
 
-        // A failed call is not a quiet one: an MCP server puts its error in the result body, and
-        // `toolResultContent` sends that text to the model like any other, so only a call the
-        // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          !settled.ownContent &&
-          readsUntrusted(request.name)
-        ) {
-          scope.directories.untrusted = request.name;
-        }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -5284,6 +5784,7 @@ export class ChatService {
         ? {
             taskAction: async (id: string, action: TaskAction) => {
               const updated = await this.actOnTask(session.id, id, action);
+              if (pendingDecisionOf(updated.workerTask) && action.kind === 'report') return DECISION_ASKED_RESULT;
               return JSON.stringify(updated.workerTask);
             },
           }
@@ -5360,7 +5861,9 @@ export class ChatService {
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
       ...(orchestratesAgents(session)
         ? {
-            delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
+            delegates: {
+              placement: (title, prompt, isolate) => this.delegatedPlacement(project, title, prompt, isolate),
+            },
             quest: { readiness: () => this.questReadiness(session.id) },
           }
         : session.origin
@@ -6247,7 +6750,7 @@ export class ChatService {
           const { models } = await this.listModels();
           const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
           const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
-          const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
+          const briefTokens = Math.ceil(contractBrief(seed, validated.contract).length / 3);
           validateWorkerModel(resolved.effectiveModel, models, {
             localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
@@ -6269,7 +6772,7 @@ export class ChatService {
           reason: 'model-policy',
           message: 'Account changed before launch. Try again in the intended account.',
         };
-      const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
+      const brief = contractBrief(seed, validated.contract);
       const named = title?.trim();
       const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
       if (this.deps.store.scopeKey() !== scope)
@@ -6378,6 +6881,12 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
+      } else if (
+        child.orchestrationPolicy &&
+        child.project &&
+        (await isGitRepository(child.project.workingDirectory))
+      ) {
+        text = `${SHARED_CHECKOUT_PREAMBLE}\n\n${seed}`;
       }
       // The dependency install keeps running in the background: the turn starts now, and its
       // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
@@ -6392,7 +6901,7 @@ export class ChatService {
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
         if (child.workerTask)
-          await this.deps.store.updateWorkerTask(child.id, task =>
+          await this.updateTask(child.id, task =>
             task.state.status === 'canceled' ? task : { ...task, state: { status: 'running' } }
           );
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
@@ -6447,7 +6956,7 @@ export class ChatService {
     const stored = await this.deps.store.get(child.id);
     if (!stored) return;
     if (stored.workerTask)
-      await this.deps.store.updateWorkerTask(child.id, task => ({
+      await this.updateTask(child.id, task => ({
         ...task,
         state: { status: 'canceled', reason: 'Stopped by the user before its first turn.' },
       }));
@@ -6539,7 +7048,7 @@ export class ChatService {
       const pending = this.deps.queue?.list(child.id) ?? [];
       const retained = !!stored.workerTask || pending.some(message => !message.automatic);
       if (stored.workerTask)
-        await this.deps.store.updateWorkerTask(child.id, task =>
+        await this.updateTask(child.id, task =>
           task.state.status === 'canceled'
             ? task
             : {
@@ -6624,8 +7133,12 @@ export class ChatService {
   private async delegatedPlacement(
     project: ChatProject,
     title: string | undefined,
-    prompt: string
+    prompt: string,
+    isolate: boolean
   ): Promise<SpawnPlacement> {
+    // The parent's checkout by default, as a subagent works: the agent's edits are already in
+    // place when it finishes, with nothing to merge and one system prompt shared by every sibling.
+    if (!isolate) return { kind: 'local' };
     const repository = await isGitRepository(project.workingDirectory);
     if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
     const base = await spawnBaseFor(project);
@@ -6724,13 +7237,13 @@ export class ChatService {
         child.workerTask &&
         (child.workerTask.state.status === 'running' || child.workerTask.state.status === 'queued')
       ) {
-        await this.deps.store.updateWorkerTask(sessionId, task =>
+        await this.updateTask(sessionId, task =>
           task.state.status === 'running' || task.state.status === 'queued'
             ? {
                 ...task,
                 state: {
                   status: 'blocked',
-                  reason: 'The attempt stopped without a structured result.',
+                  reason: MISSING_TASK_RESULT_REASON,
                   evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
                 },
               }
@@ -6739,27 +7252,33 @@ export class ChatService {
         child = (await this.deps.store.get(sessionId)) ?? child;
       }
       this.deps.summaryChanged?.(summarizeSession(child));
-      await this.deliverChildReport(parentId, {
-        localOnly,
-        content:
-          describeChildOutcome(child) +
-          (child.workerTask
-            ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
-            : ''),
-        display: childOutcomeDisplay(child),
-      });
-      const last = [...child.messages].reverse().find(message => message.role === 'assistant');
-      await this.recordAgentSettled(parentId, {
-        sessionId,
-        title: child.title,
-        outcome: classifyChildOutcome(child),
-        // A device-local child's words never reach a hosted parent; see flushChildReports.
-        lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
-      });
+      // Waiting on the user is not settled: the parent hears once they answer and the task resumes, or skip.
+      if (!pendingDecisionOf(child.workerTask)) await this.reportSettledAgent(parentId, child, localOnly);
     } finally {
       if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
     }
     await this.wakeParentForAgents(parentId);
+  }
+
+  /** Tell the parent how a spawned session ended, and count it toward the parent's next wake. */
+  private async reportSettledAgent(parentId: string, child: ChatSession, localOnly: boolean): Promise<void> {
+    await this.deliverChildReport(parentId, {
+      localOnly,
+      content:
+        describeChildOutcome(child) +
+        (child.workerTask
+          ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
+          : ''),
+      display: childOutcomeDisplay(child),
+    });
+    const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+    await this.recordAgentSettled(parentId, {
+      sessionId: child.id,
+      title: child.title,
+      outcome: classifyChildOutcome(child),
+      // A device-local child's words never reach a hosted parent; see flushChildReports.
+      lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
+    });
   }
 
   /**
@@ -6822,12 +7341,18 @@ export class ChatService {
     return this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0;
   }
 
-  /** The synchronous half of agentStillRunning: agents with a watched turn, or a report not yet recorded. */
+  /**
+   * The synchronous half of agentStillRunning: agents with a watched turn, a report not yet
+   * recorded, or a decision waiting on the user.
+   */
   private agentRunningNow(parentId: string): boolean {
     for (const watch of this.spawnWatch.values()) {
       if (watch.parentSessionId === parentId) return true;
     }
     for (const entry of this.agentsSettling.values()) {
+      if (entry.parentId === parentId) return true;
+    }
+    for (const entry of this.decisionIndex.values()) {
       if (entry.parentId === parentId) return true;
     }
     return false;
@@ -7068,6 +7593,8 @@ export class ChatService {
     };
     if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
 
+    // What an "Allow in this chat" is filed, looked up and revoked under.
+    const allowanceKey = prompt.chatKey ?? prompt.key;
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -7076,12 +7603,8 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
-    // Once this reply has read web, MCP or account-skill content, an injected instruction may be
-    // steering it, so a call that can send data out is asked whatever "always" was answered
-    // before - unless the shell scan proved the command has nowhere to send it.
-    const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
-    // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
-    // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
+    // A matching allow rule runs the call in every mode: the user wrote it knowing what the
+    // command does. A loop still stops, and the rule set itself keeps
     // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
     if (verdict.decision === 'allow' && !stuck) {
       return {
@@ -7091,22 +7614,20 @@ export class ChatService {
         patterns,
       };
     }
-    if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
+
+    const intrinsicAllowOnce = prompt.allowOnce;
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
       if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
-      const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
-        prompt.key,
+        allowanceKey,
         runnable.map(option => option.id)
       );
-      // Over a tainted reply only an answer given knowing about the taint, or one for a tool
-      // whose "always" already accepted whatever the content could steer it to, still stands.
-      if (standing && (!currentlyTainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+      if (standing) {
         return {
           decision: 'once',
           ...(standing.optionId ? { optionId: standing.optionId } : {}),
@@ -7114,14 +7635,13 @@ export class ChatService {
         };
       }
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too. Over a tainted
-      // reply, only prefixes the user allowed on a card that already named the taint count.
+      // past a directory outside the project that the user has not allowed too.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always, currentlyTainted) &&
-        gate.uncoveredDirectories(sessionId, always.directories).length === 0
+        gate.coversCommands(sessionId, always) &&
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
       ) {
         return { decision: 'once' };
       }
@@ -7139,9 +7659,7 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
-    const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
     const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
@@ -7157,7 +7675,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck)) {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
@@ -7166,11 +7684,36 @@ export class ChatService {
       };
     }
 
-    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
+    const askedAlways = asked.prompt.always;
+    const outsideReason = askedAlways
+      ? outsideFoldersReason(
+          askedAlways,
+          gate.uncoveredDirectories(sessionId, askedDirectories(askedAlways, mode)),
+          context.workingDirectory
+        )
+      : null;
+    // Only the reasons beyond the tool's own: an ask rule, a loop, folders not yet allowed.
+    const askedReasons = [askedByRule, stuck ? LOOP_ASK_REASON : null, outsideReason].filter(
+      (reason): reason is string => !!reason
+    );
+    // Full access asks only at its own stops; naming the stop keeps such a card from reading as
+    // a mode that never applied. The card gains only a stop the tool's detail does not already say.
+    const fullAccessStops = mode === 'full' ? fullAccessStopReasons(prompt) : [];
+    const unshownStops = fullAccessStops.filter(reason => !asked.prompt.detail.includes(reason));
+    const fullAccessExplanation = fullAccessStops.join(' ');
+    // A tool's reasons can include context that does not itself stop Full access. Name the
+    // every-mode floor separately instead of attributing that floor to every tool check.
+    const loggedFullAccessExplanation =
+      prompt.askInFull && !prompt.irreversible && prompt.reasons?.length
+        ? `This tool asks in every mode. Tool checks: ${fullAccessExplanation}`
+        : fullAccessExplanation;
     const askedBecause =
-      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
-        .filter((reason): reason is string => !!reason)
-        .join(' ') || undefined;
+      [
+        ...askedReasons,
+        ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${loggedFullAccessExplanation}`] : []),
+      ].join(' ') || undefined;
+    // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
+    const approvalReasons = [...(asked.prompt.reasons ?? []), ...askedReasons];
     let requestedAt: string | undefined;
     // What answered this card when another card's "always" or a newly saved rule covered it.
     let coveredBy: ChatApprovalDecidedBy | undefined;
@@ -7190,7 +7733,7 @@ export class ChatService {
     const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
-      prompt.key,
+      allowanceKey,
       signal,
       approvalId => {
         requestedAt = new Date().toISOString();
@@ -7202,12 +7745,16 @@ export class ChatService {
             ...call,
             status: 'awaiting-approval',
             approvalId,
-            approvalDetail: asked.prompt.detail,
+            approvalDetail: [asked.prompt.detail, ...unshownStops, ...(outsideReason ? [outsideReason] : [])].join(
+              '\n\n'
+            ),
+            ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
+            ...(asked.prompt.askInFull ? { approvalInAppOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,
@@ -7223,8 +7770,7 @@ export class ChatService {
         });
       },
       {
-        remember: !prompt.irreversible && !prompt.allowOnce,
-        tainted: !!tainted,
+        remember: () => !prompt.irreversible && !prompt.allowOnce,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
           try {
@@ -7239,7 +7785,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || intrinsicAllowOnce || stuck || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -7249,9 +7795,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            // A parallel call may have tainted the reply since this card opened.
-            const fresher =
-              byPart && !taintedParts() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -7311,9 +7855,9 @@ export class ChatService {
       await this.deps.capabilities
         .grant({
           subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
-          capability: capabilityFor(call.name, prompt.key),
-          scope: capabilityScope(call.name, prompt.key),
-          approvalKey: prompt.key,
+          capability: capabilityFor(call.name, allowanceKey),
+          scope: capabilityScope(call.name, allowanceKey),
+          approvalKey: allowanceKey,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
@@ -7404,6 +7948,7 @@ export class ChatService {
       roots: context.roots,
       ...(context.workingDirectory ? { workingDirectory: context.workingDirectory } : {}),
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
+      ...(context.shareableUnderProtected ? { shareableUnderProtected: context.shareableUnderProtected } : {}),
       declined: turn.declined,
     });
     if (inspection.kind === 'refused') {
@@ -7688,18 +8233,17 @@ export class ChatService {
    * The mode is read from the store by the caller rather than from the session captured when
    * the turn started, so a user who lowers it mid-reply is obeyed by the very next tool call.
    *
-   * Three exclusions hold in every mode, 'full' included. An irreversible call is asked because
-   * there is nothing to undo it with; a credit-spending call is asked because cost is a
-   * different axis from filesystem risk; and an `askInFull` call is asked because its risk is
+   * Two exclusions hold in every mode, 'full' included. An irreversible call is asked because
+   * there is nothing to undo it with, and an `askInFull` call is asked because its risk is
    * someone else's - a signed-in site's. Deciding the agent may edit files and run the shell
-   * says nothing about whether the user wants to pay for an image, or wants a script run with
-   * their cookies on a site they happen to have open.
+   * says nothing about whether the user wants a script run with their cookies on a site they
+   * happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
-   * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
-   * project the user has not allowed.
+   * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
+   * own words name, reach permission settings, or a folder outside the project the user has not
+   * allowed that the command may write in. Commands the scan cannot follow or parse ask in
+   * every mode.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -7708,11 +8252,11 @@ export class ChatService {
     prompt: ApprovalPrompt,
     stuck: boolean
   ): boolean {
-    if (prompt.irreversible || spendsCredits(call.name) || prompt.askInFull) return false;
+    if (prompt.irreversible || prompt.askInFull) return false;
     if (mode === 'ask') return false;
     if (mode === 'full') return true;
     if (stuck || prompt.askInAuto) return false;
-    const directories = prompt.always?.directories ?? [];
+    const directories = prompt.always ? askedDirectories(prompt.always, mode) : [];
     return (this.deps.approvals?.uncoveredDirectories(sessionId, directories) ?? directories).length === 0;
   }
 
@@ -7723,6 +8267,47 @@ export class ChatService {
    * conversation has to move somewhere, and the model the user last chose is the likeliest one
    * they would pick for it themselves.
    */
+  async studioContextRoots(sessionId: string): Promise<readonly string[]> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session) throw new Error('Session is unavailable.');
+    const roots = (await this.resolveToolScope(session)).roots;
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return roots;
+  }
+
+  async prepareStudioText(
+    sessionId: string,
+    system: string,
+    input: string,
+    signal: AbortSignal,
+    api: AuthenticatedApiClient | null
+  ): Promise<string> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session || scope !== this.deps.store.scopeKey()) throw new Error('Session is unavailable.');
+    let output = '';
+    await this.streamAuxiliary(
+      api,
+      {
+        model: session.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: input },
+        ],
+        tools: [],
+        maxTokens: 4096,
+      },
+      event => {
+        if (event.type === 'content') output += event.text ?? '';
+      },
+      signal
+    );
+    signal.throwIfAborted();
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return output;
+  }
+
   private async pickModel(models: readonly ChatModelOption[]): Promise<string | null> {
     const remembered = await this.deps.modelMemory?.read();
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
@@ -7734,12 +8319,17 @@ export class ChatService {
     return this.deps.modelSettings.get(model);
   }
 
-  /** Auxiliary generations honor the same device-local boundary as the main reply. */
+  /**
+   * Auxiliary generations honor the same device-local boundary as the main reply. A hosted one
+   * made for an orchestrated session is billed under that session's run with `purpose`, so the
+   * run's usage counts titles, summaries and suggestions beside its turns.
+   */
   private async streamAuxiliary(
     api: AuthenticatedApiClient | null,
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    attributed?: AuxiliaryRun
   ): Promise<void> {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
@@ -7760,7 +8350,33 @@ export class ChatService {
     }
     if (!api) throw new Error('Sign in to use a hosted model.');
     const { endpoint } = await this.resolveServerConfig(api);
-    await streamCompletion(api.getAxiosInstance(), endpoint, request, onEvent, signal);
+    await withRunFallback(
+      attributed?.run,
+      attribution =>
+        streamCompletion(
+          api.getAxiosInstance(),
+          endpoint,
+          attribution ? { ...request, run: attribution } : request,
+          onEvent,
+          signal
+        ),
+      () => (attributed ? this.forgetServerRun(attributed.session, attributed.run.runId) : undefined)
+    );
+  }
+
+  /**
+   * The run a hosted auxiliary call for `session` is billed under. Resolved BEFORE the caller starts
+   * its timeout: a first prompt's title can be what waits on the run being minted, and that wait
+   * must not eat the few seconds the title itself is given.
+   */
+  private async auxiliaryRun(
+    session: ChatSession,
+    model: string,
+    purpose: AuxiliaryPurpose
+  ): Promise<AuxiliaryRun | undefined> {
+    if (isLocalModel(model)) return undefined;
+    const run = await this.runAttribution(session);
+    return run ? { session, run: { ...run, purpose } } : undefined;
   }
 
   /**
@@ -7793,6 +8409,7 @@ export class ChatService {
 
       // Bounded on its own rather than tied to the turn: a title is worth a few seconds and no
       // more, and the reply it runs beside can legitimately last half an hour.
+      const attributed = await this.auxiliaryRun(session, model, 'title');
       timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
 
       let reply = '';
@@ -7802,7 +8419,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        attributed
       );
 
       const title = sanitizeGeneratedTitle(reply);
@@ -7877,6 +8495,7 @@ export class ChatService {
         : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
+      const attributed = await this.auxiliaryRun(session, model.id, 'suggestion');
       timer = setTimeout(
         () => controller.abort(),
         isLocalBackend(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
@@ -7894,7 +8513,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') answer += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        attributed
       );
 
       // An abort is a normal outcome here - streamCompletion resolves on one - so the partial
@@ -7931,13 +8551,16 @@ export class ChatService {
    * non-fatal - the same-origin path is the right guess for deploys that omit the field, and an
    * empty `cdnUrl` only means image generation falls back to the URLs the quest itself carries.
    */
-  private async resolveServerConfig(api: AuthenticatedApiClient): Promise<ResolvedServerConfig> {
+  private async resolveServerConfig(api: AuthenticatedApiClient, timeout?: number): Promise<ResolvedServerConfig> {
     const environmentUrl = this.deps.getEnvironmentUrl();
     if (this.serverConfigCache?.environmentUrl === environmentUrl) return this.serverConfigCache.config;
 
     const config: ResolvedServerConfig = { endpoint: DEFAULT_COMPLETIONS_PATH, cdnUrl: '' };
     try {
-      const served = await api.get<ServerTransportConfig>('/api/settings/serverConfig');
+      const served =
+        timeout === undefined
+          ? await api.get<ServerTransportConfig>('/api/settings/serverConfig')
+          : await api.get<ServerTransportConfig>('/api/settings/serverConfig', { timeout });
       if (served?.sseCompletionsUrl) config.endpoint = served.sseCompletionsUrl;
       if (served?.cdnUrl) config.cdnUrl = served.cdnUrl;
     } catch (err) {
@@ -7976,8 +8599,8 @@ function heldElsewhereMessage(branch: string, holder: BranchCheckout): string {
 function projectPreamble(project: ChatProject): string[] {
   const lines = [
     `This conversation is about the project ${project.name}, at ${project.directory}.`,
-    `Commands run in ${project.workingDirectory} unless you name another folder, and a relative`,
-    'path resolves against it.',
+    `Commands run in ${project.workingDirectory} (the working directory) unless you name another`,
+    'folder, and a relative path resolves against it.',
   ];
   if (project.workspace && project.workingDirectory !== project.directory) {
     // The branch the app cut, not the base the user picked: a model told the base would propose
@@ -8055,7 +8678,9 @@ export function buildSystemMessage(
   screen = false,
   simulator = false,
   /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
-  orchestrate = false
+  orchestrate = false,
+  /** todo_write is declared; false for a model without tools, or once they are shed to fit its context. */
+  plan = false
 ): CompletionMessage {
   const orchestrating = host && orchestrate;
   if (roots.length === 0) {
@@ -8063,6 +8688,7 @@ export function buildSystemMessage(
       role: 'system',
       content: [
         ...noAccessLines(ask),
+        ...(plan ? PLAN_GUIDANCE : []),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -8079,41 +8705,68 @@ export function buildSystemMessage(
         '',
         DESKTOP_ARTIFACT_PROMPT,
         ...(projectContext ? ['', projectContext] : []),
+        // The project context names its files relative to the working directory; with no access
+        // there is no project preamble to say which directory that is.
+        ...(projectContext && project ? [`The working directory is ${project.workingDirectory}.`] : []),
         ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
       ].join('\n'),
     };
   }
 
-  return {
-    role: 'system',
-    content: [
-      'You can read and change files on the user machine, and run bash commands on it, with the',
-      'provided tools.',
-      ...(project ? projectPreamble(project) : []),
-      ...dependencyLines,
-      'These folders are shared with you, including everything beneath them:',
-      ...roots.map(root => `  ${root}`),
-      ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
-      ...(browser ? BROWSER_GUIDANCE : []),
-      ...(screen ? SCREEN_GUIDANCE : []),
-      ...(simulator ? SIMULATOR_GUIDANCE : []),
-      ...(web ? WEB_GUIDANCE : []),
-      ...HONESTY_LINES,
-      ...(media ? MEDIA_GUIDANCE : []),
-      ...(host ? HOST_GUIDANCE : []),
-      ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
-      ...(memory ? MEMORY_GUIDANCE : []),
-      ...(ask ? ASK_GUIDANCE : []),
-      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
-      ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
-      ...(skillsSection ? [skillsSection] : []),
-      '',
-      DESKTOP_ARTIFACT_PROMPT,
-      ...(projectContext ? ['', projectContext] : []),
-      // Last, after everything stable: see mcpServerLines for when it changes.
-      ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
-    ].join('\n'),
-  };
+  const shared = [
+    'You can read and change files on the user machine, and run bash commands on it, with the',
+    'provided tools.',
+    ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
+    ...(plan ? PLAN_GUIDANCE : []),
+    ...(browser ? BROWSER_GUIDANCE : []),
+    ...(screen ? SCREEN_GUIDANCE : []),
+    ...(simulator ? SIMULATOR_GUIDANCE : []),
+    ...(web ? WEB_GUIDANCE : []),
+    ...HONESTY_LINES,
+    ...(media ? MEDIA_GUIDANCE : []),
+    ...(host ? HOST_GUIDANCE : []),
+    ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
+    ...(memory ? MEMORY_GUIDANCE : []),
+    ...(ask ? ASK_GUIDANCE : []),
+    ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
+    ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
+    ...(skillsSection ? [skillsSection] : []),
+    '',
+    DESKTOP_ARTIFACT_PROMPT,
+    ...(projectContext ? ['', projectContext] : []),
+    '',
+  ].join('\n');
+  // Per-session lines after everything sessions share, so sibling agents in their own worktrees
+  // read the shared half from one cache entry; see ChatService.promptPrefix.test.ts.
+  const tail = [
+    ...(project ? projectPreamble(project) : []),
+    ...dependencyLines,
+    ...sharedRootLines(roots),
+    ...(host ? AGENT_WORKTREE_LINES : []),
+    // Last, after everything stable: see mcpServerLines for when it changes.
+    ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
+  ].join('\n');
+  return { role: 'system', content: `${shared}\n${tail}`, cacheSplitAt: shared.length + 1 };
+}
+
+/**
+ * Stands in for listing the agents' worktrees, which join the roots as agents start: listed, they
+ * would rewrite the parent's system prompt, and every turn after it, on the wake that follows.
+ */
+const AGENT_WORKTREE_LINES: readonly string[] = [
+  'A session you start in a worktree of its own shares that worktree with you as well; find its',
+  'folder with git worktree list, by the branch the session_spawn result names.',
+];
+
+function sharedRootLines(roots: readonly string[]): string[] {
+  const scratch = roots.find(isScratchDirectory);
+  return [
+    'These folders are shared with you, including everything beneath them:',
+    ...roots.map(root => `  ${root}`),
+    ...(scratch
+      ? [`Put throwaway scripts and files in ${scratch}, not the project; it is deleted with this conversation.`]
+      : []),
+  ];
 }
 
 function noAccessLines(ask: boolean): string[] {
@@ -8154,7 +8807,7 @@ function localToolLines(
   patchEdits: boolean
 ): string[] {
   return [
-    'Always pass absolute paths. The file tools deny any path outside those folders;',
+    'Always pass absolute paths. The file tools deny any path outside the folders shared with you;',
     ...(ask
       ? [
           'if you need one, call request_directory with that folder and your reason - the user adds it',
@@ -8166,7 +8819,7 @@ function localToolLines(
           'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
           'path in this conversation. No typed message grants access on its own.',
         ]),
-    'Bash commands run as the user with their full environment, not inside those folders: git,',
+    'Bash commands run as the user with their full environment, not inside the shared folders: git,',
     'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
     'on authentication, report the command error; do not conclude the user is logged out.',
     ...(instructions
@@ -8184,14 +8837,6 @@ function localToolLines(
     'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
     'above them. One sentence per round of work, not per call, with no label in front of it, and',
     'none at all when a single call speaks for itself.',
-    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-    'things to do, or the work clearly runs to five or more steps, usually across several files.',
-    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-    'small edit: answer those directly.',
-    'When you do keep one, send the whole list each time and mark one item in_progress before',
-    'starting it. Before writing the message that ends a turn, make the plan match what actually',
-    'happened: an item whose result you are about to report as done is marked completed in that',
-    'same reply, not left for later. Never end a turn with an item still in_progress.',
     ...(patchEdits
       ? [
           'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
@@ -8266,7 +8911,6 @@ export function buildDeferredSystemMessage(
     content: [
       'Which tools you have and which folders are shared with you are stated in a system reminder on',
       'a user turn. When there are several, the latest one is current and replaces the earlier ones.',
-      ...(project ? projectPreamble(project) : []),
       ...WEB_GUIDANCE,
       ...HONESTY_LINES,
       ...desktopAppGuidance(null),
@@ -8274,6 +8918,7 @@ export function buildDeferredSystemMessage(
       '',
       DESKTOP_ARTIFACT_PROMPT,
       ...(projectContext ? ['', projectContext] : []),
+      ...(project ? ['', ...projectPreamble(project)] : []),
     ].join('\n'),
   };
 }
@@ -8305,10 +8950,10 @@ export function buildToolStateText(state: {
           'You can read and change files on the user machine, and run bash commands on it, with the',
           'provided tools.',
           ...state.dependencyLines,
-          'These folders are shared with you, including everything beneath them:',
-          ...roots.map(root => `  ${root}`),
+          ...sharedRootLines(roots),
           ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
         ]),
+    ...PLAN_GUIDANCE,
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
@@ -8391,6 +9036,18 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     };
   }
 }
+
+/** todo_write is declared in every conversation, folder or not; see toolsForRequest. */
+const PLAN_GUIDANCE: readonly string[] = [
+  'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+  'things to do, or the work clearly runs to five or more steps, usually across several files.',
+  'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+  'small edit: answer those directly.',
+  'When you do keep one, send the whole list each time and mark one item in_progress before',
+  'starting it. Before writing the message that ends a turn, make the plan match what actually',
+  'happened: an item whose result you are about to report as done is marked completed in that',
+  'same reply, not left for later. Never end a turn with an item still in_progress.',
+];
 
 const BROWSER_GUIDANCE: readonly string[] = [
   'You also have a browser (browser_navigate, browser_click, browser_type, browser_scroll,',
@@ -8566,6 +9223,11 @@ const HOST_GUIDANCE: readonly string[] = [
   'conversation to be deleted.',
 ];
 
+/** The prompt carries the task, so a contract only has to add the outcome, role and acceptance criteria. */
+function contractBrief(prompt: string, contract: TaskContract | undefined): string {
+  return contract ? `${prompt.trim()}\n\n${renderTaskBrief(contract)}` : prompt;
+}
+
 /**
  * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
  * block's suggest-only rule: in such a session session_spawn starts the child at once (see
@@ -8577,10 +9239,11 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'The user turned on Orchestrate for this conversation: you are coordinating agents for',
   'separable work with bounded tasks. Here session_spawn STARTS the session at once, with no card and nothing to',
   'approve, whatever is said above about suggesting.',
-  'Execute small or non-separable requests directly. For separable work, prefer a versioned task',
-  'contract on session_spawn: outcome, rationale, role, paths/context, ownership/coordination,',
-  'non-goals, acceptance evidence, verification, assumptions and escalation conditions. Explicit',
-  'empty lists are fine. Do not copy the transcript, load every skill or pay for spec-polishing.',
+  'Execute small or non-separable requests directly. For separable work, prefer a task contract on',
+  'session_spawn with just outcome, role and acceptanceCriteria; add owned paths, non-goals or',
+  'verification only where an agent would otherwise guess, and leave the other fields out. Keep',
+  'the prompt short when a contract carries the task. Do not copy the transcript, load every skill',
+  'or pay for spec-polishing.',
   'Use task_assess to review completion evidence or revise the same task after a disproven',
   'assumption. A stopped model turn is not accepted completion. Failed checks remain unresolved.',
   'Worker model requests are validated by runtime policy. Skills grant no permission or spend.',
@@ -8589,14 +9252,24 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'to name the files and contracts each piece touches - then start the agents. Keep each brief',
   'concise and leave the detailed reading to the agents: they read the code themselves, and a',
   "long survey here only delays them and can run out this turn's time before anything starts.",
-  'In a git repository session_spawn gives each agent its own isolated worktree and branch',
-  'automatically; its result names them. So never create worktrees or branches for agents',
-  'yourself, never point an agent at another path, and never remove an agent worktree or delete',
-  'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Choose where each agent works by how its work lands:',
+  '- Pieces of one change, landing together on this branch: leave isolation unset. Agents then work',
+  '  in this working directory, so their edits are already here when they finish, with nothing to',
+  '  merge or copy. Give each running agent different files to change, named in its contract or',
+  '  prompt so it knows which are its own, and do not edit those files yourself while it runs.',
+  '  When woken, check the combined result with git status, git diff and the tests, then commit',
+  '  it yourself if the task calls for a commit.',
+  '- Work that lands on its own, as its own branch or pull request: pass isolation "worktree", and',
+  '  say in its brief to commit, push and open its pull request. Do not merge it into this branch;',
+  '  when woken, report each agent branch or pull request.',
+  '- Pieces of one change whose files overlap another running agent, or work you may want to',
+  '  discard: also pass isolation "worktree", then combine it with git merge of its branch (commit',
+  '  its worktree first if it left changes uncommitted), never by retyping its files.',
+  'In a git repository a worktree agent gets its own worktree and a branch cut from this one, which',
+  'its result names. Never create worktrees or branches for agents yourself, never point an agent at',
+  'another path, and never remove an agent worktree or delete its branch.',
   'Never use git stash, and tell agents not to: the stash is shared by every worktree of the',
   "repository, so one agent's pop can take another's changes. Set work aside with a commit.",
-  'Outside a repository the agents share this working directory, so give each one different',
-  'files to change.',
   `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
   'the limit, wait for one to finish before starting another.',
   'Track them with session_list and session_read if you need to. Once every agent you started',
@@ -8871,6 +9544,18 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
+/**
+ * Prepended to the seed of a delegated agent in its parent's checkout: the parent and its other
+ * agents work in the same files and on the same branch, and the parent combines the result.
+ */
+export const SHARED_CHECKOUT_PREAMBLE = [
+  '[You are working in the same checkout as the conversation that started you, and other agents',
+  'may be working in it at the same time. Change only the files your task owns, and leave the',
+  'rest as you found it. Do not commit, switch or create branches, stash, reset, or check out or',
+  'restore files: the session that started you reviews and commits the combined result. Report',
+  'which files you changed.]',
+].join('\n');
+
 export function worktreePreamble(
   projectDirectory: string,
   workspace: { branch: string; base: string; workingDirectory: string }
@@ -8925,6 +9610,19 @@ interface ApprovalOutcome {
 }
 
 const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
+
+/** Leads `askedBecause` for a card Full access showed; approvalSummary's reasonLabel matches on it. */
+const FULL_ACCESS_ASK_PREFIX = 'Asked in Full access because:';
+
+/**
+ * Why Full access stops for a call it would otherwise run: the same two flags `autoApproves`
+ * checks before any mode, with the tool's own words for them.
+ */
+function fullAccessStopReasons(prompt: ApprovalPrompt): string[] {
+  if (prompt.irreversible) return ['It cannot be undone, so it is asked every time.'];
+  if (!prompt.askInFull) return [];
+  return prompt.reasons?.length ? [...prompt.reasons] : ['This tool asks in every mode, Full access included.'];
+}
 
 function approvalRecord(
   outcome: ChatToolApproval['outcome'],
@@ -8995,10 +9693,15 @@ interface PartDecision {
   decidedBy: ChatApprovalDecidedBy;
 }
 
+/** The folders outside the shared ones a mode asks about: 'auto' only the ones the command may write in. */
+function askedDirectories(always: ApprovalAlways, mode: ChatApprovalMode): readonly string[] {
+  return mode === 'auto' ? (always.writtenDirectories ?? always.directories) : always.directories;
+}
+
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
-  if (mode === 'full') return part.ask?.mode !== 'full';
-  return mode === 'auto' && part.ask === undefined;
+  if (mode === 'full') return true;
+  return mode === 'auto' && (part.ask === undefined || part.ask.mode === 'ask');
 }
 
 /**
@@ -9028,9 +9731,8 @@ function decideParts(
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);
-  const outside = allByRule
-    ? always.directories.filter(directory => !rules?.coversFolder(directory))
-    : always.directories;
+  const asked = askedDirectories(always, mode);
+  const outside = allByRule ? asked.filter(directory => !rules?.coversFolder(directory)) : asked;
   const directories = gate.uncoveredDirectories(sessionId, outside);
   const decidedBy: ChatApprovalDecidedBy = allowance
     ? { kind: 'chat-allowance' }
@@ -9061,7 +9763,6 @@ function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts
   return {
     prompt: {
       ...rest,
-      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
       always: { ...always, commands: parts.uncovered, directories: parts.directories },
     },
     subject: subject.shell
@@ -9118,20 +9819,6 @@ interface DirectoryTurn {
   declined: string[];
   /** Folders this round's cards granted; their own results already told the model. */
   granted: string[];
-  /**
-   * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
-   * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.
-   */
-  untrusted?: string;
-}
-
-/**
- * The first untrusted source a turn that ran out of budget had read. The reply that carries it
- * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
- */
-function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
-  const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
-  return source ? { untrusted: source.name } : {};
 }
 
 /** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */
@@ -9139,21 +9826,6 @@ async function unlessStopped<T>(work: Promise<T>, signal: AbortSignal, stopped: 
   const outcome = await untilStopped(work, signal, () => false, 0);
   if (outcome.kind === 'threw') throw outcome.error;
   return outcome.kind === 'returned' ? outcome.value : stopped;
-}
-
-function untrustedReason(tool: string): string {
-  const source = tool.startsWith('browser_')
-    ? 'a web page in the browser'
-    : tool.startsWith(MCP_TOOL_PREFIX)
-      ? 'an MCP server'
-      : tool === 'skill'
-        ? 'a skill'
-        : tool === 'session_read'
-          ? 'another conversation'
-          : tool === IMPORTED_TAINT_SOURCE
-            ? 'a conversation imported from Claude'
-            : 'the web';
-  return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
 /** `first`, then whatever of `second` it does not already hold, in order. */
@@ -9521,10 +10193,16 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
   }
 }
 
+function imageLocationNote(attachment: ChatAttachment, path: string): string {
+  return `<attached-image-file name="${attachment.name}" media-type="${attachment.mediaType}" path="${path}" />`;
+}
+
 /** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
 interface AttachmentReader {
   bytes(attachment: ChatAttachment): Promise<Buffer | null>;
   pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+  /** Where the stored bytes sit on disk, so a tool-using agent can hand the file to another service. */
+  path?(attachment: ChatAttachment): Promise<string | null>;
 }
 
 /**
@@ -9568,6 +10246,9 @@ async function toAttachedContent(
         type: 'image',
         source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
       });
+      // The stored file has no extension, so the name and type are given for whoever copies it out.
+      const stored = await readAttachment.path?.(attachment);
+      if (stored) sections.push(imageLocationNote(attachment, stored));
       continue;
     }
 

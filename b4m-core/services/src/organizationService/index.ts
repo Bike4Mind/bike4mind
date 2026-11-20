@@ -3,7 +3,7 @@ import type { SearchParameters } from './search';
 import { get } from './get';
 import { addMember } from './addMember';
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
-import getUsers from './getUsers';
+import getUsers, { getRoster } from './getUsers';
 import { create } from './create';
 import { update } from './update';
 import { deleteOrganization, deleteSchema } from './delete';
@@ -19,6 +19,8 @@ import { setOrganizationManager } from './setOrganizationManager';
 import type { OrganizationManagerChange } from './setOrganizationManager';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { createStandardGroup } from './createStandardGroup';
+import { shareGroupProject } from './shareGroupProject';
 import {
   assignUserToGroup,
   removeUserFromGroup,
@@ -51,6 +53,7 @@ export {
   setMemberCreditOverride,
   applyPartnerRuleMembership,
   getUsers,
+  getRoster,
   create,
   update,
   deleteOrganization,
@@ -65,6 +68,8 @@ export {
   setOrganizationManager,
   clearActiveOrganization,
   setOrganizationGroupTypes,
+  createStandardGroup,
+  shareGroupProject,
   assignUserToGroup,
   assertCanManageOrgGroups,
   removeUserFromGroup,

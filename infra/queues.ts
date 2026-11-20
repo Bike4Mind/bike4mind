@@ -2,6 +2,7 @@ import {
   appFilesBucket,
   fabFileBucket,
   generatedImagesBucket,
+  historyImportBucket,
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
@@ -156,6 +157,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     vpc: lambdaVpc,
     // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
     // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    // eventBus: the data lake spend notice is queued as an email.send event.
     link: [
       ...allSecrets,
       websocketApi,
@@ -164,6 +166,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       appFilesBucket,
       dataLakeTaxonomyQueue,
       lakeMemoryQueue,
+      eventBus,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -277,7 +280,8 @@ const fabFileBucketNotification = fabFileBucket.notify({
         // Animated images are moderated frame by frame (up to 60 frames), which can exceed the default 20s/1024 MB.
         timeout: '2 minutes',
         memory: '2048 MB',
-        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         permissions: [
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
           // Required for Lambda's async-invoke failure mechanism to deliver the failed
@@ -785,10 +789,63 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Account Data Export Queue
-// "Download all my data": builds a zip of the user's data under the fabFileBucket exports/ prefix
-// (expired by its lifecycle rule). Self-serve exports email a link to the app download page; admin
-// data subject exports (with the registry records) are fetched from the admin user profile instead.
+// Account Erasure Queue
+// Admin data subject erasure: runs the account purge at once instead of waiting for the daily sweep.
+const accountErasureQueueDLQ = new sst.aws.Queue('accountErasureQueueDLQ', {});
+const accountErasureQueue = new sst.aws.Queue('accountErasureQueue', {
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: accountErasureQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const accountErasureQueueSubscription = accountErasureQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/accountErasure.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      eventBus,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      historyImportBucket,
+      publishedArtifactsBucket,
+      routerDistributionId,
+    ],
+    permissions: [
+      {
+        actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+        resources: [
+          fabFileBucket.arn,
+          $interpolate`${fabFileBucket.arn}/*`,
+          generatedImagesBucket.arn,
+          $interpolate`${generatedImagesBucket.arn}/*`,
+          appFilesBucket.arn,
+          $interpolate`${appFilesBucket.arn}/*`,
+          historyImportBucket.arn,
+          $interpolate`${historyImportBucket.arn}/*`,
+          publishedArtifactsBucket.arn,
+          $interpolate`${publishedArtifactsBucket.arn}/*`,
+        ],
+      },
+      {
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+      },
+    ],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Account and organization exports share a consumer and retry policy, with a payload discriminator.
+// All write under the expiring exports/ prefix. Self-serve and organization exports email an
+// authenticated app link; admin data subject exports are fetched from the admin user profile.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',
@@ -1108,7 +1165,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // Generated media a notebook or message delete could not purge within its request budget
-// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
+// (packages/server-utils/src/sessions/purgeDeletedNotebookMedia.ts,
+// apps/client/server/sessions/purgeDeletedMessageMedia.ts) finishes here.
 const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
 const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
   visibilityTimeout: '6 minutes',
@@ -1144,67 +1202,25 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
   }
 );
 
-// Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
-// The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
-const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
-  transform: {
-    queue: {
-      kmsMasterKeyId: 'alias/aws/sqs', // Enable SQS encryption
-      messageRetentionSeconds: 1209600, // 14 days for debugging
-    },
-  },
-});
-const whatsNewHighlightsQueue = new sst.aws.Queue('whatsNewHighlightsQueue', {
-  visibilityTimeout: '8 minutes', // 3-minute safety margin over Lambda 5-min timeout
+// Render Job Queue
+// The render engine step (packages/server-utils/src/generationJobs/wiring.ts resolveRenderJobQueueUrl) sends
+// {jobId} here; the render worker (apps/workers/src/render/main.ts) long-polls it, as a Fargate service on hosted
+// stages (infra/renderWorker.ts) or from the self-host chart, so there is no Lambda subscription. The visibility
+// timeout covers the whole render cap (STUDIO_RENDER_MAX_WALL_CLOCK_MS, 30 minutes) plus the hand-back, so a
+// running render is never redelivered to a second task.
+const renderJobDLQ = new sst.aws.Queue('renderJobDLQ', {});
+const renderJobQueue = new sst.aws.Queue('renderJobQueue', {
+  visibilityTimeout: '35 minutes',
   dlq: {
-    queue: whatsNewHighlightsQueueDLQ.arn,
+    queue: renderJobDLQ.arn,
     retry: 3,
   },
-  transform: {
-    queue: {
-      kmsMasterKeyId: 'alias/aws/sqs', // Enable SQS encryption
-    },
-  },
 });
-const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
-  {
-    handler: 'apps/workers/src/queueHandlers/whatsNewHighlights.dispatch',
-    timeout: '5 minutes',
-    vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-        resources: [
-          'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
-          'arn:aws:bedrock:*:*:foundation-model/amazon.*',
-          'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
-          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
-          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
-        ],
-      },
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-    copyFiles: [
-      {
-        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-        to: 'tiktoken_bg.wasm',
-      },
-    ],
-  },
-  SINGLE_RECORD_BATCH
-);
 
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
-// and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
+// and the engine lease (packages/server-utils/src/generationJobs/wiring.ts LEASE_MS) must stay ordered:
 // timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
 // overlapped by another worker. That ordering holds because Lambda enforces the timeout; the self-host
 // runner (apps/workers/src/selfhost/main.ts) has no hard kill, so there it relies on provider and storage
@@ -1223,6 +1239,15 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
+    // Scene (compose) jobs download up to 200 MB of inputs and write the rendered MP4 under /tmp.
+    storage: '2 GB',
+    nodejs: {
+      // ffmpeg-static resolves its binary relative to its own package dir, so it cannot be bundled; install runs
+      // npm for the Lambda's linux platform, so its postinstall downloads the matching static ffmpeg into the zip.
+      // Registered by apps/workers/src/queueHandlers/generationJob.ts, never imported by server-utils.
+      install: ['ffmpeg-static'],
+      esbuild: { external: ['ffmpeg-static'] },
+    },
     vpc: lambdaVpc,
     link: [
       ...allSecrets,
@@ -1233,6 +1258,8 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // The render submit step hands the job to the render worker.
+      renderJobQueue,
       // A masked image edit converts the mask to PNG there.
       imageProcessor,
     ],
@@ -1372,7 +1399,8 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+    link: [...allSecrets, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1748,10 +1776,9 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
 );
 
 // Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
-// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
-// these queues, so a pair has no consumer until that wiring exists. Without core names
-// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
-// deploy here.
+// (web.ts) but subscribes no consumer: sst.config.ts hands the pairs to a package's
+// contributeInfra, which subscribes its own. Without core names nothing stops a pair from
+// reusing a core logical name, so codegen without infra/ fails the deploy here.
 const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
 const { contributedInfraResources } = generatedInfraResources;
 if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
@@ -1789,9 +1816,9 @@ export {
   imageGenerationQueue,
   imageEditQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -1799,6 +1826,7 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
@@ -1829,9 +1857,9 @@ export {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
@@ -1839,6 +1867,7 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -1873,7 +1902,6 @@ export {
   fabFileBucketNotification,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
@@ -1881,6 +1909,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,

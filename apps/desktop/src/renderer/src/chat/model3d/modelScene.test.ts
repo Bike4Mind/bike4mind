@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { ModelPartMesh } from '@shared/model3d';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -7,6 +7,7 @@ import {
   fitAngle,
   buildModelObject,
   exportGlb,
+  shareMetalRoughMaps,
   loadAsset,
   openPose,
   partMaterial,
@@ -15,7 +16,11 @@ import {
   summarizeObject,
   summarizeParts,
   canExplode,
+  drivingJoint,
   explodeModel,
+  jointDragFrame,
+  extendsPastView,
+  frameBox,
 } from './modelScene';
 
 /** An axis-aligned box from 0 to (x, y, z): 8 corners, 12 triangles, wound outward. */
@@ -33,6 +38,34 @@ describe('fitAngle', () => {
     expect(fitAngle(camera)).toBeCloseTo(THREE.MathUtils.degToRad(20));
     camera.aspect = 0.5;
     expect(fitAngle(camera)).toBeCloseTo(Math.atan(Math.tan(THREE.MathUtils.degToRad(20)) * 0.5));
+  });
+});
+
+describe('extendsPastView', () => {
+  const framedOn = (box: THREE.Box3) => {
+    const camera = new THREE.PerspectiveCamera(35, 1.5, 0.01, 1000);
+    camera.lookAt(frameBox(camera, box));
+    return camera;
+  };
+
+  it('keeps a framed model, and a rebuild that stays inside it, in view', () => {
+    const lantern = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 1));
+    const camera = framedOn(lantern);
+    expect(extendsPastView(camera, lantern)).toBe(false);
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2.1, 1)))).toBe(
+      false
+    );
+  });
+
+  it('flags a model that grew past the view, or reaches behind the camera', () => {
+    const camera = framedOn(new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 1)));
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 4, 1)))).toBe(true);
+    const behind = camera.position.clone().multiplyScalar(2);
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), behind))).toBe(true);
+  });
+
+  it('never flags an empty model', () => {
+    expect(extendsPastView(new THREE.PerspectiveCamera(), new THREE.Box3())).toBe(false);
   });
 });
 
@@ -79,6 +112,54 @@ describe('exportGlb', () => {
     expect(loaded.size[1]).toBeCloseTo(0.5);
     expect(loaded.size[2]).toBeCloseTo(0.25);
     expect(loaded.units).toBe('m');
+  });
+
+  it('exports a procedurally textured part as one metallic-roughness texture', async () => {
+    // jsdom has no canvas: stand in for the 2D context the exporter writes its images through.
+    // Like a real one, drawImage rejects anything that is not an image or canvas.
+    const context = {
+      putImageData: vi.fn(),
+      drawImage: vi.fn(() => {
+        throw new TypeError('drawImage: not an image source');
+      }),
+    };
+    vi.stubGlobal(
+      'ImageData',
+      class {
+        constructor(
+          public data: Uint8ClampedArray,
+          public width: number,
+          public height: number
+        ) {}
+      }
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback =>
+      callback(new Blob([new Uint8Array(4)]))
+    );
+    try {
+      const glb = await exportGlb(buildModelObject([{ ...box('plank', 100, 20, 10), texture: 'wood' }], 'mm'));
+      const jsonLength = new DataView(glb.buffer, glb.byteOffset).getUint32(12, true);
+      const json = JSON.parse(new TextDecoder().decode(glb.slice(20, 20 + jsonLength)));
+      expect(json.materials[0].pbrMetallicRoughness.metallicRoughnessTexture).toBeDefined();
+      expect(context.drawImage).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('hands the exporter one packed map for a textured part, leaving the viewer material alone', () => {
+    const root = buildModelObject([{ ...box('plank', 100, 20, 10), texture: 'wood' }, box('plain', 1, 1, 1)], 'mm');
+    const viewer = (root.getObjectByName('plank') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    const copy = root.clone(true);
+    shareMetalRoughMaps(copy);
+    const plank = (copy.getObjectByName('plank') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(plank.roughnessMap).toBeInstanceOf(THREE.DataTexture);
+    expect(plank.metalnessMap).toBe(plank.roughnessMap);
+    expect(viewer.metalnessMap).toBeNull();
+    const plain = (copy.getObjectByName('plain') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(plain.metalnessMap).toBeNull();
   });
 });
 
@@ -439,5 +520,54 @@ describe('explodeModel', () => {
 
   it('has nothing to pull apart in a single part', () => {
     expect(canExplode(buildModelObject([box('solo', 10, 10, 10)], 'mm'))).toBe(false);
+  });
+});
+
+describe('drivingJoint / jointDragFrame', () => {
+  /** A body, a lid hinged on it, a fixed handle on the lid and a flap hinged on the lid about model Z. */
+  const assembly = () => {
+    const root = buildModelObject(
+      [
+        box('body', 60, 40, 30),
+        { ...box('lid', 60, 40, 10), pivot: [0, 40, 30], parent: 'body', axis: [-1, 0, 0], range: [0, 90] },
+        { ...box('handle', 10, 4, 4), parent: 'lid' },
+        { ...box('flap', 10, 10, 2), pivot: [30, 0, 40], parent: 'lid', axis: [0, 0, 1], range: [0, 45] },
+      ],
+      'mm'
+    );
+    // Model space as world space, so the expected axes read in model terms.
+    root.getObjectByName('model')!.rotation.set(0, 0, 0);
+    return root;
+  };
+
+  it('refuses a drag frame for a part that is not a joint', () => {
+    expect(() => jointDragFrame(assembly().getObjectByName('body')!)).toThrow(/is not a joint/);
+  });
+
+  it('finds the part itself, its jointed parent, or nothing', () => {
+    const root = assembly();
+    expect(drivingJoint(root.getObjectByName('lid')!)?.name).toBe('lid');
+    expect(drivingJoint(root.getObjectByName('handle')!)?.name).toBe('lid');
+    expect(drivingJoint(root.getObjectByName('flap')!)?.name).toBe('flap');
+    expect(drivingJoint(root.getObjectByName('body')!)).toBeNull();
+  });
+
+  it('reads the hinge at its pivot, along its axis', () => {
+    const frame = jointDragFrame(assembly().getObjectByName('lid')!);
+    expect(frame.motion).toBe('turn');
+    expect(frame.pivot.toArray()).toEqual([0, 40, 30]);
+    expect(frame.axis.toArray()).toEqual([-1, 0, 0]);
+    expect(frame.range).toEqual([0, 90]);
+    expect(frame.scale).toBeCloseTo(1, 10);
+  });
+
+  it("carries a child's axis round with its posed parent", () => {
+    const root = assembly();
+    poseJoints(root, { lid: 90 });
+    const { axis } = jointDragFrame(root.getObjectByName('flap')!);
+    // A quarter turn about -X takes model Z to model Y.
+    expect(axis.x).toBeCloseTo(0, 6);
+    expect(axis.y).toBeCloseTo(1, 6);
+    expect(axis.z).toBeCloseTo(0, 6);
   });
 });

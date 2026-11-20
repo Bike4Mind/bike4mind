@@ -11,6 +11,7 @@ import {
   secureParameters,
   BadRequestError,
   NotFoundError,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
@@ -52,7 +53,7 @@ export const addFiles = async (
       : found
   ) as IProjectDocument;
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), fileIds);
 
   // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
   // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable

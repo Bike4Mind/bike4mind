@@ -18,6 +18,7 @@ const refreshUser = vi.fn();
 const stripePortalMutate = vi.fn();
 
 let subscriptions: IUserSubscription[] = [];
+let seatPlan: null | { organizationId: string; organizationName: string; planName: string } = null;
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -30,6 +31,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
+  useGetSeatPlan: () => ({ data: seatPlan, isLoading: false }),
 }));
 
 vi.mock('@client/app/hooks/data/stripe', () => ({
@@ -80,8 +82,30 @@ const renderTab = () =>
 describe('ProfileDetailTabContent subscription line', () => {
   beforeEach(() => {
     subscriptions = [];
+    seatPlan = null;
     stripePortalMutate.mockReset();
     sessionStorage.clear();
+  });
+
+  it('shows a Team seat instead of None, with no upgrade offer', () => {
+    seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+
+    renderTab();
+
+    expect(screen.getByText('Team')).toBeInTheDocument();
+    expect(screen.getByTestId('profile-seat-plan-detail')).toHaveTextContent('profile.seat_plan_via');
+    expect(screen.queryByTestId('subscription-upgrade-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-corner-btn')).not.toBeInTheDocument();
+  });
+
+  it('keeps showing and managing a personal plan held alongside a seat', () => {
+    subscriptions = [subRow()];
+    seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+
+    renderTab();
+
+    expect(screen.queryByTestId('profile-seat-plan-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subscription-corner-btn')).toBeInTheDocument();
   });
 
   it('tells a delinquent user their payment failed instead of when the plan renews', () => {

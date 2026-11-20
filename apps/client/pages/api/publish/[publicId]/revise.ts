@@ -1,3 +1,8 @@
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -19,7 +24,7 @@ import {
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:
@@ -56,6 +61,7 @@ interface ReviseArtifactLean {
   ownerId: string;
   lastPublishedBy?: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   size: { totalBytes: number; fileCount: number };
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
@@ -140,6 +146,7 @@ const handler = baseApi().post(
       {
         publicId,
         deletedAt: null,
+        ...publishedContentSnapshotFilter(artifact),
         $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - REVISE_LOCK_TTL_MS) } }],
       },
       { $set: { revisingAt: lockNow } }
@@ -171,7 +178,7 @@ const handler = baseApi().post(
       // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
       let currentBuf: Buffer;
       try {
-        currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
+        currentBuf = await downloadPublishedIndex(artifact, storage);
       } catch {
         return res.status(500).json({ error: 'Artifact index.html missing from storage' });
       }
@@ -296,19 +303,23 @@ const handler = baseApi().post(
 
       // Archive the current version's stored bytes before overwriting, so a bad revision can be
       // rolled back (previousVersionMeta only stores metadata).
-      await storage
-        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+      let archivedPrevious = false;
+      try {
+        await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
           ContentType: 'text/html',
-        })
-        .catch(() =>
-          req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
-        );
+        });
+        archivedPrevious = true;
+      } catch (error) {
+        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`, {
+          error,
+        });
+      }
 
       // Write the new index.html in place, then the version metadata.
       await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
 
-      await PublishedArtifact.updateOne(
-        { publicId, deletedAt: null },
+      const updated = await PublishedArtifact.updateOne(
+        { publicId, deletedAt: null, revisingAt: lockNow, ...publishedContentSnapshotFilter(artifact) },
         {
           $set: {
             manifest: newManifest,
@@ -323,9 +334,20 @@ const handler = baseApi().post(
               sha256Index: currentSha,
             },
           },
+          $unset: { indexObjectPath: 1 },
           $push: { versions: { $each: versionsToPush } },
         }
       );
+
+      if (updated.matchedCount === 0) {
+        return res.status(409).json({ error: 'The page changed while this operation was running' });
+      }
+
+      if (archivedPrevious) {
+        await deleteRetiredPublishedIndex(artifact, storage, error =>
+          req.logger.warn('[REVISE] Could not remove a retired page payload', { error })
+        );
+      }
 
       // Mark the consumed feedback resolved by the AI revision (current version only).
       await Annotation.updateMany(

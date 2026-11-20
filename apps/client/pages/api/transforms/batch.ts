@@ -1,4 +1,5 @@
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
@@ -10,7 +11,7 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
   resolveShadowSubstitute,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
@@ -84,7 +85,9 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
 
   const modelIds = [...new Set(body.requests.map(r => r.model))];
   const catalog = await getAvailableModels({ anthropic: apiKey });
-  const admission = await createModelAdmission(req.user, catalog);
+  const admission = await createModelAdmission(req.user, catalog, false, {
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   for (const modelId of modelIds) await admission.assert(modelId);
   const modelInfos = new Map<string, ModelInfo>(catalog.filter(m => modelIds.includes(m.id)).map(m => [m.id, m]));
   const unpriced = modelIds.filter(id => !modelInfos.has(id));

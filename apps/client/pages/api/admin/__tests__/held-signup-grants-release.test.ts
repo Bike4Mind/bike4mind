@@ -43,19 +43,38 @@ vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({
 const audit = vi.hoisted(() => ({
   record: vi.fn(),
   deny: vi.fn(),
+  policy: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase()),
   denySelfAdminAction: audit.deny,
-  loadCreditGrantPolicy: vi.fn(),
+  loadCreditGrantPolicy: audit.policy,
+  parseAdminActionReason: (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim())
+      throw Object.assign(new Error('A reason is required'), { statusCode: 400 });
+    return value.trim();
+  },
   recordAdminActionFromRequest: audit.record,
+}));
+const ai = vi.hoisted(() => ({ suggestion: vi.fn(), override: vi.fn() }));
+vi.mock('@server/admin/ai/audit', () => ({
+  withAiSuggestionId: (details: Record<string, unknown>, aiSuggestionId: string) => ({ ...details, aiSuggestionId }),
+}));
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({
+  userAssessmentSuggestion: ai.suggestion,
+  recordUserAssessmentOverride: ai.override,
 }));
 import '@pages/api/admin/held-signup-grants/release';
 
 const id = (n: number) => String(n).padStart(24, '0');
+const REASON = 'verified partner signup';
 const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> = {}) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+  const withReason =
+    body && typeof body === 'object' && !Array.isArray(body) && !('reason' in body)
+      ? { reason: REASON, ...body }
+      : body;
+  const { req, res } = createMocks({ method: 'POST', body: withReason });
   Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: { error: vi.fn() } });
   await Promise.resolve()
     .then(() => {
@@ -70,7 +89,81 @@ beforeEach(() => {
   findAdminTargetsByIds.mockReset().mockResolvedValue([]);
   preview.mockReset().mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   audit.record.mockReset();
+  audit.policy.mockReset().mockReturnValue({ singleGrantCredits: 10 });
   audit.deny.mockReset().mockRejectedValue(Object.assign(new Error('own account'), { statusCode: 403 }));
+  ai.suggestion.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+  ai.override.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+});
+
+const ASSESSMENT_ID = 'a'.repeat(24);
+const SUGGESTION_ID = 'c'.repeat(24);
+
+describe('releasing from a confirm dialog', () => {
+  it('records the admin reason on each release audit entry', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'released', credits: 500 }] });
+
+    expect((await run({ userIds: [id(1)], reason: REASON })).statusCode).toBe(200);
+
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        reason: REASON,
+        details: { credits: 500, source: 'held_grant_release', batchId: 'b1' },
+      }),
+      expect.anything()
+    );
+    expect(ai.suggestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed reason before paying', async () => {
+    expect((await run({ userIds: [id(1)], reason: '' })).statusCode).toBe(400);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('records releasing over an abuse assessment as an override, linked in the audit entry', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'released', credits: 500 }] });
+
+    const res = await run({
+      userIds: [id(1)],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID, overrideReason: 'Evidence misread' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ai.suggestion).toHaveBeenCalledWith('heldSignupGrant', id(1), ASSESSMENT_ID);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: { credits: 500, source: 'held_grant_release', batchId: 'b1', aiSuggestionId: SUGGESTION_ID },
+      }),
+      expect.anything()
+    );
+    expect(ai.override).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      {
+        overrideAction: { action: 'release' },
+        overrideReason: 'Evidence misread',
+        decidedBy: { userId: 'admin-1', name: 'Admin' },
+      }
+    );
+  });
+
+  it('records no override when nothing was released', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'skipped', credits: 0 }] });
+
+    await run({ userIds: [id(1)], reason: REASON, aiDecision: { assessmentId: ASSESSMENT_ID } });
+
+    expect(ai.override).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['without a reason', { userIds: [id(1)], reason: undefined }],
+    ['for a batch', { userIds: [id(1), id(2)], reason: REASON }],
+  ])('refuses an AI decision %s before paying', async (_label, body) => {
+    expect((await run({ ...body, aiDecision: { assessmentId: ASSESSMENT_ID } })).statusCode).toBe(400);
+    expect(release).not.toHaveBeenCalled();
+    expect(ai.suggestion).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/admin/held-signup-grants/release', () => {
@@ -122,10 +215,44 @@ describe('POST /api/admin/held-signup-grants/release', () => {
         action: 'user.credits.adjusted',
         target: { kind: 'user', id: id(1), displayName: id(1) },
         summary: 'released held signup grant',
+        reason: REASON,
         details: { credits: 12, source: 'held_grant_release', batchId: 'b1' },
       },
       expect.anything()
     );
+  });
+
+  describe('reason', () => {
+    it.each([
+      ['missing', undefined],
+      ['empty', ''],
+      ['blank', '   '],
+      ['non-string', 42],
+    ])('refuses a %s reason before paying or auditing anything', async (_label, reason) => {
+      const body: Record<string, unknown> = { userIds: [id(1)] };
+      body.reason = reason;
+      expect((await run(body)).statusCode).toBe(400);
+      expect(release).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('carries the reason and the large-grant policy into every paid row audit', async () => {
+      release.mockResolvedValue({
+        batchId: 'b1',
+        results: [
+          { userId: id(1), outcome: 'released', credits: 500 },
+          { userId: id(2), outcome: 'released', credits: 3 },
+        ],
+      });
+      expect((await run({ userIds: [id(1), id(2)], reason: '  bulk review done ' })).statusCode).toBe(200);
+      expect(audit.record).toHaveBeenCalledTimes(2);
+      for (const call of audit.record.mock.calls) {
+        expect(call[1]).toMatchObject({ reason: 'bulk review done' });
+        expect(call[2].creditGrantPolicy()).toEqual({ singleGrantCredits: 10 });
+      }
+      expect(audit.record.mock.calls[0][1].details.credits).toBe(500);
+      expect(audit.policy).toHaveBeenCalledTimes(1);
+    });
   });
   it.each([
     ['self', { id: id(2) }],
@@ -161,7 +288,7 @@ describe('POST /api/admin/held-signup-grants/release', () => {
 
   describe('dry run', () => {
     it('previews with the held-release classification and pays, audits and records nothing', async () => {
-      const res = await run({ userIds: [id(1)], dryRun: true });
+      const res = await run({ userIds: [id(1)], dryRun: true, reason: undefined });
 
       expect(res.statusCode).toBe(200);
       expect(preview).toHaveBeenCalledExactlyOnceWith(

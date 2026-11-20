@@ -47,7 +47,7 @@ const {
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
   userState: {
     isAdmin: false,
-    currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
+    currentUser: undefined as { id?: string; tags?: string[]; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
   logEvent: vi.fn(),
 }));
@@ -402,6 +402,20 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     expect(contributedRow()).toHaveTextContent('Launch Pad');
   });
 
+  it('draws a gated row for an admin who lacks the entitlement', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    userState.isAdmin = true;
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
+  it('draws a gated row for a developer who lacks the entitlement', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    userState.currentUser = { tags: ['Developer'] };
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
   it('leaves a nav item that does not opt in to the More flyout', () => {
     navItems.push({ path: '/launch', label: 'Launch Pad' });
     renderNav();
@@ -510,7 +524,7 @@ describe('SidenavNav More overflow', () => {
   it('draws no More row at exactly the limit', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
-    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
     const { container } = renderNav();
     expect(navRowIds(container)).toHaveLength(8);
     expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
@@ -534,6 +548,7 @@ describe('SidenavNav More overflow', () => {
       'sidenav-more-premium-launch',
       'sidenav-more-premium-forge',
       'sidenav-more-projects',
+      'sidenav-more-artifacts',
       'sidenav-more-published',
       'sidenav-more-skill-market',
     ]);
@@ -542,12 +557,12 @@ describe('SidenavNav More overflow', () => {
   it('never folds a single row: one over the limit moves two', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
-    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
     useVideoModelsMock.mockReturnValue({ data: [{ id: 'v' }] });
     const { container } = renderNav();
 
     expect(navRowIds(container)).toHaveLength(8);
-    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-skill-market']);
+    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-artifacts']);
   });
 
   it('navigates from a More item', () => {

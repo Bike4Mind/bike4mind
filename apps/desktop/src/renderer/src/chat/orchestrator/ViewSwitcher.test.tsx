@@ -4,7 +4,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS } from './orchestratorPrefs';
 import { createThemedMount, el, query } from './testUtils';
-import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, stepView, viewStepFor } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_COMPONENTS } from './viewRegistry';
+import {
+  ORCHESTRATOR_VIEW_INFO,
+  ViewSwitcher,
+  RESET_VIEW,
+  isFocusToggle,
+  isViewReset,
+  stepView,
+  viewStepFor,
+} from './ViewSwitcher';
 
 const themed = createThemedMount();
 const onViewChange = vi.fn();
@@ -47,9 +56,33 @@ describe('viewStepFor', () => {
   });
 });
 
+describe('isFocusToggle', () => {
+  it('matches Mod+Shift+F only', () => {
+    expect(isFocusToggle(shortcut('KeyF'))).toBe(true);
+    expect(isFocusToggle(shortcut('KeyF', { shiftKey: false }))).toBe(false);
+    expect(isFocusToggle(shortcut('KeyF', { altKey: true }))).toBe(false);
+    expect(isFocusToggle(shortcut('KeyG'))).toBe(false);
+  });
+});
+
+describe('isViewReset', () => {
+  it('matches Mod+Shift+Esc only', () => {
+    expect(isViewReset(shortcut('Escape'))).toBe(true);
+    expect(isViewReset(shortcut('Escape', { shiftKey: false }))).toBe(false);
+    expect(isViewReset(shortcut('Escape', { altKey: true }))).toBe(false);
+    expect(isViewReset(shortcut('Escape', { metaKey: false, ctrlKey: false }))).toBe(false);
+    expect(isViewReset(shortcut('KeyO'))).toBe(false);
+  });
+});
+
 describe('ViewSwitcher', () => {
-  it('has a menu entry for every view', () => {
-    for (const id of ORCHESTRATOR_VIEWS) expect(ORCHESTRATOR_VIEW_INFO[id].label).toBeTruthy();
+  it('has a menu entry and a component for every view, and nothing more', () => {
+    for (const id of ORCHESTRATOR_VIEWS) {
+      expect(ORCHESTRATOR_VIEW_INFO[id].label).toBeTruthy();
+      expect(ORCHESTRATOR_VIEW_COMPONENTS[id]).toBeTypeOf('function');
+    }
+    expect(Object.keys(ORCHESTRATOR_VIEW_INFO).sort()).toEqual([...ORCHESTRATOR_VIEWS].sort());
+    expect(Object.keys(ORCHESTRATOR_VIEW_COMPONENTS).sort()).toEqual([...ORCHESTRATOR_VIEWS].sort());
   });
 
   it('shows the current view on the button', async () => {
@@ -71,7 +104,26 @@ describe('ViewSwitcher', () => {
     expect(el('orchestrator-view-option-table').querySelectorAll('svg')).toHaveLength(1);
   });
 
-  it('offers the quiet-when-idle switch in the Tavern only, checked while on', async () => {
+  it('offers the Focus switch on every view and toggles it from the menu and the shortcut', async () => {
+    const onToggle = vi.fn();
+    await themed.render(<ViewSwitcher view="board" onViewChange={onViewChange} focus={{ on: false, onToggle }} />);
+    expect(el('orchestrator-view-menu-btn').dataset.focus).toBe('off');
+    act(() => el('orchestrator-view-menu-btn').click());
+    const toggle = el('orchestrator-focus-toggle');
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    act(() => toggle.click());
+    expect(onToggle).toHaveBeenLastCalledWith(true);
+
+    await themed.render(<ViewSwitcher view="board" onViewChange={onViewChange} focus={{ on: true, onToggle }} />);
+    expect(el('orchestrator-view-menu-btn').textContent).toContain('Focus');
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', shortcut('KeyF')));
+    });
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
+  it('offers the quiet-when-idle switch only on views that settle, checked while on', async () => {
     const onToggle = vi.fn();
     await themed.render(<ViewSwitcher view="board" onViewChange={onViewChange} ambient={{ on: true, onToggle }} />);
     act(() => el('orchestrator-view-menu-btn').click());
@@ -86,11 +138,78 @@ describe('ViewSwitcher', () => {
     expect(onToggle).toHaveBeenCalledWith(false);
   });
 
+  it('resets to Board and turns Focus off from the shortcut and the menu', async () => {
+    const onToggle = vi.fn();
+    await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} focus={{ on: true, onToggle }} />);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', shortcut('Escape')));
+    });
+    expect(onViewChange).toHaveBeenLastCalledWith(RESET_VIEW);
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+
+    onViewChange.mockReset();
+    onToggle.mockReset();
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-view-reset').click());
+    expect(onViewChange).toHaveBeenCalledWith(RESET_VIEW);
+    expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it('resets from a focused composer that would otherwise stop the turn', async () => {
+    await themed.render(
+      <>
+        <ViewSwitcher view="tavern" onViewChange={onViewChange} />
+        <textarea data-testid="fake-composer" />
+      </>
+    );
+    const onStop = vi.fn();
+    // Mirrors the composer's own handler: Escape with a live turn stops it.
+    const textarea = el('fake-composer');
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        onStop();
+      }
+    });
+    act(() => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { ...shortcut('Escape'), key: 'Escape', bubbles: true }));
+    });
+    expect(onViewChange).toHaveBeenCalledWith(RESET_VIEW);
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('leaves Focus alone on reset when it is already off', async () => {
+    const onToggle = vi.fn();
+    await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} focus={{ on: false, onToggle }} />);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', shortcut('Escape')));
+    });
+    expect(onViewChange).toHaveBeenCalledWith('board');
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
   it('reports the picked view', async () => {
     await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} />);
     act(() => el('orchestrator-view-menu-btn').click());
     act(() => el('orchestrator-view-option-tavern').click());
     expect(onViewChange).toHaveBeenCalledWith('tavern');
+  });
+
+  it('selects Office as an ambient scene', async () => {
+    await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-view-option-office').click());
+    expect(onViewChange).toHaveBeenCalledWith('office');
+    expect(ORCHESTRATOR_VIEW_INFO.office.group).toBe('scene');
+
+    await themed.render(
+      <ViewSwitcher view="office" onViewChange={onViewChange} ambient={{ on: true, onToggle: vi.fn() }} />
+    );
+    expect(el('orchestrator-view-menu-btn').textContent).toContain('Office');
+    act(() => el('orchestrator-view-menu-btn').click());
+    expect(el('orchestrator-ambient-toggle').getAttribute('aria-checked')).toBe('true');
+    expect(stepView('aquarium', 1)).toBe('office');
+    expect(stepView('office', 1)).toBe('board');
   });
 
   it('cycles views from the keyboard shortcut', async () => {

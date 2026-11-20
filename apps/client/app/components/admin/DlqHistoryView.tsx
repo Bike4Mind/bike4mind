@@ -60,6 +60,7 @@ const columns: DataColumn<DlqReplayLogEntry>[] = [
   {
     id: 'reason',
     label: 'Reason',
+    wrap: true,
     render: entry => (
       <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
         {entry.reason || 'No reason recorded'}
@@ -78,6 +79,7 @@ const columns: DataColumn<DlqReplayLogEntry>[] = [
   {
     id: 'result',
     label: 'Result',
+    wrap: true,
     render: entry => (
       <Stack gap={0.5}>
         <StatusChip

@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: h.quotaAdmission,
 }));
 import { createMocks } from 'node-mocks-http';
@@ -35,7 +35,9 @@ vi.mock('@bike4mind/services', () => ({
   sessionService: { autoName: h.autoName },
   meterCompletionBackend: (llm: unknown) => llm,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: () => vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({ questRepository: {}, sessionRepository: {} }));
 
 await import('../auto-rename');

@@ -1,3 +1,4 @@
+import type { Theme } from '@mui/joy/styles';
 import { FIELD_FOCUS_PARTS } from '@client/app/utils/themes/customizations/adminSkin';
 
 export { adminScrollGutter, adminScrollbarVisible } from '@client/app/utils/themes/customizations/adminScrollbar';
@@ -34,6 +35,14 @@ export const adminPageFrame = {
   pt: { xs: 2, md: 3 },
   pb: 8,
 };
+
+/**
+ * Stacking for the sticky bottom bars. A DataTable's sticky header sits at Joy's `zIndex.table`, so the
+ * bars go just above it (and far below Joy's popup layer, so menus and dialogs opened from a bar still
+ * cover it). A wrapper that makes a bar sticky itself must use the same value, or the bar stays under it.
+ */
+export const adminBulkBarZIndex = (theme: Theme) => theme.zIndex.table + 1;
+export const adminSaveBarZIndex = (theme: Theme) => theme.zIndex.table + 2;
 
 /**
  * Rows-per-page sizes the DataTable footer offers. Feedback/constants.ts derives the page sizes its URL

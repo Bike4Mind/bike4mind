@@ -5,9 +5,9 @@ import { z } from 'zod';
 import { Request } from 'express';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
-import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@bike4mind/server-utils/dataLakes/index';
 import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 3600;

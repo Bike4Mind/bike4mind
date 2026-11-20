@@ -1,19 +1,16 @@
 /**
  * Create v2's video rules on top of videoForm: a model switch keeps every value, so each one the model does not take
  * is reported here with its why-not reason (videoFailureReason, the same text the server refuses with) and the value
- * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
+ * the user can move to in one click. The model cards come from rankVideoModels, which runs the same validator.
  */
-import {
-  VIDEO_MODEL_STRENGTHS,
-  VIDEO_PROVIDER_LABELS,
-  VIDEO_PROVIDER_IDS,
-  VideoModelIdSchema,
-  videoFailureReason,
-  type VideoModel,
-  type VideoProviderId,
-} from '@bike4mind/common';
+import { rankVideoModels, videoFailureReason, type VideoModel, type VideoRankingRequest } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
-import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
+import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
+import {
+  rankedCardFit,
+  withRankedDefaultFirst,
+  type StudioModelCard,
+} from '@client/app/components/Studio/studioModelCard';
 import { MODE_LABELS, estimateCredits, initialFormFor, snapDuration, type VideoFormState } from './videoForm';
 
 export type VideoProblemField = 'mode' | 'duration' | 'aspect' | 'resolution';
@@ -79,27 +76,43 @@ export function videoFieldProblems(model: VideoModel, form: VideoFormState): Vid
   return problems;
 }
 
-const isVideoProvider = (provider: string): provider is VideoProviderId =>
-  (VIDEO_PROVIDER_IDS as readonly string[]).includes(provider);
+// The ranker checks capability, not the file, so an image not chosen yet still ranks as "this animates an image".
+const PENDING_FIRST_FRAME = 'pending-first-frame';
 
-const strengthOf = (modelId: string): string => {
-  const parsed = VideoModelIdSchema.safeParse(modelId);
-  return parsed.success ? VIDEO_MODEL_STRENGTHS[parsed.data] : '';
+/** The form as the ranker reads it. Audio is left out: it is a per-model toggle, not part of what is asked for. */
+export const videoRankingRequest = (form: VideoFormState): VideoRankingRequest => ({
+  mode: form.mode,
+  durationSeconds: form.durationSeconds,
+  aspectRatio: form.aspectRatio,
+  resolution: form.resolution,
+  ...(form.mode === 'image_to_video' && {
+    inputs: [{ role: 'first_frame' as const, fileId: form.inputImage?.fileId ?? PENDING_FIRST_FRAME }],
+  }),
+});
+
+/**
+ * A card per video model in rankVideoModels order for the form: the ones that fit first with why they were picked,
+ * the rest after with the validator's why-not reason. Each is priced at its own defaults.
+ */
+export const videoModelCards = (models: readonly VideoModel[], form: VideoFormState): StudioModelCard[] => {
+  const byId = new Map(models.map(model => [model.id, model]));
+  return rankVideoModels([...byId.keys()], videoRankingRequest(form)).flatMap(ranked => {
+    const model = byId.get(ranked.id);
+    if (!model) return [];
+    return [
+      {
+        id: model.id,
+        name: model.display_name,
+        provider: model.provider_label ?? model.provider,
+        strength: model.blurb ?? '',
+        creditsPerOutput: estimateCredits(initialFormFor(model)),
+        outputNoun: 'clip',
+        ...rankedCardFit(ranked),
+      },
+    ];
+  });
 };
 
-/** A card per video model, each priced at its own defaults and greyed with the first value it does not take. */
-export const videoModelCards = (models: readonly VideoModel[], form: VideoFormState): StudioModelCard[] =>
-  models.map(model => {
-    const [firstProblem] = Object.values(videoFieldProblems(model, form));
-    return {
-      id: model.id,
-      name: model.display_name,
-      provider: isVideoProvider(model.provider) ? VIDEO_PROVIDER_LABELS[model.provider] : model.provider,
-      strength: strengthOf(model.id),
-      creditsPerOutput: estimateCredits(initialFormFor(model)),
-      outputNoun: 'clip',
-      modes: model.modes.map(mode => MODE_LABELS[mode]),
-      unavailableReason: null,
-      mismatchReason: firstProblem?.reason ?? null,
-    };
-  });
+/** `models` with the ranked default first, so Create v2 opens on it (see withRankedDefaultFirst). */
+export const withRankedVideoDefaultFirst = (models: NonEmptyList<VideoModel>): NonEmptyList<VideoModel> =>
+  withRankedDefaultFirst(models, model => videoModelCards(models, initialFormFor(model)));

@@ -6,7 +6,6 @@ import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
-import type { ProviderSlotStore } from '../../../providerCapacity';
 import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
 import type { OperationalBillingCheck } from '../../../billing/isOperationalBillingEnabled';
 import {
@@ -34,6 +33,7 @@ import {
   type AuthOrigin,
   type CitableSource,
   type DecisionResponse,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 
 /**
@@ -128,8 +128,6 @@ export interface ToolContext {
     latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
-    caches?: ProviderSlotStore;
     /**
      * The image tools bump the session's imageCount through this (see recordGeneratedImages).
      * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
@@ -275,6 +273,8 @@ export interface ToolContext {
    * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
    */
   organizationId?: string;
+  /** Policy scope is independent of the tool's personal/organization data-write scope. */
+  governingOrgModelPolicy?: ReadOrgModelPolicy;
   /**
    * How the turn was authenticated (see AuthOrigin). Required so that every door that runs tools
    * has to decide it: a tool that must refuse non-session turns checks `authOrigin === 'session'`

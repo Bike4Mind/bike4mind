@@ -2,6 +2,19 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  GeneratedFileCleanup: {
+    kind: 'noUserData',
+    note: 'Exact server-generated UUID Files paths awaiting cleanup; no account or session identifier.',
+  },
+  OrganizationGeneratedObject: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  OrganizationRetentionEstimate: {
+    kind: 'holder',
+    references: [{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['token'],
+  },
   // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
   // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
   // Campaign keys are opaque hashes, so no other example names the person. The admin references below
@@ -83,6 +96,15 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrgAdminNotificationPref: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Per-period alert dedup rows; only an alert about one person names them, and its scope repeats the id.
+  OrgAlertNotification: {
+    kind: 'holder',
+    references: [{ path: 'subjectUserId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   OrganizationAuditEvent: {
     kind: 'holder',
     references: [
@@ -90,6 +112,11 @@ export const infraHolders = {
       { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.added' } },
       { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
     ],
+  },
+  // Platform-level admin roles; the only personal reference is the admin who created the role.
+  AdminRole: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
@@ -125,10 +152,78 @@ export const infraHolders = {
     withheldPaths: ['details.approval.requestedBy', 'details.organizationOwnerId'],
     unmatchedPaths: { 'actor.email': 'The acting admin, kept in the audit trail; not resolved to their account.' },
   },
+  // Spend-freeze history rows stay as the audit trail: the person is the frozen scope (a 'User' freeze) or an
+  // admin who froze or lifted. Free-text `reason` and `liftReason` are not scanned for the person.
+  SpendFreeze: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'scopeId',
+        matchBy: 'userId',
+        where: { scopeType: 'User' },
+        action: 'retain',
+        ...AUDIT_LOG,
+      },
+      {
+        path: 'actor.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'liftedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+    ],
+    // Mixed objects: the person inside is covered by the dotted `actor.userId` / `liftedBy.userId` references.
+    unrelatedPaths: ['actor', 'liftedBy'],
+  },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
   AdminAuditReview: {
     kind: 'holder',
     references: [{ path: 'reviewer.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['reviewer.name'] }],
+  },
+  // Quarterly admin access review: who held admin access and who confirmed or revoked it.
+  AdminAccessReview: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'decisions.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.email'],
+      },
+      {
+        path: 'decisions.reviewer.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.reviewer.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'startedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['startedBy.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'completedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['completedBy.name'],
+        exportScope: 'reference',
+      },
+    ],
+    unmatchedPaths: { 'decisions.email': 'The reviewed admin, kept with the decision; matched by decisions.userId.' },
   },
   // Expires on its own (TTL index) once the admin's gated action has written its audit rows.
   AdminGateReservation: {
@@ -203,6 +298,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqTriageDelivery: {
+    kind: 'noUserData',
+    note: 'Notification deduplication keys derived from suggestion IDs, delivery state and timestamps only. No bodies or user references. Expires after 30 days.',
+  },
   DlqFailure: {
     kind: 'noUserData',
     note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
@@ -261,6 +360,13 @@ export const infraHolders = {
   EmailTemplate: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  // Triage of the person's own mail. The draft's recipient is the third-party sender, which goes with the document.
+  EmailTriageItem: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The ingested email's id, not an address.
+    unrelatedPaths: ['emailId'],
   },
   FallbackLakeSetting: { kind: 'noUserData', note: 'Per-lake grounding settings; no user reference.' },
   GitHubLakeAuthGrant: {
@@ -376,14 +482,20 @@ export const infraHolders = {
     secretPaths: ['routingToken', 'secret'],
   },
   // `userId` is the owner. Deleting a team organization would remove its members' workspace, so the owner link is
-  // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
-  // `purgeAccountContent` filters on) is deferred to the erasure flow.
+  // anonymized here. The person's personal workspaces (the `personal` flag) are skipped by
+  // subjectErasureExecutor.ts and deleted by `hardDeleteUser` (completeAccountDeletion.ts).
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
   // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['billingContact'] },
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'anonymize',
+        alsoRedact: ['billingContact'],
+        afterSubjectDeleted: true,
+      },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
@@ -394,6 +506,8 @@ export const infraHolders = {
       'signupGrantUnlockCount',
       'signupInviteBonusCount',
       'serviceAccountUserId',
+      'retentionSweepRevision',
+      'retentionLastSweptAt',
     ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
@@ -433,6 +547,7 @@ export const infraHolders = {
       },
     ],
   },
+  SecopsTriageRun: { kind: 'noUserData', note: 'Platform security triage run summary.' },
   SecretRotation: {
     kind: 'holder',
     references: [
@@ -476,6 +591,24 @@ export const infraHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['downloadUrl'],
     unrelatedPaths: ['includeUserNames'],
+  },
+  SlackFeedbackChannel: {
+    kind: 'holder',
+    references: [{ path: 'configuredBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  SlackFeedbackDelivery: {
+    kind: 'noUserData',
+    note: 'Organization delivery dedupe and audit. Reactor is an external Slack id, not a platform account id; no platform user mapping, message text or email is stored.',
+    unrelatedPaths: ['reactor'],
+  },
+  // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
+  Space: {
+    kind: 'holder',
+    references: [
+      { path: 'ownerUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'members.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'removedUserIds', matchBy: 'userId', action: 'pullFromArray' },
+    ],
   },
   SreErrorPattern: { kind: 'noUserData', note: 'Learned error diagnosis pattern.' },
   // `fixVerdict.by` is a GitHub login of a staff reviewer, not a Bike4Mind user reference.

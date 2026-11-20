@@ -5,6 +5,7 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
+import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
 import { MfaEnrollmentEvents } from '@bike4mind/common';
 import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
 
@@ -40,6 +41,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         // it out of the error log so it doesn't trip a LiveOps alert.
         if (freshUser.mfa?.totpEnabled) {
           return res.status(409).json({ error: 'MFA is already enabled for this account.' });
+        }
+
+        if (refuseAppEnrollmentBeforeSecondFactor(req.user, freshUser)) {
+          return res.status(403).json({ error: APP_ENROLLMENT_REFUSAL });
         }
 
         const result = await mfaService.setupMFA(

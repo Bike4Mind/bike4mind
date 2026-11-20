@@ -2,8 +2,7 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "required": [
-    "existingSecret",
-    "images"
+    "existingSecret"
   ],
   "properties": {
     "existingSecret": {
@@ -13,92 +12,7 @@
       "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
     },
     "images": {
-      "type": "object",
-      "required": [
-        "app",
-        "chatcompletion",
-        "ws",
-        "subscriberFanout",
-        "minio",
-        "mc",
-        "mongo",
-        "sqs",
-        "mail"
-      ],
-      "properties": {
-        "app": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "chatcompletion": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "ws": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "subscriberFanout": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "minio": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "mc": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "mongo": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "sqs": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        },
-        "mail": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
-          "not": {
-            "pattern": ":latest$"
-          }
-        }
-      }
+      "type": "object"
     },
     "imagePullPolicy": {
       "enum": [
@@ -167,6 +81,282 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        }
+      }
+    },
+    "renderWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "selfhost",
+                "podIdentity"
+              ]
+            }
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Z_][A-Z0-9_]*$",
+            "not": {
+              "pattern": "(SECRET|PASSWORD|TOKEN|API_KEY|ACCESS_KEY|ENCRYPTION_KEY|^MONGODB_URI$|^TMPDIR$)"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 30
+        },
+        "tmpSizeLimit": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi|Ti)$"
+        },
+        "podAnnotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "resources": {
+          "type": "object"
+        },
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+              "maxLength": 253
+            },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "keda": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minReplicaCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxReplicaCount": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "queueLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pollingInterval": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldownPeriod": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "queueURL": {
+              "type": "string"
+            },
+            "awsRegion": {
+              "type": "string"
+            },
+            "identityOwner": {
+              "enum": [
+                "keda",
+                "workload"
+              ]
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "image": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          }
+        }
+      }
+    },
+    "mode": {
+      "enum": [
+        "full",
+        "renderWorkerOnly"
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "mode": {
+        "const": "renderWorkerOnly"
+      }
+    },
+    "required": [
+      "mode"
+    ]
+  },
+  "then": {
+    "required": [
+      "renderWorker"
+    ],
+    "properties": {
+      "renderWorker": {
+        "required": [
+          "enabled",
+          "aws"
+        ],
+        "properties": {
+          "enabled": {
+            "const": true
+          },
+          "aws": {
+            "properties": {
+              "mode": {
+                "const": "podIdentity"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "required": [
+      "images"
+    ],
+    "properties": {
+      "images": {
+        "type": "object",
+        "required": [
+          "app",
+          "chatcompletion",
+          "ws",
+          "subscriberFanout",
+          "minio",
+          "mc",
+          "mongo",
+          "sqs",
+          "mail"
+        ],
+        "properties": {
+          "app": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "chatcompletion": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "ws": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "subscriberFanout": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "minio": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "mc": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "mongo": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "sqs": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          },
+          "mail": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(^.+@sha256:[a-f0-9]{64}$|^.+:[^/:]+$)",
+            "not": {
+              "pattern": ":latest$"
+            }
+          }
         }
       }
     }

@@ -35,7 +35,9 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
 const validRequest = { model: 'test-music', prompt: 'a folk song', durationSeconds: 5 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 // Registered as ElevenLabs so a priced, per-second model can be held against.
 const elevenLabsStub: MusicProvider = {
@@ -107,7 +109,7 @@ describe('createMusicJob', () => {
         deps
       )
     ).rejects.toBe(refusal);
-    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-music', true);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-music', true, null);
     expect(holdCredits).not.toHaveBeenCalled();
     expect(deps.enqueue).not.toHaveBeenCalled();
   });
@@ -249,6 +251,7 @@ describe('createMusicJob', () => {
       { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
       deps
     );
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', expect.any(String), undefined, 'org1');
     expect(result).toMatchObject({ ok: true, job: { ownerType: CreditHolderType.Organization, ownerId: 'org1' } });
   });
 

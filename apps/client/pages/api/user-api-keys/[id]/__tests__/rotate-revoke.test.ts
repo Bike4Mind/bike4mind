@@ -435,6 +435,25 @@ describe('POST /api/user-api-keys/[id]/rotate - paid-only access switch', () => 
   });
 });
 
+describe('rotating a key never carries an exchange client marker', () => {
+  it('refuses a starter-only owner with 403 even when the key row names an exchange client', async () => {
+    vi.clearAllMocks();
+    resolveOwnedApiKey.mockResolvedValue({
+      id: 'key-1',
+      metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'c' },
+    });
+    isApiKeyAccessAllowedMock.mockImplementation(
+      async (_user: unknown, billing?: unknown) =>
+        !!(billing as { oauthExchangeClientId?: string } | undefined)?.oauthExchangeClientId
+    );
+    const { req, res } = post('key-1');
+    await expect(mockRefs.rotateHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(isApiKeyAccessAllowedMock.mock.calls[0][1]).not.toHaveProperty('oauthExchangeClientId');
+    expect(rotateUserApiKey).not.toHaveBeenCalled();
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+  });
+});
+
 describe('rotation billing policy wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -167,14 +167,6 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
     await this.model.findByIdAndUpdate(id, { $inc: { [field]: amount } });
   }
 
-  async updateOverallStatus(
-    id: string,
-    overallStatus: EmailJobOverallStatus,
-    updates?: Partial<IEmailJob>
-  ): Promise<void> {
-    await this.model.findByIdAndUpdate(id, { overallStatus, ...updates });
-  }
-
   /**
    * Atomically set overallStatus to SENDING only if not already SENDING.
    * Returns the updated doc, or null if the job was already sending (prevents duplicate sends).

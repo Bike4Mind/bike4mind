@@ -258,3 +258,42 @@ describe('SpendRollupRepository.sourceMix', () => {
     aggregate.mockRestore();
   });
 });
+
+describe('SpendRollupRepository.ownerModelActivity', () => {
+  const bucketEnd = new Date(bucketStart.getTime() + SPEND_BUCKET_MS);
+
+  beforeEach(async () => {
+    await CreditTransaction.insertMany([
+      deduct(CreditHolderType.User, 'user-a', -100, { model: 'm1' }),
+      deduct(CreditHolderType.User, 'user-a', -50, { model: 'm1' }),
+      deduct(CreditHolderType.User, 'user-a', -5, { model: 'm2' }),
+      deduct(CreditHolderType.User, 'user-a', -3),
+      deduct(CreditHolderType.User, 'user-b', -7, { model: 'm1' }),
+      deduct(CreditHolderType.Organization, 'org-o', -30, { model: 'm3' }),
+      deduct(CreditHolderType.Organization, 'org-o', -999, { model: 'm3', createdAt: bucketEnd }),
+    ]);
+  });
+
+  it('sums credits and counts usage rows per owner and model, inside the window only', async () => {
+    const rows = await spendRollupRepository.ownerModelActivity(bucketStart, bucketEnd, [
+      { scopeType: 'User', scopeId: 'user-a' },
+      { scopeType: 'Organization', scopeId: 'org-o' },
+    ]);
+
+    const sorted = [...rows].sort((a, b) => `${a.scopeId}${a.model}`.localeCompare(`${b.scopeId}${b.model}`));
+    expect(sorted).toEqual([
+      { scopeType: 'Organization', scopeId: 'org-o', model: 'm3', credits: 30, calls: 1 },
+      { scopeType: 'User', scopeId: 'user-a', model: 'm1', credits: 150, calls: 2 },
+      { scopeType: 'User', scopeId: 'user-a', model: 'm2', credits: 5, calls: 1 },
+    ]);
+  });
+
+  it('runs no query when no owner scope is requested', async () => {
+    const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
+    await expect(
+      spendRollupRepository.ownerModelActivity(bucketStart, bucketEnd, [{ scopeType: 'apiKey', scopeId: 'K1' }])
+    ).resolves.toEqual([]);
+    expect(aggregate).not.toHaveBeenCalled();
+    aggregate.mockRestore();
+  });
+});

@@ -121,7 +121,7 @@ const AdminSettingInputField = ({
   defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
-  /** Locks a boolean setting: the switch and Save are disabled and this replaces the description. */
+  /** Locks the setting: its control and Save are disabled and this replaces the description. */
   lockedNote?: string;
   valueHelper?: ReactNode;
 }) => {
@@ -320,11 +320,15 @@ const AdminSettingInputField = ({
                   // Locked during the save round-trip: onSuccess resyncs this field from the
                   // server's resolved value, so an edit typed mid-flight would be silently
                   // overwritten by the response for the previous submission.
-                  disabled={updateSettings.isPending || draft.pending}
+                  disabled={Boolean(lockedNote) || updateSettings.isPending || draft.pending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
-                  <Select disabled={draft.pending} value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
+                  <Select
+                    disabled={Boolean(lockedNote) || draft.pending}
+                    value={(value as string) || ''}
+                    onChange={(e, v) => setValue(v)}
+                  >
                     {Array.from(new Set(setting.options)).map((option, i) => (
                       <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
                         {option}
@@ -340,7 +344,7 @@ const AdminSettingInputField = ({
                     // server mask stays plain text so its last-4 tail is readable.
                     type={setting.isSensitive && secretEdited ? 'password' : 'text'}
                     value={draft.staged && secretFocused && showsStoredSecretMask ? '' : (value as string) || ''}
-                    disabled={draft.pending}
+                    disabled={Boolean(lockedNote) || draft.pending}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => {
                       setValue(e.target.value);

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
-import { loadAbuseAssessmentSettings } from '@server/security/abuseAssessment/abuseAssessment';
+import { loadAbuseAssessmentSettings } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
 import { AI_ADVISORY_WINDOW_HOURS } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 import { defineAdminTool } from '../defineAdminTool';
 import { toIso } from '../formatters';
@@ -9,7 +9,7 @@ const MAX_ADVISORIES = 25;
 const MAX_GROUPS = 10;
 
 const WHERE_TO_ENABLE =
-  'Turn on "Advisory Abuse Assessment" and choose a model in Admin Settings > SecOps (abuseAssessmentEnabled, abuseAssessmentConfig.model).';
+  'Turn on "Advisory Abuse Assessment" and choose a model in Admin Settings > Security (abuseAssessmentEnabled, abuseAssessmentConfig.model).';
 
 export const getAiAdvisoriesTool = defineAdminTool({
   name: 'admin_get_ai_advisories',

@@ -11,7 +11,7 @@ import { exportAdminPayments } from '@server/admin/payments/adminPayments';
 import { PAYMENTS_OWNER_SEARCH_LIMIT } from '@server/admin/payments/paymentsQuery';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /** Comma-separated `truncated` / `search_truncated`, present only when the file is incomplete. */
 export const PAYMENTS_EXPORT_NOTES_HEADER = 'X-Export-Notes';

@@ -5,7 +5,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { verifyApiKey } from '@server/cli/auth';
+import { verifyApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';

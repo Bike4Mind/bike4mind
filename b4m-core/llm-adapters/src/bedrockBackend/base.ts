@@ -61,6 +61,8 @@ const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 // error once per recursion depth, and the outer entries would describe a request that never failed.
 // The innermost catch sees the failing payload, so it logs and the rest stay quiet.
 const loggedErrors = new WeakSet<Error>();
+// Caps the provider message in the error title; the full message stays in the log metadata.
+const MAX_LOGGED_ERROR_REASON_LENGTH = 300;
 
 /**
  * Message for a stream that produced no text and no tool call. A stall (no terminal event from an
@@ -1132,7 +1134,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           $metadata?: unknown;
           $retryable?: unknown;
         };
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${error.name}`, {
+        // The alert shows only this title, so it carries the provider's reason (e.g. which block a
+        // ValidationException rejected). Bedrock describes the request's structure here, not its text.
+        const reason =
+          error.message && error.message !== error.name
+            ? `${error.name}: ${error.message.slice(0, MAX_LOGGED_ERROR_REASON_LENGTH)}`
+            : error.name;
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${reason}`, {
           name: error.name,
           message: error.message,
           stack: error.stack,

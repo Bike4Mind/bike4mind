@@ -5,7 +5,14 @@ import type { ChatUsage } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
-import { checkQuotes, describeNested, exploreSystemPrompt, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
+import {
+  checkQuotes,
+  describeNested,
+  exploreSystemPrompt,
+  exploreTool,
+  MAX_EXPLORE_ROUNDS,
+  SHORT_FINAL_REPORT_CHARS,
+} from './exploreTool';
 import { MAX_EXPLORE_REPORT_CHARS, MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor } from './types';
 import type { ExploreContext, ToolContext } from './types';
 
@@ -58,7 +65,6 @@ describe('explore', () => {
         notice: vi.fn(),
         label: vi.fn(),
         moved: vi.fn(),
-        ownContent: vi.fn(),
         diff: vi.fn(),
         detail: vi.fn(),
         image: vi.fn(),
@@ -207,6 +213,49 @@ describe('explore', () => {
     expect(report).toContain(`${MAX_EXPLORE_ROUNDS}-round limit`);
     expect(JSON.stringify(requests.at(-1)?.messages.at(-1)?.content)).toContain('Write your report now');
     expect(JSON.stringify(requests.at(-2)?.messages.at(-1)?.content)).not.toContain('Write your report now');
+  });
+
+  it('returns the report written alongside a tool call when the final reply only points back to it', async () => {
+    const longReport = `Summary: app.ts:1 exports answer.\n\nEdit points\n${'- detail line\n'.repeat(30)}`.trim();
+    expect(longReport.length).toBeGreaterThan(SHORT_FINAL_REPORT_CHARS);
+    const reportedWhileSearching = { ...toolUse([{ name: 'glob_files', input: { pattern: '*' } }]), text: longReport };
+    const { explore } = fakeExplore([[reportedWhileSearching], [{ type: 'content', text: 'Report delivered above.' }]]);
+
+    const report = await exploreTool.run({ question: 'where is answer?' }, { ...context, explore });
+
+    expect(report).toBe(`${longReport}\n\nReport delivered above.`);
+  });
+
+  it('keeps a short genuine final answer when earlier narration was longer', async () => {
+    const narration =
+      'Let me check the remaining test helpers and fixtures to confirm there is no other definition of the handler.';
+    const answer = "No handler for X exists. Searched grep 'X' and glob '**/*x*' under /r.";
+    expect(narration.length).toBeGreaterThan(answer.length);
+    expect(answer.length).toBeLessThan(SHORT_FINAL_REPORT_CHARS);
+    const narratedWhileSearching = { ...toolUse([{ name: 'glob_files', input: { pattern: '*' } }]), text: narration };
+    const { explore } = fakeExplore([[narratedWhileSearching], [{ type: 'content', text: answer }]]);
+
+    const report = await exploreTool.run({ question: 'where is the X handler?' }, { ...context, explore });
+
+    expect(report).toContain(answer);
+    expect(report.endsWith(answer)).toBe(true);
+  });
+
+  it('keeps a full final report even when earlier notes were longer', async () => {
+    const notes = 'n'.repeat(SHORT_FINAL_REPORT_CHARS * 3);
+    const finalReport = `Final: ${'r'.repeat(SHORT_FINAL_REPORT_CHARS)}`;
+    const notedWhileSearching = { ...toolUse([{ name: 'glob_files', input: { pattern: '*' } }]), text: notes };
+    const { explore } = fakeExplore([[notedWhileSearching], [{ type: 'content', text: finalReport }]]);
+
+    const report = await exploreTool.run({ question: 'where is answer?' }, { ...context, explore });
+
+    expect(report).toBe(finalReport);
+  });
+
+  it('tells the explorer to put the whole report in its final reply', () => {
+    expect(exploreSystemPrompt({ roots: ['/r'], workingDirectory: '/r' })).toContain(
+      'Write the whole report in your final reply'
+    );
   });
 
   it('stops when the turn is stopped', async () => {

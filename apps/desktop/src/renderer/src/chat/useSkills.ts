@@ -1,40 +1,64 @@
-import { useCallback, useEffect, useState } from 'react';
-import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
 
 export interface SkillsController extends SkillsState {
   /** Re-read from disk. The picker calls this when it opens, so a skill written a minute ago shows. */
   refresh: () => Promise<void>;
-  /** Let this session's project contribute its skills, and remember the answer for that path. */
+  /** Let this conversation's project contribute its skills, and remember the answer for that path. */
   trustProject: () => Promise<void>;
 }
 
 /**
- * The skills the open conversation can run.
+ * The skills the open conversation - saved, or a draft not yet sent - can run.
  *
  * Read on demand rather than pushed, unlike the MCP servers: nothing changes a skill set except
  * the user editing a markdown file or trusting a project, so there is no transition worth
  * subscribing to - and the picker asks for a fresh read every time it opens, which covers the
  * file they just wrote.
  */
-export function useSkills(sessionId: string | null): SkillsController {
-  const [state, setState] = useState<SkillsState>(NO_SKILLS);
+export function useSkills(scope: SkillsScope | null): SkillsController {
+  const [result, setResult] = useState<{ scope: SkillsScope | null; state: SkillsState } | null>(null);
+  const sessionId = scope && 'sessionId' in scope ? scope.sessionId : null;
+  const isDraft = !!scope && 'draftDirectory' in scope;
+  const draftDirectory = scope && 'draftDirectory' in scope ? scope.draftDirectory : null;
+  const stable = useMemo<SkillsScope | null>(
+    () => (sessionId ? { sessionId } : isDraft ? { draftDirectory } : null),
+    [sessionId, isDraft, draftDirectory]
+  );
+  // A draft's folder can change while a read is in flight; only the latest read may land.
+  const latest = useRef(0);
+  const currentScope = useRef(stable);
+  useLayoutEffect(() => {
+    currentScope.current = stable;
+    return () => {
+      currentScope.current = null;
+      latest.current++;
+    };
+  }, [stable]);
 
-  const refresh = useCallback(async () => {
-    if (!sessionId) {
-      setState(NO_SKILLS);
-      return;
-    }
-    setState(await window.b4m.chat.listSkills(sessionId));
-  }, [sessionId]);
+  const load = useCallback(
+    async (read: (scope: SkillsScope) => Promise<SkillsState>) => {
+      if (currentScope.current !== stable) return;
+      const request = ++latest.current;
+      const next = stable ? await read(stable) : NO_SKILLS;
+      if (request === latest.current && currentScope.current === stable) setResult({ scope: stable, state: next });
+    },
+    [stable]
+  );
+
+  const refresh = useCallback(() => load(target => window.b4m.chat.listSkills(target)), [load]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const trustProject = useCallback(async () => {
-    if (!sessionId) return;
-    setState(await window.b4m.chat.setProjectSkillsTrusted(sessionId, true));
-  }, [sessionId]);
+    const displayedProject = result?.scope === stable ? result.state.untrustedProject : null;
+    if (!stable || currentScope.current !== stable || !displayedProject) return;
+    await load(target => window.b4m.chat.setProjectSkillsTrusted(target, true, displayedProject));
+  }, [stable, result, load]);
 
+  // Mask during render: an effect-only reset leaves the previous project's Trust button clickable.
+  const state = result?.scope === stable ? result.state : NO_SKILLS;
   return { ...state, refresh, trustProject };
 }

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { KnowledgeType, StorageLimitError } from '@bike4mind/common';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
+import { presignPutForReal, signedHeaders } from './__tests__/presignPutForReal';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
@@ -51,7 +53,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'u1' })),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeTagWriteScope: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ assertDataLakeTagWriteScope: vi.fn() }));
 vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
@@ -108,6 +110,19 @@ describe('createPresignedUpload - owning organization', () => {
     expect(options?.signableHeaders?.has('content-length')).toBe(true);
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });
+  });
+
+  it.each([
+    ['a JWT', {}],
+    ['an API key', { apiKeyInfo: { keyId: 'key-1' } }],
+  ])('signs %s upload as create-only, so the PUT must carry If-None-Match: *', async (_caller, extra) => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    const caller = { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() }, ...extra };
+    await createPresignedUpload(caller as never, upload() as never);
+    const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
+    const input = (command as unknown as { input: PutObjectCommandInput }).input;
+    expect(input.IfNoneMatch).toBe('*');
+    expect(signedHeaders(await presignPutForReal(input, options))).toContain('if-none-match');
   });
 
   it('stamps the API key that requested the upload, so its later indexing charge is attributed to it', async () => {

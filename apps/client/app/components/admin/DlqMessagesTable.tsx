@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import { Button, Chip, ChipDelete, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import ReplayIcon from '@mui/icons-material/Replay';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ArticleIcon from '@mui/icons-material/Article';
@@ -25,18 +25,18 @@ import { useAdminListUrlState } from '@client/app/components/admin/shared/useAdm
 import { ActionDialog } from './shared/ActionDialog';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
-import { REPLAY_CHIP, UNKNOWN_REPLAY_CHIP } from './DlqMessageDrawer';
+import { FailureChip, failureText, REPLAY_CHIP, UNKNOWN_REPLAY_CHIP } from './DlqMessageDrawer';
 import { DlqRecommendation } from './DlqRecommendation';
+import { DlqTriageRecommendation } from './DlqTriageRecommendation';
 import { DLQ_SEARCH_KEYS } from './dlqSearch';
+import { defaultDiscardReason, rememberDiscardReason, toDlqRows, type DlqRow } from './dlqGroups';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 
 const ENTITY_ID_PREVIEW = 12;
 
-/** The area a queue belongs to; overlay-contributed queues have no owner and stand alone. */
-export const queueFeature = (queue: DlqQueueInfo | undefined, queueLabel: string): string =>
-  queue?.owner ?? queue?.displayName ?? queueLabel;
+export { queueFeature } from './dlqGroups';
 
-type Row = DlqListedMessage & { feature: string; queue: DlqQueueInfo | undefined };
+type Row = DlqRow;
 
 const explicitIds = (selection: AdminSelection, rows: readonly Row[]) =>
   selection.mode === 'explicit' ? selection.ids : rows.map(row => row.messageId);
@@ -48,6 +48,8 @@ function groupByQueue(rows: readonly Row[]): Map<string, string[]> {
 }
 
 const hasReplayDestination = (row: Row) => row.queue?.hasReplayDestination !== false;
+
+export const DLQ_COUNT_LAG_NOTE = 'Queue counts catch up within about a minute.';
 
 function summarize(verb: string, outcomes: readonly DlqBulkOutcome[]) {
   const count = (status: DlqBulkOutcome['status']) => outcomes.filter(outcome => outcome.status === status).length;
@@ -65,6 +67,7 @@ function summarize(verb: string, outcomes: readonly DlqBulkOutcome[]) {
   const message = [
     `${done} of ${outcomes.length} ${verb}${problems.length ? `; ${problems.join(', ')}` : ''}.`,
     problems.length && firstReason ? firstReason : null,
+    done > 0 ? DLQ_COUNT_LAG_NOTE : null,
   ]
     .filter(Boolean)
     .join(' ');
@@ -142,10 +145,14 @@ const COLUMNS: readonly DataColumn<Row>[] = [
     render: row => (
       <Stack gap={0.5} sx={{ minWidth: 0 }} data-testid={`dlq-reason-${row.messageId}`}>
         <Typography level="body-xs" noWrap>
-          {row.failure?.errorMessage ?? 'Unknown'}
+          {failureText(row.failure)}
         </Typography>
-        <span data-testid={`dlq-category-${row.messageId}`}>
-          <StatusChip tone="neutral" label={row.failure?.category ?? 'Unknown'} />
+        <span>
+          <FailureChip
+            failure={row.failure}
+            categoryTestId={`dlq-category-${row.messageId}`}
+            sourceTestId={`dlq-failure-source-${row.messageId}`}
+          />
         </span>
       </Stack>
     ),
@@ -154,17 +161,23 @@ const COLUMNS: readonly DataColumn<Row>[] = [
     id: 'recommendation',
     label: 'Next step',
     width: '14rem',
-    help: 'Advisory only, from the recorded failure and replay attempts; review before acting.',
-    render: row => <DlqRecommendation message={row} />,
+    help: 'Advisory only, from the recorded failure, replay attempts and queue policy; review before acting.',
+    render: row => (
+      <Stack gap={1}>
+        <DlqRecommendation message={row} />
+        <DlqTriageRecommendation queueLabel={row.queueLabel} messageId={row.messageId} />
+      </Stack>
+    ),
   },
   { id: 'age', label: 'Age', width: '6rem', render: row => <AgeCell row={row} /> },
   { id: 'expires', label: 'Expires in', width: '7rem', render: row => <ExpiresCell row={row} /> },
   {
     id: 'receives',
-    label: 'Receives',
-    width: '6rem',
+    label: 'Receives (incl. views)',
+    width: '7rem',
     numeric: true,
-    help: 'Approximate SQS receives, including views in this browser; not a count of handler failures',
+    wrapHeader: true,
+    help: 'Approximate SQS receives. Every view of this page by any admin adds one, so it is not a count of handler failures.',
     render: row => row.approximateReceiveCount ?? '-',
   },
 ];
@@ -181,26 +194,26 @@ export const DlqMessagesTable: React.FC<{
   const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
   const [replayOpen, setReplayOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [discardProgress, setDiscardProgress] = useState<number | null>(null);
   const replay = useDlqReplay();
   const discard = useDlqDiscard();
 
-  const rows = useMemo((): Row[] => {
-    const queueByLabel = new Map(queues.map(queue => [queue.label, queue]));
-    return messages.map(message => {
-      const queue = queueByLabel.get(message.queueLabel);
-      return { ...message, queue, feature: queueFeature(queue, message.queueLabel) };
-    });
-  }, [messages, queues]);
+  const rows = useMemo(() => toDlqRows(messages, queues), [messages, queues]);
 
-  const { feature: featureFilter, queue: queueFilter } = listState.filters;
+  const { feature: featureFilter, queue: queueFilter, failure: failureFilter } = listState.filters;
   const inFeature = useMemo(
     () => (featureFilter ? rows.filter(row => row.feature === featureFilter) : rows),
     [rows, featureFilter]
   );
   const visibleRows = useMemo(
-    () => (queueFilter ? inFeature.filter(row => row.queueLabel === queueFilter) : inFeature),
-    [inFeature, queueFilter]
+    () =>
+      inFeature.filter(
+        row =>
+          (!queueFilter || row.queueLabel === queueFilter) && (!failureFilter || row.failureSignature === failureFilter)
+      ),
+    [inFeature, queueFilter, failureFilter]
   );
+  const failureGroupText = failureFilter ? failureText(visibleRows[0]?.failure) : null;
 
   const filters = useMemo(() => {
     const features = [...new Set(rows.map(row => row.feature))].sort();
@@ -226,7 +239,7 @@ export const DlqMessagesTable: React.FC<{
   const replayableRows = selectedRows.filter(hasReplayDestination);
   const clearSelection = () => setSelection({ mode: 'explicit', ids: [] });
   const selectAllVisible = () => setSelection({ mode: 'explicit', ids: visibleRows.map(row => row.messageId) });
-  const scoped = Boolean(featureFilter || queueFilter);
+  const scoped = Boolean(featureFilter || queueFilter || failureFilter);
 
   const confirmReplay = async (reason: string) => {
     setReplayOpen(false);
@@ -237,7 +250,11 @@ export const DlqMessagesTable: React.FC<{
   };
 
   const confirmDiscard = async (reason: string) => {
-    const outcomes = await discard.mutateAsync({ messageIdsByQueue: groupByQueue(selectedRows), reason });
+    rememberDiscardReason(reason);
+    setDiscardProgress(0);
+    const outcomes = await discard
+      .mutateAsync({ messageIdsByQueue: groupByQueue(selectedRows), reason, onProgress: setDiscardProgress })
+      .finally(() => setDiscardProgress(null));
     summarize('discarded', outcomes);
     if (outcomes.some(outcome => outcome.historyPending)) {
       toast.warning(
@@ -274,9 +291,29 @@ export const DlqMessagesTable: React.FC<{
             clearSelection();
           }}
         />
+        {failureFilter && (
+          <Chip
+            size="sm"
+            variant="soft"
+            endDecorator={
+              <ChipDelete
+                onDelete={() => {
+                  setListState({ filters: { ...listState.filters, failure: '' } });
+                  clearSelection();
+                }}
+                aria-label="Show every failure"
+                data-testid="dlq-failure-filter-clear"
+              />
+            }
+            data-testid="dlq-failure-filter"
+          >
+            Failure: {failureGroupText}
+          </Chip>
+        )}
         {scoped && visibleRows.length > 0 && (
           <Button size="sm" variant="plain" onClick={selectAllVisible} data-testid="dlq-select-all-in-scope">
-            Select all {visibleRows.length.toLocaleString()} in {queueFilter ? 'this queue' : featureFilter}
+            Select all {visibleRows.length.toLocaleString()} in{' '}
+            {failureFilter ? 'this failure group' : queueFilter ? 'this queue' : featureFilter}
           </Button>
         )}
       </Stack>
@@ -300,19 +337,25 @@ export const DlqMessagesTable: React.FC<{
         onSelectionChange={setSelection}
         onRowActivate={onOpen}
         rowTestId={row => `dlq-message-row-${row.messageId}`}
-        pageResetKey={`${featureFilter}|${queueFilter}`}
+        pageResetKey={`${featureFilter}|${queueFilter}|${failureFilter}`}
         testId="dlq-messages-table"
         minWidth="60rem"
         rowActions={row =>
           row.logsUrl ? (
-            <Tooltip title="View consumer logs around the send time">
+            <Tooltip
+              title={
+                row.logsScope === 'request'
+                  ? 'View the logs of the failed request'
+                  : 'View consumer logs around the send time'
+              }
+            >
               <IconButton
                 size="sm"
                 component="a"
                 href={row.logsUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="View consumer logs"
+                aria-label={row.logsScope === 'request' ? 'View request logs' : 'View consumer logs'}
                 data-testid={`dlq-logs-${row.messageId}`}
               >
                 <ArticleIcon fontSize="small" />
@@ -394,8 +437,7 @@ export const DlqMessagesTable: React.FC<{
         </Stack>
         {replayNeedsReason && (
           <Typography level="body-sm" data-testid="dlq-replay-reason-note">
-            A reason is required because replay can have side effects or its safety is unknown for some of these
-            queues.
+            A reason is required because replay can have side effects or its safety is unknown for some of these queues.
           </Typography>
         )}
         {selectedRows.length > replayableRows.length && (
@@ -412,12 +454,19 @@ export const DlqMessagesTable: React.FC<{
         title={`Discard ${selectedRows.length.toLocaleString()} dead letters?`}
         description="This removes the selected messages from their dead-letter queues. It cannot be undone from this page. Each message body is kept for 30 days for manual recovery."
         reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
+        initialReason={defaultDiscardReason(selectedRows.map(row => row.recommendation))}
         confirmLabel={`Discard ${selectedRows.length.toLocaleString()} messages`}
         tone="danger"
         pending={discard.isPending}
         onConfirm={confirmDiscard}
         data-testid="dlq-discard-dialog"
-      />
+      >
+        {discardProgress !== null && (
+          <Typography level="body-sm" role="status" data-testid="dlq-discard-progress">
+            Discarding: {discardProgress.toLocaleString()} of {selectedRows.length.toLocaleString()} done.
+          </Typography>
+        )}
+      </ActionDialog>
     </Stack>
   );
 };

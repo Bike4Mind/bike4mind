@@ -5,16 +5,27 @@
   /// Launch with the environment variable `B4M_UI_FIXTURES=1` to run the signed-in UI against canned data:
   /// no sign-in, no network. For screenshots and UI work while a stage with the endpoints is unavailable.
   enum FixtureServices {
-    static var isEnabled: Bool { ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1" }
+    /// Also accepts the launch argument `-B4M_UI_FIXTURES 1` (Maestro's `launchApp.arguments`), which lands in the
+    /// UserDefaults argument domain, because the Maestro suite cannot set environment variables.
+    static var isEnabled: Bool {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1"
+        || UserDefaults.standard.string(forKey: "B4M_UI_FIXTURES") == "1"
+    }
 
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
     static let studio: any StudioAPI = FixtureStudioAPI()
+    /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
+    static let frameUploader = FrameUploader(
+      capture: FixtureUploader(), media: media, put: { _, _, _ in }, sleep: { _ in })
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
     static let account: any AccountAPI = FixtureAccountAPI()
+    static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefAPI: any BriefAPI = FixtureBriefAPI()
+    static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -32,6 +43,101 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// One ready brief with an approval decision; composing a new one "takes" a few seconds, then returns it.
+    private struct FixtureBriefAPI: BriefAPI {
+      private static let brief: Brief = {
+        let now = Date()
+        return Brief(
+          id: "fixture", status: .ready, createdAt: now, composedAt: now,
+          periodStart: now.addingTimeInterval(-86_400), periodEnd: now,
+          headline: "Two agents finished overnight and one is waiting on you.",
+          happened: [
+            BriefItem(id: "h1", text: "The weekly metrics notebook picked up 14 new rows from the shared drive."),
+            BriefItem(id: "h2", text: "A 3-minute product walkthrough video finished generating."),
+          ],
+          handled: [
+            BriefItem(id: "d1", text: "The research agent summarized 6 articles into the Reading notebook."),
+            BriefItem(id: "d2", text: "Two draft replies were saved for your review."),
+          ],
+          decisions: [
+            BriefDecision(
+              id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
+              approval: BriefApprovalRef(
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000)),
+            BriefDecision(id: "n2", text: "Decide whether to archive the three notebooks untouched for 90 days."),
+          ])
+      }()
+
+      func compose() async throws -> Brief {
+        try await Task.sleep(for: .seconds(2))
+        return Self.brief
+      }
+
+      /// `B4M_UI_FIXTURE_BRIEF`: `composing` never finishes (the poll times out), `offline` is composing and
+      /// then every poll fails; anything else is the ready brief.
+      private static let scenario = ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_BRIEF"] ?? ""
+
+      private static var stuck: Brief {
+        Brief(
+          id: "fixture-stuck", status: .composing, createdAt: Date(), periodStart: Date(), periodEnd: Date())
+      }
+
+      func list() async throws -> [Brief] {
+        Self.scenario == "composing" || Self.scenario == "offline" ? [Self.stuck] : [Self.brief]
+      }
+
+      func brief(id: String) async throws -> Brief {
+        switch Self.scenario {
+        case "composing": return Self.stuck
+        case "offline":
+          // The first open (by the link's id) finds it composing; the polls by its own id then fail.
+          if id == Self.stuck.id { throw APIError.offline }
+          return Self.stuck
+        default: return Self.brief
+        }
+      }
+    }
+
+    /// One saved instruction, kept in memory for the session.
+    private actor FixtureInstructionAPI: InstructionAPI {
+      private var instructions = [
+        AssistantInstruction(
+          id: "fixture-instruction-1", text: "Always lead with anything about invoices.", createdAt: Date())
+      ]
+
+      func list() async throws -> [AssistantInstruction] { instructions }
+
+      func add(text: String) async throws -> AssistantInstruction {
+        guard instructions.count < AssistantInstruction.maxCount else { throw InstructionError.limitReached }
+        let instruction = AssistantInstruction(id: UUID().uuidString, text: text, createdAt: Date())
+        instructions.append(instruction)
+        return instruction
+      }
+
+      func remove(id: String) async throws {
+        instructions.removeAll { $0.id == id }
+      }
+    }
+
+    /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
+    /// `resolved` (answered elsewhere) or `offline`; the default is success.
+    private struct FixturePendingActionAPI: PendingActionAPI {
+      func respond(
+        to target: PendingActionTarget, decision: PendingActionDecision
+      ) async throws
+        -> PendingActionResult
+      {
+        try await Task.sleep(for: .seconds(1))
+        switch ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_APPROVAL"] {
+        case "replaced": throw PendingActionFailure.replaced
+        case "expired": throw PendingActionFailure.expired
+        case "resolved": throw PendingActionFailure.alreadyResolved
+        case "offline": throw PendingActionFailure.api(.offline)
+        default: return PendingActionResult(decision: decision)
+        }
+      }
     }
 
     /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
@@ -58,10 +164,18 @@
               id: "fixture-video", name: "Fixture Video",
               capabilities: .video(
                 VideoCapabilities(
-                  inputRoles: ["first_frame": 1], duration: .range(min: 1, max: 15, step: 1),
+                  modes: ["text_to_video", "image_to_video"], inputRoles: ["first_frame": 1],
+                  duration: .range(min: 1, max: 15, step: 1),
                   aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
                   defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
                   creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-morph", name: "Fixture Video Morph",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["image_to_video"], inputRoles: ["first_frame": 1, "last_frame": 1],
+                  duration: .discrete([5, 8]), aspectRatios: ["16:9"], resolutions: ["720p"], defaultDuration: 5,
+                  defaultAspectRatio: "16:9", defaultResolution: "720p"))),
             GenerationModel(
               id: "fixture-video-short", name: "Fixture Video Short",
               capabilities: .video(
@@ -103,6 +217,16 @@
       func cancel(_ handle: GenerationHandle) async throws {}
 
       func createSession(name: String) async throws -> String { "fixture-session" }
+    }
+
+    private struct FixtureUploader: FileUploading {
+      func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
+        UploadTicket(
+          fileID: "fixture-media-0", uploadURL: URL(string: "https://fixture.invalid/upload")!,
+          expiresAt: Date().addingTimeInterval(600))
+      }
+
+      func fileStatus(fileID: String) async throws -> RemoteFileStatus { .clean }
     }
 
     private struct FixtureAccountAPI: AccountAPI {
@@ -303,6 +427,34 @@
       func media(id: String) async throws -> MediaItem {
         guard let item = Self.all.first(where: { $0.id == id }) else { throw APIError.notFound }
         return await Self.withContent(item)
+      }
+
+      /// Video 3 was animated from image 0: its trail has a parent and image 0's has a child.
+      func lineage(of id: String) async throws -> FileLineage {
+        func node(_ item: MediaItem, generator: String, request: JSONObject? = nil) -> LineageNode {
+          LineageNode(
+            id: item.id, kind: item.kind, fileName: item.fileName, mimeType: item.mimeType, generator: generator,
+            modelID: nil, prompt: "A fox in the snow", createdAt: item.createdAt, request: request)
+        }
+        let image = Self.all[0]
+        let video = Self.all[3]
+        let edge = LineageEdge(parentID: image.id, childID: video.id, role: .firstFrame)
+        switch id {
+        case video.id:
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(video, generator: "video", request: ["durationSeconds": .number(6)]),
+              node(image, generator: "image"),
+            ],
+            children: [], edges: [edge])
+        case image.id:
+          return FileLineage(
+            fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
+            edges: [edge])
+        default:
+          return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
+        }
       }
 
       private static func withContent(_ item: MediaItem) async -> MediaItem {

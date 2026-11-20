@@ -25,7 +25,8 @@ export type ImageFailureDetail =
     }
   | { code: 'unsupported_output_count'; mode: ImageMode; requested: number; max: number }
   | { code: 'unsupported_transparent_background' }
-  | { code: 'unsupported_seed' };
+  | { code: 'unsupported_seed' }
+  | { code: 'unsupported_edit_regions'; mode: ImageMode; requested: number; max: number };
 
 const ROLE_NOUN: Record<ImageInputRole, { singular: string; plural: string }> = {
   edit_source: { singular: 'source image', plural: 'source images' },
@@ -104,6 +105,10 @@ const IMAGE_REASONS: ReasonTable<ImageValidationErrorCode, ImageFailureDetail> =
   unsupported_output_count: ({ mode, requested, max }) => outputCountReason(mode, requested, max),
   unsupported_transparent_background: () => 'This model cannot render a transparent background',
   unsupported_seed: () => 'This model does not take a seed',
+  unsupported_edit_regions: ({ mode, requested, max }) =>
+    max === 0
+      ? `This model cannot target regions ${MODE_WHEN[mode]}`
+      : `This model takes up to ${pluralize(max, 'region', 'regions')} ${MODE_WHEN[mode]}; you marked ${requested}`,
 };
 
 /** A short, user-facing "why not" for one image validation failure, e.g. for a greyed-out model card. */

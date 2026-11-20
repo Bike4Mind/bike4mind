@@ -1,4 +1,11 @@
-import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
 import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
@@ -8,6 +15,7 @@ import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
+  ChatArtifact,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -137,12 +145,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
-  /**
-   * This call's result is text the user wrote or chose to load - a skill from their own folder or
-   * from a project they trusted - so reading it does not make the reply untrusted. See
-   * ChatToolCall.ownContent.
-   */
-  ownContent(): void;
+  /** The result comes from a trusted local skill rather than an imported body. */
+  ownContent?(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -183,6 +187,8 @@ export interface BrowserProvider {
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext;
   closeSession(sessionId: string): Promise<void>;
+  /** Reload, in place, any of the conversation's tabs showing one of these artifacts at an older version. */
+  refreshArtifacts?(sessionId: string, artifacts: readonly ChatArtifact[]): void;
 }
 
 /** One of a conversation's tabs, as browser_tabs lists it. */
@@ -358,6 +364,8 @@ export interface ModelViewPort {
   /** An 8 s turntable clip of the current model, as WebM. */
   recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
 }
 
 export interface ModelContext {
@@ -397,6 +405,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
@@ -504,6 +514,12 @@ export interface PullRequestContext {
  */
 export interface SkillContext {
   available(): Promise<readonly CustomCommand[]>;
+  /**
+   * True when `name` exists but is withheld from the model by `disable-model-invocation`, so a
+   * refusal can say the user has to start it rather than that it is missing. Optional: without it
+   * the tool reports a plain miss.
+   */
+  isUserOnly?(name: string): Promise<boolean>;
 }
 
 /** What one session looks like to the host-control tools. */
@@ -672,8 +688,11 @@ export interface QuestHost {
 export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
 
 export interface DelegationHost {
-  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
-  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
+  /**
+   * Where a delegated child goes: the parent's checkout, or with `isolate` a worktree of its own
+   * when the project is a repository.
+   */
+  placement(title: string | undefined, prompt: string, isolate: boolean): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {
@@ -697,6 +716,12 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
+   * surface that shows less than the full card (the menu bar, the mini window) can tell the call
+   * carries a reason it would otherwise drop.
+   */
+  reasons?: readonly string[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**
@@ -721,17 +746,11 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
-  /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
-   */
-  contained?: true;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
@@ -742,6 +761,10 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
+  unchecked?: true;
+  /** The shell scan cannot positively prove every executed command keeps data local. */
+  outbound?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
@@ -756,6 +779,11 @@ export interface ApprovalPrompt {
   mcp?: { server: string; tool: string };
   /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
   alwaysCovers?: string;
+  /**
+   * What "Allow in this chat" is filed under when it stands for more than this one call. A write
+   * tool's `key` names the exact change, which the stale-file check needs; this names the file.
+   */
+  chatKey?: string;
 }
 
 /** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */
@@ -767,14 +795,14 @@ export interface ApprovalPart {
   expanded?: string;
   opaque?: string;
   /**
-   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
-   * every mode. Only set on a prompt with `byPart`.
+   * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
    */
-  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
-export type PartAskKind = 'unread' | 'outbound' | 'env' | 'gitUnlisted';
+export type PartAskKind = 'env';
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
@@ -786,6 +814,11 @@ export interface ApprovalAlways {
   commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
+   * cannot tell, and then every one counts.
+   */
+  writtenDirectories?: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
   /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */

@@ -6,10 +6,13 @@ import {
   IOrganizationRepository,
   IProjectRepository,
   ISessionDocument,
+  ISpaceRepository,
   IUserDocument,
   isOrgMember,
+  isSpaceManager,
+  isSpaceMember,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 import { z } from 'zod';
 
@@ -45,6 +48,7 @@ interface CancelInviteAdapters {
     groups: {
       findById: (id: string) => Promise<IGroupDocument | null>;
     };
+    spaces: Pick<ISpaceRepository, 'findLiveById'>;
   };
 }
 
@@ -86,6 +90,10 @@ export const cancelInvite = async (
     // (sharingService/create.ts, authorizeByInviteType.ts).
     const project = await db.projects.shareable.findShareAccessById(user, id);
     if (!project) throw new NotFoundError('Project not found');
+  } else if (type === InviteType.Space) {
+    const space = await db.spaces.findLiveById(id);
+    if (!space || !isSpaceMember(user.id, space)) throw new NotFoundError('Space not found');
+    if (!isSpaceManager(user.id, space)) throw new ForbiddenError('Only a Space admin can cancel invites');
   } else {
     // Default deny: a type reaching this point has no authorization predicate written for it, so it
     // must not reach the write below, which zeroes every invite for the document and returns their

@@ -4,7 +4,7 @@ vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: vi.fn() },
 }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyBridgeApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -13,7 +13,7 @@ vi.mock('@server/cli/auth', () => ({
 
 import { Connection } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@bike4mind/server-utils/cli/auth';
 import { resolveBridgeWsAuth } from './ccAgentAuth';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';

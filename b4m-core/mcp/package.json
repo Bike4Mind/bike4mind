@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "2.2.3",
+  "version": "2.2.6",
   "publishConfig": {
     "access": "restricted"
   },

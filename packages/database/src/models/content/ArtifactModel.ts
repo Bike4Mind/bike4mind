@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
 export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
@@ -97,6 +98,7 @@ const ArtifactSchema = new Schema(
     },
     organizationId: {
       type: String,
+      immutable: true,
     },
     visibility: {
       type: String,
@@ -259,6 +261,8 @@ ArtifactSchema.methods.restore = function () {
   }
   return this.save();
 };
+
+ArtifactSchema.plugin(organizationContentPolicyPlugin);
 
 export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||

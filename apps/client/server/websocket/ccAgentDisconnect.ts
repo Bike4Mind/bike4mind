@@ -55,7 +55,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   // Tavern access gate: a valid bridge identity isn't enough - the owning user
-  // must be allowed to reach the Tavern (admin or 'tavern' tag), the same
+  // must be allowed to reach the Tavern (admin, developer, or 'tavern' tag), the same
   // predicate the HTTP surface enforces via ensureTavernAccess.
   // Intentionally checked before the instance/device-ownership checks below:
   // run the cheap access predicate first so an unauthorized caller never reaches

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
+import { EndUserIdSchema } from './endUserId';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../constants/completionRuns';
 // Specific file, not the `../types` barrel - this module is imported by
@@ -338,7 +339,7 @@ export const CompletionRunAttributionSchema = z
     ),
   })
   .describe(
-    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`).'
+    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`), as is a read of its spend.'
   );
 
 export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
@@ -356,6 +357,60 @@ export const CompletionRunSchema = z.object({
 });
 
 export type CompletionRun = z.infer<typeof CompletionRunSchema>;
+
+/** How many attempts a run's usage lists before byAttempt is cut off (byAttemptTruncated). */
+export const COMPLETION_RUN_USAGE_MAX_ATTEMPTS = 500;
+
+export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
+
+const TokenCountSchema = z.number().int().nonnegative();
+
+/** Settled spend of a set of run-attributed requests, summed from their ledger rows. */
+export const CompletionRunSpendSchema = z.object({
+  creditsCharged: z
+    .number()
+    .nonnegative()
+    .describe('Credits the ledger recorded for these requests: the same amount each `settled` stream event reported.'),
+  requests: z.number().int().nonnegative().describe('Settled requests counted.'),
+  inputTokens: TokenCountSchema,
+  outputTokens: TokenCountSchema,
+  cacheReadTokens: TokenCountSchema,
+  cacheWriteTokens: TokenCountSchema,
+});
+
+export type CompletionRunSpend = z.infer<typeof CompletionRunSpendSchema>;
+
+export const CompletionRunUsageSchema = z.object({
+  runId: CompletionRunIdSchema,
+  rootSessionId: z.string().optional(),
+  createdAt: z.iso.datetime(),
+  settled: CompletionRunSpendSchema.describe('Every settled request attributed to the run, each counted once.'),
+  byRole: z.array(CompletionRunSpendSchema.extend({ role: z.enum(COMPLETION_RUN_ROLES) })),
+  byPurpose: z.array(
+    CompletionRunSpendSchema.extend({
+      purpose: z.enum(COMPLETION_RUN_PURPOSES).describe('`turn` when sent without one.'),
+    })
+  ),
+  byModel: z
+    .array(CompletionRunSpendSchema.extend({ model: z.string() }))
+    .describe('Grouped by the model each request asked for, which is not always the model that ran.'),
+  byAttempt: z
+    .array(
+      CompletionRunSpendSchema.extend({
+        role: z.enum(COMPLETION_RUN_ROLES),
+        taskId: z.string().optional(),
+        attemptId: z.string().optional(),
+      })
+    )
+    .describe(
+      `One entry per distinct role, \`taskId\` and \`attemptId\` sent; absent ids are their own entry. At most ${COMPLETION_RUN_USAGE_MAX_ATTEMPTS}, largest spend first.`
+    ),
+  byAttemptTruncated: z
+    .boolean()
+    .describe('True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them.'),
+});
+
+export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
 
 /**
  * Schema for CLI LLM completion requests
@@ -378,6 +433,7 @@ export const CompletionRequestSchema = z.object({
   max_tokens: z.number().optional(),
   sessionId: CompletionSessionIdSchema.optional(),
   run: CompletionRunAttributionSchema.optional(),
+  end_user_id: EndUserIdSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),

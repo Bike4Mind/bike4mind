@@ -4,17 +4,20 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EMPTY_MODEL_STATE } from '@shared/model3d';
+import { EMPTY_MODEL_STATE, type ModelVersionEntry } from '@shared/model3d';
 import type { ModelEngine } from './model3d/useModelEngine';
 import type { ModelViewportHandle } from './model3d/ModelViewport';
+import { buildModelObject } from './model3d/modelScene';
 import { MODEL_EXAMPLE_PROMPTS, ModelPane, type PartEditTurn } from './ModelPane';
 
 const handle = vi.hoisted(() => ({
   recordTurntable: vi.fn<ModelViewportHandle['recordTurntable']>(async () => new Uint8Array([1, 2, 3])),
   setView: vi.fn(),
+  fit: vi.fn(),
   orbit: vi.fn(),
   zoom: vi.fn(),
   partPoint: vi.fn(() => ({ x: 60, y: 50 })),
+  partKept: vi.fn((_name: string) => true),
 }));
 
 const closeup = vi.hoisted(() => vi.fn(async () => new Uint8Array([9, 9])));
@@ -24,33 +27,69 @@ vi.mock('./model3d/modelScene', async importOriginal => ({
   renderPartCloseup: closeup,
 }));
 
+// The compare view draws with WebGL too; which mode is open is what the pane decides. It rebuilds its
+// GL view whenever a subject changes identity, so the mock counts those changes.
+const compareView = vi.hoisted(() => ({ subjectChanges: 0 }));
+vi.mock('./model3d/ModelVersionCompare', async () => {
+  const { useEffect } = await import('react');
+  return {
+    ModelVersionCompare: ({
+      mode,
+      first,
+      second,
+    }: {
+      mode: string;
+      first: { label: string };
+      second: { label: string };
+    }) => {
+      useEffect(() => {
+        compareView.subjectChanges += 1;
+      }, [first, second]);
+      return <div data-testid={`model-version-compare-view-${mode}`} data-labels={`${first.label}|${second.label}`} />;
+    },
+  };
+});
+
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
 vi.mock('./model3d/ModelViewport', () => ({
   ModelViewport: ({
+    object,
     dimmed,
     lighting,
     pose,
     picked,
     editing,
     onPick,
+    onPoseChange,
+    onJointDragStart,
     clip,
     exploded,
+    onCroppedChange,
     handleRef,
+    tool,
+    onMeasure,
   }: {
+    object: THREE.Group | null;
     dimmed: boolean;
     lighting: string;
     pose: Record<string, number>;
     picked: readonly string[];
     editing: readonly string[];
     onPick: (pick: { name: string | null; additive: boolean; point: { x: number; y: number } }) => void;
+    onPoseChange?: (name: string, value: number) => void;
+    onJointDragStart?: () => void;
     clip: string | null;
     exploded: boolean;
+    onCroppedChange?: (cropped: boolean) => void;
     handleRef?: { current: unknown };
+    tool?: string | null;
+    onMeasure?: (points: THREE.Vector3[]) => void;
   }) => {
     if (handleRef) handleRef.current = handle;
     return (
       <div
         data-testid="model-pane-viewport"
+        data-object={object?.name ?? ''}
         data-dimmed={String(dimmed)}
         data-lighting={lighting}
         data-pose={JSON.stringify(pose)}
@@ -58,7 +97,12 @@ vi.mock('./model3d/ModelViewport', () => ({
         data-editing={editing.join(',')}
         data-clip={clip ?? ''}
         data-exploded={String(exploded)}
+        data-tool={tool ?? ''}
       >
+        <button
+          data-testid="measure-two-points"
+          onClick={() => onMeasure?.([new THREE.Vector3(0, 0, 0), new THREE.Vector3(3, 4, 0)])}
+        />
         <button
           data-testid="pick-lid"
           onClick={event => onPick({ name: 'lid', additive: event.shiftKey, point: { x: 40, y: 30 } })}
@@ -67,6 +111,15 @@ vi.mock('./model3d/ModelViewport', () => ({
           data-testid="pick-body"
           onClick={event => onPick({ name: 'body', additive: event.shiftKey, point: { x: 20, y: 30 } })}
         />
+        <button
+          data-testid="drag-lid"
+          onClick={() => {
+            onJointDragStart?.();
+            onPoseChange?.('lid', 55);
+          }}
+        />
+        <button data-testid="report-cropped" onClick={() => onCroppedChange?.(true)} />
+        <button data-testid="report-in-view" onClick={() => onCroppedChange?.(false)} />
         <button
           data-testid="pick-none"
           onClick={() => onPick({ name: null, additive: false, point: { x: 0, y: 0 } })}
@@ -115,6 +168,8 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     exportFile: vi.fn(async () => '/project/chest.glb'),
     saveRecording: vi.fn(async () => null),
     openFile: vi.fn(async () => {}),
+    buildSource: vi.fn(async (source: string) => Object.assign(new THREE.Group(), { name: `built:${source}` })),
+    setInspection: vi.fn(),
     ...overrides,
   };
 }
@@ -130,7 +185,30 @@ const BUILT: Partial<ModelEngine> = {
 let host: HTMLDivElement;
 let root: Root;
 
+let listedVersions: ModelVersionEntry[] = [];
+let versionsListener: ((update: { sessionId: string }) => void) | null = null;
+const restoreVersion = vi.fn(async (_sessionId: string, number: number) => {
+  const version = listedVersions.find(entry => entry.number === number);
+  if (!version) throw new Error(`There is no v${number} in this conversation.`);
+  return version;
+});
+
 beforeEach(() => {
+  listedVersions = [];
+  versionsListener = null;
+  restoreVersion.mockClear();
+  (window as unknown as { b4m: unknown }).b4m = {
+    model: {
+      listVersions: vi.fn(async () => listedVersions),
+      onVersions: (listener: typeof versionsListener) => {
+        versionsListener = listener;
+        return () => {
+          versionsListener = null;
+        };
+      },
+      restoreVersion,
+    },
+  };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -277,6 +355,119 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
   });
 
+  describe('moving a joint from the view', () => {
+    const lidJoint = {
+      name: 'lid',
+      motion: 'turn' as const,
+      axis: [-1, 0, 0] as [number, number, number],
+      range: [0, 90] as [number, number],
+    };
+    /** A body with a lid hinged on it and a fixed handle on the lid, as the engine builds them. */
+    const hinged = () => {
+      const cube = (name: string) => ({
+        name,
+        color: '#8b5a2b',
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        indices: new Uint32Array([0, 1, 2]),
+      });
+      return buildModelObject(
+        [
+          cube('body'),
+          { ...cube('lid'), pivot: [0, 1, 1], parent: 'body', axis: lidJoint.axis, range: lidJoint.range },
+          { ...cube('handle'), parent: 'lid' },
+        ],
+        'mm'
+      );
+    };
+    const pressKey = (key: string, shiftKey = false) =>
+      act(() => {
+        byTestId('model-pane-stage')?.dispatchEvent(
+          new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })
+        );
+      });
+
+    it('nudges a picked moving part with the arrows and announces the value', () => {
+      handle.orbit.mockClear();
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 40 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowRight');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 41 });
+      expect(byTestId('model-pane-joint-announcer')?.textContent).toBe('lid 41\u00b0');
+      // The engine feeds the new angles back before the next key.
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 41 }, setJointAngles }));
+      pressKey('ArrowDown', true);
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 26 });
+      expect(handle.orbit).not.toHaveBeenCalled();
+    });
+
+    it('opens a joint whose range runs downwards with Right and Up', () => {
+      const setJointAngles = vi.fn();
+      const joints = [{ ...lidJoint, range: [0, -110] as [number, number] }];
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: -40 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowRight');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: -41 });
+      pressKey('ArrowLeft');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: -39 });
+    });
+
+    it('holds a nudge at the end of the range', () => {
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 89.5 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowUp', true);
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 90 });
+    });
+
+    it('still orbits with a fixed part picked', () => {
+      handle.orbit.mockClear();
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], setJointAngles }));
+      act(() => byTestId('pick-body')?.click());
+      pressKey('ArrowLeft');
+      expect(handle.orbit).toHaveBeenCalledWith(-Math.PI / 12, 0);
+      expect(setJointAngles).not.toHaveBeenCalled();
+    });
+
+    it('moves the sliders with a drag and stops playback', () => {
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 10 }, setJointAngles }));
+      act(() => byTestId('model-pane-joints-play-btn')?.click());
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
+      act(() => byTestId('drag-lid')?.click());
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55 });
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+    });
+
+    it('keeps the other joints when a drag moves one', () => {
+      const setJointAngles = vi.fn();
+      const flap = { ...lidJoint, name: 'flap', range: [0, 45] as [number, number] };
+      render(
+        engine({
+          ...BUILT,
+          object: hinged(),
+          joints: [lidJoint, flap],
+          jointAngles: { lid: 10, flap: 5 },
+          setJointAngles,
+        })
+      );
+      act(() => byTestId('drag-lid')?.click());
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55, flap: 5 });
+    });
+
+    it('does not start playing on the next jointed model after the joints went away', () => {
+      const joints = [lidJoint];
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: 10 } }));
+      act(() => byTestId('model-pane-joints-play-btn')?.click());
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
+      render(engine({ ...BUILT }));
+      expect(byTestId('model-pane-joints')).toBeNull();
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: 10 } }));
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+    });
+  });
+
   const LANTERN_PARTS: ModelEngine['parts'] = [
     { name: 'body', lines: [3], min: [0, 0, 0], max: [60, 40, 20] },
     { name: 'lid', lines: [4], min: [0, 0, 20], max: [60, 40, 30] },
@@ -378,6 +569,17 @@ describe('ModelPane', () => {
     expect(document.activeElement).toBe(byTestId('model-pane-edit-input'));
   });
 
+  it('steps over parts the section cut has removed', () => {
+    render(engine(LANTERN));
+    const stage = byTestId('model-pane-stage') as HTMLElement;
+    handle.partKept.mockImplementation(name => name !== 'body');
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    handle.partKept.mockImplementation(() => true);
+  });
+
   it('highlights a part of an opened GLB without offering an edit', () => {
     render(
       engine({
@@ -467,6 +669,37 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-record-btn')?.textContent).toBe('Record');
   });
 
+  it('turns the measure and section tools on and off, and hands them to screenshots', () => {
+    const model = engine(BUILT);
+    render(model);
+    const stage = byTestId('model-pane-stage');
+    const press = (key: string) =>
+      act(() => {
+        stage?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    press('m');
+    expect(byTestId('model-pane-viewport')?.dataset.tool).toBe('measure');
+    expect(byTestId('model-pane-measure-btn')?.getAttribute('aria-pressed')).toBe('true');
+    expect(byTestId('model-pane-measure-readout')?.textContent).toBe('Click a point on the model');
+    act(() => byTestId('measure-two-points')?.click());
+    expect(byTestId('model-pane-measure-readout')?.textContent).toBe('5 mm (x 3, y 0, z 4)');
+    expect(model.setInspection).toHaveBeenLastCalledWith({
+      section: null,
+      measure: { points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(3, 4, 0)], units: 'mm' },
+    });
+    press('Escape');
+    expect(byTestId('model-pane-viewport')?.dataset.tool).toBe('');
+    expect(model.setInspection).toHaveBeenLastCalledWith(null);
+    act(() => byTestId('model-pane-section-btn')?.click());
+    act(() => byTestId('model-pane-section-axis-y')?.click());
+    expect(model.setInspection).toHaveBeenLastCalledWith({
+      section: { axis: 'y', offset: 0.5, flipped: false },
+      measure: null,
+    });
+    act(() => byTestId('model-pane-section-btn')?.click());
+    expect(byTestId('model-pane-section-panel')).toBeNull();
+  });
+
   it('drives the camera and toggles from the keyboard while the view has focus', () => {
     handle.orbit.mockClear();
     handle.setView.mockClear();
@@ -524,6 +757,23 @@ describe('ModelPane', () => {
     expect(handle.setView).toHaveBeenCalledWith('top');
   });
 
+  it('offers a fit once the model grows past a placed camera, by button and by F', () => {
+    handle.fit.mockClear();
+    render(engine(BUILT));
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
+    act(() => byTestId('report-cropped')?.click());
+    act(() => byTestId('model-pane-fit-btn')?.click());
+    expect(handle.fit).toHaveBeenCalledTimes(1);
+    act(() => {
+      byTestId('model-pane-stage')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true })
+      );
+    });
+    expect(handle.fit).toHaveBeenCalledTimes(2);
+    act(() => byTestId('report-in-view')?.click());
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
+  });
+
   it('drops the highlight when another file opens', () => {
     render(engine(BUILT));
     act(() => byTestId('pick-lid')?.click());
@@ -545,5 +795,144 @@ describe('ModelPane', () => {
     act(() => window.dispatchEvent(new PointerEvent('pointerup', { clientX: 500 })));
     expect(pane.style.width).toBe('520px');
     expect(window.localStorage.getItem('b4m.modelPane.width')).toBe('520');
+  });
+});
+
+describe('ModelPane versions', () => {
+  const version = (number: number, source: string, extra: Partial<ModelVersionEntry> = {}): ModelVersionEntry => ({
+    number,
+    path: '/project/chest.model.js',
+    source,
+    jointAngles: {},
+    createdAt: Date.UTC(2026, 10, 18, 9, number),
+    thumbnail: new Uint8Array([137, 80, 78, 71]),
+    ...extra,
+  });
+
+  // BUILT's file source is 'x', so the version holding 'x' is the current one.
+  async function renderWithVersions(entries: ModelVersionEntry[], overrides: Partial<ModelEngine> = {}) {
+    listedVersions = entries;
+    const model = engine({ ...BUILT, ...overrides });
+    render(model);
+    await act(async () => {});
+    return model;
+  }
+
+  it('lists the kept versions with thumbnails and marks the current one', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+    expect(byTestId('model-versions')).not.toBeNull();
+    expect(byTestId('model-version-1')?.getAttribute('aria-pressed')).toBe('false');
+    expect(byTestId('model-version-2')?.getAttribute('aria-pressed')).toBe('true');
+    expect(byTestId('model-version-2')?.getAttribute('aria-label')).toContain('current');
+    expect(byTestId('model-version-1')?.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('shows no strip before anything is kept', async () => {
+    await renderWithVersions([]);
+    expect(byTestId('model-versions')).toBeNull();
+  });
+
+  it('lists again when main says this conversation kept a version', async () => {
+    await renderWithVersions([version(1, 'x')]);
+    listedVersions = [version(1, 'a'), version(2, 'x')];
+    await act(async () => versionsListener?.({ sessionId: 'chat-a' }));
+    expect(byTestId('model-version-2')).not.toBeNull();
+  });
+
+  it('previews a version in the viewport at its kept pose, without picking', async () => {
+    const model = await renderWithVersions([version(1, 'a', { jointAngles: { lid: 30 } }), version(2, 'x')]);
+    await act(async () => byTestId('model-version-1')?.click());
+    expect(model.buildSource).toHaveBeenCalledWith('a');
+    const viewport = byTestId('model-pane-viewport');
+    expect(viewport?.dataset.object).toBe('built:a');
+    expect(viewport?.dataset.pose).toBe(JSON.stringify({ lid: 30 }));
+    expect(byTestId('model-version-banner-title')?.textContent).toBe('Previewing v1');
+    expect(byTestId('model-version-1')?.getAttribute('aria-pressed')).toBe('true');
+    act(() => byTestId('pick-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
+  });
+
+  it('goes back to the current build from the close button, Escape or the current thumbnail', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+    await act(async () => byTestId('model-version-1')?.click());
+    act(() => byTestId('model-version-close')?.click());
+    expect(byTestId('model-version-banner')).toBeNull();
+    expect(byTestId('model-pane-viewport')?.dataset.object).toBe('');
+
+    await act(async () => byTestId('model-version-1')?.click());
+    act(() => {
+      byTestId('model-version-banner')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(byTestId('model-version-banner')).toBeNull();
+
+    await act(async () => byTestId('model-version-1')?.click());
+    await act(async () => byTestId('model-version-2')?.click());
+    expect(byTestId('model-version-banner')).toBeNull();
+  });
+
+  it('compares the previewed version with the current one, side by side or overlaid', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+    await act(async () => byTestId('model-version-1')?.click());
+    act(() => byTestId('model-version-compare-side')?.click());
+    expect(byTestId('model-version-compare-view-side')?.dataset.labels).toBe('v1|v2 (current)');
+    expect(byTestId('model-version-banner-title')?.textContent).toBe('Comparing v1 with v2');
+    act(() => byTestId('model-version-compare-overlay')?.click());
+    expect(byTestId('model-version-compare-view-overlay')).not.toBeNull();
+    expect(byTestId('model-version-compare-view-side')).toBeNull();
+  });
+
+  it('hides the joints while previewing, so a pose change never rebuilds the compare view', async () => {
+    const joint = {
+      name: 'lid',
+      motion: 'turn' as const,
+      axis: [-1, 0, 0] as [number, number, number],
+      range: [0, 90] as [number, number],
+    };
+    const posed = { joints: [joint], jointAngles: { lid: 10 } };
+    const model = await renderWithVersions([version(1, 'a'), version(2, 'x')], posed);
+    expect(byTestId('model-pane-joints')).not.toBeNull();
+    await act(async () => byTestId('model-version-1')?.click());
+    act(() => byTestId('model-version-compare-side')?.click());
+    expect(byTestId('model-pane-joints')).toBeNull();
+    const changes = compareView.subjectChanges;
+    render({ ...model, jointAngles: { lid: 20 } });
+    expect(byTestId('model-version-compare-view-side')).not.toBeNull();
+    expect(compareView.subjectChanges).toBe(changes);
+    act(() => byTestId('model-version-close')?.click());
+    expect(byTestId('model-pane-joints')).not.toBeNull();
+  });
+
+  it('goes back to the current build on Escape in the 3D view or the strip', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+    const escape = (id: string) =>
+      act(() => {
+        byTestId(id)?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+    await act(async () => byTestId('model-version-1')?.click());
+    escape('model-pane-stage');
+    expect(byTestId('model-version-banner')).toBeNull();
+    await act(async () => byTestId('model-version-1')?.click());
+    escape('model-version-1');
+    expect(byTestId('model-version-banner')).toBeNull();
+  });
+
+  it('restores the previewed version and poses the pane as it was kept', async () => {
+    const model = await renderWithVersions([version(1, 'a', { jointAngles: { lid: 45 } }), version(2, 'x')]);
+    await act(async () => byTestId('model-version-1')?.click());
+    await act(async () => byTestId('model-version-restore')?.click());
+    expect(restoreVersion).toHaveBeenCalledWith('chat-a', 1);
+    expect(model.setJointAngles).toHaveBeenCalledWith({ lid: 45 });
+    expect(byTestId('model-version-banner')).toBeNull();
+  });
+
+  it('shows why a version could not be built', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')], {
+      buildSource: vi.fn(async () => {
+        throw new Error('nope is not defined');
+      }),
+    });
+    await act(async () => byTestId('model-version-1')?.click());
+    expect(byTestId('model-version-error')?.textContent).toBe('nope is not defined');
+    expect(byTestId('model-version-compare-side')?.hasAttribute('disabled')).toBe(true);
   });
 });

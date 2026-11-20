@@ -24,9 +24,11 @@ import {
   type AgentExecutionStatus,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
+import { readOrgModelPolicy } from '@bike4mind/common';
+import { orgDisallowedTools } from '@bike4mind/services/llm/orgToolPolicy';
 import type { Logger } from '@bike4mind/observability';
-import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import { credentialExecutionFields, type ApiKeyCredential } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
@@ -34,11 +36,11 @@ import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
-} from '@server/utils/dispatchAgentExecution';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
-import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
-import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
+import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
+import { admitApiKeyCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
@@ -121,7 +123,9 @@ export type StartAgentExecutionInput = {
    * without the others.
    */
   apiKeyInfo:
-    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
+    | (ApiKeyCredential &
+        Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted' | 'unpaidAccountLimits'>)
+    | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -161,6 +165,7 @@ export type StartAgentExecutionFailureReason =
   | 'session_not_found'
   | 'organization_not_found'
   | 'billing_organization_mismatch'
+  | 'org_tool_not_allowed'
   | 'billing_key_stale'
   | 'confidence_overrides_forbidden'
   | 'concurrent_limit'
@@ -209,6 +214,20 @@ export async function startAgentExecution(
   if (!billing.ok) return billing;
   const { organizationId } = billing;
 
+  // Same rule as /api/chat: an API-key caller chose these tools, so it is told which ones the org
+  // disallows. Session callers have them stripped silently by the executor.
+  if (input.apiKeyInfo && organizationId && input.enabledTools?.length) {
+    const org = await organizationRepository.findById(organizationId);
+    const disallowed = orgDisallowedTools(input.enabledTools, readOrgModelPolicy(org?.modelPolicy));
+    if (disallowed.length > 0) {
+      return {
+        ok: false,
+        reason: 'org_tool_not_allowed',
+        message: `Tools not allowed by your organization: ${disallowed.join(', ')}`,
+      };
+    }
+  }
+
   // Queued work does not occupy a synchronous completion slot. Both transports must
   // still refuse starts while the verified personal-key owner's token window is full.
   if (input.apiKeyInfo) {
@@ -216,6 +235,7 @@ export async function startAgentExecution(
       owner: userId,
       ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
       billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      unpaidAccountLimits: input.apiKeyInfo.unpaidAccountLimits,
       holdSlot: false,
     });
   }

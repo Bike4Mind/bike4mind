@@ -163,7 +163,7 @@ describe('GET /api/identify', () => {
 
   describe('api-key caller', () => {
     it('mints no session, returns no accessToken and sets no refresh cookie', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY });
       await handler(req, res);
 
@@ -174,7 +174,7 @@ describe('GET /api/identify', () => {
     });
 
     it('returns a whoami stripped of every secret field', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY });
       await handler(req, res);
 
@@ -197,7 +197,7 @@ describe('GET /api/identify', () => {
     });
 
     it('does not echo a bearer back when the request also carries one', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY, bearer: 'someone-elses-jwt' });
       await handler(req, res);
 

@@ -14,7 +14,7 @@ import {
   requireEnv,
 } from '@bike4mind/common';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { SQSBatchResponse } from 'aws-lambda';
 import { z } from 'zod';
@@ -158,11 +158,13 @@ async function processAttempt(
 
   for (let retryAttempt = 0; retryAttempt < MAX_RETRY_ATTEMPTS; retryAttempt++) {
     try {
-      const result = await mailer.sendEmail(attempt.recipientEmail, {
+      const result = await queuedMailer.sendEmail(attempt.recipientEmail, {
         subject: finalSubject,
         html: rendered.html,
       });
 
+      // On a hosted stage a truthy result only means the event bus accepted the mail, so SENT here is
+      // "queued": a transport failure in the email-send worker is retried there and dead-lettered, not written back.
       if (result) {
         await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.SENT, {
           sentAt: new Date(),
@@ -266,7 +268,8 @@ export function renderTemplate(
   html = wrapLinksForTracking(html, trackingToken, baseUrl);
 
   // 5. Inject unsubscribe link variable
-  const unsubscribeUrl = `${baseUrl}/email/unsubscribe?token=${trackingToken}`;
+  // Fragment, not query: the token stays out of the unsubscribe URL sent to a server (app/utils/emailLinkToken.ts).
+  const unsubscribeUrl = `${baseUrl}/email/unsubscribe#token=${trackingToken}`;
   html = html.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);
   subject = subject.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);
 

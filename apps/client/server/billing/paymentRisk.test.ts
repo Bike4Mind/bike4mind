@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   lockIfPaidWithBlockedCard: vi.fn(),
   recordShadowDetection: vi.fn(),
   claimStep: vi.fn(),
+  emitMetric: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -44,6 +45,8 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessage
 vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   lockIfPaidWithBlockedCard: mocks.lockIfPaidWithBlockedCard,
 }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test-stage' } }));
 
 import {
   alertStripeRiskEvent,
@@ -172,6 +175,38 @@ describe('paymentNetworkOf', () => {
 });
 
 describe('recordPaymentStart', () => {
+  beforeEach(() => {
+    mocks.emitMetric.mockReset();
+  });
+
+  it('counts each started payment once with the credits kind', async () => {
+    mocks.recordStart.mockResolvedValue(undefined);
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+
+    await recordPaymentStart({ paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network }, logger);
+
+    expect(mocks.emitMetric).toHaveBeenCalledTimes(1);
+    expect(mocks.emitMetric).toHaveBeenCalledWith(
+      'Lumina5/Billing',
+      'PaymentStarted',
+      1,
+      { kind: 'credits', Stage: 'test-stage' },
+      'Count'
+    );
+  });
+
+  it('still counts the start when the attempt write fails', async () => {
+    mocks.recordStart.mockRejectedValue(new Error('db down'));
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+
+    await expect(
+      recordPaymentStart({ paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network }, logger)
+    ).resolves.toBeUndefined();
+
+    expect(mocks.emitMetric).toHaveBeenCalledTimes(1);
+    expect(mocks.emitMetric.mock.calls[0][1]).toBe('PaymentStarted');
+  });
+
   it('records the visit the payment started in, or null without one', async () => {
     mocks.recordStart.mockResolvedValue(undefined);
     const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
@@ -229,6 +264,46 @@ describe('screenPaymentOutcome', () => {
     mocks.recordOutcome.mockResolvedValue({ attempt: recorded, changed: true });
     mocks.countAccountsForCard.mockResolvedValue(2);
     mocks.countRecentCards.mockResolvedValue({ userCards: 1, networkCards: 1 });
+    mocks.emitMetric.mockReset();
+    mocks.emitMetric.mockResolvedValue(undefined);
+  });
+
+  it('emits one PaymentOutcome count for a succeeded credits payment', async () => {
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.emitMetric).toHaveBeenCalledTimes(1);
+    expect(mocks.emitMetric).toHaveBeenCalledWith(
+      'Lumina5/Billing',
+      'PaymentOutcome',
+      1,
+      { outcome: 'succeeded', kind: 'credits', Stage: 'test-stage' },
+      'Count'
+    );
+  });
+
+  it('emits a failed outcome with the subscription kind', async () => {
+    mocks.recordOutcome.mockResolvedValue({
+      attempt: { ...recorded, kind: 'subscription', outcome: 'failed' },
+      changed: true,
+    });
+
+    await screenPaymentOutcome({ ...input, kind: 'subscription', outcome: 'failed' }, logger, now);
+
+    expect(mocks.emitMetric).toHaveBeenCalledWith(
+      'Lumina5/Billing',
+      'PaymentOutcome',
+      1,
+      expect.objectContaining({ outcome: 'failed', kind: 'subscription' }),
+      'Count'
+    );
+  });
+
+  it('emits nothing for a redelivered outcome', async () => {
+    mocks.recordOutcome.mockResolvedValue({ attempt: recorded, changed: false });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.emitMetric).not.toHaveBeenCalled();
   });
 
   it('records the card and Radar outcome, then alerts with every signal that fired', async () => {

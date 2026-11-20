@@ -2,7 +2,12 @@ import { Box, Dropdown, IconButton, Menu, MenuButton, MenuItem } from '@mui/joy'
 import CloseIcon from '@mui/icons-material/Close';
 import { adminFocus } from './adminStyles';
 
-export type FilterChipOption = { value: string; label: string };
+export type FilterChipOption = {
+  value: string;
+  label: string;
+  /** What the set chip reads in place of `label`, e.g. the range an "Edit range" entry holds. */
+  chipLabel?: string;
+};
 type FilterChipValue =
   | { multiple?: false; value: string | undefined; onChange: (value: string | undefined) => void }
   /** Each pick toggles one value; the chip reads "Label: First +N". */
@@ -21,7 +26,10 @@ export function FilterChip(
 ) {
   const { id, label, options } = choice;
   const values: readonly string[] = choice.multiple ? choice.value : choice.value === undefined ? [] : [choice.value];
-  const labelOf = (value: string) => options.find(option => option.value === value)?.label ?? value;
+  const labelOf = (value: string) => {
+    const option = options.find(candidate => candidate.value === value);
+    return option?.chipLabel ?? option?.label ?? value;
+  };
   const isSet = values.length > 0;
   const summary = isSet ? labelOf(values[0]) + (values.length > 1 ? ` +${values.length - 1}` : '') : '';
   const pick = (value: string) => {

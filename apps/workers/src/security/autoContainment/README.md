@@ -12,7 +12,7 @@ reason cites the assessment and the evidence.
 | `policy.ts` | Pure decision: `decideContainment(assessment, detection, config)` -> contain or skip-with-reason. |
 | `executor.ts` | `applyAutoContainment`: config, idempotent decision record, hourly cap, then shadow or enforce. |
 | `strongLink.ts` | On signup, a new account whose signup IP matches a blocked account within the window gets a `signupIpLinkedToBlocked` detection, assessed and decided at once. |
-| `apps/client/server/security/abuseAssessment/linkedAccountEvidence.ts` | The `groupEvidence` producer the assessment sees (linked accounts, landing notebook, settlement over hold, signup method and network). |
+| `packages/server-utils/src/security/abuseAssessment/linkedAccountEvidence.ts` | The `groupEvidence` producer the assessment sees (linked accounts, landing notebook, settlement over hold, signup method and network). |
 
 ## Decision API
 

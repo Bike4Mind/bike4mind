@@ -11,7 +11,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 
 /** `browser`: the SPA's legacy alias gets the stable app URL (browserFileSigner.ts); API callers keep a raw S3 link. */
 export const sessionFilesHandler = ({ browser }: { browser: boolean }) =>

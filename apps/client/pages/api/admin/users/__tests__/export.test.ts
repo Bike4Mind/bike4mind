@@ -9,8 +9,13 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockExport = vi.fn();
-vi.mock('@server/admin/usersList/listAdminUsers', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersList/listAdminUsers', () => ({
   exportAdminUsers: (...args: unknown[]) => mockExport(...args),
+}));
+
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
 }));
 
 import handler from '../export';
@@ -29,6 +34,51 @@ describe('GET /api/admin/users/export', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExport.mockResolvedValue({ users: [], truncated: false });
+    mockAudit.mockResolvedValue({});
+  });
+
+  describe('provider end-user identifier search', () => {
+    const DIGEST = 'cd'.repeat(32);
+
+    it.each(['ada', 'ada@example.com', 'ab'.repeat(12)])('does not audit the search %j', async search => {
+      await call({ search });
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+
+    it('audits a 64-hex search against the single matched account', async () => {
+      mockExport.mockResolvedValue({
+        users: [{ id: 'u1', username: 'ada', email: 'ada@example.com' }],
+        truncated: false,
+      });
+
+      const res = await call({ search: DIGEST.toUpperCase() });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.provider_id.resolved',
+          target: { kind: 'user', id: 'u1', displayName: 'ada@example.com' },
+          details: { providerEndUserId: DIGEST, source: 'users_export', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
+    it('audits a 64-hex search with no match against the system target', async () => {
+      await call({ search: DIGEST });
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          target: expect.objectContaining({ kind: 'system' }),
+          details: { providerEndUserId: DIGEST, source: 'users_export', matched: false, matchedCount: 0 },
+        })
+      );
+    });
+
+    it('fails the request when the audit write fails', async () => {
+      mockAudit.mockRejectedValue(new Error('audit down'));
+      await expect(call({ search: DIGEST })).rejects.toThrow('audit down');
+    });
   });
 
   it('requires JWT auth with admin scope', () => {

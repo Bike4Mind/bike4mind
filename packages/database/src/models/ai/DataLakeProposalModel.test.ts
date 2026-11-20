@@ -331,4 +331,45 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.listByLake('lake-1')).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
   });
+  it('keeps the feed url on provenance through a save, and defaults it to null for a search proposal', async () => {
+    const fromFeed = await create({
+      provenance: {
+        producer: 'research_run',
+        runId: 'run-1',
+        feedUrl: 'https://example.com/feed.xml',
+        retrievedAt: new Date('2026-08-01T00:00:00Z'),
+      },
+    });
+    const fromSearch = await create({
+      sourceUrl: 'https://example.com/other',
+      canonicalSourceKey: 'example.com/other',
+    });
+
+    expect(fromFeed.provenance.feedUrl).toBe('https://example.com/feed.xml');
+    expect(fromSearch.provenance.feedUrl).toBeNull();
+    const reread = await repo.listByLake('lake-1');
+    expect(reread.find(p => p.id === fromFeed.id)?.provenance.feedUrl).toBe('https://example.com/feed.xml');
+  });
+
+  it('keeps a review reason through a save, and leaves it absent otherwise', async () => {
+    const retrievedAt = new Date('2026-08-01T00:00:00Z');
+    const flagged = await create({
+      provenance: {
+        producer: 'research_run',
+        retrievedAt,
+        reviewReason: { kind: 'rule_match', conditions: ['About sports'] },
+      },
+    });
+    const failed = await create({
+      canonicalSourceKey: 'https://example.com/other',
+      provenance: { producer: 'research_run', retrievedAt, reviewReason: { kind: 'rule_check_failed' } },
+    });
+    const plain = await create({ canonicalSourceKey: 'https://example.com/plain' });
+
+    const rows = await repo.listByLake('lake-1');
+    const byId = (id: string) => rows.find(p => p.id === id)?.provenance;
+    expect(byId(flagged.id)?.reviewReason).toEqual({ kind: 'rule_match', conditions: ['About sports'] });
+    expect(byId(failed.id)?.reviewReason).toEqual({ kind: 'rule_check_failed' });
+    expect(byId(plain.id)?.reviewReason).toBeUndefined();
+  });
 });

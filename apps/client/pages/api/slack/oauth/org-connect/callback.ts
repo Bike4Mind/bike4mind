@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 /**
@@ -17,6 +17,7 @@ import {
   organizationRepository,
   orgSlackWorkspaceRepository,
   slackChannelConfigRepository,
+  SlackFeedbackChannel,
 } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@bike4mind/slack';
@@ -183,6 +184,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Check if org already has a workspace connected
     const existingForOrg = await orgSlackWorkspaceRepository.findByOrganizationId(organizationId);
 
+    await SlackFeedbackChannel.updateMany({ $or: [{ organizationId }, { slackTeamId }] }, { $set: { enabled: false } });
+
     // API posting opt-ins are only ever this organization's own: drop any granted under another
     // connection of this workspace, and all of a workspace this organization is moving away from.
     const clearedChannelIds = await slackChannelConfigRepository.clearApiPostingBySlackTeamId(
@@ -240,6 +243,16 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     auditLogger.setWorkspaceId(slackTeamId);
     await recordOrganizationAuditEventSafe({ organizationId, actorUserId: userId, action: 'connector.connected' });
+    await recordAdminActionForActor(
+      req,
+      { kind: 'user', scope: 'organization', userId, name: userId, wasAdmin: false },
+      {
+        action: 'org.slack.connected',
+        target: { kind: 'organization', id: organizationId, displayName: org.name },
+        summary: `connected Slack workspace ${slackTeamName ?? slackTeamId}`,
+        details: { slackTeamId },
+      }
+    );
     auditLogger.success({ slackTeamId, slackTeamName, organizationId });
 
     return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_connected=true`);

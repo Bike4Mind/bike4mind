@@ -1,8 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
+import {
+  SETTING_TABS,
+  makeContributedBooleanSetting,
+  registerContributedSettings,
+  resetContributedSettings,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
@@ -16,7 +23,6 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
-vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
 vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
@@ -25,15 +31,21 @@ vi.mock('./AdminTurnstileStatusNotice', () => ({
 }));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
-vi.mock('./AdminGenerationModelsSetting', () => ({
-  AdminGenerationModelsSetting: () => <div data-testid="admin-generation-models-card" />,
-}));
-vi.mock('./AdminRecommendedModelsSetting', () => ({
-  AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
-}));
 vi.mock('./AdminSettingInputField', () => ({
-  default: ({ setting, defaultValue }: { setting: { key: SettingKey }; defaultValue: unknown }) => (
-    <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
+  default: ({
+    setting,
+    defaultValue,
+    lockedNote,
+  }: {
+    setting: { key: SettingKey };
+    defaultValue: unknown;
+    lockedNote?: string;
+  }) => (
+    <div
+      data-testid={`generic-setting-${setting.key}`}
+      data-default-value={JSON.stringify(defaultValue)}
+      data-locked-note={lockedNote}
+    />
   ),
 }));
 vi.mock('./AdminStringListSettingField', () => ({
@@ -54,10 +66,12 @@ vi.mock('@tanstack/react-router', () => ({
 import AdminSettingsTab from './AdminSettingsTab';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { MODEL_SETTINGS_ONLY_KEYS } from './Models/Settings/modelSettingsKeys';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { useUser } from '@client/app/contexts/UserContext';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -261,22 +275,74 @@ describe('AdminSettingsTab URL state', () => {
   });
 });
 
-describe('AdminSettingsTab generation models setting', () => {
-  it('renders the bespoke generation models card and no generic video or music card', () => {
-    renderAiTab();
+describe('AdminSettingsTab model settings', () => {
+  const moved = [...MODEL_SETTINGS_ONLY_KEYS];
 
-    expect(screen.getByTestId('admin-generation-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
-    expect(screen.queryByTestId('generic-setting-musicGeneration')).toBeNull();
+  it('covers the discovery, default, free-tier and generation keys', () => {
+    for (const key of [
+      'enableModelDiscovery',
+      'modelDiscoveryMode',
+      'DefaultAPIModel',
+      'recommendedModelIds',
+      'freeTierModelGateEnabled',
+      'freeTierAllowedModels',
+      'videoGeneration',
+      'musicGeneration',
+    ] as const) {
+      expect(MODEL_SETTINGS_ONLY_KEYS.has(key), key).toBe(true);
+    }
   });
-});
 
-describe('AdminSettingsTab recommended models setting', () => {
-  it('renders the bespoke recommended models editor and no generic recommendedModelIds card', () => {
+  it('shares no key with a setting home, so no setting gets two editors', () => {
+    const shared = moved.filter(key => HOME_BY_KEY.has(key));
+    expect(shared).toEqual([]);
+  });
+
+  it.each([
+    ['AI', aiTab],
+    ['SecOps', findTab(settingsMap.freeTierModelGateEnabled.category)],
+  ] as const)('renders no editor for a moved key in the %s sections', (_name, tab) => {
+    renderTab(tab);
+
+    for (const key of moved) {
+      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+      expect(screen.queryByTestId(`string-list-setting-${key}`), key).toBeNull();
+    }
+    expect(screen.queryByTestId('admin-generation-models-card')).toBeNull();
+  });
+
+  it('still lists the other AI settings and links to Models > Settings', () => {
     renderAiTab();
 
-    expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
+    expect(screen.getByTestId('generic-setting-agentVideoClipsPerRun')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-settings-models-link-AI'));
+    const call = router.navigate.mock.calls.at(-1)?.[0] as { to: string; search: Record<string, unknown> };
+    expect(call.to).toBe('/admin');
+    expect(call.search).toMatchObject({ tab: 'models', modelsSection: 'settings' });
+  });
+
+  it('points to Models > Settings from every category that lost a key', () => {
+    renderTab(findTab(settingsMap.freeTierModelGateEnabled.category));
+
+    expect(
+      screen.getByTestId(`admin-settings-models-link-${settingsMap.freeTierModelGateEnabled.category}`)
+    ).toBeTruthy();
+  });
+
+  it('points a search for a moved key to Models > Settings', () => {
+    router.search = { tab: 'admin-settings', q: 'free-tier model gate' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-freeTierModelGateEnabled')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-models-link'));
+    expect(router.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin' }));
+  });
+
+  it('shows no Models pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-models-hint')).toBeNull();
   });
 });
 
@@ -293,15 +359,65 @@ describe('AdminSettingsTab Turnstile notice', () => {
   });
 });
 
-describe('AdminSettingsTab reviewer emails setting', () => {
-  it('renders the string-list editor with the stored reviewers and no generic card', () => {
-    serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
+describe('AdminSettingsTab category headings', () => {
+  it('shows the SecOps category under a Security heading and keeps the stored category name', () => {
     renderSecurityTab();
 
-    const field = screen.getByTestId('string-list-setting-ImageModerationReviewerEmails');
-    expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
-    expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
+    const heading = screen.getByTestId('admin-settings-category-heading-SecOps');
+    expect(heading.textContent).toBe('Security');
+    expect(screen.queryByRole('heading', { name: 'SecOps' })).toBeNull();
+    expect(settingsMap.abuseAssessmentEnabled.category).toBe('SecOps');
   });
+
+  it('shows other categories under their own name', () => {
+    renderSecurityTab();
+
+    expect(screen.getByTestId('admin-settings-category-heading-AI Moderation').textContent).toBe('AI Moderation');
+  });
+});
+
+describe('AdminSettingsTab settings that stay off the list', () => {
+  afterEach(() => resetContributedSettings());
+
+  it('lists no editor for a core setting flagged hideFromSettingsList', () => {
+    renderSecurityTab();
+
+    expect(settingsMap.secopsTriageConfig.hideFromSettingsList).toBe(true);
+    expect(settingsMap.secopsTriageConfig.category).toBe(settingsMap.abuseAssessmentEnabled.category);
+    expect(screen.queryByTestId('generic-setting-secopsTriageConfig')).toBeNull();
+    expect(screen.getByTestId('generic-setting-abuseAssessmentEnabled')).toBeTruthy();
+  });
+
+  it('applies the flag to a contributed setting too', () => {
+    const contributed = (key: string, hideFromSettingsList?: boolean) =>
+      makeContributedBooleanSetting({
+        key,
+        name: key,
+        description: 'x',
+        defaultValue: false,
+        category: settingsMap.abuseAssessmentEnabled.category,
+        hideFromSettingsList,
+      });
+    registerContributedSettings([contributed('ExtensionListed'), contributed('ExtensionOwnEditor', true)]);
+    renderSecurityTab();
+
+    expect(screen.getByTestId('generic-setting-ExtensionListed')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-ExtensionOwnEditor')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab reviewer emails setting', () => {
+  it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+    'renders the %s string-list editor with the stored reviewers and no generic card',
+    key => {
+      serverSettings = [{ settingName: key, settingValue: '["reviewer@example.com"]' }];
+      renderSecurityTab();
+
+      const field = screen.getByTestId(`string-list-setting-${key}`);
+      expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
+      expect(screen.queryByTestId(`generic-setting-${key}`)).toBeNull();
+    }
+  );
 
   it('gives the generic field to an object setting that defaults to an array', () => {
     // The editor belongs to the listed keys, not to every object setting that happens to hold a
@@ -353,6 +469,29 @@ describe('AdminSettingsTab field default value', () => {
     renderAiTab();
 
     expect(passedDefault('forcedRetrievalSpreadFloorPct')).toBe(settingsMap.forcedRetrievalSpreadFloorPct.defaultValue);
+  });
+});
+
+describe('AdminSettingsTab full-admin-only settings', () => {
+  const lockedNote = (key: SettingKey) => screen.getByTestId(`generic-setting-${key}`).getAttribute('data-locked-note');
+  const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
+    useUser.setState({ currentUser: user as unknown as ReturnType<typeof useUser.getState>['currentUser'] });
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('locks a setting that constrains delegates for a settings:manage delegate, and only that one', () => {
+    signInAs({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBe('Only full administrators can change this setting.');
+    expect(lockedNote('turnstileEnabled')).toBeNull();
+  });
+
+  it('leaves it editable for a full admin', () => {
+    signInAs({ isAdmin: true });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBeNull();
   });
 });
 
@@ -432,6 +571,8 @@ describe('AdminSettingsTab Credits System group', () => {
     // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
     ['drip', 'invite-center-schedule', 'schedule'],
     ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['signupGrantActivityMinActiveSeconds', 'invite-center-schedule', 'schedule'],
+    ['signupUnlockPaymentHoldHours', 'invite-center-schedule', 'schedule'],
     ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
     ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
     ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
@@ -461,13 +602,13 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderUsersTab();
 
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
   });
 
-  it('shows them when the server hides nothing', () => {
+  it('leaves moved preview controls to Schedule even when the server hides nothing', () => {
     renderUsersTab();
 
-    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 
   it.each([
@@ -486,7 +627,7 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderSettings();
     fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
 
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });

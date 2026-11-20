@@ -55,8 +55,12 @@ const handler = adminApi({
     ncmecReportId: incident.ncmecReportId ?? null,
     alertedAt: incident.alertedAt ?? null,
     lastReminderAt: incident.lastReminderAt ?? null,
+    escalatedAt: incident.escalatedAt ?? null,
+    escalationTrigger: incident.escalationTrigger ?? null,
+    escalationAlertedAt: incident.escalationAlertedAt ?? null,
     reportedAt: incident.reportedAt ?? null,
     falsePositiveAt: incident.falsePositiveAt ?? null,
+    noActionAt: incident.noActionAt ?? null,
     image,
   });
 });

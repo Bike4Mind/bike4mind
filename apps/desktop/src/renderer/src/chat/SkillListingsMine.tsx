@@ -51,7 +51,13 @@ function ListingRow({
             {status.label}
           </Chip>
           <Chip size="sm" variant="soft" color="neutral">
-            {listing.visibility === 'organization' ? 'Org' : listing.visibility === 'unlisted' ? 'Unlisted' : 'Public'}
+            {listing.visibility === 'organization'
+              ? 'Org'
+              : listing.visibility === 'space'
+                ? 'Space'
+                : listing.visibility === 'unlisted'
+                  ? 'Unlisted'
+                  : 'Public'}
           </Chip>
           {listing.currentVersion ? (
             <Chip size="sm" variant="outlined">

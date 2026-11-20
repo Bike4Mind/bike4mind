@@ -9,11 +9,15 @@ import {
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
   OVERFLOW_POINTS,
+  QUEST_BOARD,
   TAVERN_SLOTS,
   assignCharacters,
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
+  needsYouGroups,
+  noteCapacity,
+  pinNotes,
   placeAgents,
   poseFor,
   zoneFor,
@@ -75,6 +79,93 @@ describe('tavern layout data', () => {
     empty.slots.hearth = [];
     expect(tavernLayoutSchema.safeParse(empty).success).toBe(false);
     expect(tavernLayoutSchema.safeParse(layoutJson).success).toBe(true);
+  });
+
+  it('hangs the quest board inside the scene, above every seat and clear of the Innkeeper', () => {
+    const { left, top, width, height } = QUEST_BOARD;
+    expect(left + width).toBeLessThanOrEqual(100);
+    expect(top + height).toBeLessThanOrEqual(100);
+    // A sprite's box is 15% of the scene tall above its feet; none may reach up over the board.
+    const spriteTop = (point: SlotPoint) => point.y - 15;
+    const seats = [...Object.values(TAVERN_SLOTS).flat(), ...Object.values(OVERFLOW_POINTS), DOOR_POINT];
+    expect(seats.every(point => spriteTop(point) >= top + height)).toBe(true);
+    const innkeeperClear = INNKEEPER_POINT.x - 7.5 >= left + width || INNKEEPER_POINT.x + 7.5 <= left;
+    expect(innkeeperClear).toBe(true);
+  });
+
+  it('rejects a quest board that holds fewer than two notes', () => {
+    const tiny = structuredClone(layoutJson);
+    tiny.questBoard.notes = 1;
+    expect(tavernLayoutSchema.safeParse(tiny).success).toBe(false);
+  });
+});
+
+describe('pinNotes', () => {
+  it('pins everything when it fits', () => {
+    expect(pinNotes([1, 2, 3], 3)).toEqual({ pinned: [1, 2, 3], hidden: [] });
+  });
+
+  it('gives the last place to the "+N" note once the board is over full', () => {
+    expect(pinNotes([1, 2, 3, 4, 5], 3)).toEqual({ pinned: [1, 2], hidden: [3, 4, 5] });
+  });
+});
+
+describe('noteCapacity', () => {
+  // Board heights (px) as measured live in the desktop app, from a large scene down to a tiny one.
+  it.each([
+    [145, 3],
+    [109, 2],
+    [77, 2],
+    [70, 2],
+    [55, 2],
+    [39, 1],
+    [28, 1],
+  ])('fits three quests on a %ipx board as %i places', (height, places) => {
+    expect(noteCapacity(height, 3)).toBe(places);
+  });
+
+  it.each([
+    [145, 3],
+    [109, 3],
+    [77, 2],
+    [39, 1],
+  ])('puts the last place of a %ipx board to the "+N" note for six quests (%i places)', (height, places) => {
+    expect(noteCapacity(height, 6)).toBe(places);
+    const { pinned, hidden } = pinNotes([1, 2, 3, 4, 5, 6], noteCapacity(height, 6));
+    expect(pinned).toHaveLength(places - 1);
+    expect(pinned.length + hidden.length).toBe(6);
+  });
+
+  it('never reports a capacity of every quest unless the full stack fits, so a clipped last note gets a "+N"', () => {
+    const { pinned, hidden } = pinNotes([1, 2, 3], noteCapacity(109, 3));
+    expect(pinned).toHaveLength(1);
+    expect(hidden).toHaveLength(2);
+  });
+
+  it('gives no place at all once not even the "+N" note fits, so the board is not drawn', () => {
+    expect(noteCapacity(16, 3)).toBe(0);
+    expect(noteCapacity(7, 6)).toBe(0);
+    expect(noteCapacity(0, 6)).toBe(0);
+  });
+
+  it('never exceeds the layout count and never shrinks as the board grows', () => {
+    let last = 0;
+    for (let height = 0; height <= 400; height += 1) {
+      const places = noteCapacity(height, 10);
+      expect(places).toBeLessThanOrEqual(QUEST_BOARD.notes);
+      expect(places).toBeGreaterThanOrEqual(last);
+      last = places;
+    }
+  });
+
+  it('keeps every quest reachable: pinned notes plus the hidden ones are all of them', () => {
+    for (const height of [0, 20, 40, 60, 80, 100, 150]) {
+      for (const total of [1, 2, 3, 4, 9]) {
+        const items = Array.from({ length: total }, (_, index) => index);
+        const { pinned, hidden } = pinNotes(items, noteCapacity(height, total));
+        expect([...pinned, ...hidden]).toEqual(items);
+      }
+    }
   });
 });
 
@@ -372,6 +463,17 @@ describe('nameLabelLayout', () => {
     expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.front - 0.1 }, 2)).toBe(100);
   });
 
+  it('keeps every label inside the scene, so a seat by the wall never has its name cut off', () => {
+    const points = allSeats();
+    const layout = nameLabelLayout(points);
+    for (const [id, label] of layout) {
+      const { x } = points.get(id)!;
+      expect(x - label.maxWidth / 2).toBeGreaterThanOrEqual(0);
+      expect(x + label.maxWidth / 2).toBeLessThanOrEqual(100);
+    }
+    expect(nameLabelLayout(new Map([['wall', { x: 95, y: 50 }]])).get('wall')?.maxWidth).toBeCloseTo(9);
+  });
+
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {
     const points = new Map<string, SlotPoint>([
       ['left', { x: 50, y: 50 }],
@@ -384,5 +486,44 @@ describe('nameLabelLayout', () => {
     expect(layout.get('right')?.shown).toBe(false);
     expect(layout.get('left')?.maxWidth).toBeLessThan(NAME_LABEL_MIN_WIDTH);
     expect(overlapping(points, layout)).toEqual([]);
+  });
+});
+
+const needsYouBubbles = (seats: Parameters<typeof needsYouGroups>[0]) =>
+  new Map([...needsYouGroups(seats)].map(([id, group]) => [id, group.length]));
+
+describe('needsYouGroups', () => {
+  it('lists the agents a bubble speaks for left to right', () => {
+    expect(needsYouGroups([atBar('c', 2), atBar('a', 0), atBar('b', 1)])).toEqual(new Map([['b', ['a', 'b', 'c']]]));
+  });
+
+  const bar = TAVERN_SLOTS.bar;
+  const atBar = (id: string, slot: number) => ({ id, zone: 'bar' as const, point: bar[slot] });
+
+  it('gives a lone waiting agent its own bubble', () => {
+    expect(needsYouBubbles([atBar('a', 2)])).toEqual(new Map([['a', 1]]));
+  });
+
+  it('puts one bubble over the middle of a zone, speaking for everyone waiting there', () => {
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2)])).toEqual(new Map([['b', 3]]));
+  });
+
+  it('takes the leftmost of the two middle agents of an even group', () => {
+    expect(needsYouBubbles([atBar('b', 1), atBar('a', 0)])).toEqual(new Map([['a', 2]]));
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2), atBar('d', 3)])).toEqual(new Map([['b', 4]]));
+  });
+
+  it('keeps one bubble per zone', () => {
+    const bench = { id: 'e', zone: 'benches' as const, point: TAVERN_SLOTS.benches[0] };
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), bench])).toEqual(
+      new Map([
+        ['a', 2],
+        ['e', 1],
+      ])
+    );
+  });
+
+  it('draws no bubble when nobody is waiting', () => {
+    expect(needsYouBubbles([])).toEqual(new Map());
   });
 });

@@ -11,6 +11,10 @@ import {
 } from './index';
 
 describe('computeImageUsdCostPerImage', () => {
+  it('returns 0 for the free test-image model', () => {
+    expect(computeImageUsdCostPerImage('test-image', { model: 'test-image' })).toBe(0);
+  });
+
   it('returns 0 for a self-hosted local-image model (no provider spend)', () => {
     expect(
       computeImageUsdCostPerImage('local-image/v1-5-pruned-emaonly', { model: 'local-image/v1-5-pruned-emaonly' })

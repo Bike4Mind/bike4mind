@@ -1,19 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mongoose } from '@bike4mind/database';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { accountDeletionNoticeRepository, mongoose } from '@bike4mind/database';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import '@bike4mind/server-utils/models/UserSubscription';
+import {
+  createMongoReplSet,
+  settleAutoIndexBuilds,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
+import { SubjectErasurePlan } from './subjectErasurePlan';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer | undefined;
+let mongoServer: MongoMemoryReplSet | undefined;
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
@@ -22,6 +28,35 @@ afterAll(async () => {
 });
 
 describe('SubjectRecordExport over the real registry', () => {
+  it('withholds the live deletion-notice lease token from the recipient export', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const email = 'notice-export@example.com';
+    const idHash = `notice-export-${userId}`;
+    const now = new Date();
+    await accountDeletionNoticeRepository.record({ idHash, email, now });
+    const claimed = await accountDeletionNoticeRepository.claimDue(idHash, now, now);
+    expect(claimed?.leaseToken).toEqual(expect.any(String));
+    if (!claimed) throw new Error('Notice was not claimed');
+
+    const records: Record<string, unknown>[] = [];
+    for await (const record of new SubjectRecordExport({ userId, email }).records('AccountDeletionNotice')) {
+      records.push(record);
+    }
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ idHash, email, attempts: 0 });
+    expect(records[0]).not.toHaveProperty('leaseToken');
+    expect(JSON.stringify(records)).not.toContain(claimed.leaseToken);
+    expect((await accountDeletionNoticeRepository.find(idHash))?.leaseToken).toBe(claimed.leaseToken);
+
+    const unrelated: Record<string, unknown>[] = [];
+    for await (const record of new SubjectRecordExport({ userId, email: 'other-export@example.com' }).records(
+      'AccountDeletionNotice'
+    )) {
+      unrelated.push(record);
+    }
+    expect(unrelated).toEqual([]);
+  });
+
   // `strictQuery: 'throw'` makes any registry path a schema does not declare fail here, and every
   // viaParent child must find its parent already read.
   it('queries every classified model without error', async () => {
@@ -262,5 +297,12 @@ describe('SubjectRecordExport over the real registry', () => {
     );
     expect(JSON.stringify(records[0])).not.toContain(reviewerB);
     expect(JSON.stringify(records[0])).not.toContain('reason B');
+  });
+});
+
+describe('SubjectErasurePlan over the real registry', () => {
+  it('walks every classified model without error', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    await expect(new SubjectErasurePlan({ userId, email: 'subject@example.com' }).collections()).resolves.toEqual([]);
   });
 });

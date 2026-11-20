@@ -5,8 +5,8 @@ import {
   Button,
   Chip,
   FormControl,
+  FormHelperText,
   FormLabel,
-  IconButton,
   Option,
   Select,
   Slider,
@@ -17,7 +17,6 @@ import {
   Typography,
 } from '@mui/joy';
 import { formatCredits } from '@client/app/utils/formatUsd';
-import CloseIcon from '@mui/icons-material/Close';
 import {
   hasInvalidField,
   type AspectField,
@@ -28,10 +27,13 @@ import {
   type ReferencesField,
   type TextField,
 } from './capabilityFields';
+import ImageFieldPreview from './ImageFieldPreview';
 import { insertSnippet } from './insertSnippet';
-import StudioModelCards, { type StudioModelCard } from './StudioModelCards';
+import ReferenceChip from './ReferenceChip';
+import StudioModelPicker from './StudioModelPicker';
+import type { StudioModelCard } from './studioModelCard';
 
-// The model picker: a dropdown of names, or a card per model with its strength, price and fit (Create v2).
+// The model picker: a dropdown of names, or (Create v2) a compact row with a panel of ranked model cards.
 type ModelPickerProps =
   | { models: readonly CapabilityOption[]; modelCards?: never }
   | { modelCards: readonly StudioModelCard[]; models?: never };
@@ -166,32 +168,28 @@ const AspectControl = ({ field, testId }: { field: AspectField; testId: string }
   </FormControl>
 );
 
+// A labelled group, not a FormControl: Joy wires a FormControl's label and error state into every input inside it,
+// so a chip's Remove background switch would take the label's click and the field's danger color.
 const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: string }) => (
-  <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
-    <FormLabel>
+  <Stack role="group" aria-labelledby={`${testId}-label`} gap={0.75}>
+    <Typography
+      id={`${testId}-label`}
+      level="title-sm"
+      color={field.invalidReason !== undefined ? 'danger' : undefined}
+      sx={{ opacity: field.disabled ? 0.6 : 1 }}
+    >
       {field.label} ({field.files.length}/{field.max})
-    </FormLabel>
+    </Typography>
     <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
       {field.files.map(file => (
-        <Chip
+        <ReferenceChip
           key={file.fileId}
-          variant="soft"
-          data-testid={`${testId}-file-${file.fileId}`}
-          endDecorator={
-            <IconButton
-              size="sm"
-              variant="plain"
-              aria-label={`Remove ${file.fileName}`}
-              disabled={field.disabled}
-              onClick={() => field.onRemove(file.fileId)}
-              data-testid={`${testId}-remove-${file.fileId}-btn`}
-            >
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          }
-        >
-          {file.fileName}
-        </Chip>
+          file={file}
+          disabled={field.disabled}
+          testId={testId}
+          onRemove={field.onRemove}
+          onToggleCutout={field.onToggleCutout}
+        />
       ))}
       {field.files.length < field.max && (
         <Button
@@ -205,7 +203,7 @@ const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: 
         </Button>
       )}
     </Stack>
-  </FormControl>
+  </Stack>
 );
 
 // Diameter of a chip's swatch dot, in px.
@@ -372,9 +370,12 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
       );
     case 'image':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
-          <Stack direction="row" gap={1} alignItems="center">
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            {field.previewFileId !== undefined && (
+              <ImageFieldPreview fileId={field.previewFileId} alt={field.fileName ?? field.label} testId={testId} />
+            )}
             <Button
               size="sm"
               variant="outlined"
@@ -382,14 +383,27 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
               onClick={field.onPick}
               data-testid={`${testId}-pick-btn`}
             >
-              {field.fileName !== null ? 'Change image' : 'Choose image'}
+              {field.pickLabel ?? (field.fileName !== null ? 'Change image' : 'Choose image')}
             </Button>
             {field.fileName !== null && (
               <Typography level="body-sm" data-testid={`${testId}-name`}>
                 {field.fileName}
               </Typography>
             )}
+            {field.fileName !== null && field.onClear && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={field.disabled}
+                onClick={field.onClear}
+                data-testid={`${testId}-clear-btn`}
+              >
+                Remove
+              </Button>
+            )}
           </Stack>
+          {field.hint && <FormHelperText data-testid={`${testId}-hint`}>{field.hint}</FormHelperText>}
         </FormControl>
       );
     default: {
@@ -405,10 +419,10 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
 /**
  * The Studio form for any modality: a model picker, the fields the selected model's capabilities produce, the credit
  * estimate and the submit button. Field test ids are `<prefix>-<id>` plus a per-kind suffix: `-input` (text),
- * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn` and
- * `-name` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and `-remove-<id>-btn` (references), `-chips` and
- * `-<value>-chip` (chips). A field holding a value the model does not take adds `-invalid` and, with a fix,
- * `-fix-btn`, and holds submit.
+ * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn`, `-name`,
+ * `-preview`, `-clear-btn` and `-hint` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and
+ * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not
+ * take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit.
  */
 const CapabilityForm = ({
   testIdPrefix,
@@ -432,7 +446,7 @@ const CapabilityForm = ({
       {modelCards ? (
         <FormControl>
           <FormLabel>Model</FormLabel>
-          <StudioModelCards
+          <StudioModelPicker
             testIdPrefix={testIdPrefix}
             cards={modelCards}
             selectedId={modelId}

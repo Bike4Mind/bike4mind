@@ -5,11 +5,13 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -50,7 +52,7 @@ describe('git rule and launcher review regressions', () => {
   it.each(['pnpm exec git f origin', 'npm x git f origin', 'npx git m other'])(
     'checks expanded launched options in %s',
     async command => {
-      expect((await promptFor(command)).askInAuto).toBe(true);
+      expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
     }
   );
   it.each(['npx printf git bang', 'pnpm exec printf git bang', 'pnpm exec printf node -e 1'])(
@@ -80,7 +82,7 @@ describe('git rule and launcher review regressions', () => {
     'for n in 1 2; do git commit; export EDITOR=vim; done',
     'f(){ export EDITOR=vim; }; f; git commit',
   ])('retains actual or uncertain fallback consumers in %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -121,7 +123,7 @@ describe('git rule and launcher review regressions', () => {
     'yarn exec git bang',
     'bunx git bang',
   ])('checks the executable launched by %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -146,6 +148,54 @@ describe('git rule and launcher review regressions', () => {
     'export EDITOR=vim; pnpm exec git commit',
     'export EDITOR=vim; npm x git commit',
   ])('retains the program/config check for %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
+  });
+});
+
+const DELETE_REASON = 'Deletes files recursively or forcefully, which cannot be undone.';
+
+describe('recursive or forced deletes', () => {
+  it.each([
+    'rm -rf src',
+    'rm -r src',
+    'rm -R src',
+    'rm -fr src',
+    'rm -f src/a.txt',
+    'rm --recursive src',
+    'rm --force src/a.txt',
+    'sudo rm -rf src',
+    'find . -name x -delete',
+    'find . -delete',
+    'find . -exec rm {} \\;',
+    'find . -exec rm -rf {} +',
+    'ls | xargs rm -rf',
+    '/bin/rm -rf src',
+    'env X=1 rm -rf src',
+    'command rm -rf src',
+    'rm --rec src',
+    'rm src -rf',
+    'ls && rm -rf src',
+    'echo $(rm -rf src)',
+    'find . -execdir rm {} \\;',
+    'find . -ok rm {} \\;',
+  ])('gives %s a reason on the card', async command => {
+    const prompt = await promptFor(command);
+    expect(prompt.reasons).toContain(DELETE_REASON);
+    expect(prompt.detail).toContain(DELETE_REASON);
+  });
+
+  it.each([
+    'rm src/a.txt',
+    'rm -i src/a.txt',
+    'rm -v src/a.txt',
+    'rm -d src',
+    'rm --dir src',
+    'ls',
+    'find . -name x',
+    'find . -fprint out',
+    'pnpm test',
+    'echo rm -rf src',
+  ])('gives %s no delete reason', async command => {
+    expect((await promptFor(command)).reasons ?? []).not.toContain(DELETE_REASON);
   });
 });

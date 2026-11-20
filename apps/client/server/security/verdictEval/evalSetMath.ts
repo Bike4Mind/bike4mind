@@ -22,12 +22,12 @@ import {
   Scoreboard,
   cohortRowsFrom,
   ratio,
-  type EvalAssessment,
   type EvalDecision,
   type Label,
   type Prediction,
   type SignupChartVerdict,
 } from './gradeVerdicts';
+import { calibrate, calibrationProbability, type CalibratedAssessment } from './calibration';
 
 /**
  * The pure half of the evaluation sets (evalSets.ts loads and stores): campaign keys, the split,
@@ -147,7 +147,7 @@ export function exampleLabel(example: Pick<AbuseEvalExample, 'kind' | 'verdicts'
 }
 
 export type EvalSetPredictions = {
-  assessments: readonly EvalAssessment[];
+  assessments: readonly CalibratedAssessment[];
   decisions: readonly EvalDecision[];
   /** Absent for an account the chart did not classify; such an example abstains. */
   signupVerdicts: ReadonlyMap<string, SignupChartVerdict>;
@@ -161,13 +161,12 @@ function combine(detectionIds: readonly string[], predictionOf: (detectionId: st
   return predictions.every(prediction => prediction === 'negative') ? 'negative' : 'abstain';
 }
 
-/** Per variant (model or mode), each detection's newest prediction. */
-function latestPredictions<Row extends { detectionId: string }>(
+/** Per variant (model or mode), each detection's newest row. */
+function newestPerVariant<Row extends { detectionId: string }>(
   rows: readonly Row[],
   variantOf: (row: Row) => string,
-  timeOf: (row: Row) => Date,
-  predictionOf: (row: Row) => Prediction
-): Map<string, Map<string, Prediction>> {
+  timeOf: (row: Row) => Date
+): Map<string, Map<string, Row>> {
   const newest = new Map<string, Map<string, Row>>();
   for (const row of rows) {
     const variant = variantOf(row);
@@ -176,6 +175,14 @@ function latestPredictions<Row extends { detectionId: string }>(
     if (!current || timeOf(row) > timeOf(current)) byDetection.set(row.detectionId, row);
     newest.set(variant, byDetection);
   }
+  return newest;
+}
+
+/** Per variant (model or mode), each detection's newest prediction. */
+function latestPredictions<Row extends { detectionId: string }>(
+  newest: ReadonlyMap<string, ReadonlyMap<string, Row>>,
+  predictionOf: (row: Row) => Prediction
+): Map<string, Map<string, Prediction>> {
   return new Map(
     [...newest].map(([variant, byDetection]) => [
       variant,
@@ -298,22 +305,24 @@ export function gradeEvalSet(
     });
   }
 
+  const newestAssessments = newestPerVariant(
+    predictions.assessments,
+    row => row.model,
+    row => row.assessedAt
+  );
   const byVariant = [
     {
       grader: 'assessment' as const,
-      predictions: latestPredictions(
-        predictions.assessments,
-        row => row.model,
-        row => row.assessedAt,
-        row => ASSESSMENT_PREDICTIONS[row.result]
-      ),
+      predictions: latestPredictions(newestAssessments, row => ASSESSMENT_PREDICTIONS[row.result]),
     },
     {
       grader: 'containment' as const,
       predictions: latestPredictions(
-        predictions.decisions,
-        row => row.mode,
-        row => row.decidedAt,
+        newestPerVariant(
+          predictions.decisions,
+          row => row.mode,
+          row => row.decidedAt
+        ),
         row => CONTAINMENT_PREDICTIONS[row.outcome]
       ),
     },
@@ -346,6 +355,21 @@ export function gradeEvalSet(
   const labelSources: Record<string, number> = {};
   for (const { label } of labelled) labelSources[label.source] = (labelSources[label.source] ?? 0) + 1;
 
+  // Unflagged examples have no detection, so no assessment to calibrate.
+  const flaggedLabelled = labelled.filter(({ example }) => example.kind === 'flagged');
+  const calibration = [...newestAssessments]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([model, byDetection]) =>
+      calibrate(
+        model,
+        flaggedLabelled.length,
+        flaggedLabelled.flatMap(({ example, label }) => {
+          const predicted = calibrationProbability(example.detectionIds, byDetection);
+          return predicted === null ? [] : [{ predicted, abuse: label.label === 'abuse' }];
+        })
+      )
+    );
+
   return {
     split: 'heldOut',
     examples: heldOut.length,
@@ -360,6 +384,7 @@ export function gradeEvalSet(
     recall: estimateRecall(set),
     cohorts: cohortRowsFrom(cohortsByUser.keys(), labels, userId => cohortsByUser.get(userId) ?? []),
     labelSources,
+    calibration,
   };
 }
 

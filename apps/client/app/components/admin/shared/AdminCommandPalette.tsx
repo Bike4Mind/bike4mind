@@ -46,6 +46,11 @@ const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
   ['/', 'Focus the current page search'],
   ['x', 'Toggle selection of the focused table row'],
+  ['j / k', 'Focus the next / previous Feedback row; move between reports in the drawer'],
+  ['Enter', 'Open the focused Feedback report'],
+  ['i', 'Mark the focused Feedback report In progress'],
+  ['c', 'Close the focused Feedback report with a resolution'],
+  ['e', 'Email the focused Feedback reporter'],
   ['c', 'Adjust credits on a user profile'],
   ['s', 'Suspend the account on a user profile'],
   ['Cmd/Ctrl+S', 'Save the settings editor you are working in'],
@@ -244,7 +249,7 @@ function CommandPalette({
           </Typography>
           <Typography id="admin-command-description" level="body-sm">
             {entitySearch
-              ? 'Search by email, user or organization ID, key prefix, IP, billing customer ID or exact organization name.'
+              ? 'Search by email, user or organization ID, key prefix, IP, billing customer ID, LLM provider user identifier or exact organization name.'
               : 'Navigate or open a current-record action. Paste a user ID to open its profile.'}
           </Typography>
           <Input
@@ -332,13 +337,14 @@ function CommandPalette({
             Admin keyboard shortcuts
           </Typography>
           {shortcuts.map(([key, label]) => (
-            <Typography key={key} level="body-sm">
+            <Typography key={label} level="body-sm" data-testid={`admin-shortcut-${label}`}>
               <kbd>{key}</kbd>: {label}
             </Typography>
           ))}
           <Typography level="body-xs">
-            Single-key shortcuts do not run in inputs or editable text. No shortcut runs while a menu or dialog is open.
-            Actions still require their normal preview, reason and confirmation.
+            Single-key shortcuts do not run in inputs or editable text. Feedback navigation and actions also work in its
+            report drawer; other menus and dialogs pause shortcuts. Actions still require their normal preview, reason
+            and confirmation.
           </Typography>
         </ModalDialog>
       </Modal>

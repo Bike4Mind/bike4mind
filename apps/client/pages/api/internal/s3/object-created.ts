@@ -1,4 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@bike4mind/server-utils/s3/utils';
@@ -6,12 +7,12 @@ import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFi
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
-import { recordLandedObject } from '@server/s3/moderationScan';
+import { recordLandedObject } from '@bike4mind/server-utils/s3/moderationScan';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@bike4mind/server-utils/s3/historyUploadComplete';
-import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
+import { dispatch as notebookImportComplete } from '@bike4mind/server-utils/s3/notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@bike4mind/server-utils/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
@@ -61,7 +62,7 @@ const selfHostLambdaContext = (functionName: string) =>
 
 const secretOk = (authorizationHeader: string | string[] | undefined): boolean => {
   const expected = process.env.INTERNAL_S3_WEBHOOK_SECRET;
-  if (!expected) return false;
+  if (!expected || isUnconfiguredSecret(expected)) return false;
   const raw = Array.isArray(authorizationHeader) ? '' : (authorizationHeader ?? '');
   // MinIO sends the auth_token verbatim as the Authorization value; tolerate a Bearer prefix.
   const provided = raw.startsWith('Bearer ') ? raw.slice(7) : raw;

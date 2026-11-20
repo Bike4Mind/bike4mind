@@ -23,7 +23,8 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -32,7 +33,7 @@ const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res)
   const session = await sessionService.getSession(
     req.user!.id,
     { id: req.validatedParams.id },
-    { db: { sessions: sessionRepository, users: userRepository } }
+    { db: { sessions: sessionRepository, users: requesterScopedUsers(req, userRepository) } }
   );
 
   // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.

@@ -1,8 +1,11 @@
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation, useInfiniteQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import { api } from '@/app/contexts/ApiContext';
 import { useSubscribeCollection, updateAllQueryData } from '@/app/utils/react-query';
 import { IArtifactDocument, IArtifactVersionDocument } from '@bike4mind/common';
+import type { artifactService } from '@bike4mind/services';
+
+type ArtifactViewerView = artifactService.ArtifactViewerView;
 
 interface ArtifactVersion {
   _id: string;
@@ -125,7 +128,9 @@ export const useSubscribeToArtifactVersions = (artifactId?: string) => {
       });
 
       if (val.artifactId) {
-        queryClient.invalidateQueries({ queryKey: ['artifact-versions', val.artifactId] });
+        // The version list and the artifact an open viewer syncs from are cached under these keys.
+        queryClient.invalidateQueries({ queryKey: ['artifactVersions', val.artifactId] });
+        queryClient.invalidateQueries({ queryKey: ['artifact', val.artifactId] });
       }
     },
     [queryClient]
@@ -140,6 +145,17 @@ export const useSubscribeToArtifactVersions = (artifactId?: string) => {
   useSubscribeCollection('artifact_versions', query, callback);
 };
 
+type ArtifactDetailContent = { content: string; version: number };
+
+/**
+ * `GET /api/artifacts/:id`. The server answers 404 unless the caller owns the artifact, was granted
+ * read, or it is public; a public-only reader gets the trimmed viewer view (no owner, session,
+ * project or permission fields).
+ */
+export type ArtifactDetailResponse =
+  | { access: 'owner' | 'shared'; artifact: IArtifactDocument; content?: ArtifactDetailContent }
+  | { access: 'public'; artifact: ArtifactViewerView; content?: ArtifactDetailContent };
+
 export const useArtifact = (
   artifactId: string | null,
   options?: { includeContent?: boolean; includeVersions?: boolean }
@@ -153,7 +169,7 @@ export const useArtifact = (
       if (options?.includeContent) params.append('includeContent', 'true');
       if (options?.includeVersions) params.append('includeVersions', 'true');
 
-      const response = await api.get(`/api/artifacts/${artifactId}?${params.toString()}`);
+      const response = await api.get<ArtifactDetailResponse>(`/api/artifacts/${artifactId}?${params.toString()}`);
       return response.data;
     },
     enabled: !!artifactId,
@@ -249,5 +265,36 @@ export function useArtifactVersionContent(artifactId: string | null, version: nu
     },
     enabled: !!artifactId && !!version,
     staleTime: 60000, // 1 minute - version content is stable
+  });
+}
+
+export const ARTIFACT_LIBRARY_PAGE_SIZE = 20;
+
+export type ArtifactLibraryPage = {
+  artifacts: IArtifactDocument[];
+  pagination: { total: number; limit: number; offset: number; hasMore: boolean };
+};
+
+/**
+ * The signed-in user's own artifacts, newest first. `GET /api/artifacts` scopes the list to the
+ * caller's userId server-side, so this never returns another user's artifacts.
+ */
+export function useArtifactLibrary({ search }: { search: string }) {
+  return useInfiniteQuery({
+    queryKey: ['artifact-library', search],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({
+        limit: String(ARTIFACT_LIBRARY_PAGE_SIZE),
+        offset: String(pageParam),
+        sortBy: 'updatedAt',
+        sortOrder: 'desc',
+      });
+      if (search) params.append('search', search);
+      const response = await api.get<ArtifactLibraryPage>(`/api/artifacts?${params}`);
+      return response.data;
+    },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.pagination.hasMore ? allPages.reduce((count, page) => count + page.artifacts.length, 0) : undefined,
   });
 }

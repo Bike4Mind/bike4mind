@@ -11,7 +11,7 @@ import {
   toVerdictPatch,
   writeModerationVerdict,
   type ModerationVerdictPatch,
-} from '@server/s3/moderationScan';
+} from '@bike4mind/server-utils/s3/moderationScan';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';

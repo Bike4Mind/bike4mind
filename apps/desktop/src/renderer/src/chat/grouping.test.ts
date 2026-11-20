@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { descendantsOf, groupSessions, orderedSessions, projectForGroup } from './grouping';
+import {
+  descendantsOf,
+  groupSessions,
+  orderedSessions,
+  parentHints,
+  projectForGroup,
+  projectGroupDirectory,
+} from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -255,6 +262,14 @@ describe('Claude Code worktrees', () => {
       ['/work/repo/.manifold/worktrees/run', 'run', ['other']],
     ]);
   });
+
+  it('names the sidebar group directory of a project', () => {
+    expect(projectGroupDirectory(project('/work/repo/.claude/worktrees/wt', 'wt'))).toBe('/work/repo');
+    expect(projectGroupDirectory(project('/work/repo', 'repo'))).toBe('/work/repo');
+    expect(projectGroupDirectory(project('/work/repo/.manifold/worktrees/run', 'run'))).toBe(
+      '/work/repo/.manifold/worktrees/run'
+    );
+  });
 });
 
 describe('starting a session from a project group', () => {
@@ -290,6 +305,119 @@ describe('nested sub-sessions', () => {
     const grouped = groupSessions(sessions, 'chat', undefined, false, true);
     expect(grouped.loose.map(entry => entry.id)).toEqual(['root']);
     expect(descendantsOf(grouped.children, 'root').map(entry => entry.id)).toEqual(['kid', 'grandkid']);
+  });
+
+  it('nests a grandchild under its own parent, however deep the chain', () => {
+    const sessions = [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.children.get('root')?.map(entry => entry.id)).toEqual(['kid']);
+    expect(grouped.children.get('kid')?.map(entry => entry.id)).toEqual(['grandkid']);
+    expect(parentHints(sessions, grouped.children).size).toBe(0);
+  });
+
+  it('orders children by creation, not recency', () => {
+    const sessions = [
+      session({ id: 'root' }),
+      spawned('late', 'root', { createdAt: '2026-09-03T00:00:00.000Z', updatedAt: '2026-09-09T00:00:00.000Z' }),
+      spawned('early', 'root', { createdAt: '2026-09-02T00:00:00.000Z' }),
+    ];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.children.get('root')?.map(entry => entry.id)).toEqual(['early', 'late']);
+  });
+
+  it('sorts a group by its most recently active member', () => {
+    const sessions = [
+      session({ id: 'newer', updatedAt: '2026-09-05T00:00:00.000Z' }),
+      session({ id: 'busy-parent', updatedAt: '2026-09-02T00:00:00.000Z' }),
+      spawned('busy-kid', 'busy-parent', { updatedAt: '2026-09-08T00:00:00.000Z' }),
+      session({ id: 'older', updatedAt: '2026-09-01T00:00:00.000Z' }),
+    ];
+    expect(groupSessions(sessions, 'chat', undefined, false, true).loose.map(entry => entry.id)).toEqual([
+      'busy-parent',
+      'newer',
+      'older',
+    ]);
+    expect(groupSessions(sessions, 'chat').loose.map(entry => entry.id)).toEqual([
+      'newer',
+      'busy-parent',
+      'busy-kid',
+      'older',
+    ]);
+  });
+
+  it('hints "from" on an orphan whose parent exists, and on a pinned child; none when the parent is deleted', () => {
+    const sessions = [
+      session({ id: 'gone', title: 'Archived parent', archived: true }),
+      spawned('orphan', 'gone'),
+      spawned('missing-parent', 'deleted'),
+      session({ id: 'root', title: 'Root' }),
+      spawned('pinned-kid', 'root', { pinned: true }),
+    ];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    const hints = parentHints(sessions, grouped.children);
+    expect(hints.get('orphan')).toBe('Archived parent');
+    expect(hints.get('pinned-kid')).toBe('Root');
+    expect(hints.has('missing-parent')).toBe(false);
+  });
+
+  it('sorts pinned roots by group activity too', () => {
+    const sessions = [
+      session({ id: 'p-new', pinned: true, updatedAt: '2026-09-05T00:00:00.000Z' }),
+      session({ id: 'p-old', pinned: true, updatedAt: '2026-09-01T00:00:00.000Z' }),
+      spawned('p-old-kid', 'p-old', { updatedAt: '2026-09-09T00:00:00.000Z' }),
+    ];
+    const grouped = groupSessions(sessions, 'chat', undefined, false, true);
+    expect(grouped.pinned.map(entry => entry.id)).toEqual(['p-old', 'p-new']);
+  });
+
+  it('nests a grandchild under a filed child, and survives a chain that runs into a cycle', () => {
+    const state = { sections: [{ id: 's1', name: 'Mine' }], assignments: { kid: 's1' } };
+    const filed = groupSessions(
+      [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')],
+      'chat',
+      state,
+      false,
+      true
+    );
+    expect(filed.custom[0].sessions.map(entry => entry.id)).toEqual(['kid']);
+    expect(filed.children.get('kid')?.map(entry => entry.id)).toEqual(['grandkid']);
+
+    const cyclic = groupSessions(
+      [spawned('a', 'b'), spawned('b', 'a'), spawned('c', 'a')],
+      'chat',
+      undefined,
+      false,
+      true
+    );
+    expect(cyclic.loose.map(entry => entry.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('lists a flattened grandchild in quick-switch order only while its group is open', () => {
+    const grouped = groupSessions(
+      [session({ id: 'root' }), spawned('kid', 'root'), spawned('grandkid', 'kid')],
+      'chat',
+      undefined,
+      false,
+      true
+    );
+    expect(orderedSessions(grouped, { isOpen: () => true }).map(entry => entry.id)).toEqual([
+      'root',
+      'kid',
+      'grandkid',
+    ]);
+  });
+
+  it('gives no hint to a session that names itself as its parent', () => {
+    const all = [spawned('loop', 'loop')];
+    expect(parentHints(all, new Map()).size).toBe(0);
+  });
+
+  it('hints "from" on every spawned session in a flat list, including when the parent is not a match', () => {
+    const all = [session({ id: 'root', title: 'Root' }), spawned('kid', 'root')];
+    const matching = [all[1]];
+    const grouped = groupSessions(matching, 'chat', undefined, false, false);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['kid']);
+    expect(parentHints(all, grouped.children).get('kid')).toBe('Root');
   });
 
   it('stays flat when nesting is off', () => {

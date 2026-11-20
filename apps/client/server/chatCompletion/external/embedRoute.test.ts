@@ -115,8 +115,10 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
   embedConversationRepository: mockEmbedConversationRepository,
+  spendFreezeRepository: { findActiveForSubject: (...args: unknown[]) => mockFindActiveFreeze(...args) },
 }));
 
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockReauthorizeIdentifiedSession = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', () => ({
   reauthorizeIdentifiedSession: mockReauthorizeIdentifiedSession,
@@ -124,7 +126,7 @@ vi.mock('@server/embed/identifiedEmbedUser', () => ({
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
 const mockVerifyEmbedKeyById = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: mockVerifyEmbedApiKey,
   verifyEmbedKeyById: mockVerifyEmbedKeyById,
 }));
@@ -176,7 +178,7 @@ beforeAll(async () => {
   const app = express();
   registerEmbedRoutes(app, () => {});
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       resolve();
     });
@@ -780,6 +782,18 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(params.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
+  // sharedToolBuilder.mcpNarrowing.test.ts proves orgToolPolicy is what refuses a disallowed tool model.
+  it("hands the embed org's model policy to the tool builder, so a tool's own model calls are governed", async () => {
+    const modelPolicy = { allowedProviders: ['openai'] };
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [], modelPolicy });
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { orgToolPolicy: unknown };
+    expect(opts.orgToolPolicy).toEqual(expect.objectContaining({ allowedProviders: ['openai'] }));
+  });
+
   it('a tool outside the curated universe never materializes, even when explicitly allowed', async () => {
     hydrateWith({ allowedTools: ['image_generation', 'delegate_to_agent', 'skill'] });
     await post(CHAT);
@@ -1164,6 +1178,17 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(mockGetEffectiveLLMApiKeys.mock.calls[0][0]).toBe(END_USER.id);
   });
 
+  it("carries the embed org's model policy onto the personally billed turn", async () => {
+    const modelPolicy = { allowedModels: ['other-model'] };
+    mockOrgFindById.mockResolvedValue({ ...ORG, modelPolicy });
+    const res = await postIdentified(CHAT);
+    await res.text();
+
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.billingOrganizationId).toBeUndefined();
+    expect(params.governingOrgModelPolicy).toEqual(modelPolicy);
+  });
+
   it("refuses a broke identified user instead of falling back to the org's pool", async () => {
     mockAssertOwnerHasCredits.mockImplementation((owner: { id: string }) => {
       if (owner.id === END_USER.id) throw new MockInsufficientCreditsError('Host User has insufficient credits');
@@ -1172,6 +1197,30 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(res.status).toBe(422);
     expect((await res.json()).error).toBe('insufficient_credits');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen identified user with 403 spend_frozen before any stream bytes', async () => {
+    mockFindActiveFreeze.mockResolvedValueOnce({
+      scopeType: 'User',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal',
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'spend_frozen', code: 'spend_frozen', frozenScope: 'user' });
+    expect(JSON.stringify(body)).not.toContain('internal');
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(expect.objectContaining({ userId: END_USER.id }));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the org, the key and the key user for an anonymous visitor', async () => {
+    const res = await post(CHAT);
+    await res.text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', apiKeyId: expect.any(String) })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeChecked: true }));
   });
 
   it("is not blocked by the org key's spend cap, which bounds only org-paid turns", async () => {

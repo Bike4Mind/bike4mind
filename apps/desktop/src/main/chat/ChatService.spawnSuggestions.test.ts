@@ -407,25 +407,19 @@ describe('ChatService spawn suggestions', () => {
     expect(requested).not.toHaveBeenCalled();
   });
 
-  it('ignores the flag on a child at the depth cap: no guidance, and the gated start it always had', async () => {
+  it('ignores the flag on a child at the depth cap: no guidance, and the cap refuses the start', async () => {
     const childId = await orchestratingChild(2);
     await service.send(childId, 'split this up');
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
     expect(String(wire(0)[0]?.content)).not.toContain('coordinating agents');
 
     callTool(streams[0], 'd2', 'session_spawn', { prompt: 'a piece', title: 'Piece' });
-    const card = await vi.waitUntil(
-      () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find(call => call?.name === 'session_spawn' && call.status === 'awaiting-approval'),
-      { timeout: 5000, interval: 5 }
-    );
-    expect(card).toBeDefined();
-    expect(requested).toHaveBeenCalledWith(childId);
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(call)).toContain('nested');
+    expect((await store.list()).filter(session => session.origin?.parentSessionId === childId)).toHaveLength(0);
   });
 
-  it('keeps the approval-gated start in a spawned session, which has no card to show', async () => {
+  it('lets a spawned session start another without a card, below the depth cap', async () => {
     const { parent, suggestion } = await suggestedBy('do the child work');
     const result = await service.startSpawnSuggestion({
       sessionId: parent.id,
@@ -444,28 +438,14 @@ describe('ChatService spawn suggestions', () => {
     expect(tools).not.toContain('session_suggestion_update');
 
     callTool(streams[childRequest], 'g1', 'session_spawn', { prompt: 'and another' });
-    const card = await vi.waitUntil(
-      () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find(call => call?.name === 'session_spawn' && call.status === 'awaiting-approval'),
-      { timeout: 5000, interval: 5 }
-    );
-    expect(card.approvalChoice?.options.map(option => option.id)).toEqual(['worktree', 'local', 'here']);
-    expect(latestSuggestions(childOf(result))).toEqual([]);
-
-    // Run here, from the child's card: no grandchild, and the model is told to do it itself.
-    approvals.resolve(card.approvalId as string, { decision: 'redirect', optionId: 'here' });
-    const answered = await vi.waitUntil(() => settled('session_spawn').find(call => call?.id === card.id), {
+    const call = await vi.waitUntil(() => settled('session_spawn').find(entry => entry?.id === 'g1'), {
       timeout: 5000,
       interval: 5,
     });
-    expect(answered).toMatchObject({
-      status: 'done',
-      preview: expect.stringContaining('Do the work yourself now'),
-      label: 'Run here, in this conversation - no session was started',
-    });
-    expect((await store.list()).filter(session => session.origin)).toHaveLength(1);
+    // The mode takes the card's first option, a worktree, which this plain folder cannot hold.
+    expect(call?.approval?.decidedBy).toMatchObject({ kind: 'mode', mode: 'auto' });
+    expect(events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')).toBe(false);
+    expect(latestSuggestions(childOf(result))).toEqual([]);
   });
 
   it('draws a run-here message when the reply ends while the send reads the session', async () => {

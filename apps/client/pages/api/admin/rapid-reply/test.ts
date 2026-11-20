@@ -5,13 +5,16 @@ import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { rapidReplyResultRepository, sessionRepository } from '@bike4mind/database';
 import { generateRapidReply, saveRapidReplyResult } from '@server/rapidReply/generateRapidReply';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ApiKeyScope, ttfvtState } from '@bike4mind/common';
 import { SQSService } from '@bike4mind/utils';
 

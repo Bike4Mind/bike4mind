@@ -105,6 +105,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
       // the list would leave the drawer showing a report that no longer exists.
       queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: ['feedback-history'] }),
     ]);
   }, [queryClient]);
 

@@ -51,9 +51,9 @@ to the environment variable with the same name, supporting self-host deployments
 An unregistered name returns `undefined`. These checks prevent accidental
 collisions; they do not sandbox workspace code.
 
-Rotation reminders must refer to a registered contributed secret. The admin API
-and notifier use `getSecretRotationConfig()` from
-`@bike4mind/server-utils/lib/secretRotation/constants` to include them.
+Rotation records must refer to a registered contributed secret. They are merged into `getSecretRotationConfig()`
+(`@bike4mind/server-utils/lib/secretRotation/constants`), which no longer drives a reminder since the in-app rotation
+tracker was removed; the field is kept so existing package declarations stay valid.
 
 A queue entry takes the `buildQueuePair` options (`name`, `visibilityTimeout`,
 `dlqName`, `retry`, `encryption`, ...) plus a `label`, `displayName` and
@@ -68,21 +68,15 @@ variable, a contributed secret or an earlier declaration.
 
 A registered pair gets a DLQ alarm and dashboard widget, and is listed in the admin
 DLQ registry. Only the web app is linked to it, and no consumer is subscribed: the
-package must wire its own consumer. Server code narrows its names with
-`contributedDlqLabel()` and `contributedSourceQueueName()` from
-`@bike4mind/server-utils/utils/dlqRegistry` before passing them to `getDlqUrl` or
-`getSourceQueueUrl`; both throw for a dropped or undeclared name.
-
-Before deactivating stale rotation records, regenerate the glue with every package
-used by the target stage mounted. Preview the cleanup script with `--dry-run`,
-then pass `--confirm-complete-rotation-inventory` for a write, or
-`--no-contributed-rotations` when the stage has no contributed rotations. The flags
-are not the safeguard. Run under `sst shell`, the script also checks the stage: it
-refuses when a stale record names a non-core secret that the stage still deploys,
-because that record belongs to a package missing from the local tree. It also
-refuses when the shell does not link every core secret (as under `sst shell
---target`), and when the glue was generated without `infra/`, since core and
-package names cannot then be told apart.
+package must wire its own consumer. `sst.config.ts` can hand the registered pairs to a
+package's `contributeInfra` as `contributedQueues`, keyed by queue name with
+`{ spec, queue, dlq }` values, next to the shared event bus (`eventBus`) and the alarm
+topic (`alarmTopic`, undefined on a stage without monitoring). A package must treat
+each of them as optional, since a host revision that predates the wiring passes none.
+Server code narrows its names with `contributedDlqLabel()` and
+`contributedSourceQueueName()` from `@bike4mind/server-utils/utils/dlqRegistry` before
+passing them to `getDlqUrl` or `getSourceQueueUrl`; both throw for a dropped or
+undeclared name.
 
 ## DLQ registries
 

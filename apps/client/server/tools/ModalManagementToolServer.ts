@@ -13,7 +13,7 @@ import { createModal, updateModal, deleteModal, listModals } from './modalOperat
 import { parseNaturalLanguageQueryDirect } from '@client/pages/api/admin/modal-tool';
 import { Logger } from '@bike4mind/observability';
 import { resolveModalImageUrl, withSignedModalImage } from './modalImageUrls';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   showHelp,
   buildModalFromParams,

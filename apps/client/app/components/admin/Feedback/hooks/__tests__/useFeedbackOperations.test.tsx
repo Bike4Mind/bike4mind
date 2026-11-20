@@ -295,4 +295,10 @@ describe('useFeedbackOperations trends refresh', () => {
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: FEEDBACK_TRENDS_QUERY_KEY });
   });
+
+  it('refreshes open report history after a bulk action', async () => {
+    const { result, invalidate } = setup();
+    await act(() => result.current.refreshFeedback());
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feedback-history'] });
+  });
 });

@@ -1,9 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels, mergeRegistries } from './index';
 import { holderExportScope } from '../exportScope';
+import { SubjectMatcher } from '../subjectMatcher';
 import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
+
+describe('organization retention personal-data policy', () => {
+  it('deletes actor-owned estimates and withholds their confirmation tokens', () => {
+    const holder = DATA_HOLDER_REGISTRY.OrganizationRetentionEstimate;
+    if (holder.kind !== 'holder') throw new Error('Estimate must be a holder');
+    expect(holder.references).toEqual([{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }]);
+    expect(holder.secretPaths).toContain('token');
+  });
+  it('anonymizes the creator while retaining immutable organization media ownership', () => {
+    const holder = DATA_HOLDER_REGISTRY.OrganizationGeneratedObject;
+    if (holder.kind !== 'holder') throw new Error('Generated object must be a holder');
+    expect(holder.references).toEqual([{ path: 'userId', matchBy: 'userId', action: 'anonymize' }]);
+  });
+});
+
+describe('organization library personal-data policy', () => {
+  it('keeps organization-owned snapshots independent of an individual author erasure', () => {
+    expect(DATA_HOLDER_REGISTRY.OrganizationLibrary).toEqual({
+      kind: 'noUserData',
+      note: 'Organization-owned definition snapshots with no author identity or personal source reference.',
+    });
+    expect(findUnclassifiedModels(['OrganizationLibrary'])).toEqual([]);
+  });
+});
 
 describe('organization audit personal-data policy', () => {
   it('classifies membership target IDs in analytics as attribution on another account record', () => {
@@ -78,5 +103,55 @@ describe('private feedback note export policy', () => {
       scope: 'wholeDocument',
     });
     expect(holder.secretPaths).toContain('body');
+  });
+});
+
+describe('account purge reconciliation', () => {
+  const userId = '0123456789abcdef01234567';
+  const matched = (model: string, document: Record<string, unknown>) => {
+    const holder = DATA_HOLDER_REGISTRY[model];
+    if (holder.kind !== 'holder') throw new Error(`${model} must be a holder`);
+    const matcher = new SubjectMatcher({ userId, email: null });
+    return holder.references.filter(reference => matcher.matches(document, reference)).map(({ action }) => action);
+  };
+
+  it('deletes a live memory key but keeps the tombstone the purge leaves as a fence', () => {
+    const key = { ownerUserId: userId, principalKind: 'user', principalId: userId };
+    expect(matched('MemoryPrincipalKey', { ...key, dek: 'wrapped' })).toEqual(['deleteDocument', 'deleteDocument']);
+    expect(matched('MemoryPrincipalKey', key)).toContain('retain');
+    expect(matched('MemoryPrincipalKey', { ...key, dek: null })).toContain('retain');
+  });
+
+  it("deletes a person's own MCP connections and only anonymizes the creator of a shared one", () => {
+    expect(matched('McpConnection', { ownerType: 'user', ownerKey: userId, userId })).toEqual(['deleteDocument']);
+    expect(matched('McpConnection', { ownerType: 'org', ownerKey: 'org-1', userId })).toEqual(['anonymize']);
+    expect(matched('McpConnection', { ownerType: 'platform', ownerKey: 'platform', userId })).toEqual(['anonymize']);
+  });
+
+  it('deletes only a personal project and anonymizes the owner of an organization one', () => {
+    const holder = DATA_HOLDER_REGISTRY.Project;
+    if (holder.kind !== 'holder') throw new Error('Project must be a holder');
+    const owner = holder.references.filter(reference => reference.path === 'userId');
+    expect(owner).toEqual([
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ]);
+  });
+
+  it.each([
+    'SessionModel',
+    'AgentExecution',
+    'LatticeModel',
+    'QuestExternalLink',
+    'ResearchData',
+    'ResearchTask',
+    'WorkItem',
+  ] as const)('deletes only a personal %s and anonymizes the owner of an organization one', model => {
+    const holder = DATA_HOLDER_REGISTRY[model];
+    if (holder.kind !== 'holder') throw new Error(`${model} must be a holder`);
+    expect(holder.references.filter(reference => reference.path === 'userId')).toEqual([
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ]);
   });
 });

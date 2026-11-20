@@ -6,8 +6,18 @@ export const getRegInvitesFromServer = async () => {
   return response.data;
 };
 
-export const updateRegInvites = async (invite: Partial<IRegInviteDocument & { ids: string[] }>) => {
+export const updateRegInvites = async (
+  invite: Partial<IRegInviteDocument & { ids: string[] }> & { reason?: string }
+) => {
   const response = await api.post(`/api/reg-invites/update`, invite);
+  return response.data;
+};
+
+export const updateRegInvite = async (
+  id: string,
+  fields: { unlimitedUse?: boolean; expiresAt?: Date | null; reason?: string }
+) => {
+  const response = await api.post<IRegInviteDocument[]>(`/api/reg-invites/update`, { ids: [id], ...fields });
   return response.data;
 };
 
@@ -17,6 +27,7 @@ export const createRegInvites = async (data: {
   tags?: string[];
   startingCredits?: number;
   startingStorage?: number;
+  grantPackageId?: string;
 }) => {
   const response = await api.post(`/api/reg-invites/create`, data);
   return response.data;
