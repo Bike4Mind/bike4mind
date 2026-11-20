@@ -39,7 +39,8 @@ final class VoiceConversationModelTests: XCTestCase {
       utteranceHandler: utteranceHandler, sleep: sleep)
     await model.start()
     await until { await realtime.listenerCount == 1 }
-    await until { await listener.startCount == 1 }
+    // An opening that finishes speaking restarts the recognizer, so the count may already be past 1.
+    await until { await listener.startCount >= 1 }
     return model
   }
 
@@ -800,7 +801,7 @@ final class VoiceConversationModelTests: XCTestCase {
     let model = await startedModel(
       answerPhrases: ["Next week"], opening: ["Pick a slot. Options: next week, or tomorrow at noon."],
       utteranceHandler: { await handled.record($0) })
-    await until { model.phase == .listening }
+    await until { await listener.startCount == 2 }
     await say("tomorrow at noon")
     await say("next week")
     await until { await handled.all == ["next week"] }
@@ -819,7 +820,7 @@ final class VoiceConversationModelTests: XCTestCase {
     let handled = HandledUtterances()
     let model = await startedModel(
       opening: ["Approve the budget? Say yes to go ahead."], utteranceHandler: { await handled.record($0) })
-    await until { model.phase == .listening }
+    await until { await listener.startCount == 2 }
     await say("yes")
     await until { await handled.all == ["yes"] }
     await model.stop()
