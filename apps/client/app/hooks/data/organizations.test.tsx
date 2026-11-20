@@ -20,7 +20,7 @@ import {
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
   useSetMemberCreditOverride,
-  useSetOrganizationManager,
+  useSetOrganizationMemberRole,
   useTransferOrganizationOwnership,
 } from './organizations';
 
@@ -190,41 +190,39 @@ describe('manager and ownership mutations', () => {
     post.mockResolvedValue({ data: { organizationId: 'org1', ownerId: 'u1' } });
   });
 
-  it('useSetOrganizationManager PUTs to appoint and never DELETEs', async () => {
-    const { result, invalidateSpy } = renderWithClient(useSetOrganizationManager);
+  it('useSetOrganizationMemberRole PUTs the role and never DELETEs', async () => {
+    const { result, invalidateSpy } = renderWithClient(useSetOrganizationMemberRole);
 
-    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager: true });
+    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', role: 'billingManager' });
 
-    expect(put).toHaveBeenCalledWith('/api/organizations/org1/members/u1/manager');
+    expect(put).toHaveBeenCalledWith('/api/organizations/org1/members/u1/role', { role: 'billingManager' });
     expect(del).not.toHaveBeenCalled();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
-    expect(toast.success).toHaveBeenCalledWith('Member is now a manager');
+    expect(toast.success).toHaveBeenCalledWith('Role updated');
   });
 
-  it('useSetOrganizationManager DELETEs to remove and never PUTs', async () => {
-    const { result } = renderWithClient(useSetOrganizationManager);
+  it('useSetOrganizationMemberRole toasts the server error', async () => {
+    put.mockRejectedValueOnce(new Error('nope'));
+    const { result } = renderWithClient(useSetOrganizationMemberRole);
 
-    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager: false });
+    await expect(
+      result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', role: 'member' })
+    ).rejects.toThrow();
 
-    expect(del).toHaveBeenCalledWith('/api/organizations/org1/members/u1/manager');
-    expect(put).not.toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledWith('Manager removed');
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Failed to update role:')));
   });
 
-  it.each([
-    [true, 'Member is now a manager'],
-    [false, 'Manager removed'],
-  ])(
-    'useSetOrganizationManager(isManager=%s) succeeds with an invite-links page cached',
-    async (isManager, message) => {
-      const { result, queryClient } = renderWithClient(useSetOrganizationManager);
+  it.each(['manager', 'member'] as const)(
+    'useSetOrganizationMemberRole(role=%s) succeeds with an invite-links page cached',
+    async role => {
+      const { result, queryClient } = renderWithClient(useSetOrganizationMemberRole);
       seedInviteLinks(queryClient);
 
-      await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager })).resolves.toEqual({
+      await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', role })).resolves.toEqual({
         id: 'org1',
       });
 
-      expect(toast.success).toHaveBeenCalledWith(message);
+      expect(toast.success).toHaveBeenCalledWith('Role updated');
       expect(toast.error).not.toHaveBeenCalled();
     }
   );

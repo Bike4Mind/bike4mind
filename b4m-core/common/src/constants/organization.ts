@@ -1,4 +1,12 @@
-import { hasOrgPermission, orgMemberHasPermission, type OrgPermissionActor, type OrgRoleSubject } from './orgRoles';
+import {
+  ORG_ROLE_PERMISSIONS,
+  hasOrgPermission,
+  orgMemberHasPermission,
+  organizationMemberRole,
+  type AssignableOrgRole,
+  type OrgPermissionActor,
+  type OrgRoleSubject,
+} from './orgRoles';
 
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
@@ -162,6 +170,30 @@ export function canRevokeOrgMember(
   // yet and stays revocable, while a stale list entry stays protected, as before roles existed.
   const privileged = [...(organization.adminUserIds ?? []), ...(organization.billingManagerUserIds ?? [])];
   return !privileged.includes(targetUserId);
+}
+
+/**
+ * May this actor give `targetUserId` the role `role`? The single rule behind the Members tab's role
+ * menu and `organizationService.setOrganizationMemberRole`.
+ *
+ * - The target must be on the roster (an invitee has no role yet) and must not be the owner: Owner
+ *   moves only through the ownership transfer.
+ * - The owner or a platform admin may assign any assignable role.
+ * - Anyone else needs `manageMembers`, may change only a plain Member, and may hand out only a role
+ *   whose permissions they hold themselves - so a Manager can make a Member a Manager, but cannot
+ *   create a Billing manager or demote another Manager.
+ */
+export function canAssignOrgRole(
+  actor: OrgAuthorityActor,
+  organization: AdministrableOrg,
+  targetUserId: string,
+  role: AssignableOrgRole
+): boolean {
+  const currentRole = organizationMemberRole(organization, targetUserId);
+  if (currentRole === null || currentRole === 'owner') return false;
+  if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
+  if (!hasOrgPermission(actor, organization, 'manageMembers') || currentRole !== 'member') return false;
+  return ORG_ROLE_PERMISSIONS[role].every(permission => orgMemberHasPermission(organization, actor.id, permission));
 }
 
 export type OrganizationSeatUsage = { used: number; seats: number; full: boolean };

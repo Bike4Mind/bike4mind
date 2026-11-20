@@ -207,11 +207,11 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'isAdmin only passed to toSafeOrganization; org authority checked in service',
   ],
   ['organizations/[id]/members/[userId]/index.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
-  ['organizations/[id]/members/[userId]/manager.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   [
     'organizations/[id]/model-policy.ts',
     'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
   ],
+  ['organizations/[id]/members/[userId]/role.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   [

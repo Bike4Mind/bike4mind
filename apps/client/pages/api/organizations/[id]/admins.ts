@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { withTransaction } from '@bike4mind/database';
 import { isOrgOwnerOrPlatformAdmin, orgAclRowConfersMembership } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
@@ -21,40 +22,48 @@ const handler = baseApi().put(
     const parsed = bodySchema.parse(req.body);
     const adminUserIds = [...new Set(parsed.adminUserIds)];
 
-    const organization = await organizationRepository.findById(organizationId);
-    if (!organization) throw new NotFoundError('Organization not found');
+    // One transaction from read to write: the billing list is rewritten from this read, so a concurrent
+    // role change must force a retry rather than be overwritten.
+    const { organization, billingManagerUserIds, updated } = await withTransaction(async () => {
+      const organization = await organizationRepository.findById(organizationId);
+      if (!organization) throw new NotFoundError('Organization not found');
 
-    if (!isOrgOwnerOrPlatformAdmin(req.user!, organization)) {
-      throw new ForbiddenError('Only the billing owner or a platform admin can set org managers');
-    }
+      if (!isOrgOwnerOrPlatformAdmin(req.user!, organization)) {
+        throw new ForbiddenError('Only the billing owner or a platform admin can set org managers');
+      }
 
-    // An appointed admin must be a member of the org - don't reference outsiders. Membership means
-    // an ACL row that actually CONFERS it, not merely a row that exists: checking `userId` alone
-    // admitted a row carrying no permissions, which `findMembershipOrgIds` then refused to count as
-    // membership, so the appointment silently created a principal that held admin rights over the
-    // org while the org was unselectable in their own account switcher (#2005). Same predicate as
-    // the read gate, from the shared constant, so the two cannot drift apart again.
-    const memberIds = new Set(
-      organization.users.filter(member => orgAclRowConfersMembership(member)).map(member => member.userId)
-    );
+      // An appointed admin must be a member of the org - don't reference outsiders. Membership means
+      // an ACL row that actually CONFERS it, not merely a row that exists: checking `userId` alone
+      // admitted a row carrying no permissions, which `findMembershipOrgIds` then refused to count as
+      // membership, so the appointment silently created a principal that held admin rights over the
+      // org while the org was unselectable in their own account switcher (#2005). Same predicate as
+      // the read gate, from the shared constant, so the two cannot drift apart again.
+      const memberIds = new Set(
+        organization.users.filter(member => orgAclRowConfersMembership(member)).map(member => member.userId)
+      );
 
-    // The membership requirement binds the appointments this call ADDS. Because the endpoint is a
-    // full replace, every sitting admin is resent on every save, so validating the whole set would
-    // let one row appointed before this check existed block every later edit of the roster until the
-    // operator de-appointed them - a stricter rule turning into a retroactive revocation. Resends of
-    // an existing appointment are grandfathered instead; that mints no new principal, and it agrees
-    // with the read side, which still serves such an admin. Roster membership itself is NOT waived:
-    // a grandfathered id must still hold a users[] row, so removal from the org still ejects them.
-    const rosterUserIds = new Set(organization.users.map(member => member.userId));
-    const sittingAdminIds = new Set(organization.adminUserIds ?? []);
-    const notMembers = adminUserIds.filter(
-      userId => !memberIds.has(userId) && !(sittingAdminIds.has(userId) && rosterUserIds.has(userId))
-    );
-    if (notMembers.length > 0) {
-      throw new BadRequestError(`Not organization members with read access: ${notMembers.join(', ')}`);
-    }
+      // The membership requirement binds the appointments this call ADDS. Because the endpoint is a
+      // full replace, every sitting admin is resent on every save, so validating the whole set would
+      // let one row appointed before this check existed block every later edit of the roster until the
+      // operator de-appointed them - a stricter rule turning into a retroactive revocation. Resends of
+      // an existing appointment are grandfathered instead; that mints no new principal, and it agrees
+      // with the read side, which still serves such an admin. Roster membership itself is NOT waived:
+      // a grandfathered id must still hold a users[] row, so removal from the org still ejects them.
+      const rosterUserIds = new Set(organization.users.map(member => member.userId));
+      const sittingAdminIds = new Set(organization.adminUserIds ?? []);
+      const notMembers = adminUserIds.filter(
+        userId => !memberIds.has(userId) && !(sittingAdminIds.has(userId) && rosterUserIds.has(userId))
+      );
+      if (notMembers.length > 0) {
+        throw new BadRequestError(`Not organization members with read access: ${notMembers.join(', ')}`);
+      }
 
-    const updated = await organizationRepository.update({ id: organizationId, adminUserIds });
+      // A user holds one role: appointing a billing manager as manager moves them off the billing list.
+      const appointed = new Set(adminUserIds);
+      const billingManagerUserIds = (organization.billingManagerUserIds ?? []).filter(userId => !appointed.has(userId));
+      const updated = await organizationRepository.update({ id: organizationId, adminUserIds, billingManagerUserIds });
+      return { organization, billingManagerUserIds, updated };
+    });
 
     // "Who appointed the person who can reach confidential groups" - the same legal question the
     // group-type grant audit answers, one link up the chain. Best-effort (the writer swallows
@@ -64,7 +73,18 @@ const handler = baseApi().put(
       actorScope: 'organization',
       target: { kind: 'organization', id: organizationId, displayName: organization.name },
       summary: `set ${adminUserIds.length} organization managers`,
-      changes: [{ field: 'adminUserIds', before: organization.adminUserIds ?? [], after: adminUserIds }],
+      changes: [
+        { field: 'adminUserIds', before: organization.adminUserIds ?? [], after: adminUserIds },
+        ...(billingManagerUserIds.length !== (organization.billingManagerUserIds ?? []).length
+          ? [
+              {
+                field: 'billingManagerUserIds',
+                before: organization.billingManagerUserIds ?? [],
+                after: billingManagerUserIds,
+              },
+            ]
+          : []),
+      ],
     });
 
     return res.status(200).json({ adminUserIds: updated?.adminUserIds ?? adminUserIds });
