@@ -25,8 +25,8 @@ import {
   validateBundle,
   checkScopePermission,
   resolveVisibility,
-  checkPublishQuota,
-  planPublishVersions,
+  planVersionedPublish,
+  versionsPushUpdate,
   buildPublishS3KeyPrefix,
   buildPublishUrlPath,
   invalidatePublishCdn,
@@ -300,12 +300,11 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     ? await downloadPublishedIndex({ ...previous, storageKeyPrefix: canonicalPrefix }, storage).catch(() => null)
     : null;
 
-  // 5b. Version history (deduped by content sha): backfill the replaced version if
-  // history doesn't record it, then add the new one unless it's an identical
-  // re-publish (same sha). On first publish, `previous` is null -> [new] only.
-  // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
+  // 5b. Version history (deduped by content sha, `previous` null -> [new] only) and 5c, the cumulative
+  // per-owner quota re-check (defense in depth - the draft may have been issued before other publishes
+  // consumed the allowance). One call: the quota counts the archived versions as they stand after this publish.
   const now = new Date();
-  const { versionsToPush, archivedBytes } = planPublishVersions({
+  const { versionsToPush, quota } = await planVersionedPublish({
     previous,
     priorIndex,
     incoming: {
@@ -315,19 +314,12 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
       size: { totalBytes, fileCount: filesWithMeta.length },
       indexBytes: indexEntry.size,
     },
-  });
-
-  // 5c. Cumulative per-owner quota re-check (defense in depth - the draft may
-  // have been issued before other publishes consumed the allowance). Excludes
-  // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted,
-  // then adds back that page's archived versions as they stand after this publish:
-  // replacing the current version with new content archives it, which is growth.
-  const quota = await checkPublishQuota({
-    ownerId: String(req.user.id),
-    orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
-    isAdmin: req.user.isAdmin,
-    incoming: { bytes: totalBytes, fileCount: filesWithMeta.length, archivedBytes },
-    replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
+    quota: {
+      ownerId: String(req.user.id),
+      orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
+      isAdmin: req.user.isAdmin,
+      replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
+    },
   });
   if (!quota.ok) {
     return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
@@ -410,7 +402,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     // sha and backfilling the replaced version if not yet recorded (an
     // identical re-publish must not duplicate a sha). Bytes for the current
     // entry live at index.html; older entries at versions/{sha}.html.
-    $push: { versions: { $each: versionsToPush } },
+    ...versionsPushUpdate(versionsToPush),
   };
   const scope = { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null, ownerId };
   // Replacing a v1-published page with a different artifact must drop its one-page-per-artifact
