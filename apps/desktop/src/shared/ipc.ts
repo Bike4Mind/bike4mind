@@ -155,6 +155,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { OrchestrateMiniPayload } from './orchestrateMini';
 import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
@@ -611,6 +612,18 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** An app window's stage -> main: the OrchestrateMiniPayload the Orchestrate mini window shows, or null. */
+  orchestrateMiniPublish: 'orchestrate-mini:publish',
+  orchestrateMiniToggle: 'orchestrate-mini:toggle',
+  orchestrateMiniGetOpen: 'orchestrate-mini:get-open',
+  /** main -> app windows push: the Orchestrate mini window opened or closed. */
+  orchestrateMiniOpen: 'orchestrate-mini:open',
+  /** The Orchestrate mini window's own surface (preload/orchestrateMini.ts); refused from any other window. */
+  orchestrateMiniGetSnapshot: 'orchestrate-mini:get-snapshot',
+  /** main -> Orchestrate mini window push of the latest payload, or null. */
+  orchestrateMiniSnapshot: 'orchestrate-mini:snapshot',
+  orchestrateMiniFocus: 'orchestrate-mini:focus',
+  orchestrateMiniClose: 'orchestrate-mini:close',
   /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
@@ -769,6 +782,19 @@ export interface MiniTavernApi {
   respond(approvalId: string, decision: WatchDecision): Promise<boolean>;
   /** Raise the main window on this agent, the way clicking its notification does. */
   focusAgent(sessionId: string, rootId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * Everything the Orchestrate mini window can reach, exposed as `window.b4mOrchestrateMini` by
+ * preload/orchestrateMini.ts: the stage's snapshot and two actions, neither of which answers anything.
+ * Pushed values are `unknown` on purpose: the page parses them (parseOrchestrateMiniPayload) on receipt.
+ */
+export interface OrchestrateMiniApi {
+  getSnapshot(): Promise<unknown>;
+  onSnapshot(listener: (payload: unknown) => void): () => void;
+  /** Raise the main window on the decision this agent (or the root) waits on. */
+  focus(agentId: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -1501,6 +1527,15 @@ export interface DesktopApi {
     getPreferences(): Promise<WatchPreferences>;
     setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
     onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
+  };
+  /** The Orchestrate mini window (main/orchestrateMini): the stage feeds it and toggles it. */
+  orchestrateMini: {
+    /** The stage's current payload, or null when no orchestration is on stage. Main validates it. */
+    publish(payload: OrchestrateMiniPayload | null): Promise<void>;
+    /** Resolves with whether the window is open afterwards. */
+    toggle(): Promise<boolean>;
+    isOpen(): Promise<boolean>;
+    onOpenChanged(listener: (open: boolean) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

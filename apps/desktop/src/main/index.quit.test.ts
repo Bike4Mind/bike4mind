@@ -78,6 +78,15 @@ vi.mock('./chat/model3d/engineProtocol', () => ({ registerModelScheme: vi.fn() }
 vi.mock('./chat/media/protocol', () => ({ registerMediaScheme: vi.fn() }));
 vi.mock('./mods/skinProtocol', () => ({ registerSkinScheme: vi.fn() }));
 vi.mock('./mods', () => ({ registerSkins: vi.fn() }));
+vi.mock('./orchestrateMini', () => ({
+  registerOrchestrateMini: () => ({
+    isOpen: () => false,
+    toggle: vi.fn(),
+    close: vi.fn(),
+    onOpenChanged: vi.fn(),
+    start: async () => undefined,
+  }),
+}));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },
