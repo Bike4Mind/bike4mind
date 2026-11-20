@@ -85,7 +85,7 @@ function harness(
       } as unknown as ChatSession);
       return { ok: true as const, session: { id } as never };
     }),
-    setApprovalMode: vi.fn(async () => null),
+    setLoopRunApprovalMode: vi.fn(async () => null),
     setLoopRunModel: vi.fn(async () => null),
     startAutomaticTurn: vi.fn(async (sessionId: string, _text: string, automatic: ChatAutomaticOrigin) => {
       if (automatic.kind === 'loop-runner') runOf.set(sessionId, automatic.runId);
@@ -208,7 +208,7 @@ describe('LoopRunner claiming', () => {
     await h.runner.tick();
     expect(h.client.claim).toHaveBeenCalledWith('t1');
     expect(h.chat.createCodeSession).toHaveBeenCalledWith({ directory: '/repo', workspace: true });
-    expect(h.chat.setApprovalMode).toHaveBeenCalledWith('s1', 'auto');
+    expect(h.chat.setLoopRunApprovalMode).toHaveBeenCalledWith('s1', 'auto');
     expect(h.chat.startAutomaticTurn).toHaveBeenCalledWith('s1', expect.stringMatching(/\n\nWork the ticket\.$/), {
       kind: 'loop-runner',
       loopId: 'loop-1',
@@ -404,7 +404,7 @@ describe('LoopRunner runs', () => {
   });
 
   it('releases the claim when the session cannot be set up', async () => {
-    h.chat.setApprovalMode.mockRejectedValueOnce(new Error('store locked'));
+    h.chat.setLoopRunApprovalMode.mockRejectedValueOnce(new Error('store locked'));
     await h.runner.tick();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
     expect(h.runner.busy).toBe(0);

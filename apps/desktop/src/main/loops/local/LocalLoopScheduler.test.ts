@@ -39,7 +39,7 @@ function fakeChat() {
     runs,
     stopped: [] as string[],
     createCodeSession: vi.fn(async () => ({ ok: true as const, session: { id: `s${++next}` } })),
-    setApprovalMode: vi.fn(async () => undefined),
+    setLoopRunApprovalMode: vi.fn(async () => undefined),
     setLoopRunModel: vi.fn(async (sessionId: string, model: string) => void models.set(sessionId, model)),
     deleteSession: vi.fn(async () => undefined),
     async startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin) {

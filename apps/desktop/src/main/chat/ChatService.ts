@@ -1103,6 +1103,8 @@ export class ChatService {
    * tag: its id means nothing to the server.
    */
   private readonly loopRuns = new Map<string, { runId: string; local?: true }>();
+  /** The mode setLoopRunApprovalMode gave a run's session, reset to 'ask' when the run ends unless the user changed it. */
+  private readonly loopRunApprovalModes = new Map<string, ChatApprovalMode>();
 
   /**
    * Spawned sessions whose running turn the user typed, so someone is there to answer a card.
@@ -1966,6 +1968,13 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
       });
     }
+    return updated;
+  }
+
+  /** A loop run's approval mode, from its loop. Unlike setApprovalMode it is not remembered as the user's pick. */
+  async setLoopRunApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.setLoopRunApprovalMode(sessionId, mode);
+    if (updated) this.loopRunApprovalModes.set(sessionId, mode);
     return updated;
   }
 
@@ -3005,6 +3014,7 @@ export class ChatService {
     const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
     this.loopRuns.delete(sessionId);
+    this.loopRunApprovalModes.delete(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
     if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
@@ -3116,7 +3126,9 @@ export class ChatService {
       this.loopRuns.delete(sessionId);
       this.deps.approvals?.setUnattended(sessionId, false);
       // The runner set auto or full for the run; a later wake must not inherit it.
-      void this.deps.store.setApprovalMode(sessionId, 'ask').catch(() => undefined);
+      const loopMode = this.loopRunApprovalModes.get(sessionId);
+      this.loopRunApprovalModes.delete(sessionId);
+      if (loopMode) void this.deps.store.setLoopRunApprovalMode(sessionId, 'ask', loopMode).catch(() => undefined);
     }
   }
 

@@ -152,11 +152,22 @@ describe('ChatService loop runner sessions', () => {
 
   it('resets the approval mode the runner set once its run ends', async () => {
     const session = await service.createSession();
-    await service.setApprovalMode(session.id, 'full');
+    await service.setLoopRunApprovalMode(session.id, 'full');
     await service.startAutomaticTurn(session.id, 'work the ticket', origin);
     (await nextStream(1)).write(frame('[DONE]'));
     service.endLoopRun('run-1');
     await vi.waitUntil(async () => (await store.approvalMode(session.id)) === 'ask', { timeout: 5000, interval: 10 });
+  });
+
+  it('keeps a mode the user picked during the run', async () => {
+    const session = await service.createSession();
+    await service.setLoopRunApprovalMode(session.id, 'full');
+    await service.startAutomaticTurn(session.id, 'work the ticket', origin);
+    (await nextStream(1)).write(frame('[DONE]'));
+    await service.setApprovalMode(session.id, 'auto');
+    service.endLoopRun('run-1');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(await store.approvalMode(session.id)).toBe('auto');
   });
 
   it('starts its shell commands at low priority; a normal session does not', async () => {

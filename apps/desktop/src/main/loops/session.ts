@@ -47,7 +47,7 @@ export interface LoopSessionChat {
     directory: string;
     workspace: boolean;
   }): Promise<{ ok: true; session: { id: string } } | { ok: false; error: string }>;
-  setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
+  setLoopRunApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
   setLoopRunModel(sessionId: string, model: string): Promise<unknown>;
   deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
   startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): Promise<AutomaticTurnResult>;
@@ -66,7 +66,7 @@ export async function openLoopSession(
     const created = await chat.createCodeSession({ directory: options.directory, workspace: true });
     if (!created.ok) return { ok: false, outcome: 'failed', reason: created.error };
     sessionId = created.session.id;
-    await chat.setApprovalMode(sessionId, options.approvalMode);
+    await chat.setLoopRunApprovalMode(sessionId, options.approvalMode);
     if (options.model) await chat.setLoopRunModel(sessionId, options.model);
     return { ok: true, sessionId };
   } catch (err) {

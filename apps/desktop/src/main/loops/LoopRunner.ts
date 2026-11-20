@@ -36,7 +36,7 @@ import {
 /** The parts of ChatService the runner drives; every call is one a user's own click could make. */
 export interface RunnerChat {
   createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
-  setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
+  setLoopRunApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
   setLoopRunModel(sessionId: string, model: string): Promise<unknown>;
   startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): Promise<AutomaticTurnResult>;
   stop(sessionId: string): void;
