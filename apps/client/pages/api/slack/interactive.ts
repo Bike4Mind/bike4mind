@@ -443,11 +443,11 @@ function logRegistryProblemsOnce() {
 // Handler for different interactive actions
 async function handleInteractiveAction(
   payload: SlackInteractivePayload,
-  botToken?: string,
-  prefetchedUser?: SlackDbUser | null,
-  appName?: string,
-  workspaceId?: string,
-  deferredWork: Promise<void>[] = []
+  botToken: string | undefined,
+  prefetchedUser: SlackDbUser | null | undefined,
+  appName: string | undefined,
+  workspaceId: string | undefined,
+  deferredWork: Promise<void>[]
 ): Promise<object> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
 
@@ -670,7 +670,14 @@ async function handleInteractiveAction(
       botToken,
       appName,
     });
-    if (deferred) deferredWork.push(deferred);
+    if (deferred) {
+      // The response is already sent by the time this is awaited, so a failure can only be logged.
+      deferredWork.push(
+        deferred.catch(error => {
+          Logger.error('[Slack Interactive] Deferred work failed', { actionId: firstAction.action_id, error });
+        })
+      );
+    }
     return response;
   }
 
