@@ -223,4 +223,11 @@ describe('registerLocalLoops handlers', () => {
     expect(mocks.deps!.cloudLoopsSpentToday(now)).toBe(40);
     expect(mocks.deps!.cloudLoopsSpentToday(new Date(now.getTime() + 24 * 60 * 60_000))).toBe(0);
   });
+
+  it('dispose clears the timers it started', () => {
+    const clear = vi.spyOn(globalThis, 'clearInterval');
+    register().dispose();
+    expect(clear).toHaveBeenCalledTimes(2);
+    clear.mockRestore();
+  });
 });

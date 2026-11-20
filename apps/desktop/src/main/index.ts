@@ -365,6 +365,7 @@ void app.whenReady().then(async () => {
     auth.dispose();
     fleet.dispose();
     loops.runner.dispose();
+    localLoops?.dispose();
     models.dispose();
     chat.dispose();
     stopModelServers();

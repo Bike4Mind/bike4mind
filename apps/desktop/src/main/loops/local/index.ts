@@ -145,7 +145,7 @@ export function registerLocalLoops(
     details: () => store.loops().map(loop => detail(loop.id)),
     logger,
   });
-  setInterval(() => void mirror.flush(), MIRROR_MS.heartbeat);
+  const heartbeat = setInterval(() => void mirror.flush(), MIRROR_MS.heartbeat);
 
   const follow = () => {
     currentScope = scope();
@@ -388,7 +388,7 @@ export function registerLocalLoops(
 
   powerMonitor.on('suspend', () => scheduler.suspend(new Date()));
   powerMonitor.on('resume', () => scheduler.resume());
-  setInterval(() => void scheduler.watchdog(), WATCHDOG_MS.interval);
+  const watchdog = setInterval(() => void scheduler.watchdog(), WATCHDOG_MS.interval);
 
   follow();
   return {
@@ -397,6 +397,12 @@ export function registerLocalLoops(
     /** For main's dock badge while no window is open. */
     needsYouCount: () => loopNeedsYouCount(summaries()),
     onChanged: (listener: () => void) => void listeners.push(listener),
+    /** Clears the heartbeat and watchdog timers and stops scheduling; runs are released by releaseAll. */
+    dispose: () => {
+      clearInterval(heartbeat);
+      clearInterval(watchdog);
+      scheduler.stop();
+    },
   };
 }
 
