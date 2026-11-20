@@ -21,7 +21,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
-import { planPublishVersions } from '@server/services/publish/planPublishVersions';
+import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
@@ -326,7 +326,7 @@ const handler = baseApi().post(
             },
           },
           $unset: { indexObjectPath: 1 },
-          $push: { versions: { $each: versionsToPush } },
+          ...versionsPushUpdate(versionsToPush),
         }
       );
 
