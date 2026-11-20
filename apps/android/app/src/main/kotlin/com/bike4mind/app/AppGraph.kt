@@ -11,6 +11,7 @@ import com.bike4mind.client.apis.AIApi
 import com.bike4mind.client.apis.AccountApi
 import com.bike4mind.client.apis.SessionsApi
 import com.bike4mind.client.models.GetClientConfigResponse200
+import com.bike4mind.kit.approvals.PendingActionWire
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
@@ -66,7 +67,12 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
     private val briefs = BriefWire(environment, http)
-    private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
+    private val chatBackend = LiveChatBackend(
+        sessions,
+        ChatSendWire(environment, http),
+        RealtimeConnection(environment, http),
+        PendingActionWire(environment, http),
+    )
 
     /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
     val push = PushRegistrationCoordinator(
