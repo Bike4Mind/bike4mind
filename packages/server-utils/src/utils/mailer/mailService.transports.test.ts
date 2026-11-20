@@ -320,7 +320,7 @@ describe('SMTP without auth', () => {
     );
   });
 
-  it('still logs in with a half-set pair on self-host, so the send fails instead of going out unauthenticated', async () => {
+  it('still logs in with a half-set pair on self-host, so a server that requires auth rejects the send', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
     Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: '' });
     const nodemailer = await import('nodemailer');

@@ -14,7 +14,7 @@ export const SES_CONFIGURATION_SET_HEADER = 'X-SES-CONFIGURATION-SET';
 export interface SmtpTransportOptions {
   host: string;
   port: string;
-  /** Leave both undefined for a relay that takes no auth; any other combination logs in, so a half-set pair fails at send. */
+  /** Leave both undefined for a relay that takes no auth; any other combination logs in, so a server that requires auth rejects a half-set pair. */
   username?: string;
   password?: string;
   /** SES configuration set for `otc` mail, applied as a header the SES SMTP endpoint honours. */
