@@ -654,8 +654,9 @@ const DROP_REASON_LABEL: Record<
   Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'>,
   string
 > = {
-  filteredBySource: 'blocked by source rules',
-  unresolvedRedirect: 'search link could not be resolved',
+  filteredBySource: 'on your Never these sites list',
+  unlistedDropped: 'from sites not on your lists (Other sites: Ignore)',
+  unresolvedRedirect: 'search link never revealed its site (skipped; usually clears on the next run)',
   blockedByRule: 'blocked by an item rule',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
@@ -696,7 +697,10 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   if (totals.reviewedByRule > 0) parts.push(`${totals.reviewedByRule} sent to review by a rule`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
-    if (count > 0) parts.push(`${count} ${label}`);
+    // A run stored before the split has no unlistedDropped, and its filteredBySource counts both drops.
+    const text =
+      key === 'filteredBySource' && totals.unlistedDropped === undefined ? 'blocked by your site lists' : label;
+    if ((count ?? 0) > 0) parts.push(`${count} ${text}`);
   }
   // Not a totals bucket: a waiting item has had no outcome yet.
   if (feedRun && (run.feedBacklog ?? 0) > 0) parts.push(`${run.feedBacklog} waiting`);
@@ -714,6 +718,7 @@ const JUDGED_BUCKETS: Record<
     keyof ResearchRunTotals,
     | 'searchHits'
     | 'filteredBySource'
+    | 'unlistedDropped'
     | 'unresolvedRedirect'
     | 'judgeFailed'
     | 'notJudged'
@@ -737,7 +742,7 @@ const JUDGED_BUCKETS: Record<
 const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
   if (!run.judgeModel) return null;
   const { totals } = run;
-  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => (totals[key as keyof ResearchRunTotals] ?? 0) > 0);
   if (judged) return `judged by ${run.judgeModel}`;
   if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
   return null;
@@ -781,7 +786,17 @@ export function DataLakeResearchPanel({
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
+  const [formOpenCount, setFormOpenCount] = useState(0);
+  const formRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const isDirty = editingId !== null && JSON.stringify(draft) !== JSON.stringify(draftBaseline);
+  // The one shared form renders below every config card, so opening it from a card high in the list
+  // would otherwise change nothing on screen.
+  useEffect(() => {
+    if (editingId === null) return;
+    formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    nameInputRef.current?.focus({ preventScroll: true });
+  }, [editingId, formOpenCount]);
   // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
   // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
   // panel's TabPanel, because an unmount takes the draft with it.
@@ -835,6 +850,7 @@ export function DataLakeResearchPanel({
     setAdvancedOpen(false);
     setEditingId('');
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
   const openEdit = (config: IDataLakeResearchConfigResponse) => {
     setSaveNotice(null);
@@ -844,6 +860,7 @@ export function DataLakeResearchPanel({
     setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
     setEditingId(config.id);
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
   const closeForm = () => setEditingId(null);
 
@@ -1074,6 +1091,7 @@ export function DataLakeResearchPanel({
 
       {formOpen ? (
         <Box
+          ref={formRef}
           data-testid="datalake-research-form"
           sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1.5 }}
         >
@@ -1084,7 +1102,11 @@ export function DataLakeResearchPanel({
                 value={draft.name}
                 onChange={e => setField('name')(e.target.value)}
                 slotProps={{
-                  input: { 'data-testid': 'datalake-research-name-input', maxLength: RESEARCH_CONFIG_NAME_MAX_CHARS },
+                  input: {
+                    ref: nameInputRef,
+                    'data-testid': 'datalake-research-name-input',
+                    maxLength: RESEARCH_CONFIG_NAME_MAX_CHARS,
+                  },
                 }}
               />
               <FormHelperText data-testid="datalake-research-name-count">

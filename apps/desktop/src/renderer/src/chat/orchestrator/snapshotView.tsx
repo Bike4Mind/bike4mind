@@ -33,6 +33,7 @@ export function snapshotView(
     onSelect,
     onInnkeeperSelect,
     agentDetailsOverlay,
+    restoreAction,
   }: OrchestratorViewProps) {
     const snapshot = useMemo(
       () => toViewSnapshot(rootId ?? UNNAMED_ROOT, agents, parent ?? NO_PARENT),
@@ -44,9 +45,16 @@ export function snapshotView(
     const onAction = (action: ViewAction) => {
       const accepted = acceptViewAction(snapshot, action);
       if (!accepted) return;
-      runViewAction(accepted, { openAgent: onSelect, openRoot: () => onInnkeeperSelect?.() }).catch((error: unknown) =>
-        console.error('A view action failed', error)
-      );
+      const reportFailure = (error: unknown) => console.error('A view action failed', error);
+      // Presenter mode hands this host a redacted roster, so an answer names placeholder labels until restored.
+      let real: ViewAction;
+      try {
+        real = restoreAction ? restoreAction(accepted) : accepted;
+      } catch (error) {
+        reportFailure(error);
+        return;
+      }
+      runViewAction(real, { openAgent: onSelect, openRoot: () => onInnkeeperSelect?.() }).catch(reportFailure);
     };
 
     return (

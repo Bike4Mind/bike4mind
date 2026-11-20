@@ -76,6 +76,13 @@ android {
         disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
     }
 
+    // Compose UI tests run on the JVM under Robolectric, so `make test` and CI cover them without an emulator.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric's SDK 36 sandbox reaches into FileDescriptor internals, which newer JDKs keep unexported.
+        unitTests.all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
+
     packaging {
         resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
     }
@@ -101,4 +108,11 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.junit)
+    // Declares the empty activity Compose UI tests host their content in; debug builds only.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

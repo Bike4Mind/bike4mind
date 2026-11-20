@@ -31,6 +31,7 @@ import {
   mcpConnectionErrorMessage,
   useCreateMcpConnection,
   type McpConnectionAuthInput,
+  type McpConnectionScope,
 } from '@client/app/hooks/data/mcpConnections';
 
 type AuthChoice = McpConnectionAuthInput['kind'];
@@ -40,6 +41,9 @@ const AUTH_LABELS: Record<AuthChoice, string> = {
   api_key: 'API key',
   none: 'No authentication',
 };
+
+// A platform connector holds one shared credential, so the server refuses per-user sign-in for it.
+const PLATFORM_AUTH_CHOICES: AuthChoice[] = ['api_key', 'none'];
 
 const TRANSPORT_LABELS: Record<McpConnectionTransport, string> = {
   auto: 'Detect automatically',
@@ -51,23 +55,28 @@ const TRANSPORT_LABELS: Record<McpConnectionTransport, string> = {
  * Adds one connection. For a preset the server address and sign-in method are the catalog's
  * (the server refuses anything else); otherwise the user supplies the URL and picks how to sign in.
  * The server probes the address on create, so the result already says whether it answered.
+ * With `scope="platform"` it adds a platform connector, which takes an API key or no authentication.
  */
 const AddMcpConnectorForm = ({
   presetId,
   presetName,
+  scope = 'user',
   onCreated,
   onCancel,
 }: {
   presetId?: McpPresetId;
   presetName?: string;
+  scope?: McpConnectionScope;
   onCreated: (connection: IMcpConnectionPublic) => void;
   onCancel?: () => void;
 }) => {
-  const presetUrl = getMcpPresetUrl(presetId);
-  const create = useCreateMcpConnection();
+  const platform = scope === 'platform';
+  const presetUrl = platform ? undefined : getMcpPresetUrl(presetId);
+  const create = useCreateMcpConnection(scope);
+  const authChoices = platform ? PLATFORM_AUTH_CHOICES : (Object.keys(AUTH_LABELS) as AuthChoice[]);
   const [url, setUrl] = useState(presetUrl ?? '');
   const [displayName, setDisplayName] = useState(presetName ?? '');
-  const [auth, setAuth] = useState<AuthChoice>(presetUrl ? 'api_key' : 'oauth');
+  const [auth, setAuth] = useState<AuthChoice>(presetUrl || platform ? 'api_key' : 'oauth');
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [slug, setSlug] = useState('');
@@ -93,7 +102,7 @@ const AddMcpConnectorForm = ({
       auth === 'api_key' ? { kind: 'api_key', value: apiKey, headerName, scheme } : { kind: auth };
     create.mutate(
       {
-        ...(presetId ? { presetId } : {}),
+        ...(presetId && !platform ? { presetId } : {}),
         url: url.trim(),
         displayName: displayName.trim(),
         ...(slug ? { slug } : {}),
@@ -128,8 +137,9 @@ const AddMcpConnectorForm = ({
           startDecorator={<WarningAmberIcon />}
           data-testid="custom-mcp-add-warning"
         >
-          Bike4Mind has not reviewed this server. Its tools can read and change data in the account you connect, and
-          their descriptions come from the server.
+          {platform
+            ? 'Bike4Mind has not reviewed this server. Any user who switches it on can use its tools, and every call uses the authentication set here. Tool descriptions come from the server.'
+            : 'Bike4Mind has not reviewed this server. Its tools can read and change data in the account you connect, and their descriptions come from the server.'}
         </Alert>
       )}
       <FormControl required>
@@ -138,6 +148,7 @@ const AddMcpConnectorForm = ({
           size="sm"
           value={displayName}
           onChange={event => setDisplayName(event.target.value)}
+          autoFocus={platform}
           slotProps={{ input: { maxLength: 100, 'data-testid': 'custom-mcp-add-name-input' } }}
         />
       </FormControl>
@@ -161,7 +172,7 @@ const AddMcpConnectorForm = ({
             onChange={event => setAuth(event.target.value as AuthChoice)}
             data-testid="custom-mcp-add-auth"
           >
-            {(Object.keys(AUTH_LABELS) as AuthChoice[]).map(kind => (
+            {authChoices.map(kind => (
               <Radio
                 key={kind}
                 value={kind}
@@ -268,7 +279,7 @@ const AddMcpConnectorForm = ({
       )}
 
       {error && (
-        <Typography level="body-sm" color="danger" data-testid="custom-mcp-add-error">
+        <Typography level="body-sm" color="danger" role="alert" data-testid="custom-mcp-add-error">
           {error}
         </Typography>
       )}

@@ -1,5 +1,6 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT, STAGE_LOG_RETENTION } from './constants';
 import { allSecrets } from './secrets';
+import { eventBus } from './bus';
 import { lambdaVpc } from './vpc';
 
 // Access logs carry client IPs; use the stage default instead of SST's flat 1 month.
@@ -103,7 +104,7 @@ const cliToolRoute = websocketApi.route('cli_tool_request', {
   timeout: '10 minutes',
   memory: DB_HANDLER_MEMORY,
   vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
+  link: [...allSecrets, websocketApi, eventBus],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },

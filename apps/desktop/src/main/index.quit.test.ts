@@ -56,7 +56,7 @@ vi.mock('./auth', () => ({
 vi.mock('./attention', () => ({
   registerAttention: () => ({ watchNeedsYou: () => ({}) }),
 }));
-vi.mock('./usage', () => ({ registerUsage: vi.fn() }));
+vi.mock('./usage', () => ({ registerUsage: vi.fn(), registerLocalUsage: vi.fn() }));
 vi.mock('./fleet', () => ({
   registerFleet: () => ({ setDirectoryResolver: vi.fn(), setModelResolver: vi.fn() }),
 }));

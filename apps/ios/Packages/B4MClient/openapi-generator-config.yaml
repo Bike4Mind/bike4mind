@@ -12,6 +12,7 @@ filter:
   operations:
     - listSessions
     - getSession
+    - getSessionById
     - listSessionQuests
     - getQuest
     - getCreditBalance

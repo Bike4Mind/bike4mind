@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 import { DOOR_POINT } from './orchestrator/tavern/scene';
+import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -130,6 +131,7 @@ let statusSnapshot: ChatSessionStatusEvent[] = [];
 let statusListener: ((event: ChatSessionStatusEvent) => void) | null = null;
 let parentMessages: ChatMessage[] = [];
 let codeMessages: ChatMessage[] = [];
+let childMessages: ChatMessage[] = [];
 let attentionOpen: ((event: AttentionOpenEvent) => void) | null = null;
 let sessionsChanged: (() => void) | null = null;
 let catalogModels: ChatModelOption[] = [];
@@ -150,6 +152,7 @@ beforeEach(() => {
   statusListener = null;
   parentMessages = [];
   codeMessages = [];
+  childMessages = [];
   attentionOpen = null;
   sessionsChanged = null;
   Element.prototype.scrollIntoView = () => undefined;
@@ -172,7 +175,8 @@ beforeEach(() => {
         getSession: async (id: string) =>
           ({
             ...(listed.find(session => session.id === id) ?? PARENT),
-            messages: id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : [],
+            messages:
+              id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : id === CHILD.id ? childMessages : [],
           }) as unknown as ChatSession,
         setSessionOrchestrate,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
@@ -844,5 +848,140 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('chat-session-title').textContent).toBe(CHILD.title);
     // The agent has spawned nothing itself, so its own session is plain chat.
     expect(query('orchestrator-stage')).toBeNull();
+  });
+});
+
+describe('the reply stats rail with the orchestrator', () => {
+  let restoreWidth: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreWidth?.();
+    restoreWidth = null;
+  });
+
+  it('draws the rail beside the full-width thread, and keeps the stats under the reply in the dock', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    reloadReplyStatsPrefs();
+    const at = '2026-10-01T00:00:00.000Z';
+    parentMessages = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'An answer',
+        createdAt: at,
+        stats: { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } },
+        usage: { outputTokens: 120 },
+      },
+    ] as ChatMessage[];
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1400 } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+    await openParent();
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+    expect(query('chat-message-cost')).toBeNull();
+
+    await enterOrchestrate();
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(query('chat-reply-stats-rail')).toBeNull();
+    expect(el('orchestrator-dock').contains(el('chat-message-cost'))).toBe(true);
+    expect(el('chat-message-cost').textContent).toContain('4.0s total');
+
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+  });
+
+  const toggleTitle = async () => {
+    const trigger = el('chat-toggle-reply-stats-btn').parentElement!;
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    const title = document.querySelector('[role="tooltip"]')?.textContent;
+    await act(async () => trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    return title;
+  };
+
+  it.each([
+    ['chat, narrow', 600, false, 'Hide reply stats beside the conversation; the window is too narrow for them now'],
+    ['chat, wide', 1400, false, 'Hide reply stats'],
+    [
+      'orchestrate',
+      1400,
+      true,
+      'Hide reply stats beside the conversation; while orchestrating they show under each reply on hover',
+    ],
+  ])('titles the stats toggle for %s', async (_label, regionWidth, orchestrate, title) => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    reloadReplyStatsPrefs();
+    const width = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width: regionWidth } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+    await openParent();
+    if (orchestrate) await enterOrchestrate();
+
+    expect(await toggleTitle()).toBe(title);
+  });
+
+  const statsThread = (): ChatMessage[] => {
+    const at = '2026-10-01T00:00:00.000Z';
+    return [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'An answer',
+        createdAt: at,
+        stats: { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } },
+        usage: { outputTokens: 120 },
+      },
+    ] as ChatMessage[];
+  };
+
+  const wideWindow = () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1400 } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+  };
+
+  it.each([
+    ['the table', 'table', false],
+    ['the tavern', 'tavern', false],
+    ['the aquarium', 'aquarium', false],
+    ['the office', 'office', false],
+    ['Focus mode on the table', 'table', true],
+    ['Focus mode on the tavern', 'tavern', true],
+  ] as const)('keeps the stats under the reply in the conversation docked over %s', async (_label, view, focus) => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+    if (focus) window.localStorage.setItem('b4m.orchestrator.focus', '1');
+    reloadReplyStatsPrefs();
+    parentMessages = statsThread();
+    wideWindow();
+    await openParent();
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+
+    await enterOrchestrate();
+    expect(query('orchestrator-focus-panel') !== null).toBe(focus);
+    expect(query('chat-reply-stats-rail')).toBeNull();
+    expect(el('orchestrator-dock').contains(el('chat-message-cost'))).toBe(true);
+    expect(el('chat-message-cost').textContent).toContain('4.0s total');
+  });
+
+  it("keeps the stats under the reply in an agent's details over a scene", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'tavern');
+    reloadReplyStatsPrefs();
+    childMessages = statsThread();
+    wideWindow();
+    await openParent();
+    await enterOrchestrate();
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    await act(async () => undefined);
+
+    const drawer = el('orchestrator-peek-drawer');
+    expect(drawer.querySelector('[data-testid="chat-message-cost"]')?.textContent).toContain('4.0s total');
+    expect(query('chat-reply-stats-rail')).toBeNull();
   });
 });

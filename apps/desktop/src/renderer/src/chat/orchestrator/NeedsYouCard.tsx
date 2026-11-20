@@ -64,7 +64,12 @@ export function NeedsYouCard({
           Open
         </Button>
       </Box>
-      {agent ? (
+      {agent?.redacted ? (
+        // A Presenter mode copy: the request is in the agent's transcript, which Open shows unredacted.
+        <Typography level="body-sm" textColor="text.secondary">
+          Open it to answer.
+        </Typography>
+      ) : agent ? (
         <AgentRequests agent={agent} />
       ) : (
         <Typography level="body-sm" textColor="text.secondary">

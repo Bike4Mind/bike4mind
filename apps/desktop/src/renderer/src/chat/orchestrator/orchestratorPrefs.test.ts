@@ -14,9 +14,11 @@ import {
   readDockOpen,
   readFinaleSeen,
   readIntroSeen,
+  readPresenter,
   readSurface,
   readView,
   writeAmbient,
+  writePresenter,
   writeAmbientHintSeen,
   writeDockOpen,
   writeFinaleSeen,
@@ -253,6 +255,16 @@ describe('orchestratorPrefs', () => {
       });
       expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
       expect(() => writeDockWidth(500)).not.toThrow();
+    });
+  });
+
+  describe('presenter', () => {
+    it('is off until turned on, and remembers both ways', () => {
+      expect(readPresenter()).toBe(false);
+      writePresenter(true);
+      expect(readPresenter()).toBe(true);
+      writePresenter(false);
+      expect(readPresenter()).toBe(false);
     });
   });
 });

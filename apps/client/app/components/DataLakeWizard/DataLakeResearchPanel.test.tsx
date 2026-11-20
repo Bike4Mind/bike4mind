@@ -154,6 +154,47 @@ describe('DataLakeResearchPanel', () => {
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
+  describe('opening the form', () => {
+    let scrollIntoView: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    });
+    afterEach(() => {
+      scrollIntoView.mockRestore();
+    });
+
+    it('scrolls the edit form into view and focuses its first field', () => {
+      renderPanel({ configs: [config()] });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId('datalake-research-form'));
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('scrolls and focuses again when Edit is pressed on the config whose form is already open', () => {
+      renderPanel({ configs: [config()] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('does the same for a new configuration', () => {
+      renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+  });
+
   it('starts a run for the configuration whose button was pressed', () => {
     const spies = renderPanel({ configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })] });
 
@@ -922,13 +963,46 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
     });
 
-    it('labels hits whose search link could not be resolved', () => {
+    it('labels hits whose search link could not be resolved as skipped', () => {
       renderPanel({
         runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4, unresolvedRedirect: 3, proposed: 1 } })],
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(
-        /3 search link could not be resolved/
+        /3 search link never revealed its site \(skipped; usually clears on the next run\)/
       );
+    });
+
+    it('labels the two source-rule drops apart on a run that stored both', () => {
+      renderPanel({
+        runs: [
+          run({ totals: { ...emptyResearchRunTotals(), searchHits: 6, filteredBySource: 2, unlistedDropped: 4 } }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/2 on your Never these sites list/);
+      expect(summary).toMatch(/4 from sites not on your lists \(Other sites: Ignore\)/);
+    });
+
+    it('keeps the combined label for a run stored before the split', () => {
+      const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+      renderPanel({
+        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } })],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/6 blocked by your site lists/);
+      expect(summary).not.toMatch(/Never these sites/);
+    });
+
+    it('does not report a judge when a run only dropped hits by source', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 4, unlistedDropped: 4 },
+          }),
+        ],
+      });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
     });
 
     it('names the model that judged a run', () => {
