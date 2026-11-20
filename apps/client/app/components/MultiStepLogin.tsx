@@ -845,7 +845,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     neither: the caller's fallback reads as "registration closed" and flashed the
                     invite/waitlist line before "Register now" on open instances. isPending, not
                     isLoading: while the persisted cache restores, the query is pending but not yet
-                    fetching. The box keeps one line's height (14px at body1's 1.5 line height). */}
+                    fetching. The box keeps one line's height (14px at Joy body-md's 1.5 line height). */}
                 <Box
                   className="register-prompt-container"
                   data-testid="login-register-prompt"
