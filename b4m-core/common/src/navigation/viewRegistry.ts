@@ -1275,8 +1275,11 @@ const contributedViews = new Map<string, NavigableView>();
 
 const CONTRIBUTED_VIEW_ID_PATTERN = /^admin\.ext\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
 // `%` and `\` are rejected with `..` so an encoded or backslash dot segment cannot leave the prefix.
-const UNSAFE_TARGET_PATTERN = /[$?#%\\\s]|\.\./;
-const LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/;
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+const UNSAFE_TARGET_PATTERN = /[$?#%\\\s\u0000-\u001f\u007f-\u009f]|\.\./;
+// Control characters (tab, NUL, NEL, ...) and bidi overrides have no place in one-line prompt text.
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+const LINE_BREAK_PATTERN = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
 
 export interface ContributedViewsRegistration {
   registered: string[];
