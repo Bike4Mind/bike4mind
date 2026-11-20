@@ -51,6 +51,9 @@ const ResearchRunLeversSchema = {
 const ResearchRunTotalsSchema = {
   searchHits: { type: Number, default: 0 },
   filteredBySource: { type: Number, default: 0 },
+  // No default: a run stored before the split must read undefined, not 0, so its combined count keeps its label.
+  unlistedDropped: { type: Number },
+  unresolvedRedirect: { type: Number, default: 0 },
   belowRelevance: { type: Number, default: 0 },
   judgeFailed: { type: Number, default: 0 },
   fetchFailed: { type: Number, default: 0 },

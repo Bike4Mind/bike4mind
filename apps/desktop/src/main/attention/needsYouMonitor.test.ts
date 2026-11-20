@@ -1,4 +1,4 @@
-import type { AttentionNotice } from '@shared/attention';
+import type { AttentionNotice, NotifyScope } from '@shared/attention';
 import type { ChatMessage, ChatSessionSummary } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
@@ -30,6 +30,7 @@ const parked: ChatMessage[] = [
 
 let sessions: ChatSessionSummary[];
 let hasWindow: boolean;
+let scope: NotifyScope;
 let notices: AttentionNotice[];
 const setBadge = vi.fn<(count: number) => void>();
 const claim = vi.fn<(sessionIds: readonly string[]) => string[]>();
@@ -39,6 +40,7 @@ let monitor: NeedsYouMonitor;
 beforeEach(() => {
   sessions = [session('root'), session('agent', 'root'), session('plain')];
   hasWindow = false;
+  scope = 'agents';
   notices = [];
   setBadge.mockReset();
   claim.mockReset().mockImplementation(ids => [...ids]);
@@ -46,6 +48,7 @@ beforeEach(() => {
     listSessions: vi.fn(async () => sessions),
     sessionMessages: vi.fn(async () => parked),
     hasWindow: () => hasWindow,
+    notifyScope: () => scope,
     claim,
     notify: notice => notices.push(notice),
     setBadge,
@@ -104,6 +107,17 @@ describe('NeedsYouMonitor with no window open', () => {
     await enter('gone');
     expect(notices).toEqual([]);
     expect(setBadge).toHaveBeenLastCalledWith(0);
+  });
+
+  it('with the all scope, announces and counts a plain session, but not an archived one', async () => {
+    scope = 'all';
+    sessions = [...sessions, session('shelved', undefined, { archived: true })];
+    await enter('plain');
+    await enter('shelved');
+    expect(notices).toEqual([
+      { sessionId: 'plain', rootId: 'plain', title: 'Session plain needs you', body: 'bash pnpm test' },
+    ]);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
   it('skips an entry another announcer already claimed, but still counts it', async () => {

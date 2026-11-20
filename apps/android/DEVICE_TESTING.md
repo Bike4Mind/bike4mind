@@ -98,6 +98,20 @@ Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recen
 - [ ] With the `brief_ready` category switched off for the user (`preferences.pushNotifications.brief_ready: false`,
       set from web or iOS), no brief push arrives; the brief is still reachable from the chats list.
 
+## Links
+
+Until the server publishes `assetlinks.json`, open links with `adb shell am start -a android.intent.action.VIEW -d <url>
+com.bike4mind.app` (see README).
+
+- [ ] `https://app.bike4mind.com/notebooks/<id>` opens that chat, from a cold start and with the app already running.
+      Signed out, it opens after sign-in.
+- [ ] `/briefs/<id>` opens that brief; `/notebooks` and the bare host open the chats list.
+- [ ] A page with no Android screen (for example `/pricing`) opens in the browser, not back in the app.
+- [ ] A push with a `deepLink` to a chat (for example a finished reply) opens that chat when tapped, from the system
+      tray and from the notification the app shows in the foreground.
+- [ ] Once `assetlinks.json` lists the signing certificate: tapping an `app.bike4mind.com/notebooks/<id>` link in another
+      app (mail, chat) opens the app without a chooser.
+
 ## Upgrade required
 
 - [ ] With the minimum version above the build's, any request shows the update screen with the required version.

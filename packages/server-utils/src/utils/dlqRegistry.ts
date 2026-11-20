@@ -132,6 +132,17 @@ export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unkno
  */
 const DLQ_REGISTRY = [
   {
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed cloud security scan invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failure and request a new scan from the security dashboard.',
+    owner: 'Security',
+    describe: noEntity,
+  },
+  {
     label: 'fab-file-vectorize',
     displayName: 'FabFile Vectorize',
     application: 'FabFileProcessing',

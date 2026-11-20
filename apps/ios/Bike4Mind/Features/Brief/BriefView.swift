@@ -2,13 +2,13 @@ import B4MKit
 import SwiftUI
 
 /// The assistant brief: a server-composed summary opened from a push or the drawer. What needs the user comes
-/// first, because that is the point of it; an approval opens the conversation that holds the existing card.
+/// first, because that is the point of it: approvals are answered and questions replied to right here.
 struct BriefView: View {
   @Environment(AppServices.self) private var services
   let briefID: String?
 
   var body: some View {
-    BriefScreen(api: services.briefs, briefID: briefID)
+    BriefScreen(api: services.briefs, pendingActions: services.pendingActions, briefID: briefID)
   }
 }
 
@@ -16,8 +16,8 @@ private struct BriefScreen: View {
   @State private var model: BriefViewModel
   @Environment(AppServices.self) private var services
 
-  init(api: any BriefAPI, briefID: String?) {
-    _model = State(initialValue: BriefViewModel(api: api, briefID: briefID))
+  init(api: any BriefAPI, pendingActions: any PendingActionAPI, briefID: String?) {
+    _model = State(initialValue: BriefViewModel(api: api, briefID: briefID, pendingActions: pendingActions))
   }
 
   var body: some View {
@@ -187,10 +187,11 @@ private struct BriefScreen: View {
               .font(Tokens.Typography.body)
               .foregroundStyle(Tokens.Palette.primaryText)
             if let approval = decision.approval {
-              Button("Open approval") { services.navigator.pushSession(id: approval.sessionID) }
-                .buttonStyle(.borderedProminent)
-                .accessibilityLabel("Open approval: \(decision.text)")
-                .accessibilityIdentifier("brief-open-approval-btn")
+              approvalControls(decision, approval)
+              openConversationButton(decision, sessionID: approval.sessionID)
+            } else if let question = decision.question {
+              questionControls(decision, question)
+              openConversationButton(decision, sessionID: question.sessionID)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -200,6 +201,141 @@ private struct BriefScreen: View {
         }
       }
     }
+  }
+
+  @ViewBuilder
+  private func approvalControls(_ decision: BriefDecision, _ approval: BriefApprovalRef) -> some View {
+    let local = model.approvalStates[decision.id]
+    if approval.state == .pending, local?.offersDeny ?? true {
+      if case .failed(let failure) = local {
+        statusText(failure.message, id: "brief-decision-error")
+      }
+      HStack(spacing: Tokens.Spacing.s) {
+        if local?.offersDecision ?? true {
+          Button("Approve") { decide(decision, .approve) }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Approve: \(decision.text)")
+            .accessibilityIdentifier("brief-approve-btn")
+        }
+        Button("Deny", role: .destructive) { decide(decision, .deny) }
+          .buttonStyle(.bordered)
+          .accessibilityLabel("Deny: \(decision.text)")
+          .accessibilityIdentifier("brief-deny-btn")
+      }
+    } else if local?.isSubmitting == true {
+      ProgressView()
+        .accessibilityIdentifier("brief-decision-progress")
+    } else {
+      statusText(approvalLabel(approval.state, local: local), id: "brief-approval-state")
+    }
+  }
+
+  private func approvalLabel(_ state: BriefApprovalState, local: ApprovalCardState?) -> String {
+    switch state {
+    case .pending:
+      switch local {
+      case .answered(let result): result.decision == .approve ? "Approved" : "Denied"
+      case .failed(let failure): failure.message
+      default: "Waiting for you"
+      }
+    case .approved: "Approved"
+    case .denied: "Denied"
+    case .replaced: "Replaced by a newer request"
+    case .lapsed: "Lapsed before it was answered"
+    case .resolved: "Answered"
+    }
+  }
+
+  @ViewBuilder
+  private func questionControls(_ decision: BriefDecision, _ question: BriefQuestionRef) -> some View {
+    let local = model.replyStates[decision.id]
+    let submitting = local == .submitting
+    let failure = model.replyFailure(for: decision)
+    if let failure {
+      statusText(failure.message, id: "brief-reply-error")
+    }
+    if question.state == .open, local != .sent {
+      if !question.options.isEmpty {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: Tokens.Spacing.s) { optionButtons(decision, question, disabled: submitting) }
+          VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+            optionButtons(decision, question, disabled: submitting)
+          }
+        }
+      }
+      HStack(spacing: Tokens.Spacing.s) {
+        TextField("Reply", text: draftBinding(decision.id), axis: .vertical)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier("brief-reply-field")
+        Button("Send") { send(decision) }
+          .buttonStyle(.borderedProminent)
+          .disabled(submitting || draft(decision.id).isEmpty)
+          .accessibilityIdentifier("brief-reply-send-btn")
+      }
+    } else if failure == nil {
+      statusText(questionLabel(question.state, sent: local == .sent), id: "brief-question-state")
+    }
+  }
+
+  @ViewBuilder
+  private func optionButtons(_ decision: BriefDecision, _ question: BriefQuestionRef, disabled: Bool) -> some View {
+    ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
+      Button(option) { send(decision, text: option, choiceIndex: index) }
+        .buttonStyle(.bordered)
+        .disabled(disabled)
+        .accessibilityIdentifier("brief-reply-option-btn-\(index)")
+    }
+  }
+
+  private func questionLabel(_ state: BriefQuestionState, sent: Bool) -> String {
+    if sent { return "Reply sent" }
+    switch state {
+    case .open: return "Waiting for you"
+    case .answered: return "Answered"
+    case .superseded: return "The conversation moved on"
+    }
+  }
+
+  private func draft(_ id: String) -> String {
+    (model.replyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func draftBinding(_ id: String) -> Binding<String> {
+    let briefID = model.brief?.id
+    return Binding(
+      get: { model.brief?.id == briefID ? model.replyDrafts[id] ?? "" : "" },
+      set: { model.setReplyDraft($0, decisionID: id, briefID: briefID) })
+  }
+
+  private func decide(_ decision: BriefDecision, _ answer: PendingActionDecision) {
+    let briefID = model.brief?.id
+    Task {
+      guard model.brief?.id == briefID else { return }
+      await model.decide(decision, answer)
+    }
+  }
+
+  private func send(_ decision: BriefDecision, text: String? = nil, choiceIndex: Int? = nil) {
+    let text = text ?? draft(decision.id)
+    let briefID = model.brief?.id
+    Task {
+      guard model.brief?.id == briefID else { return }
+      await model.reply(decision, text: text, choiceIndex: choiceIndex)
+    }
+  }
+
+  private func statusText(_ text: String, id: String) -> some View {
+    Text(text)
+      .font(Tokens.Typography.caption)
+      .foregroundStyle(Tokens.Palette.secondaryText)
+      .accessibilityIdentifier(id)
+  }
+
+  private func openConversationButton(_ decision: BriefDecision, sessionID: String) -> some View {
+    Button("Open conversation") { services.navigator.pushSession(id: sessionID) }
+      .buttonStyle(.bordered)
+      .accessibilityLabel("Open conversation: \(decision.text)")
+      .accessibilityIdentifier("brief-open-conversation-btn")
   }
 
   @ViewBuilder

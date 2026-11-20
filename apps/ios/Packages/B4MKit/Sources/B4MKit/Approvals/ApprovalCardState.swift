@@ -23,4 +23,10 @@ public enum ApprovalCardState: Equatable, Sendable {
     case .submitting, .answered: false
     }
   }
+
+  /// Whether deny is still on offer. A refused approve (a tool that cannot be confirmed) leaves the action pending.
+  public var offersDeny: Bool {
+    if case .failed(.refused) = self { return true }
+    return offersDecision
+  }
 }

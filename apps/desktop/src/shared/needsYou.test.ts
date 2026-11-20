@@ -76,6 +76,35 @@ describe('needsYouCount', () => {
     });
     expect(needsYouCount(waiting, sessions)).toBe(1);
     expect([...alertableSessions(sessions)].sort()).toEqual(['live', 'root']);
+    expect([...alertableSessions(sessions, 'agents')].sort()).toEqual(['live', 'root']);
+  });
+
+  it('with the all scope, counts plain sessions too, but still not archived or unlisted ones', () => {
+    const sessions = [
+      session('plain'),
+      { ...session('stored'), archived: true },
+      session('root'),
+      { ...session('shelved', 'root'), archived: true },
+      session('under', 'shelved'),
+      session('live', 'root'),
+    ];
+    const waiting = statuses({
+      plain: 'needs-action',
+      stored: 'needs-action',
+      shelved: 'needs-action',
+      under: 'needs-action',
+      live: 'needs-action',
+      gone: 'needs-action',
+    });
+    expect(needsYouCount(waiting, sessions, 'all')).toBe(2);
+    expect([...alertableSessions(sessions, 'all')].sort()).toEqual(['live', 'plain', 'root']);
+  });
+
+  it('with the all scope, counts a lone plain session that is waiting', () => {
+    const sessions = [session('chat')];
+    expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'all')).toBe(1);
+    expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'agents')).toBe(0);
+    expect(needsYouCount(statuses({ chat: 'processing' }), sessions, 'all')).toBe(0);
   });
 });
 

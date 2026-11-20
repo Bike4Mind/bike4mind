@@ -20,6 +20,8 @@ on:
       suite_name:         { type: string,  required: false, default: '' }
       artifact_suffix:    { type: string,  required: false, default: '' }
       timeout_minutes:    { type: number,  required: false, default: 35 }
+      # Playwright's globalTimeout in minutes; keep it below timeout_minutes so teardown can run.
+      global_timeout_minutes: { type: number, required: false, default: 30 }
       stamp_promotable:   { type: boolean, required: true }
       wait_for_deploy:    { type: boolean, required: false, default: false }
       show_credits:       { type: boolean, required: false, default: false }
@@ -251,6 +253,7 @@ jobs:
           SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ inputs.show_credits && secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES || '' }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '3'
+          PW_GLOBAL_TIMEOUT_MINUTES: ${{ inputs.global_timeout_minutes }}
           CI: 'true'
           PLAYWRIGHT_ARGS: ${{ inputs.playwright_args }}
           PR_NUMBER: ${{ inputs.pr_number }}

@@ -1,4 +1,5 @@
 import jwt, { JwtPayload } from 'jsonwebtoken';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 
 /**
  * Pure enforcement check for the server-side JWT kill switch.
@@ -91,10 +92,12 @@ export class AuthTokenGeneratorService {
   }
 
   verifyToken(token: string, previousSecret?: string): JwtPayload {
+    // Configuration refusal must not enter the signature-mismatch rotation fallback.
+    const accessTokenSecret = this.options.accessTokenSecret;
     try {
-      return jwt.verify(token, this.options.accessTokenSecret, { algorithms: ['HS256'] }) as JwtPayload;
+      return jwt.verify(token, accessTokenSecret, { algorithms: ['HS256'] }) as JwtPayload;
     } catch (error) {
-      if (previousSecret) {
+      if (previousSecret && !isUnconfiguredSecret(previousSecret)) {
         try {
           return jwt.verify(token, previousSecret, { algorithms: ['HS256'] }) as JwtPayload;
         } catch {
@@ -121,10 +124,12 @@ export class AuthTokenGeneratorService {
       if (!isTokenTypeAcceptable(payload.typ, 'refresh')) return null;
       return { userId: payload.id, tokenVersion: payload.tokenVersion, impersonatedBy: payload.impersonatedBy };
     };
+    // Resolve configuration before catching invalid-token errors, as on the access path.
+    const refreshTokenSecret = this.options.refreshTokenSecret;
     try {
-      return decode(this.options.refreshTokenSecret);
+      return decode(refreshTokenSecret);
     } catch (error) {
-      if (previousSecret) {
+      if (previousSecret && !isUnconfiguredSecret(previousSecret)) {
         try {
           return decode(previousSecret);
         } catch {

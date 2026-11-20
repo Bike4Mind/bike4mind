@@ -6,13 +6,14 @@ import {
   ForbiddenError,
   MCP_CONNECTION_LIMITS,
   NotFoundError,
+  PLATFORM_MCP_OWNER,
   TooManyRequestsError,
-  getMcpPresetHost,
   mcpApiKeyHeaderNameProblem,
   isReadOnlyMcpConnectionTool,
   requiresMcpConnectionToolApproval,
   type IMcpConnectionDocument,
   type McpConnectionLastErrorInput,
+  type McpConnectionOwner,
   type McpConnectionTransport,
 } from '@bike4mind/common';
 import { cacheRepository, mcpConnectionRepository, type CustomMcpAuditMetadata } from '@bike4mind/database';
@@ -64,6 +65,7 @@ import {
   OAuthRefreshUnavailableError,
   getOAuthAccessToken,
 } from './oauth/tokenManager';
+import { policyPresetHost } from './policyPresetHost';
 
 /**
  * The one way the app talks to a custom remote MCP server (design #4845 sections 5, 8, 11, 12).
@@ -138,13 +140,21 @@ export class CustomMcpUnavailableError extends BadGatewayError {
 
 interface InvokeRemoteMcpBase {
   connectionId: string;
-  /** The connection owner; the connection is loaded owner-scoped, so another user's id is a 404. */
+  /**
+   * The caller, whose policy, rate limit and audit entry apply. The connection is loaded
+   * owner-scoped, so another user's id is a 404.
+   */
   userId: string;
   limits?: Partial<RemoteMcpLimits>;
 }
 
 export interface InvokeRemoteMcpListTools extends InvokeRemoteMcpBase {
   action: 'listTools';
+  /**
+   * Whose connection to list: the caller's own unless named. Listing rewrites the stored tools, so
+   * a platform connector is reached only by naming its owner, which the admin routes alone do.
+   */
+  owner?: McpConnectionOwner;
 }
 
 export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
@@ -153,6 +163,8 @@ export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
   args?: Record<string, unknown>;
   /** The user or agent gate approved this call; required by policy and the saved tool approval mode. */
   approved?: boolean;
+  /** Platform connectors the user switched on, by id. Only a connector named here is reached as a platform one. */
+  platformConnectionIds?: readonly string[];
 }
 
 export type InvokeRemoteMcpRequest = InvokeRemoteMcpListTools | InvokeRemoteMcpCallTool;
@@ -369,17 +381,26 @@ export function invokeRemoteMcp(
   options?: InvokeRemoteMcpOptions
 ): Promise<RemoteMcpCallToolResult>;
 /**
- * Runs one listTools or callTool against a user's connection: owner-scoped load with credentials,
- * the gate and policy re-checked, the per-connection rate limit, the per-(user, connection) breaker,
- * and an audit entry carrying sizes and hashes only. Persists what a failure means for the
- * connection; persists `lastUsedAt` and a newly detected transport after a call.
+ * Runs one listTools or callTool against the caller's connection or a platform connector:
+ * owner-scoped load with credentials, the gate and policy re-checked, the per-connection rate
+ * limit, the per-(user, connection) breaker, and an audit entry carrying sizes and hashes only.
+ * Persists what a failure means for the connection, except a platform connector's tool call, whose
+ * status only the admin's probes move; persists `lastUsedAt` and a newly detected transport after
+ * a call.
  */
 export async function invokeRemoteMcp(
   request: InvokeRemoteMcpRequest,
   options: InvokeRemoteMcpOptions = {}
 ): Promise<RemoteMcpListToolsResult | RemoteMcpCallToolResult> {
-  const owner = { ownerType: 'user' as const, ownerKey: request.userId };
-  const connection = await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, owner);
+  const own: McpConnectionOwner = { ownerType: 'user', ownerKey: request.userId };
+  // A call reaches the caller's own connection, else a platform connector the caller switched on.
+  const connection =
+    request.action === 'listTools'
+      ? await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, request.owner ?? own)
+      : ((await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, own)) ??
+        (request.platformConnectionIds?.includes(request.connectionId)
+          ? await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, PLATFORM_MCP_OWNER)
+          : null));
   if (!connection) throw new NotFoundError('Connection not found');
   if (connection.auth.kind === 'api_key') options.onApiKeyLoaded?.(connection.auth.apiKey?.valueEnc ?? null);
 
@@ -389,6 +410,7 @@ export async function invokeRemoteMcp(
     connectionId: connection.id,
     host: connection.urlHost,
     slug: connection.slug,
+    ownerType: connection.ownerType,
     ...(request.action === 'callTool' ? { toolName: request.toolName } : {}),
     ...(serializedArgs !== undefined
       ? { argsSha256: sha256(serializedArgs), argsBytes: Buffer.byteLength(serializedArgs, 'utf8') }
@@ -412,7 +434,7 @@ export async function invokeRemoteMcp(
   const verdict = evaluateConnectionPolicy(context, {
     urlHost: connection.urlHost,
     authKind: connection.auth.kind,
-    presetRemoteHost: getMcpPresetHost(connection.presetId),
+    presetRemoteHost: policyPresetHost(connection),
     url: connection.displayUrl,
   });
   if (!verdict.allowed) {
@@ -536,7 +558,10 @@ export async function invokeRemoteMcp(
     if (error instanceof RemoteMcpError) {
       audit.failure(error.code);
       const shown = userFacingRemoteMcpError(error);
-      await recordFailure(connection, request.action, error, shown, context.network, sentAccessTokenEnc);
+      // One member's call must not pull a shared connector out of everyone's chat.
+      if (connection.ownerType !== 'platform' || request.action !== 'callTool') {
+        await recordFailure(connection, request.action, error, shown, context.network, sentAccessTokenEnc);
+      }
       throw shown;
     }
     audit.failure('internal_error');

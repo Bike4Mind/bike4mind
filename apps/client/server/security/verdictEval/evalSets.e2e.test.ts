@@ -109,6 +109,11 @@ async function seedWorld(): Promise<Seeded> {
     cacheKey: `seed-${farmDetection}`,
     detectionId: farmDetection,
     result: 'abuse',
+    probabilities: [
+      { value: 'abuse', probability: 0.8 },
+      { value: 'legitimate_automation', probability: 0.15 },
+      { value: 'insufficient_evidence', probability: 0.05 },
+    ],
     confidence: 0.9,
     decisionModel: 'jev-latest',
     assessedAt: daysAgo(1),
@@ -307,5 +312,13 @@ describe('shadow mode', () => {
     expect(first.previous).toBeNull();
     expect(second.previous?.note).toBe('first');
     expect(second.run.report.examples).toBe(set.examples.filter(example => example.split === 'heldOut').length);
+    // Account ids are random, so the farm's campaign may land on either split; held out, its three
+    // labelled accounts share the one assessment (p(abuse) 0.8). A tuning farm loads no assessment.
+    const farmHeldOut = set.examples.some(
+      example => world.farm.includes(example.userId) && example.split === 'heldOut'
+    );
+    expect(second.run.report.calibration).toEqual(
+      farmHeldOut ? [expect.objectContaining({ model: 'jev-latest', n: 3, brier: 0.04 })] : []
+    );
   });
 });

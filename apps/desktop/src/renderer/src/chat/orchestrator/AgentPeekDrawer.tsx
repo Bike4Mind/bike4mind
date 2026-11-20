@@ -46,15 +46,18 @@ function errorText(error: unknown): string {
 /**
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
  * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ * `viewed` marks the session read; `enabled` false skips the fetch.
  */
 export function useSessionMessages(
   agentId: string,
   refreshKey: string,
-  viewed = false
+  viewed = false,
+  enabled = true
 ): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let stale = false;
     let loading = false;
     let dirty = false;
@@ -99,7 +102,7 @@ export function useSessionMessages(
       unsubscribe();
       unsubscribeQueue();
     };
-  }, [agentId, refreshKey]);
+  }, [agentId, refreshKey, enabled]);
   useEffect(() => {
     if (viewed) markSessionViewed(agentId);
   }, [agentId, viewed]);

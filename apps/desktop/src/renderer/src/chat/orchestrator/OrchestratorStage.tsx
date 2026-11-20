@@ -1,5 +1,6 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
@@ -10,6 +11,7 @@ import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
 import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
+import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
@@ -49,6 +51,11 @@ export interface OrchestratorViewProps {
   desk?: InnkeeperDesk;
   /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
   settled?: boolean;
+  /**
+   * Turns an accepted action on the snapshot built from these props back into the same action on the real
+   * roster (Presenter mode's placeholder option labels); absent when the props are not redacted.
+   */
+  restoreAction?(action: ViewAction): ViewAction;
 }
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
@@ -63,6 +70,15 @@ export interface InnkeeperDesk {
 
 /** Focus mode (FocusPanel): owned by the shell, which also keeps the ambient settle off while it is on. */
 export interface StageFocus {
+  on: boolean;
+  onToggle(on: boolean): void;
+}
+
+/**
+ * Presenter mode (presenter.ts): the stage redacts what it hands every view, and shows a badge. Owned by the
+ * shell; the peek drawer and the conversation are not redacted.
+ */
+export interface StagePresenter {
   on: boolean;
   onToggle(on: boolean): void;
 }
@@ -105,9 +121,20 @@ export interface OrchestratorStageProps {
   focus?: StageFocus;
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
+  presenter?: StagePresenter;
 }
 
 const NO_PARENT: ParentView = {};
+const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
+
+/** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
+function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+  const numbers = useRef(NO_NUMBERS);
+  // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
+  // harmless, and moving it to an effect would flash the real titles for a frame.
+  numbers.current = on ? numberAgents(numbers.current, agents) : NO_NUMBERS;
+  return numbers.current;
+}
 
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
@@ -115,8 +142,8 @@ const pulse = keyframes`
 `;
 
 export function OrchestratorStage({
-  agents,
-  parent = NO_PARENT,
+  agents: rosterAgents,
+  parent: rosterParent = NO_PARENT,
   onParentFocus,
   onParentToggle,
   rootId,
@@ -130,20 +157,38 @@ export function OrchestratorStage({
   introPlaying,
   renderView,
   dockControl,
-  desk,
+  desk: rosterDesk,
   ambient,
   focus,
   conversationRequest,
+  presenter,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const focused = focus?.on === true && rootId !== undefined && rosterAgents.length > 0;
+  const rosterApprovals = useQuickApprovals(focused, rootId, rosterAgents, rosterParent);
+
+  // The one place Presenter mode applies: everything below draws from `agents`, `parent`, `approvals` and
+  // `desk`, except the peek drawer, which reads the real roster.
+  const presenting = presenter?.on === true;
+  const presenterNumbers = usePresenterNumbers(presenting, rosterAgents);
+  const shown = useMemo((): PresentedStage => {
+    const real = { agents: rosterAgents, parent: rosterParent, approvals: rosterApprovals, desk: rosterDesk };
+    return presenting ? redactForPresenter(real, presenterNumbers) : real;
+  }, [presenting, presenterNumbers, rosterAgents, rosterParent, rosterApprovals, rosterDesk]);
+  const { agents, parent, approvals, desk } = shown;
+  const restoreAction = presenting ? (action: ViewAction) => restorePresentedAction(action, rosterAgents) : undefined;
+
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
   // feeds only the epithet and is fixed once an agent is created.
   const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n');
   const personas = useMemo(() => assignPersonas(agents), [personaKey]);
-  const selected = agents.find(agent => agent.id === selectedId) ?? null;
+  const realPersonaKey = presenting
+    ? rosterAgents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n')
+    : '';
+  const realPersonas = useMemo(() => (presenting ? assignPersonas(rosterAgents) : undefined), [realPersonaKey]);
+  const selected = rosterAgents.find(agent => agent.id === selectedId) ?? null;
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
-  const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
   const handledDetailsClicks = useRef(new WeakSet<Event>());
 
   useEffect(() => {
@@ -222,7 +267,7 @@ export function OrchestratorStage({
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
-      spend={spend}
+      spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
       onRead={() => {
         finale.dismiss();
@@ -263,7 +308,7 @@ export function OrchestratorStage({
       <AgentPeekDrawer
         key={selected.id}
         agent={selected}
-        persona={personas.get(selected.id)}
+        persona={(realPersonas ?? personas).get(selected.id)}
         onClose={() => setSelectedId(null)}
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
@@ -286,9 +331,9 @@ export function OrchestratorStage({
     agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
     desk,
     settled: ambient?.settled === true,
+    restoreAction,
   };
 
-  const approvals = useQuickApprovals(focused, rootId, agents, parent);
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
@@ -297,7 +342,7 @@ export function OrchestratorStage({
   const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
     if (!accepted) return;
-    await runViewAction(accepted, {
+    await runViewAction(restoreAction ? restoreAction(accepted) : accepted, {
       openAgent: setSelectedId,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
@@ -351,15 +396,12 @@ export function OrchestratorStage({
       }}
     >
       {settled ? (
-        <Typography
-          level="body-xs"
-          textColor="text.tertiary"
-          noWrap
-          data-testid="orchestrator-ambient-status"
-          sx={{ px: 1.5, py: 0.5 }}
-        >
-          {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, minWidth: 0 }}>
+          {presenting && <PresentingBadge />}
+          <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="orchestrator-ambient-status">
+            {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
+          </Typography>
+        </Box>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
           <ViewSwitcher
@@ -367,7 +409,9 @@ export function OrchestratorStage({
             onViewChange={onViewChange}
             ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
             focus={focus}
+            presenter={presenter}
           />
+          {presenting && <PresentingBadge />}
           <Typography
             level="body-sm"
             noWrap
@@ -442,6 +486,21 @@ export function OrchestratorStage({
         {!detailsInScene && detailsOverlay}
       </Box>
     </Box>
+  );
+}
+
+function PresentingBadge() {
+  return (
+    <Chip
+      size="sm"
+      color="primary"
+      variant="solid"
+      data-testid="orchestrator-presenting-badge"
+      title="Presenter mode: titles, activity, questions, PRs, branches and costs are hidden on this stage"
+      sx={{ flexShrink: 0 }}
+    >
+      Presenting
+    </Chip>
   );
 }
 

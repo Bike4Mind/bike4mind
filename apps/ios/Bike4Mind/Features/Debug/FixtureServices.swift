@@ -25,6 +25,7 @@
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
+    static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -44,7 +45,7 @@
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
     }
 
-    /// One ready brief with an approval decision; composing a new one "takes" a few seconds, then returns it.
+    /// One ready brief with pending, lapsed and replaced approvals and an open question; composing a new one "takes" a few seconds, then returns it.
     private struct FixtureBriefAPI: BriefAPI {
       private static let brief: Brief = {
         let now = Date()
@@ -64,8 +65,22 @@
             BriefDecision(
               id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
               approval: BriefApprovalRef(
-                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000)),
-            BriefDecision(id: "n2", text: "Decide whether to archive the three notebooks untouched for 90 days."),
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000,
+                state: .pending)),
+            BriefDecision(
+              id: "n2", text: "The cleanup agent wanted to archive three notebooks untouched for 90 days.",
+              approval: BriefApprovalRef(
+                questID: "fixture-1-q2", sessionID: "fixture-1", pendingActionTs: 1_699_990_000_000,
+                state: .lapsed)),
+            BriefDecision(
+              id: "n3", text: "The calendar agent asked to send a meeting invite.",
+              approval: BriefApprovalRef(
+                questID: "fixture-2-q3", sessionID: "fixture-2", pendingActionTs: 1_699_980_000_000,
+                state: .replaced)),
+            BriefDecision(
+              id: "n4", text: "The research agent asked which topic to dig into next.",
+              question: BriefQuestionRef(
+                questID: "fixture-3-q1", sessionID: "fixture-3", options: ["Pricing", "Competitors"], state: .open)),
           ])
       }()
 
@@ -96,6 +111,34 @@
           return Self.stuck
         default: return Self.brief
         }
+      }
+
+      func reply(
+        briefID: String, decisionID: String, text: String, choiceIndex: Int?
+      ) async throws -> BriefReplyResult {
+        try await Task.sleep(for: .seconds(1))
+        return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
+      }
+    }
+
+    /// One saved instruction, kept in memory for the session.
+    private actor FixtureInstructionAPI: InstructionAPI {
+      private var instructions = [
+        AssistantInstruction(
+          id: "fixture-instruction-1", text: "Always lead with anything about invoices.", createdAt: Date())
+      ]
+
+      func list() async throws -> [AssistantInstruction] { instructions }
+
+      func add(text: String) async throws -> AssistantInstruction {
+        guard instructions.count < AssistantInstruction.maxCount else { throw InstructionError.limitReached }
+        let instruction = AssistantInstruction(id: UUID().uuidString, text: text, createdAt: Date())
+        instructions.append(instruction)
+        return instruction
+      }
+
+      func remove(id: String) async throws {
+        instructions.removeAll { $0.id == id }
       }
     }
 
@@ -271,6 +314,12 @@
 
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()
+
+      func session(id: String) async throws -> SessionSummary {
+        let page = try await listSessions(cursor: nil, limit: 50)
+        guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return session
+      }
 
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]

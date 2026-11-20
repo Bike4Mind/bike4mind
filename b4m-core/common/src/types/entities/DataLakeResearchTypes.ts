@@ -64,7 +64,7 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'time_budget',
   /**
    * The judge failed several times in a row before scoring anything, so the run stopped instead of
-   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or `totals.filteredBySource` if a source rule blocks them.
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or in a source-rule bucket (`totals.filteredBySource`, `totals.unlistedDropped`) if a rule drops them.
    */
   'judge_unavailable',
 ] as const;
@@ -442,14 +442,26 @@ export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocume
 };
 
 /**
- * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
+ * What the run loop counted. Each candidate the run reaches lands in exactly one outcome bucket, so the buckets sum
+ * to `searchHits` only for a run that stopped `exhausted` or `judge_unavailable`; `cost_ceiling`, `time_budget` and
+ * `proposal_limit` leave the unreached candidates uncounted.
  * `autoAdmitted`, `autoAdmitSkipped` and `reviewedByRule` are not buckets: they are sub-counts of `proposed`.
  */
 export interface ResearchRunTotals {
   /** Hits the search provider returned. */
   searchHits: number;
-  /** Hits dropped by the allow/deny lists, before any model or network cost. */
+  /**
+   * Hits on the Never list, or whose address is not a web address, dropped before any model or network cost.
+   * On a run stored before `unlistedDropped` existed, this is the combined count of both drops.
+   */
   filteredBySource: number;
+  /**
+   * Hits from sites on none of the lists while "Other sites" is set to ignore, dropped before any model or network cost.
+   * Absent on a run stored before the split, which is how a reader tells `filteredBySource` is then the combined count.
+   */
+  unlistedDropped?: number;
+  /** Hits still on a search provider's redirect link, so their real site is unknown. Skipped, never judged or fetched, under every site-list setting, and counted apart from `filteredBySource`: no source rule saw the real host. */
+  unresolvedRedirect: number;
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
@@ -476,9 +488,10 @@ export interface ResearchRunTotals {
   unusableSource: number;
   /**
    * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
-   * buckets summing to `searchHits`. Unreached candidates a source rule blocks are still counted in
-   * `filteredBySource`, since source rules are free and are checked for them. Only that stop fills it: `cost_ceiling`, `time_budget` and
-   * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
+   * buckets summing to `searchHits`. Unreached candidates a source rule drops are still counted in
+   * `filteredBySource` or `unlistedDropped`, and unresolved links in `unresolvedRedirect`, since those checks are free.
+   * Only that stop fills it: `cost_ceiling`, `time_budget` and `proposal_limit` leave it 0, so their buckets can fall short.
+   * Older stored runs read it as 0.
    */
   notJudged: number;
   /** Candidates an item rule with action `block` removed before they were proposed. */
@@ -490,6 +503,8 @@ export interface ResearchRunTotals {
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   searchHits: 0,
   filteredBySource: 0,
+  unlistedDropped: 0,
+  unresolvedRedirect: 0,
   belowRelevance: 0,
   judgeFailed: 0,
   fetchFailed: 0,

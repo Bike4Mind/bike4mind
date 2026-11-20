@@ -284,10 +284,10 @@ describe('ChatService generation tools', () => {
       'generate_music',
       'web_search',
       'web_fetch',
+      'generate_video',
       'ask_user',
       'request_directory',
       'loop',
-      'generate_video',
     ]);
     expect(apiGet.mock.calls).toEqual([
       ['/api/settings/serverConfig', { timeout: 5_000 }],

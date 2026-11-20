@@ -38,6 +38,11 @@ export function oneClickOptions(labels: readonly string[], maxFace = BUBBLE_OPTI
   return options.every(option => option.face.length <= maxFace && !DESTRUCTIVE.test(option.face)) ? options : undefined;
 }
 
+/** Whether a decision may be answered one click per option, judged on its real labels (Presenter mode replaces them). */
+export function isOneClickDecision(labels: readonly string[], multiSelect?: boolean): boolean {
+  return !multiSelect && oneClickOptions(labels) !== undefined;
+}
+
 /** A question the bubble can answer with one click per option, or `open` when it cannot. */
 export function planForQuestion(question: ChatQuestion, target: BubbleTarget): BubblePlan {
   const prompt = question.question;

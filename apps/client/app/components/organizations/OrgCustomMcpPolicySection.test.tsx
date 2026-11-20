@@ -84,6 +84,11 @@ describe('OrgCustomMcpPolicySection', () => {
       expect(screen.getByRole('switch', { name })).toBeInTheDocument();
   });
 
+  it('keeps the custom connectors switch from shrinking beside the long description', () => {
+    renderSection();
+    expect(getComputedStyle(screen.getByTestId('org-custom-mcp-enabled-switch')).flexShrink).toBe('0');
+  });
+
   it('saves mode off when the kill switch is turned off, keeping the rest of the policy', () => {
     renderSection();
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();

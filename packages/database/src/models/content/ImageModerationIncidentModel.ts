@@ -1,5 +1,9 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
-import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
+import type {
+  EmailDeliveryOutcome,
+  ImageModerationIncident as ImageModerationIncidentData,
+  IncidentReviewStatus,
+} from '@bike4mind/common';
 import {
   INCIDENT_ESCALATION_TRIGGERS,
   INCIDENT_OVERRIDABLE_REVIEW_STATUSES,
@@ -59,11 +63,15 @@ const ImageModerationIncidentSchema = new Schema(
     noActionBy: { type: String, required: false },
     noActionAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
+    alertQueuedAt: { type: Date, required: false },
+    alertFailedAt: { type: Date, required: false },
     lastReminderAt: { type: Date, required: false },
     escalatedAt: { type: Date, required: false },
     escalatedBy: { type: String, required: false },
     escalationTrigger: { type: String, enum: INCIDENT_ESCALATION_TRIGGERS, required: false },
     escalationAlertedAt: { type: Date, required: false },
+    escalationAlertQueuedAt: { type: Date, required: false },
+    escalationAlertFailedAt: { type: Date, required: false },
     escalationLastReminderAt: { type: Date, required: false },
   },
   {
@@ -110,6 +118,17 @@ export interface ImageModerationIncidentSummary {
 
 const SUMMARY_MAX_TIME_MS = 2000;
 
+/**
+ * A queued alert is no longer in flight once a copy failed after it was queued and `queuedBefore`
+ * has passed (the worker's retries are spent), or once it was queued before `lostBefore` with no
+ * outcome at all.
+ */
+const notInFlight = (queued: string, failed: string, queuedBefore: Date, lostBefore: Date) => [
+  { [queued]: null },
+  { [queued]: { $lte: lostBefore } },
+  { [queued]: { $lte: queuedBefore }, $expr: { $gte: [`$${failed}`, `$${queued}`] } },
+];
+
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
     super(model);
@@ -138,6 +157,66 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Stamps the time the reviewer alert for this incident was delivered. */
   async markAlerted(id: string, alertedAt = new Date()): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
+  }
+
+  /** Stamps the time the reviewer alert was queued for the email-send worker; not a delivery. */
+  async markAlertQueued(id: string, alertQueuedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { alertQueuedAt } }, { runValidators: true });
+  }
+
+  /**
+   * Records the email-send worker's outcome for one reviewer's copy of an alert. The first delivered
+   * copy stamps the delivery time and later ones (other reviewers, replays) leave it, unless the round
+   * was voided (voidAlertRound). A failure only stamps the failure time: a reviewer whose copy always
+   * fails (a rejected or sink address) must not make every round resend to all reviewers.
+   */
+  async recordAlertDelivery(
+    id: string,
+    alert: 'review' | 'escalation',
+    outcome: EmailDeliveryOutcome,
+    now = new Date()
+  ): Promise<void> {
+    const [delivered, queued, failed] =
+      alert === 'review'
+        ? ['alertedAt', 'alertQueuedAt', 'alertFailedAt']
+        : ['escalationAlertedAt', 'escalationAlertQueuedAt', 'escalationAlertFailedAt'];
+    if (outcome.ok) {
+      await this.model.updateOne(
+        {
+          _id: id,
+          [delivered]: null,
+          $nor: [{ [queued]: null, [failed]: { $ne: null } }],
+        },
+        { $set: { [delivered]: outcome.at } },
+        { runValidators: true }
+      );
+    } else {
+      await this.model.updateOne({ _id: id }, { $set: { [failed]: now } }, { runValidators: true });
+    }
+  }
+
+  /**
+   * Voids a round in which some reviewer's copy could not be queued. The copies that were queued still
+   * report back; with the queue stamp cleared their delivery cannot close the round (recordAlertDelivery),
+   * and a delivery stamped at or after `roundStart` is cleared, so the sweep resends to every reviewer.
+   * An earlier round's stamp predates `roundStart` and stays.
+   */
+  async voidAlertRound(id: string, alert: 'review' | 'escalation', roundStart: Date, now = new Date()): Promise<void> {
+    const [delivered, queued, failed] =
+      alert === 'review'
+        ? ['alertedAt', 'alertQueuedAt', 'alertFailedAt']
+        : ['escalationAlertedAt', 'escalationAlertQueuedAt', 'escalationAlertFailedAt'];
+    // Unqueue first: a copy delivered after this write can no longer stamp, so the clear below is final.
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { [failed]: now }, $unset: { [queued]: 1 } },
+      { runValidators: true }
+    );
+    await this.model.updateOne(
+      { _id: id, [delivered]: { $gte: roundStart } },
+      { $unset: { [delivered]: 1 } },
+      { runValidators: true }
+    );
   }
 
   /** Stamps the time a reminder digest covered these still-unreviewed incidents. */
@@ -184,11 +263,21 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
-   * for, oldest first. A missing alertedAt is the only signal: none configured, or the send failed.
+   * for, oldest first, skipping one whose queued alert may still be in flight (see notInFlight).
    */
-  async findUnalerted(createdBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+  async findUnalerted(
+    createdBefore: Date,
+    limit: number,
+    queuedBefore: Date,
+    lostBefore: Date
+  ): Promise<IImageModerationIncidentDocument[]> {
     return this.model
-      .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES }, alertedAt: null, createdAt: { $lte: createdBefore } })
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        alertedAt: null,
+        createdAt: { $lte: createdBefore },
+        $or: notInFlight('alertQueuedAt', 'alertFailedAt', queuedBefore, lostBefore),
+      })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
@@ -223,13 +312,21 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       .lean() as unknown as IImageModerationIncidentDocument[];
   }
 
-  /** Escalated incidents still awaiting a verdict with no delivered escalation email, oldest first. */
-  async findEscalationUnalerted(limit: number): Promise<IImageModerationIncidentDocument[]> {
+  /**
+   * Escalated incidents still awaiting a verdict with no delivered escalation email, oldest first,
+   * skipping one whose queued escalation email may still be in flight (see notInFlight).
+   */
+  async findEscalationUnalerted(
+    limit: number,
+    queuedBefore: Date,
+    lostBefore: Date
+  ): Promise<IImageModerationIncidentDocument[]> {
     return this.model
       .find({
         reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
         escalatedAt: { $ne: null },
         escalationAlertedAt: null,
+        $or: notInFlight('escalationAlertQueuedAt', 'escalationAlertFailedAt', queuedBefore, lostBefore),
       })
       .sort({ createdAt: 1 })
       .limit(limit)
@@ -262,6 +359,11 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Stamps the time the escalation email for this incident was delivered. */
   async markEscalationAlerted(id: string, escalationAlertedAt = new Date()): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { escalationAlertedAt } });
+  }
+
+  /** Stamps the time the escalation email was queued for the email-send worker; not a delivery. */
+  async markEscalationAlertQueued(id: string, escalationAlertQueuedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { escalationAlertQueuedAt } }, { runValidators: true });
   }
 
   /**

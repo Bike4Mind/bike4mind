@@ -88,7 +88,7 @@ describe('admin/moderation-incidents/[id]/escalate', () => {
     m.escalate.mockResolvedValue(ESCALATED);
     m.findUserById.mockResolvedValue({ id: USER_ID, email: 'flagged@example.com' });
     m.record.mockImplementation(async () => void m.inTransaction.push(m.txActive));
-    m.sendAlert.mockResolvedValue({ outcome: 'delivered', alertedAt: ALERTED_AT });
+    m.sendAlert.mockResolvedValue({ outcome: 'delivered', alertedAt: ALERTED_AT, queuedAt: null });
   });
 
   it('takes the moderation permission on a signed-in session only', () => {
@@ -118,32 +118,37 @@ describe('admin/moderation-incidents/[id]/escalate', () => {
   });
 
   it.each([
-    ['delivered', ALERTED_AT],
-    ['no_recipients', null],
-    ['failed', null],
-  ] as const)('returns the incident and the %s email outcome after the commit', async (outcome, alertedAt) => {
-    m.sendAlert.mockImplementation(async () => {
-      expect(m.txActive).toBe(false);
-      return { outcome, alertedAt };
-    });
-    const res = makeRes();
-    await runHandler(makeReq(), res);
+    ['delivered', ALERTED_AT, null],
+    ['queued', null, ALERTED_AT],
+    ['no_recipients', null, null],
+    ['failed', null, null],
+  ] as const)(
+    'returns the incident and the %s email outcome after the commit',
+    async (outcome, alertedAt, queuedAt) => {
+      m.sendAlert.mockImplementation(async () => {
+        expect(m.txActive).toBe(false);
+        return { outcome, alertedAt, queuedAt };
+      });
+      const res = makeRes();
+      await runHandler(makeReq(), res);
 
-    // Only metadata reaches the email: never labels or the flagged user.
-    expect(m.sendAlert).toHaveBeenCalledExactlyOnceWith({ id: ID, createdAt: CREATED_AT, surface: 'generation' });
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(jsonOf(res)).toEqual({
-      ok: true,
-      incident: {
-        id: ID,
-        reviewStatus: 'pending_review',
-        escalatedAt: ESCALATED_AT,
-        escalationTrigger: 'manual',
-        escalationAlertedAt: alertedAt,
-      },
-      alert: outcome,
-    });
-  });
+      // Only metadata reaches the email: never labels or the flagged user.
+      expect(m.sendAlert).toHaveBeenCalledExactlyOnceWith({ id: ID, createdAt: CREATED_AT, surface: 'generation' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonOf(res)).toEqual({
+        ok: true,
+        incident: {
+          id: ID,
+          reviewStatus: 'pending_review',
+          escalatedAt: ESCALATED_AT,
+          escalationTrigger: 'manual',
+          escalationAlertedAt: alertedAt,
+          escalationAlertQueuedAt: queuedAt,
+        },
+        alert: outcome,
+      });
+    }
+  );
 
   it('requires a recent step-up before any side effect', async () => {
     const stepUpRequired = Object.assign(new Error('Recent verification required'), {

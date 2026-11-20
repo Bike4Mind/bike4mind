@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
   API_ERROR_CODES,
   API_KEY_USER_CAP_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
@@ -34,6 +35,7 @@ import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
 import { PENDING_ACTION_ERROR_CODES } from './schemas/pendingActions';
+import { BRIEF_REPLY_ERROR_CODES } from './schemas/brief';
 import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
@@ -74,9 +76,11 @@ describe('API_ERROR_CODES', () => {
       SLACK_MESSAGE_ERROR_CODES,
       COMPLETION_SSE_ERROR_CODES,
       PENDING_ACTION_ERROR_CODES,
+      BRIEF_REPLY_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
+    // INSTRUCTION_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/assistant/instructions/__tests__/instructions.route.test.ts.
     // UNKNOWN_MODEL_ERROR_CODE likewise; proven by b4m-core/services/src/cliCompletions.modelAlias.test.ts.
     // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
@@ -100,6 +104,7 @@ describe('API_ERROR_CODES', () => {
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       API_KEY_USER_CAP_ERROR_CODE,
       AGENT_LIMIT_REACHED_ERROR_CODE,
+      INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
       BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
       REQUEST_TIMEOUT_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,

@@ -587,25 +587,24 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertFalse(requeue(queued))
   }
 
-  func testObserversSeeEveryTransition() async throws {
+  func testObserversSeeInitialQueuedUploadingAndLatestCompletion() async throws {
     let rig = rig()
     let stream = await rig.engine.updates()
-    let collector = Task { () -> [[UploadStage]] in
-      var seen: [[UploadStage]] = []
-      for await jobs in stream {
-        seen.append(jobs.map(\.stage))
-        if jobs.first?.stage == .done { break }
-      }
-      return seen
-    }
-    let job = try only(await rig.engine.submit([photo()], to: lake, note: nil))
+    var iterator = stream.makeAsyncIterator()
+    let initial = await iterator.next()
+    XCTAssertEqual(initial?.map(\.stage), [])
+    let job = try only(await rig.engine.enqueue([photo()], to: lake, note: nil))
+    let queued = await iterator.next()
+    XCTAssertEqual(queued?.map(\.stage), [.queued])
+    await rig.engine.resume()
+    let uploading = await iterator.next()
+    XCTAssertEqual(uploading?.map(\.stage), [.uploading])
     rig.uploader.finish(job.id)
-    let seen = await collector.value
-    XCTAssertEqual(seen.first, [])
-    XCTAssertTrue(seen.contains([.queued]))
-    XCTAssertTrue(seen.contains([.uploading]))
-    XCTAssertTrue(seen.contains([.registering]))
-    XCTAssertEqual(seen.last, [.done])
+    while let jobs = await iterator.next() {
+      if jobs.first?.stage == .done { return }
+      XCTAssertEqual(jobs.map(\.stage), [.registering])
+    }
+    XCTFail("Updates ended before completion")
   }
 }
 

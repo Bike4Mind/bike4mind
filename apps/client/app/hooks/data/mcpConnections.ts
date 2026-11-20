@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios';
 import type {
   IMcpConnectionPublic,
   McpApiKeyScheme,
+  McpConnectionListEntry,
   McpConnectionTransport,
   McpPresetId,
   McpToolApprovalMode,
@@ -11,13 +12,25 @@ import type {
 import { api } from '@client/app/contexts/ApiContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
-// Client for the custom MCP connector routes (apps/client/pages/api/mcp-connections/**). Request
-// bodies mirror apps/client/server/validators/mcpConnectionValidators.ts, which refuses unknown keys.
+// Client for the custom MCP connector routes (apps/client/pages/api/mcp-connections/**) and their
+// platform twins under pages/api/admin/mcp-connections. Request bodies mirror
+// apps/client/server/validators/mcpConnectionValidators.ts, which refuses unknown keys.
 
 export const mcpConnectionKeys = {
   all: ['mcpConnections'] as const,
   list: () => [...mcpConnectionKeys.all, 'list'] as const,
+  platformList: () => [...mcpConnectionKeys.all, 'platform', 'list'] as const,
+  listFor: (scope: McpConnectionScope) =>
+    scope === 'platform' ? mcpConnectionKeys.platformList() : mcpConnectionKeys.list(),
 };
+
+/** Whose connections a hook manages: the viewer's own, or the platform connectors an admin sets up. */
+export type McpConnectionScope = 'user' | 'platform';
+
+const collectionPath = (scope: McpConnectionScope) =>
+  scope === 'platform' ? '/api/admin/mcp-connections' : '/api/mcp-connections';
+
+const connectionPath = (scope: McpConnectionScope, id: string) => `${collectionPath(scope)}/${encodeURIComponent(id)}`;
 
 export type McpConnectionAuthInput =
   | { kind: 'none' }
@@ -73,82 +86,124 @@ export const mcpConnectionErrorCode = (error: unknown): string | undefined => {
   return typeof code === 'string' ? code : undefined;
 };
 
-/** The viewer's connections; empty while the feature is switched off. */
+/** The viewer's connections and the platform connectors offered to them; empty while the feature is switched off. */
 export const useMcpConnections = (options: { enabled?: boolean } = {}) => {
   const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: mcpConnectionKeys.list(),
     enabled: !impersonating && (options.enabled ?? true),
-    queryFn: async () => (await api.get<IMcpConnectionPublic[]>('/api/mcp-connections')).data,
+    queryFn: async () => (await api.get<McpConnectionListEntry[]>('/api/mcp-connections')).data,
     staleTime: 60 * 1000,
   });
 };
 
-/** Writes the returned connection into the list cache, so every view shows the server's answer. */
-function useStoreConnection() {
+/** Every platform connector with its admin view; for the admin console only. */
+export const usePlatformMcpConnections = () => {
+  const impersonating = useAccessToken(s => s.impersonating);
+  return useQuery({
+    queryKey: mcpConnectionKeys.platformList(),
+    enabled: !impersonating,
+    queryFn: async () => (await api.get<IMcpConnectionPublic[]>(collectionPath('platform'))).data,
+    staleTime: 60 * 1000,
+  });
+};
+
+const upsert = <T extends { id: string }>(previous: T[] | undefined, entry: T): T[] => {
+  const list = previous ?? [];
+  return list.some(c => c.id === entry.id) ? list.map(c => (c.id === entry.id ? entry : c)) : [...list, entry];
+};
+
+/** Re-reads the scope's list; the viewer's own list also carries a member view of each platform connector. */
+function useInvalidateLists(scope: McpConnectionScope) {
   const queryClient = useQueryClient();
-  return (connection: IMcpConnectionPublic) =>
-    queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.list(), previous => {
-      const list = previous ?? [];
-      return list.some(c => c.id === connection.id)
-        ? list.map(c => (c.id === connection.id ? connection : c))
-        : [...list, connection];
-    });
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.listFor(scope) }),
+      ...(scope === 'platform' ? [queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() })] : []),
+    ]);
 }
 
-export const useCreateMcpConnection = () => {
-  const store = useStoreConnection();
+/** Writes the returned connection into the list cache, so every view shows the server's answer. */
+function useStoreConnection(scope: McpConnectionScope) {
   const queryClient = useQueryClient();
+  return (connection: IMcpConnectionPublic) => {
+    if (scope === 'platform') {
+      queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.platformList(), previous =>
+        upsert(previous, connection)
+      );
+      void queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() });
+      return;
+    }
+    queryClient.setQueryData<McpConnectionListEntry[]>(mcpConnectionKeys.list(), previous =>
+      upsert<McpConnectionListEntry>(previous, connection)
+    );
+  };
+}
+
+export const useCreateMcpConnection = (scope: McpConnectionScope = 'user') => {
+  const store = useStoreConnection(scope);
+  const invalidate = useInvalidateLists(scope);
   return useMutation({
     mutationFn: async (input: CreateMcpConnectionInput) =>
-      (await api.post<IMcpConnectionPublic>('/api/mcp-connections', input)).data,
+      (await api.post<IMcpConnectionPublic>(collectionPath(scope), input)).data,
     onSuccess: store,
     // A create can persist before it fails, so re-read the list.
-    onError: () => queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() }),
+    onError: invalidate,
+    // The variables hold the submitted key; nothing reads them once the form has its answer.
+    gcTime: 0,
   });
 };
 
-export const useUpdateMcpConnection = () => {
-  const store = useStoreConnection();
+export const useUpdateMcpConnection = (scope: McpConnectionScope = 'user') => {
+  const store = useStoreConnection(scope);
   return useMutation({
     mutationFn: async ({ id, ...body }: UpdateMcpConnectionInput) =>
-      (await api.patch<IMcpConnectionPublic>(`/api/mcp-connections/${encodeURIComponent(id)}`, body)).data,
+      (await api.patch<IMcpConnectionPublic>(connectionPath(scope, id), body)).data,
     onSuccess: store,
   });
 };
 
-export const useRefreshMcpConnectionTools = () => {
-  const store = useStoreConnection();
-  const queryClient = useQueryClient();
+export const useRefreshMcpConnectionTools = (scope: McpConnectionScope = 'user') => {
+  const store = useStoreConnection(scope);
+  const invalidate = useInvalidateLists(scope);
   return useMutation({
     mutationFn: async (id: string) =>
-      (await api.post<RefreshMcpToolsResult>(`/api/mcp-connections/${encodeURIComponent(id)}/refresh-tools`)).data,
+      (await api.post<RefreshMcpToolsResult>(`${connectionPath(scope, id)}/refresh-tools`)).data,
     onSuccess: result => store(result.connection),
     // A failed discovery is recorded on the connection (status, lastError), so re-read it.
-    onError: () => queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() }),
+    onError: invalidate,
   });
 };
 
-export const useRotateMcpConnectionApiKey = () => {
-  const store = useStoreConnection();
+export const useRotateMcpConnectionApiKey = (scope: McpConnectionScope = 'user') => {
+  const store = useStoreConnection(scope);
   return useMutation({
     mutationFn: async ({ id, value }: { id: string; value: string }) =>
-      (await api.post<IMcpConnectionPublic>(`/api/mcp-connections/${encodeURIComponent(id)}/api-key`, { value })).data,
+      (await api.post<IMcpConnectionPublic>(`${connectionPath(scope, id)}/api-key`, { value })).data,
     onSuccess: store,
+    gcTime: 0,
   });
 };
 
-export const useDeleteMcpConnection = () => {
+export const useDeleteMcpConnection = (scope: McpConnectionScope = 'user') => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await api.delete(`/api/mcp-connections/${encodeURIComponent(id)}`);
+      await api.delete(connectionPath(scope, id));
       return id;
     },
-    onSuccess: id =>
-      queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.list(), previous =>
+    onSuccess: id => {
+      if (scope === 'platform') {
+        queryClient.setQueryData<IMcpConnectionPublic[]>(mcpConnectionKeys.platformList(), previous =>
+          (previous ?? []).filter(c => c.id !== id)
+        );
+        void queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() });
+        return;
+      }
+      queryClient.setQueryData<McpConnectionListEntry[]>(mcpConnectionKeys.list(), previous =>
         (previous ?? []).filter(c => c.id !== id)
-      ),
+      );
+    },
   });
 };
 

@@ -29,6 +29,7 @@ export function ollamaRate(frame: {
     evalMs: evalNs / NS_PER_MS,
     ...(promptTokens !== undefined && promptNs !== undefined ? { promptTokens, promptMs: promptNs / NS_PER_MS } : {}),
     ...(loadNs !== undefined ? { loadMs: loadNs / NS_PER_MS } : {}),
+    loadReported: true,
   };
 }
 
@@ -41,12 +42,15 @@ export function llamaServerRate(timings: unknown): ChatTokenRate | undefined {
   if (evalTokens === undefined || evalMs === undefined) return undefined;
   const promptTokens = count(raw.prompt_n);
   const promptMs = duration(raw.prompt_ms);
+  const cachedPromptTokens = count(raw.cache_n);
   const draftTokens = count(raw.draft_n);
   const draftAccepted = count(raw.draft_n_accepted);
   return {
     evalTokens,
     evalMs,
+    loadReported: false,
     ...(promptTokens !== undefined && promptMs !== undefined ? { promptTokens, promptMs } : {}),
+    ...(cachedPromptTokens !== undefined ? { cachedPromptTokens } : {}),
     ...(draftTokens !== undefined && draftTokens > 0 && draftAccepted !== undefined
       ? { draftTokens, draftAccepted }
       : {}),
@@ -77,9 +81,10 @@ export function estimatedRate(outputTokens: number | undefined, timing: StreamTi
   if (outputTokens === undefined || firstAt === undefined || lastAt === undefined) return undefined;
   const evalMs = lastAt - firstAt;
   if (reads < MIN_ESTIMATE_READS || evalMs < MIN_ESTIMATE_SPAN_MS) return undefined;
-  const evalTokens = outputTokens - Math.max(1, firstReadDeltas ?? 1);
+  const untimedTokens = Math.max(1, firstReadDeltas ?? 1);
+  const evalTokens = outputTokens - untimedTokens;
   if (evalTokens < 1) return undefined;
-  return { evalTokens, evalMs, estimated: true };
+  return { evalTokens, evalMs, estimated: true, untimedTokens };
 }
 
 const RATE_FIELDS = [
@@ -88,8 +93,10 @@ const RATE_FIELDS = [
   'promptTokens',
   'promptMs',
   'loadMs',
+  'cachedPromptTokens',
   'draftTokens',
   'draftAccepted',
+  'untimedTokens',
 ] as const satisfies readonly (keyof ChatTokenRate)[];
 
 /**
@@ -107,5 +114,7 @@ export function addTokenRate(
     if (total[key] !== undefined || next[key] !== undefined) sum[key] = (total[key] ?? 0) + (next[key] ?? 0);
   }
   if (total.estimated || next.estimated) sum.estimated = true;
+  if (total.loadReported !== undefined || next.loadReported !== undefined)
+    sum.loadReported = total.loadReported === true || next.loadReported === true;
   return sum;
 }

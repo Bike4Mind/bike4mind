@@ -15,9 +15,13 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The plan for one agent: a worker decision wins, then the first call parked at the approval gate. */
+/**
+ * The plan for one agent: a worker decision wins, then the first call parked at the approval gate. A
+ * Presenter mode copy only offers Open: its question is a placeholder and its parked call is in a transcript.
+ */
 function usePlan(agent: AgentView): BubblePlan {
-  const { messages } = useSessionMessages(agent.id, refreshKeyOf(agent));
+  const { messages } = useSessionMessages(agent.id, refreshKeyOf(agent), false, !agent.redacted);
+  if (agent.redacted) return { kind: 'open' };
   if (agent.decision) {
     return planForQuestion(agent.decision.question, { via: 'decision', decisionId: agent.decision.id });
   }
