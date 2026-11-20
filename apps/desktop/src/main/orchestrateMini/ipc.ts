@@ -46,6 +46,9 @@ export function registerOrchestrateMiniIpc(deps: OrchestrateMiniIpcDeps): void {
       console.warn('ORCHESTRATE-MINI: dropped a payload that does not match the schema');
       return;
     }
+    // A publish still in flight when the window closed would re-cache a payload main just dropped, and a
+    // reopened window could then show it from before Presenter mode was turned on.
+    if (parsed !== null && !deps.isOpen()) return;
     deps.publish(parsed, event.sender);
   });
 

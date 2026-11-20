@@ -95,6 +95,14 @@ describe('registerOrchestrateMiniIpc', () => {
     expect(deps.publish).not.toHaveBeenCalled();
   });
 
+  it('drops a payload that arrives after the window closed, but still takes a clear', () => {
+    const { deps, call } = setup();
+    deps.isOpen.mockReturnValue(false);
+    call(IPC_CHANNELS.orchestrateMiniPublish, appWindow, payload());
+    call(IPC_CHANNELS.orchestrateMiniPublish, appWindow, null);
+    expect(deps.publish.mock.calls).toEqual([[null, appWindow]]);
+  });
+
   it('serves the payload to the mini window only', () => {
     const { call } = setup();
     expect(call(IPC_CHANNELS.orchestrateMiniGetSnapshot, miniWindow)).toEqual(payload());
