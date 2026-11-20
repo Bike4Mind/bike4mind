@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A failed account call, reduced to what the screen says about it. */
 enum class AccountCallError { OFFLINE, SIGNED_OUT, RATE_LIMITED, SERVER }
@@ -58,6 +60,11 @@ class SettingsController(private val api: AccountApi, private val scope: Corouti
     private val mutableState = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = mutableState.asStateFlow()
 
+    // Saves for one category run in tap order, and only the latest tap rolls back, to the last value the server accepted.
+    private val taps = mutableMapOf<NotificationCategory, Int>()
+    private val accepted = mutableMapOf<NotificationCategory, Boolean?>()
+    private val saving = NotificationCategory.entries.associateWith { Mutex() }
+
     fun load() {
         mutableState.update { it.copy(loading = true, loadError = null) }
         scope.launch {
@@ -75,13 +82,20 @@ class SettingsController(private val api: AccountApi, private val scope: Corouti
     fun setEnabled(category: NotificationCategory, enabled: Boolean) {
         val profile = state.value.profile ?: return
         if (profile.isEnabled(category) == enabled) return
-        val previous = profile.pushPreferences[category]
+        if (category !in accepted) accepted[category] = profile.pushPreferences[category]
+        val tap = (taps[category] ?: 0) + 1
+        taps[category] = tap
         setPreference(category, enabled)
         mutableState.update { it.copy(saveError = null) }
         scope.launch {
-            val failure = accountCall { api.setPushCategory(category, enabled) }?.exceptionOrNull() ?: return@launch
-            setPreference(category, previous)
-            mutableState.update { it.copy(saveError = failure.accountError) }
+            val failure = saving.getValue(category).withLock { accountCall { api.setPushCategory(category, enabled) } }
+                ?.exceptionOrNull()
+            if (failure == null) {
+                accepted[category] = enabled
+            } else if (taps[category] == tap) {
+                setPreference(category, accepted[category])
+                mutableState.update { it.copy(saveError = failure.accountError) }
+            }
         }
     }
 

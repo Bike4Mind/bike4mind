@@ -17,6 +17,7 @@ class AccountControllersTest {
     private class FakeAccount : AccountApi {
         var profile = AccountProfile("Ada", "ada@example.test")
         var saveFailure: Exception? = null
+        var firstSaveFailure: Exception? = null
         var deletion: AccountDeletionOutcome = AccountDeletionOutcome.Scheduled(null)
         var deletionRequests = 0
         var restoreFailure: Exception? = null
@@ -24,6 +25,10 @@ class AccountControllersTest {
 
         override suspend fun profile() = profile
         override suspend fun setPushCategory(category: NotificationCategory, enabled: Boolean) {
+            firstSaveFailure?.let {
+                firstSaveFailure = null
+                throw it
+            }
             saveFailure?.let { throw it }
             saved += category to enabled
         }
@@ -64,6 +69,26 @@ class AccountControllersTest {
         assertTrue(settings.state.value.isEnabled(NotificationCategory.AGENT_FAILED))
         assertFalse(settings.state.value.isEnabled(NotificationCategory.BRIEF_READY))
         assertEquals(AccountCallError.OFFLINE, settings.state.value.saveError)
+    }
+
+    @Test
+    fun theLatestTapWinsWhenAnEarlierSaveFailsLate() = runTest {
+        val api = FakeAccount()
+        val settings = SettingsController(api, this)
+        settings.load()
+        runCurrent()
+
+        api.firstSaveFailure = IOException("offline")
+        settings.setEnabled(NotificationCategory.BRIEF_READY, false)
+        settings.setEnabled(NotificationCategory.BRIEF_READY, true)
+        settings.setEnabled(NotificationCategory.BRIEF_READY, false)
+        runCurrent()
+
+        assertFalse(settings.state.value.isEnabled(NotificationCategory.BRIEF_READY))
+        assertEquals(
+            listOf(NotificationCategory.BRIEF_READY to true, NotificationCategory.BRIEF_READY to false),
+            api.saved,
+        )
     }
 
     @Test
