@@ -35,10 +35,8 @@ export const sendSessionHandoffContract = defineEndpoint({
   responses: {
     200: { description: 'The handoff was accepted by the transport.', schema: SessionHandoffResponseSchema },
     401: { description: 'Sign in again.', schema: ApiErrorSchema },
-    403: { description: 'Session access denied.', schema: ApiErrorSchema },
     404: { description: 'Session or destination unavailable.', schema: ApiErrorSchema },
     409: { description: 'The destination looks inactive. Open it and try again.', schema: ApiErrorSchema },
     429: { description: 'Too many requests.', schema: ApiErrorSchema },
-    503: { description: 'Delivery is temporarily unavailable.', schema: ApiErrorSchema },
   },
 });

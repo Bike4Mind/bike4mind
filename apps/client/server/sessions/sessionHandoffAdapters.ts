@@ -69,6 +69,9 @@ export const sessionHandoffAdapters: HandoffAdapters = {
       action: 'session_handoff',
       sessionId,
     }),
+  async dropLive(connectionId) {
+    await Connection.deleteOne({ connectionId });
+  },
   async sendPush(userId, destinationId, sessionId, destinationSid) {
     if (!(await isHandoffPushEnabled(userId))) throw new InactiveHandoffDeviceError();
     await NotificationEvents.Push.publish({

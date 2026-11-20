@@ -11,9 +11,10 @@ const h = vi.hoisted(() => ({
   authorize: vi.fn(),
   publish: vi.fn(),
   sendLive: vi.fn(),
+  deleteConnection: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
-  Connection: { find: h.connections },
+  Connection: { find: h.connections, deleteOne: h.deleteConnection },
   pushTokenRepository: { findByUser: h.tokens },
   userRepository: { findById: h.user },
   authSessionRepository: { findLiveSids: h.liveSids },
@@ -69,6 +70,12 @@ describe('session handoff persisted notification preference', () => {
       sessionId: SESSION,
     });
     expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it('deletes only the closed connection row', async () => {
+    await sessionHandoffAdapters.dropLive('connection-id');
+
+    expect(h.deleteConnection).toHaveBeenCalledExactlyOnceWith({ connectionId: 'connection-id' });
   });
 
   it.each(['missing', 'enabled'] as const)(

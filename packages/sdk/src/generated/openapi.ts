@@ -17331,7 +17331,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Session access denied. */
+      /** @description The account is suspended (`errorCode: account_suspended`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17339,7 +17339,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
       /** @description Session or destination unavailable. */
@@ -17401,17 +17401,6 @@ export interface operations {
       };
       /** @description Too many requests. */
       429: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description Delivery is temporarily unavailable. */
-      503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

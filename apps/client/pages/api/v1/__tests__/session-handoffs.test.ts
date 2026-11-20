@@ -65,12 +65,11 @@ describe('handoff route boundary', () => {
     expect(h.list).toHaveBeenCalledWith('user', {});
     expect(res._getJSONData()).toEqual({ devices: [] });
   });
-  it('returns inactive feedback without session content', async () => {
+  it('leaves inactive feedback to the shared error envelope as a 409', async () => {
     h.send.mockRejectedValue(new InactiveHandoffDeviceError());
-    const res = await call(send);
-    expect(res.statusCode).toBe(409);
-    expect(res._getJSONData()).toEqual({
-      error: 'This device is unavailable. Check sign-in and notification settings, then try again.',
+    await expect(call(send)).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'This device is unavailable. Check sign-in and notification settings, then try again.',
     });
   });
 });

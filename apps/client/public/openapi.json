@@ -38742,11 +38742,11 @@
             }
           },
           "403": {
-            "description": "Session access denied.",
+            "description": "The account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -38857,24 +38857,6 @@
           },
           "429": {
             "description": "Too many requests.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Delivery is temporarily unavailable.",
             "content": {
               "application/json": {
                 "schema": {

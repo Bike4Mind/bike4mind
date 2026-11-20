@@ -1,5 +1,5 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import type { HandoffDevice } from '@bike4mind/common';
+import { ConflictError, type HandoffDevice } from '@bike4mind/common';
 
 export type HandoffDestination = HandoffDevice & { sid: string; connectionId?: string; pushId?: string };
 export type HandoffAdapters = {
@@ -7,13 +7,21 @@ export type HandoffAdapters = {
   authorizeSession(userId: string, sessionId: string): Promise<void>;
   liveSids(sids: string[]): Promise<ReadonlySet<string>>;
   sendLive(connectionId: string, sessionId: string): Promise<void>;
+  dropLive(connectionId: string): Promise<void>;
   sendPush(userId: string, destinationId: string, sessionId: string, sid: string): Promise<void>;
 };
 
-export class InactiveHandoffDeviceError extends Error {
+export class InactiveHandoffDeviceError extends ConflictError {
   constructor() {
     super('This device is unavailable. Check sign-in and notification settings, then try again.');
   }
+}
+
+// The self-host gateway answers a closed socket with a bare 410, which the SDK cannot map to GoneException.
+function isGoneConnection(error: unknown): boolean {
+  if (error instanceof GoneException) return true;
+  const metadata = (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata;
+  return metadata?.httpStatusCode === 410;
 }
 
 export async function listHandoffDevices(userId: string, deps: HandoffAdapters): Promise<HandoffDevice[]> {
@@ -42,8 +50,10 @@ export async function sendSessionHandoff(
     try {
       await deps.sendLive(destination.connectionId, request.sessionId);
     } catch (error) {
-      if (error instanceof GoneException) throw new InactiveHandoffDeviceError();
-      throw error;
+      if (!isGoneConnection(error)) throw error;
+      // A socket that closed without $disconnect would otherwise stay listed as available.
+      await deps.dropLive(destination.connectionId);
+      throw new InactiveHandoffDeviceError();
     }
   } else if (destination.pushId) {
     await deps.sendPush(userId, destination.pushId, request.sessionId, destination.sid);
