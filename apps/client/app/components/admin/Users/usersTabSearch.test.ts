@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import {
+  type UsersListParams,
   CLEARED_FILTER_PARAMS,
   DEFAULT_USERS_PARAMS,
   USERS_SEARCH_PARSERS,
@@ -111,7 +112,7 @@ describe('usersViewToSearch', () => {
   });
 
   it('writes every non-default value and never the free-text search', () => {
-    const search = usersViewToSearch({
+    const params: UsersListParams = {
       ...DEFAULT_USERS_PARAMS,
       page: 2,
       limit: 100,
@@ -125,7 +126,8 @@ describe('usersViewToSearch', () => {
       hasApiKey: 'no',
       signedUp: 'week',
       search: 'someone@example.org',
-    });
+    };
+    const search = usersViewToSearch(params);
     expect(search).toEqual({
       ...UNWRITTEN,
       page: 2,
@@ -283,5 +285,53 @@ describe('analytics drill-down params', () => {
 
   it('restores the drill-down from a stored view', () => {
     expect(migrateStoredUsersParams({ ...DEFAULT_USERS_PARAMS, ...drillDown })).toMatchObject(drillDown);
+  });
+});
+
+describe('combined acquisition and admin-role views', () => {
+  it('roundtrips both filters and clears either without losing the other', () => {
+    const role = 'ABCDEF0123456789ABCDEF01';
+    const params = {
+      ...DEFAULT_USERS_PARAMS,
+      adminRole: role,
+      createdFrom: '2026-06-01T00:00:00.000Z',
+      createdTo: '2026-06-15T00:00:00.000Z',
+      acqSource: 'Ads',
+      acqMedium: 'cpc',
+      acqCampaign: 'spring',
+      acqTouch: 'last' as const,
+      acqConverted: 'true' as const,
+      acqWindow: '30' as const,
+    };
+    const search = usersViewToSearch(params);
+    expect(search).toMatchObject({
+      role: role.toLowerCase(),
+      acqSource: 'Ads',
+      acqTouch: 'last',
+      acqConverted: 'true',
+      acqWindow: '30',
+    });
+    const view = usersViewFromSearch(search);
+    const { search: freeText, ...expectedView } = { ...params, adminRole: role.toLowerCase() };
+    expect(view).toMatchObject(expectedView);
+    expect(view).not.toHaveProperty('search');
+    expect(migrateStoredUsersParams(params)).toMatchObject({ ...expectedView, search: freeText });
+    expect(usersViewFromSearch(usersViewToSearch({ ...params, adminRole: undefined }))).toMatchObject({
+      adminRole: undefined,
+      acqSource: 'Ads',
+    });
+    expect(
+      usersViewFromSearch(
+        usersViewToSearch({
+          ...params,
+          acqTouch: undefined,
+          acqSource: undefined,
+          acqMedium: undefined,
+          acqCampaign: undefined,
+          acqConverted: undefined,
+          acqWindow: undefined,
+        })
+      )
+    ).toMatchObject({ adminRole: role.toLowerCase(), acqSource: undefined });
   });
 });
