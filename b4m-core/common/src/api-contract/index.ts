@@ -21,6 +21,11 @@ export { approvePendingActionContract, denyPendingActionContract } from './contr
 export { composeBriefContract, listBriefsContract, getBriefContract } from './contracts/briefs.contract';
 export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './contracts/assistantInstructions.contract';
 export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';

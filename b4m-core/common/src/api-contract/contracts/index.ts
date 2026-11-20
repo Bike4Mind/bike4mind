@@ -18,6 +18,11 @@ import { approvePendingActionContract, denyPendingActionContract } from './pendi
 import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './assistantInstructions.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -186,6 +191,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getBriefContract,
   createDelegationContract,
   getDelegationContract,
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,

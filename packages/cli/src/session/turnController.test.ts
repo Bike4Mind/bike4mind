@@ -1210,7 +1210,7 @@ describe('runTurn', () => {
 
   describe('workflow reminder wiring', () => {
     const stores = () => ({
-      todoStore: { todos: [{ description: 'fix the bug', status: 'in_progress' }] as TodoItem[] },
+      todoStore: { todos: [{ id: 'x', content: 'fix the bug', status: 'in_progress' }] as TodoItem[] },
       decisionStore: {
         decisions: [{ id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' }],
       },
@@ -1244,7 +1244,7 @@ describe('runTurn', () => {
       const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
 
       liveStores.blockerStore.blockers[0].status = 'resolved' as never;
-      liveStores.todoStore.todos.push({ description: 'update docs', status: 'pending' });
+      liveStores.todoStore.todos.push({ id: 'x', content: 'update docs', status: 'pending' });
 
       const rendered = options.workflowReminder!();
       expect(rendered).not.toContain('waiting on API key');

@@ -58,6 +58,10 @@ export const contentHolders = {
       'decisions.source.delegationId',
     ],
   },
+  AssistantInstruction: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   BriefcasePrompt: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
