@@ -1,4 +1,5 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { requireConfiguredSecret } from '@bike4mind/common';
 import { resolveAgentExecutorFunctionName } from './agentExecutorFunctionName';
 
 export type ExecutorTarget = { kind: 'lambda'; functionName: string } | { kind: 'http'; url: string; secret: string };
@@ -9,8 +10,10 @@ export class AgentExecutorRejectedError extends Error {}
 export function resolveAgentExecutorTarget(): ExecutorTarget | undefined {
   const service = process.env.AGENT_EXECUTOR_SERVICE?.trim();
   if (service) {
-    const secret = process.env.AGENT_EXECUTOR_INTERNAL_SECRET?.trim();
-    if (!secret) throw new Error('AGENT_EXECUTOR_INTERNAL_SECRET is required with AGENT_EXECUTOR_SERVICE');
+    const secret = requireConfiguredSecret(
+      'AGENT_EXECUTOR_INTERNAL_SECRET',
+      process.env.AGENT_EXECUTOR_INTERNAL_SECRET
+    ).trim();
     const url = new URL(service);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
       throw new Error('AGENT_EXECUTOR_SERVICE must be an HTTP endpoint without credentials, query, or fragment');

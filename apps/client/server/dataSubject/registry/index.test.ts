@@ -132,6 +132,12 @@ describe('account purge reconciliation', () => {
     expect(matched('MemoryPrincipalKey', { ...key, dek: null })).toContain('retain');
   });
 
+  it("deletes a person's own MCP connections and only anonymizes the creator of a shared one", () => {
+    expect(matched('McpConnection', { ownerType: 'user', ownerKey: userId, userId })).toEqual(['deleteDocument']);
+    expect(matched('McpConnection', { ownerType: 'org', ownerKey: 'org-1', userId })).toEqual(['anonymize']);
+    expect(matched('McpConnection', { ownerType: 'platform', ownerKey: 'platform', userId })).toEqual(['anonymize']);
+  });
+
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {
     const holder = DATA_HOLDER_REGISTRY.Project;
     if (holder.kind !== 'holder') throw new Error('Project must be a holder');

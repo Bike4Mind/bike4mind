@@ -6,6 +6,7 @@ import {
   type SecurityDashboardStatus,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import {
@@ -89,7 +90,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     // Prefer SST Resource binding in deployed environments
     Resource.SECOPS_ZAP_INGEST_TOKEN?.value || process.env.SECOPS_ZAP_INGEST_TOKEN;
-  if (!ingestToken) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Security ingest token is not configured.' });
   }
 

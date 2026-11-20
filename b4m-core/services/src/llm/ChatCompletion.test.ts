@@ -11396,6 +11396,7 @@ describe('ChatCompletionProcess', () => {
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
       disabledMcpConnections?: string[];
+      enabledPlatformMcpConnections?: string[];
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
@@ -11454,6 +11455,9 @@ describe('ChatCompletionProcess', () => {
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
         ...(params.disabledMcpConnections !== undefined
           ? { disabledMcpConnections: params.disabledMcpConnections }
+          : {}),
+        ...(params.enabledPlatformMcpConnections !== undefined
+          ? { enabledPlatformMcpConnections: params.enabledPlatformMcpConnections }
           : {}),
         ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
@@ -11625,6 +11629,28 @@ describe('ChatCompletionProcess', () => {
         await runWithBuildToolsSpy({ message: 'Compare the smartphones', disabledMcpConnections: ['some-slug'] });
         expect(buildMcpToolsSpy).toHaveBeenCalledWith(
           expect.objectContaining({ disabledMcpConnections: ['some-slug'] })
+        );
+      } finally {
+        buildMcpToolsSpy.mockRestore();
+      }
+    });
+
+    it('request enabledPlatformMcpConnections -> buildMcpTools, and none when the request names none', async () => {
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+      buildMcpToolsSpy.mockClear();
+      try {
+        await runWithBuildToolsSpy({
+          message: 'Compare the smartphones',
+          enabledPlatformMcpConnections: ['b'.repeat(24)],
+        });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: ['b'.repeat(24)] })
+        );
+        await runWithBuildToolsSpy({ message: 'Compare the smartphones' });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: undefined })
         );
       } finally {
         buildMcpToolsSpy.mockRestore();

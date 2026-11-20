@@ -51,6 +51,7 @@ const ResearchRunLeversSchema = {
 const ResearchRunTotalsSchema = {
   searchHits: { type: Number, default: 0 },
   filteredBySource: { type: Number, default: 0 },
+  unresolvedRedirect: { type: Number, default: 0 },
   belowRelevance: { type: Number, default: 0 },
   judgeFailed: { type: Number, default: 0 },
   fetchFailed: { type: Number, default: 0 },
