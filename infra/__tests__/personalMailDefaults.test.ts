@@ -120,6 +120,61 @@ describe('applyPersonalMailDefaults', () => {
     expect(warn.mock.calls[0][0]).toContain(`${SET_PARAM} not found`);
     expect(warn.mock.calls[0][0]).not.toContain('unreadable');
   });
+
+  it('reports the Pulumi getParameter invoke error for a missing parameter as not found', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const lookup = vi.fn(async (name: string) => {
+      throw new Error(
+        'invocation of aws:ssm/getParameter:getParameter returned an error: invoking ' +
+          'aws:ssm/getParameter:getParameter: 1 error occurred:\n' +
+          `\t* reading SSM Parameter (${name}): couldn't find resource\n\n`
+      );
+    });
+    const { result } = await run('alice', {}, lookup);
+    expect(result).toBe('skipped-missing');
+    expect(warn.mock.calls[0][0]).toBe(
+      `[mail] personal stage alice: no SES defaults (${SET_PARAM} not found; ${IDENTITY_PARAM} not found), staying on SMTP`
+    );
+  });
+
+  it('reports an SDK error named ParameterNotFound as not found', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const lookup = vi.fn(async () => {
+      throw Object.assign(new Error('Parameter does not exist'), { name: 'ParameterNotFound' });
+    });
+    await run('alice', {}, lookup);
+    expect(warn.mock.calls[0][0]).toContain(`${SET_PARAM} not found`);
+    expect(warn.mock.calls[0][0]).not.toContain('unreadable');
+  });
+
+  it.each([
+    ['AccessDeniedException: User is not authorized to perform: ssm:GetParameter'],
+    ['ThrottlingException: Rate exceeded'],
+  ])('keeps %s unreadable and stays on SMTP', async message => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env: NodeJS.ProcessEnv = {};
+    const lookup = vi.fn(async () => {
+      throw new Error(message);
+    });
+    const { result } = await run('alice', env, lookup);
+    expect(result).toBe('skipped-missing');
+    expect(env).toEqual({});
+    expect(warn.mock.calls[0][0]).toContain(`${SET_PARAM} unreadable (${message})`);
+    expect(warn.mock.calls[0][0]).not.toContain('not found');
+  });
+
+  it('collapses a multi-line lookup error to one capped line in the warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const lookup = vi.fn(async () => {
+      throw new Error(`ExpiredTokenException: token expired\n\tat request\r\n  retry hint ${'x'.repeat(500)}`);
+    });
+    await run('alice', {}, lookup);
+    const line: string = warn.mock.calls[0][0];
+    expect(line).not.toMatch(/[\r\n\t]/);
+    expect(line).toContain('unreadable (ExpiredTokenException: token expired at request retry hint x');
+    expect(line).not.toContain('x'.repeat(250));
+    expect(line).toContain('...)');
+  });
 });
 
 describe('isPersonalMailStage', () => {

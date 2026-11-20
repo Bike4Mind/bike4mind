@@ -37,6 +37,25 @@ const IDENTITY_SHAPE = /^([A-Za-z0-9._%+-]+@)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
 type ParameterRead = { value: string } | { problem: string };
 
+const MAX_ERROR_DETAIL = 200;
+
+// The AWS SDK names the error ParameterNotFound; the Pulumi getParameter invoke surfaces the
+// provider's "couldn't find resource" text instead, with no ParameterNotFound token.
+const isParameterMissing = (error: unknown, message: string): boolean => {
+  const { name, code } = (error ?? {}) as { name?: unknown; code?: unknown };
+  return (
+    name === 'ParameterNotFound' ||
+    code === 'ParameterNotFound' ||
+    message.includes('ParameterNotFound') ||
+    message.includes("couldn't find resource")
+  );
+};
+
+const errorDetail = (message: string): string => {
+  const line = message.replace(/\s+/g, ' ').trim();
+  return line.length > MAX_ERROR_DETAIL ? `${line.slice(0, MAX_ERROR_DETAIL)}...` : line;
+};
+
 const readParameter = async (
   lookup: (name: string) => Promise<string | undefined>,
   name: string,
@@ -47,7 +66,11 @@ const readParameter = async (
     value = (await lookup(name))?.trim();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { problem: /ParameterNotFound/.test(message) ? `${name} not found` : `${name} unreadable (${message})` };
+    return {
+      problem: isParameterMissing(error, message)
+        ? `${name} not found`
+        : `${name} unreadable (${errorDetail(message)})`,
+    };
   }
   if (!value) return { problem: `${name} not found` };
   if (!shape.test(value)) return { problem: `${name} is not a valid SES name` };
