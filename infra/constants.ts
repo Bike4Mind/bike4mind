@@ -1,3 +1,4 @@
+// Must stay in sync with the preview test in isPersonalMailStage (infra/personalMailDefaults.ts).
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
 

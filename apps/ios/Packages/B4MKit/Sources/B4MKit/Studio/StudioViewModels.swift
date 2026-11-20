@@ -49,10 +49,17 @@ public final class StudioCreateViewModel {
   @ObservationIgnored private var selectedModelIDs: [GenerationKind: String] = [:]
   @ObservationIgnored private let api: any StudioAPI
   @ObservationIgnored private let tracker: GenerationTracker
+  @ObservationIgnored private let catalog: StudioModelCatalog?
 
-  public init(api: any StudioAPI, tracker: GenerationTracker) {
+  /// - Parameter catalog: the session-wide model lists. Without one the lists load per instance.
+  public init(api: any StudioAPI, tracker: GenerationTracker, catalog: StudioModelCatalog? = nil) {
     self.api = api
     self.tracker = tracker
+    self.catalog = catalog
+    // Lists the catalog already holds are there on the first frame, before any task runs.
+    if let catalog {
+      for kind in GenerationKind.allCases { models[kind] = catalog.models(for: kind) }
+    }
   }
 
   /// The models for the kind. Video narrows to what the request needs: text-to-video models while nothing is
@@ -206,10 +213,21 @@ public final class StudioCreateViewModel {
       && trimmedPrompt.count <= Self.maximumPromptLength && inputIssue == nil
   }
 
-  /// Loads the model list for the current kind once. A failed load falls back to a known model where one exists,
-  /// so the bar still works offline-first; video and music have no safe default and stay disabled.
+  /// Loads the model list for the current kind: once per instance, or per catalog freshness when a catalog is set.
+  /// A failed load falls back to a known model where one exists, so the bar still works offline-first; video and
+  /// music have no safe default and stay disabled.
   public func loadModels() async {
     let kind = kind
+    if let catalog {
+      await catalog.refresh(kind)
+      if let shared = catalog.models(for: kind) {
+        models[kind] = shared
+      } else if models[kind] == nil, let fallback = GenerationModel.fallback(for: kind) {
+        // Not stored in the catalog, so the next open tries the server again.
+        models[kind] = [fallback]
+      }
+      return
+    }
     guard models[kind] == nil else { return }
     do {
       let loaded = try await api.models(for: kind)
