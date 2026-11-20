@@ -89,6 +89,8 @@ export type LLMCommandArgs = {
   mcpServers?: string[];
   /** Custom MCP connector slugs switched off in the Tools menu (LLMContext.disabledMcpConnections). */
   disabledMcpConnections?: string[];
+  /** Platform connector ids switched on in the Tools menu (LLMContext.enabledPlatformMcpConnections). */
+  enabledPlatformMcpConnections?: string[];
   optimisticSessionId?: string;
   /** Agent-mode toggle state forwarded through to the chat completion payload. */
   agentMode?: LLMApiRequestBody['agentMode'];
@@ -166,6 +168,7 @@ export async function handleLLMCommand(
       deepResearchConfig,
       mcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       optimisticSessionId,
       agentMode,
     } = args;
@@ -213,6 +216,7 @@ export async function handleLLMCommand(
       agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
       disabledMcpConnections: _omitDisabledMcpConnections,
+      enabledPlatformMcpConnections: _omitEnabledPlatformMcpConnections,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
@@ -307,6 +311,9 @@ export async function handleLLMCommand(
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(Array.isArray(disabledMcpConnections) && disabledMcpConnections.length > 0
           ? { disabledMcpConnections }
+          : {}),
+        ...(Array.isArray(enabledPlatformMcpConnections) && enabledPlatformMcpConnections.length > 0
+          ? { enabledPlatformMcpConnections }
           : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),

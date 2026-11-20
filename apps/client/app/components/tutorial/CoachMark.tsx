@@ -13,8 +13,11 @@ import { keyframes } from '@mui/system';
 import CloseIcon from '@mui/icons-material/Close';
 import type { TutorialCardSide } from '@bike4mind/common';
 import { a11y, a11yAttr } from './a11y';
+import { COACH_COVER_ATTR, COACH_COVER_SELECTOR } from './coachCover';
 
 const CARD_WIDTH = 340;
+// Joy's `sm` breakpoint. Below it a card beside its anchor leaves no room for either, so it docks to an edge.
+const PHONE_WIDTH = 600;
 const PANEL_WIDTH = 960;
 const EDGE = 16;
 const DOCK = EDGE * 1.5;
@@ -231,6 +234,27 @@ function useRects(selector: string | undefined) {
   return rects;
 }
 
+/** Whether an overlay marked with `coachCover` is open over the page, and the anchor is not inside it. */
+function useCovered(element: HTMLElement | null) {
+  const [covered, setCovered] = useState(false);
+  useEffect(() => {
+    const sync = () => {
+      const covers = Array.from(document.querySelectorAll(COACH_COVER_SELECTOR));
+      setCovered(covers.length > 0 && !covers.some(cover => !!element && cover.contains(element)));
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [COACH_COVER_ATTR],
+    });
+    return () => observer.disconnect();
+  }, [element]);
+  return covered;
+}
+
 const readViewport = () => ({ width: window.innerWidth, height: window.innerHeight });
 
 function useViewport() {
@@ -378,6 +402,35 @@ export function dockCard({ side, card, viewport, obstacles }: DockCardInput): nu
   return Math.min(bottom, Math.max(DOCK, viewport.height - h - EDGE));
 }
 
+export type PhoneEdge = 'top' | 'bottom';
+
+export interface DockPhoneCardInput {
+  target: Rect;
+  obstacles: readonly Rect[];
+  card: { width: number; height: number };
+  viewport: { width: number; height: number };
+  /** The edge the card already sits on this step. */
+  current?: PhoneEdge;
+}
+
+/**
+ * Which edge a full-width card docks to on a phone. It keeps its edge while that stays clear of the target, else
+ * moves to a clear edge, preferring the bottom and one clear of the obstacles too. With neither edge clear (an
+ * answer taller than the screen) it stays put, so it does not jump as the user scrolls the target under it.
+ */
+export function dockPhoneCard({ target, obstacles, card, viewport, current }: DockPhoneCardInput): PhoneEdge {
+  const at = (edge: PhoneEdge): Rect => {
+    const top = edge === 'top' ? EDGE : viewport.height - EDGE - card.height;
+    return { left: EDGE, top, right: viewport.width - EDGE, bottom: top + card.height };
+  };
+  const onTarget = (edge: PhoneEdge) => overlap(at(edge), target);
+  if (current && onTarget(current) === 0) return current;
+  const clear = (['bottom', 'top'] as const).filter(edge => onTarget(edge) === 0);
+  if (clear.length > 0)
+    return clear.find(edge => obstacles.every(obstacle => overlap(at(edge), obstacle) === 0)) ?? clear[0];
+  return current ?? (onTarget('top') < onTarget('bottom') ? 'top' : 'bottom');
+}
+
 interface StepPillProps {
   label: string | undefined;
   side: 'left' | 'right';
@@ -488,6 +541,8 @@ export function CoachMark({
     setHiddenStep(hiddenKey);
     setHidden(false);
   }
+  // An open nav drawer over the page covers the card, unless the step points into it.
+  const veiled = useCovered(element) && !panel;
   const toasts = useRects(rect ? TOAST_SELECTOR : undefined);
   // Measured before the card hides, so the pill's first frame already sits clear of them.
   const pillAvoided = useRects(panel ? undefined : PILL_AVOID_SELECTOR);
@@ -495,11 +550,13 @@ export function CoachMark({
   useEffect(() => {
     // A step that waits on the page has no button of its own; focus stays where the user is working.
     // A panel is modal, so focus has to enter it even when it offers no primary button. preventScroll
-    // keeps a long panel opening at its top rather than at a button low down in it.
+    // keeps a long panel opening at its top rather than at a button low down in it. A hidden card cannot
+    // take focus, so it takes it when the drawer over it closes.
+    if (veiled) return;
     const primary = cardRef.current?.querySelector<HTMLElement>('[data-tutorial-primary]');
     const target = primary ?? (panel ? cardRef.current : null);
     target?.focus({ preventScroll: panel });
-  }, [stepKey, panel]);
+  }, [stepKey, panel, veiled]);
 
   // The ring pulses until the user presses its target; `click` also covers a keyboard press.
   useEffect(() => {
@@ -579,14 +636,18 @@ export function CoachMark({
   const bottom = rect ? 0 : dockCard({ side: dockSide, card, viewport, obstacles: avoided });
   let position: { left: number; top: number } | { left: number; bottom: number } | { right: number; bottom: number } =
     placement === 'left' ? { left: DOCK, bottom } : { right: DOCK, bottom };
-  if (rect) {
-    const { left, top } = placeCard({
-      target: union(pad(rect, RING_PAD), scopeRect),
-      obstacles: [...toasts, ...avoided],
-      card,
-      viewport,
-      prefer: placement,
-    });
+  const phone = viewport.width < PHONE_WIDTH;
+  const target = rect ? union(pad(rect, RING_PAD), scopeRect) : null;
+  const obstacles = [...toasts, ...avoided];
+  // Kept per step and anchor, so dockPhoneCard can hold the card on its edge while the user scrolls.
+  const [phoneDock, setPhoneDock] = useState<{ key: string; edge: PhoneEdge } | null>(null);
+  const currentEdge = phoneDock?.key === pulseKey ? phoneDock.edge : undefined;
+  const edge = phone && target ? dockPhoneCard({ target, obstacles, card, viewport, current: currentEdge }) : undefined;
+  if (edge && edge !== currentEdge) setPhoneDock({ key: pulseKey, edge });
+  if (edge) {
+    position = edge === 'top' ? { left: EDGE, top: EDGE } : { left: EDGE, bottom: EDGE };
+  } else if (target) {
+    const { left, top } = placeCard({ target, obstacles, card, viewport, prefer: placement });
     position = { left, top };
   }
   const label = progress ? `Step ${progress.index} of ${progress.count}` : heading;
@@ -600,7 +661,13 @@ export function CoachMark({
         overflowY: 'auto',
         p: { xs: 2, sm: 3 },
       }
-    : { ...position, width: `min(${cardWidth}px, calc(100vw - ${EDGE * 2}px))`, p: 2 };
+    : {
+        ...position,
+        width: edge ? `calc(100vw - ${EDGE * 2}px)` : `min(${cardWidth}px, calc(100vw - ${EDGE * 2}px))`,
+        // At most half a phone screen, so the other half always shows the page.
+        ...(phone ? { maxHeight: `calc(50dvh - ${EDGE}px)`, overflowY: 'auto' as const } : {}),
+        p: 2,
+      };
 
   return (
     <>
@@ -613,7 +680,7 @@ export function CoachMark({
           sx={{ position: 'fixed', inset: 0, bgcolor: 'rgba(0, 0, 0, 0.45)', zIndex: LAYER }}
         />
       )}
-      {rect && (
+      {rect && !veiled && (
         <Box
           data-testid="tutorial-anchor-ring"
           data-pulsing={pressed ? undefined : 'true'}
@@ -655,7 +722,7 @@ export function CoachMark({
           position: 'fixed',
           ...frame,
           // Not display:none, so the card keeps its measured size and returns where it belongs.
-          ...(hidden ? { visibility: 'hidden', pointerEvents: 'none' } : {}),
+          ...(hidden || veiled ? { visibility: 'hidden', pointerEvents: 'none' } : {}),
           // Its own surface, so the card does not read as one more panel or canvas node of the app: the
           // selected session row's tint, laid over the opaque surface since the tint itself is translucent.
           // The tint is the host theme's own token; Joy's default theme (as in unit tests) has no such palette.
@@ -747,7 +814,7 @@ export function CoachMark({
           </Stack>
         )}
       </Sheet>
-      {hidden && (
+      {hidden && !veiled && (
         <StepPill
           label={label}
           side={dockSide}

@@ -18,6 +18,7 @@ export * from './subscriberFanout';
 export * from './vpc';
 export * from './websocket';
 export * from './searxng';
+export * from './renderWorker';
 export * from './chatCompletion';
 export * from './web';
 export * from './llm';
@@ -48,6 +49,8 @@ export * from './serviceHealthAlarms';
 export * from './emailMarketing';
 export * from './wafPolicy';
 export * from './waf';
+
+export * from './webDlqFunctionLogs';
 
 // logMonitor must be last
 export * from './logMonitor';

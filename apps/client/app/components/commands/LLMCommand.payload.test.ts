@@ -129,6 +129,17 @@ describe('handleLLMCommand - custom MCP connectors switched off in the Tools men
 
     expect(llmRequestBody()).not.toHaveProperty('disabledMcpConnections');
   });
+
+  it('sends the platform connectors switched on as a top-level list, and omits an empty one', async () => {
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: ['p1'] });
+    const body = llmRequestBody();
+    expect(body.enabledPlatformMcpConnections).toEqual(['p1']);
+    expect(body.params).not.toHaveProperty('enabledPlatformMcpConnections');
+
+    post.mockClear();
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: [] });
+    expect(llmRequestBody()).not.toHaveProperty('enabledPlatformMcpConnections');
+  });
 });
 
 // The `/new` composer's Agents panel only updates local `workBenchAgents`; those ids have to ride

@@ -54,9 +54,20 @@ describe('filterVisiblePremiumNavItems', () => {
     expect(visible.map(i => i.path)).toEqual(['/a', '/c']);
   });
 
-  // The strict no-bypass rule is structural: the filter's signature takes only
-  // entitlements + tags, so admin/developer status CANNOT influence visibility.
-  // (The route gate, by contrast, bypasses for admins - see RestrictedPage.)
+  it('shows every item to staff, including while entitlements load', () => {
+    const entitlementGated = item({ path: '/a', requireEntitlement: 'a:pro' });
+    const tagGated = item({ path: '/b', requireFeatureTag: 'beta' });
+    const both = item({ path: '/c', requireEntitlement: 'c:pro', requireFeatureTag: 'c' });
+    const all = [entitlementGated, tagGated, both];
+    expect(filterVisiblePremiumNavItems(all, [], [], true).map(i => i.path)).toEqual(['/a', '/b', '/c']);
+    expect(filterVisiblePremiumNavItems(all, undefined, undefined, true)).toHaveLength(3);
+  });
+
+  it('applies the gates to non-staff when isStaff is false or omitted', () => {
+    const gated = item({ requireEntitlement: 'product:pro' });
+    expect(filterVisiblePremiumNavItems([gated], [], [], false)).toHaveLength(0);
+    expect(filterVisiblePremiumNavItems([gated], [], [])).toHaveLength(0);
+  });
 });
 
 describe('premiumNavItemForRedirect', () => {

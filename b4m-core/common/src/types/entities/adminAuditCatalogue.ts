@@ -298,6 +298,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.moderation_exception_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
@@ -338,6 +339,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: platform MCP connectors
+  'settings.mcp_connector.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.api_key_rotated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.tools_refreshed': { category: 'settings', severity: 'info', write: 'bestEffort' },
   // Handler coverage: rapid reply
   'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
@@ -416,6 +423,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin resolving a provider end-user identifier (from a provider safety notice) to an account.
+  'user.provider_id.resolved': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },

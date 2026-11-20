@@ -61,11 +61,15 @@ describe('loadVersionQueue (real mongod)', () => {
     const c = await held(await listing('organization', ORG), 1, new Date(T0.getTime() + 1000));
     const [first, second] = [a, b].sort();
 
-    const p1 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 1 });
+    const p1 = await loadVersionQueue(orgAdmin, { orgIds: [ORG], spaceIds: [] }, { filter: 'pending', limit: 1 });
     expect(ids(p1.rows)).toEqual([first]);
     expect(p1.next).toEqual({ at: T0, id: first });
 
-    const p2 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 2, after: p1.next! });
+    const p2 = await loadVersionQueue(
+      orgAdmin,
+      { orgIds: [ORG], spaceIds: [] },
+      { filter: 'pending', limit: 2, after: p1.next! }
+    );
     expect(ids(p2.rows)).toEqual([second, c]);
     expect(p2.next).toEqual({ at: new Date(T0.getTime() + 1000), id: c });
   });
@@ -75,11 +79,15 @@ describe('loadVersionQueue (real mongod)', () => {
     const orphan = await held(l, 1, T0, false);
     const pointed = await held(l, 2, new Date(T0.getTime() + 1000));
 
-    const p1 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 1 });
+    const p1 = await loadVersionQueue(orgAdmin, { orgIds: [ORG], spaceIds: [] }, { filter: 'pending', limit: 1 });
     expect(p1.rows).toEqual([]);
     expect(p1.next).toEqual({ at: T0, id: orphan });
 
-    const p2 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 1, after: p1.next! });
+    const p2 = await loadVersionQueue(
+      orgAdmin,
+      { orgIds: [ORG], spaceIds: [] },
+      { filter: 'pending', limit: 1, after: p1.next! }
+    );
     expect(ids(p2.rows)).toEqual([pointed]);
     expect(p2.rows[0].canDecide).toBe(true);
   });
@@ -89,8 +97,14 @@ describe('loadVersionQueue (real mongod)', () => {
     const other = await held(await listing('organization', 'org-2'), 1, T0);
     const pub = await held(await listing('public'), 1, T0);
 
-    expect(ids((await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 10 })).rows)).toEqual([mine]);
-    const all = await loadVersionQueue({ id: 'admin', isAdmin: true }, [], { filter: 'pending', limit: 10 });
+    expect(
+      ids((await loadVersionQueue(orgAdmin, { orgIds: [ORG], spaceIds: [] }, { filter: 'pending', limit: 10 })).rows)
+    ).toEqual([mine]);
+    const all = await loadVersionQueue(
+      { id: 'admin', isAdmin: true },
+      { orgIds: [], spaceIds: [] },
+      { filter: 'pending', limit: 10 }
+    );
     expect(ids(all.rows).sort()).toEqual([mine, other, pub].sort());
   });
 
@@ -104,7 +118,11 @@ describe('loadVersionQueue (real mongod)', () => {
     const own = await held(self, 1, new Date(T0.getTime() + 2000));
     await SkillListing.updateOne({ _id: self._id }, { $set: { currentApprovedVersionId: own } });
 
-    const { rows } = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 10 });
+    const { rows } = await loadVersionQueue(
+      orgAdmin,
+      { orgIds: [ORG], spaceIds: [] },
+      { filter: 'pending', limit: 10 }
+    );
     const prevOf = (id: string) => rows.find(r => String(r.version._id) === id)?.previous;
     expect(prevOf(fresh)).toBeNull();
     expect(prevOf(next)).toMatchObject({ id: live, version: 1 });
@@ -126,10 +144,18 @@ describe('loadVersionQueue (real mongod)', () => {
       { $set: { reviewStatus: 'approved', auditSample: true, auditedAt: T0 } }
     );
 
-    const byReviewer = await loadVersionQueue(orgAdmin, [ORG], { filter: 'audit', limit: 10 });
+    const byReviewer = await loadVersionQueue(
+      orgAdmin,
+      { orgIds: [ORG], spaceIds: [] },
+      { filter: 'audit', limit: 10 }
+    );
     expect(ids(byReviewer.rows)).toEqual([sampled]);
     expect(byReviewer.rows[0].canDecide).toBe(true);
-    const byAuthor = await loadVersionQueue({ id: 'author-1' }, [ORG], { filter: 'audit', limit: 10 });
+    const byAuthor = await loadVersionQueue(
+      { id: 'author-1' },
+      { orgIds: [ORG], spaceIds: [] },
+      { filter: 'audit', limit: 10 }
+    );
     expect(byAuthor.rows[0].canDecide).toBe(false);
   });
 });

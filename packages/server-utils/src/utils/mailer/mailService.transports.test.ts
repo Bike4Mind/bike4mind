@@ -211,11 +211,12 @@ describe.each(cases)('MailService over $kind', ({ kind, make, resolveSend, rejec
     if (kind === 'ses') {
       expect(status.configured).toBe(true);
       expect(status.missingSecrets).toEqual([]);
+      expect(status.secrets).toEqual({ MAIL_FROM: true });
     } else {
       expect(status.configured).toBe(false);
       expect(status.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PASSWORD']);
+      expect(status.secrets.MAIL_HOST).toBe(false);
     }
-    expect(status.secrets.MAIL_HOST).toBe(false);
   });
 
   it('is unconfigured without a sender on either transport', async () => {

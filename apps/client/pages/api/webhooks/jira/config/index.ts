@@ -26,7 +26,8 @@ import {
   canManageConfig,
   ROTATION_WINDOW_MS,
 } from '@server/integrations/jira/webhookUtils';
-import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import {
@@ -165,7 +166,7 @@ const handler = baseApi()
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
 
       if (encryptionKey) {
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
+        const decryptedSecret = decryptStoredSecret(webhookConfig.secret);
         secretDisplay = maskSecret(decryptedSecret);
       } else {
         secretDisplay = '****';
@@ -271,7 +272,7 @@ const handler = baseApi()
       let secretMasked = '****';
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
       if (encryptionKey) {
-        const decryptedSecret = decryptSecret(updatedConfig.secret, encryptionKey);
+        const decryptedSecret = decryptStoredSecret(updatedConfig.secret);
         secretMasked = maskSecret(decryptedSecret);
       }
 

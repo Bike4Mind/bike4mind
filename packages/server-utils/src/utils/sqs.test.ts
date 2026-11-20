@@ -46,6 +46,14 @@ describe('sqs utilities', () => {
   });
 
   describe('receiveFromQueue', () => {
+    it('requests message attributes only when the caller names them', async () => {
+      mockSend.mockResolvedValue({ Messages: [] });
+      await receiveFromQueue(TEST_QUEUE_URL, 5);
+      await receiveFromQueue(TEST_QUEUE_URL, 5, 0, 0, ['All']);
+      expect(mockSend.mock.calls[0][0].input).not.toHaveProperty('MessageAttributeNames');
+      expect(mockSend.mock.calls[1][0].input.MessageAttributeNames).toEqual(['All']);
+    });
+
     it('returns messages from the queue', async () => {
       const messages = [{ MessageId: 'msg-1', Body: '{}' }];
       mockSend.mockResolvedValueOnce({ Messages: messages });

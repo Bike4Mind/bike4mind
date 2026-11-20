@@ -37,7 +37,7 @@ import {
   settleCompletion,
 } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**

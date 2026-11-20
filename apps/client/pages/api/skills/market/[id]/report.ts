@@ -13,7 +13,7 @@ import {
   canSeeListing,
   findListing,
   loadMarketSettings,
-  memberOrgIdsFor,
+  audienceIdsFor,
 } from '@bike4mind/server-utils/skillMarket/market';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
@@ -41,7 +41,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const hasImported = listing
       ? Boolean(await SkillListingImport.exists({ listingId: String(listing.id), userId }))
       : false;
-    if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token, hasImported)) {
+    if (!listing || !canSeeListing(listing, await audienceIdsFor(userId), body.token, hasImported)) {
       throw new NotFoundError('Listing not found');
     }
     if (listing.authorUserId === userId) throw new BadRequestError("You can't report your own listing");

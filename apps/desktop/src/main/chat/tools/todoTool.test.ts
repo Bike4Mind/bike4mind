@@ -38,12 +38,12 @@ describe('todo_write', () => {
     );
   });
 
-  it('needs no approval and is offered with the local tools only', () => {
+  it('needs no approval and is offered with or without a granted folder', () => {
     expect(todoWrite.approval).toBeUndefined();
     expect(findTool('todo_write')).toBe(todoWrite);
     const names = (roots: string[]) =>
       toolsForRequest({ roots, media: false, host: false }).map(tool => tool.toolSchema.name);
     expect(names(['/tmp'])).toContain('todo_write');
-    expect(names([])).not.toContain('todo_write');
+    expect(names([])).toContain('todo_write');
   });
 });

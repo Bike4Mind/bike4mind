@@ -1,6 +1,7 @@
 import {
   STUDIO_OUTPUT_DEFAULT_SIZES,
   type StudioAudioClip,
+  type StudioCropRect,
   type StudioCaptionClip,
   type StudioOutputAspectRatio,
   type StudioTimeline,
@@ -113,6 +114,25 @@ export const updateClip = (timeline: StudioTimeline, clipId: string, patch: Stud
   const allowed = Object.fromEntries(Object.entries(patch).filter(([key]) => key in located.clip));
   const clips = located.track.clips.map(clip => (clip.id === clipId ? { ...clip, ...allowed } : clip));
   return replaceTrack(timeline, { ...located.track, clips } as StudioTimelineTrack);
+};
+
+/** Sets (or, with no rect, clears back to the centre crop) a video clip's framing for one output aspect ratio. */
+export const setClipCrop = (
+  timeline: StudioTimeline,
+  clipId: string,
+  aspectRatio: StudioOutputAspectRatio,
+  rect: StudioCropRect | undefined
+): StudioTimeline => {
+  const located = findClip(timeline, clipId);
+  if (located?.track.kind !== 'video') return timeline;
+  const clips = located.track.clips.map(clip => {
+    if (clip.id !== clipId) return clip;
+    const { [aspectRatio]: _previous, ...others } = clip.crop ?? {};
+    const crop = rect ? { ...others, [aspectRatio]: rect } : others;
+    const { crop: _old, ...rest } = clip;
+    return Object.keys(crop).length > 0 ? { ...rest, crop } : rest;
+  });
+  return replaceTrack(timeline, { ...located.track, clips });
 };
 
 export const removeClip = (timeline: StudioTimeline, clipId: string): StudioTimeline => {

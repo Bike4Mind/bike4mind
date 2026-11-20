@@ -80,7 +80,7 @@ export function renderWorkflowReminder(
   // the truncation stays observable alongside budget-pressure drops.
   let elided = state.decisions.length - recentDecisions.length;
 
-  const todoLines = openTodos.map((t, i) => `${i + 1}. [${t.status}] ${elide(t.description)}`);
+  const todoLines = openTodos.map((t, i) => `${i + 1}. [${t.status}] ${elide(t.content)}`);
   const blockerLines = openBlockers.map(b => `- ${elide(b.description)}`);
   const decisionLines = recentDecisions.map(d => `- ${elide(d.summary)} (rationale: ${elide(d.rationale, 100)})`);
 

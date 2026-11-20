@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   markEscalationAlerted: vi.fn(),
   getSettingsMap: vi.fn(),
   sendEmail: vi.fn(),
+  publish: vi.fn(),
+  smtpSendEmail: vi.fn(),
+  queueFailureLog: vi.fn(),
   logger: { warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -19,8 +22,16 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: mocks.logger } }));
-vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.sendEmail } }));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: { globalInstance: mocks.logger, error: mocks.queueFailureLog },
+}));
+// The alert path imports the queued mailer once and keeps it, so a single case swaps in the real one
+// by forwarding this stub to it.
+vi.mock('../utils/mailer/queuedMailer', () => ({
+  queuedMailer: { sendEmail: (...args: unknown[]) => mocks.sendEmail(...args) },
+}));
+vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
+vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.smtpSendEmail } }));
 
 import {
   createReviewerAlertDelivery,
@@ -106,6 +117,48 @@ describe('imageModerationIncidents', () => {
     expect(mocks.markAlerted).not.toHaveBeenCalled();
     expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no reviewer is configured'), {
       incidentId: 'incident-1',
+    });
+  });
+
+  describe('through the real queued mailer', () => {
+    beforeEach(async () => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      mocks.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
+      const { queuedMailer } =
+        await vi.importActual<typeof import('../utils/mailer/queuedMailer')>('../utils/mailer/queuedMailer');
+      mocks.sendEmail.mockImplementation((to, mail, options) => queuedMailer.sendEmail(to, mail, options));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('publishes the alert as an email.send event that skips the mirror and the recipient log', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.publish).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: 'reviewer@example.com',
+          subject: 'Moderation review pending',
+          body: expect.stringContaining('incident-1'),
+          mirror: false,
+          logRecipient: false,
+        })
+      );
+      expect(mocks.smtpSendEmail).not.toHaveBeenCalled();
+      expect(mocks.markAlerted).toHaveBeenCalledWith('incident-1');
+    });
+
+    it('leaves the incident unstamped when the event cannot be queued', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+      mocks.publish.mockRejectedValue(new Error('bus unreachable'));
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.queueFailureLog).toHaveBeenCalledTimes(1);
+      expect(mocks.queueFailureLog.mock.calls[0][0]).not.toContain('reviewer@example.com');
+      expect(mocks.markAlerted).not.toHaveBeenCalled();
     });
   });
 

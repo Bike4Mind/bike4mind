@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { NESTED_SECRET_PLACEHOLDER } from '../../schemas/nestedSettingSecrets';
 
 // ============================================
 // Enums
@@ -286,7 +287,7 @@ export const SRE_ANALYSIS_COMPLETED_EVENT = 'sre.analysis.completed';
 /** Placeholder mask for encrypted secrets in the admin UI round-trip.
  *  Used by: settings/fetch.ts (server -> client), settings/update.ts (client -> server),
  *  SreAgentTab.tsx (UI display). Must be identical across all three. */
-export const SRE_SECRET_PLACEHOLDER = '••••••••';
+export const SRE_SECRET_PLACEHOLDER = NESTED_SECRET_PLACEHOLDER;
 
 /** Base allowed patterns - always merged into resolved config.
  *  Keep in sync with scripts/apply-sre-fix.cjs ALLOWED_PATTERNS */

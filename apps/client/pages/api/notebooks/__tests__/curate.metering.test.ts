@@ -9,7 +9,7 @@ import { CreditHolderType, insufficientCreditsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({ assertRequestCanAfford: vi.fn(), publish: vi.fn(), admit: vi.fn() }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (h: unknown) => h }),

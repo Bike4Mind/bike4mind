@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "full" }}
 {{- if not .Values.externalMongo.enabled }}
 ---
 apiVersion: v1
@@ -273,3 +274,4 @@ spec:
   type: ClusterIP
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
   ports: [{name: service, port: 1025, targetPort: service}]
+{{- end }}

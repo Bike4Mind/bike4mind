@@ -180,7 +180,7 @@ const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
     mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
   };
 });
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
 }));
 
@@ -419,6 +419,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockGetOrCreateSession.mock.calls[0][0]).not.toHaveProperty('messageFileIds');
       expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
+    });
+  });
+
+  describe('platform MCP connectors switched on in the composer', () => {
+    const platformId = 'a'.repeat(24);
+    const body = { enabledPlatformMcpConnections: [platformId] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards them for a session (JWT) caller', async () => {
+      const { req, res } = fire({ apiKey: null, body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toEqual([platformId]);
+    });
+
+    it('drops them for an API-key caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toBeUndefined();
     });
   });
 

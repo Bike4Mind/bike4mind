@@ -18,7 +18,8 @@
 import { Resource } from 'sst';
 import { systemSecretRepository, SystemSecretCategory } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
@@ -120,7 +121,7 @@ export async function resolveSecret(secretName: string, skipCache = false): Prom
         warnings.push('SECRET_ENCRYPTION_KEY is invalid, cannot decrypt database secrets');
       } else {
         try {
-          const decryptedValue = decryptSecret(dbSecret.encryptedValue, encryptionKey);
+          const decryptedValue = decryptStoredSecret(dbSecret.encryptedValue);
 
           // Cache the result
           secretCache.set(secretName, {

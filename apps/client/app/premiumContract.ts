@@ -102,10 +102,8 @@ export interface PremiumRouteDescriptor {
  * "More" flyout, which renders `premiumNavItems.generated.ts` generically.
  *
  * The gating fields share names and OR-semantics with `PremiumRouteDescriptor`,
- * but nav visibility differs from route gating in two deliberate ways:
- * a denied item is HIDDEN (never redirected - the route's own gate handles
- * direct navigation), and there is NO admin/developer bypass (each access
- * gate keeps its own bypass set; launch points show only for actual holders).
+ * and admins and developers pass both. A denied item is HIDDEN (never
+ * redirected - the route's own gate handles direct navigation).
  */
 export interface PremiumNavDescriptor {
   /** SPA route path to navigate to (normally one of the package's contributed routes). */
@@ -115,7 +113,7 @@ export interface PremiumNavDescriptor {
   testId?: string;
   /** Icon component; render at menu-row size (self-sized - the consumer renders it bare). */
   icon?: ComponentType;
-  /** Show only when the user holds the server-resolved entitlement (no bypass). */
+  /** Show only when the user holds the server-resolved entitlement (admins and developers always see it). */
   requireEntitlement?: string;
   /** Show only when the user carries the tag; OR with `requireEntitlement` when both set. */
   requireFeatureTag?: string;

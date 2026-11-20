@@ -11396,6 +11396,7 @@ describe('ChatCompletionProcess', () => {
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
       disabledMcpConnections?: string[];
+      enabledPlatformMcpConnections?: string[];
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
@@ -11454,6 +11455,9 @@ describe('ChatCompletionProcess', () => {
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
         ...(params.disabledMcpConnections !== undefined
           ? { disabledMcpConnections: params.disabledMcpConnections }
+          : {}),
+        ...(params.enabledPlatformMcpConnections !== undefined
+          ? { enabledPlatformMcpConnections: params.enabledPlatformMcpConnections }
           : {}),
         ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
@@ -11625,6 +11629,28 @@ describe('ChatCompletionProcess', () => {
         await runWithBuildToolsSpy({ message: 'Compare the smartphones', disabledMcpConnections: ['some-slug'] });
         expect(buildMcpToolsSpy).toHaveBeenCalledWith(
           expect.objectContaining({ disabledMcpConnections: ['some-slug'] })
+        );
+      } finally {
+        buildMcpToolsSpy.mockRestore();
+      }
+    });
+
+    it('request enabledPlatformMcpConnections -> buildMcpTools, and none when the request names none', async () => {
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+      buildMcpToolsSpy.mockClear();
+      try {
+        await runWithBuildToolsSpy({
+          message: 'Compare the smartphones',
+          enabledPlatformMcpConnections: ['b'.repeat(24)],
+        });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: ['b'.repeat(24)] })
+        );
+        await runWithBuildToolsSpy({ message: 'Compare the smartphones' });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: undefined })
         );
       } finally {
         buildMcpToolsSpy.mockRestore();
@@ -15452,12 +15478,13 @@ describe('prompt moderation', () => {
     guardrailId: string | null;
     sharedOpenaiKey?: string;
   }) {
+    const completeModel = vi.fn(
+      async (_model: unknown, _messages: unknown, _options: unknown, callback: (tokens: string[]) => Promise<void>) => {
+        await callback(['Hi!']);
+      }
+    );
     mockedGetLlmByModel.mockReturnValue({
-      complete: vi
-        .fn()
-        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (t: string[]) => Promise<void>) => {
-          await cb(['Hi!']);
-        }),
+      complete: completeModel,
       getModelInfo: vi.fn().mockResolvedValue([]),
       currentModel: 'gpt-4',
     } as any);
@@ -15489,6 +15516,7 @@ describe('prompt moderation', () => {
       if (key === 'openaiDemoKey') return sharedOpenaiKey;
       return undefined;
     }) as any);
+    return completeModel;
   }
 
   beforeEach(() => {
@@ -15697,6 +15725,107 @@ describe('prompt moderation', () => {
     expect(BedrockGuardrailsService).not.toHaveBeenCalled();
   });
 
+  describe('an API key moderation exception', () => {
+    const keyTurn = { ...startParams, apiKeyId: 'key-1' };
+    const flagWith = (
+      Service: typeof OpenaiModerationsService | typeof BedrockGuardrailsService,
+      categories: string[]
+    ) =>
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as never);
+    const keyWith = (categories: string[], overrides: Record<string, unknown> = {}) => {
+      const findModerationException = vi.fn().mockResolvedValue({
+        userId: 'user1',
+        status: 'active',
+        moderationException: { categories, reason: 'r', setBy: 'admin-1', setAt: new Date() },
+        ...overrides,
+      });
+      service.db.userApiKeys = { findModerationException };
+      return findModerationException;
+    };
+
+    it.each([
+      [
+        'openai',
+        { openaiKey: 'demo-key', guardrailId: null },
+        OpenaiModerationsService,
+        ['violence', 'violence/graphic'],
+      ],
+      ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService, ['VIOLENCE']],
+    ] as const)(
+      'continues a %s-flagged turn the key is excepted from and records no hit',
+      async (_s, knobs, Service, categories) => {
+        const completeModel = wireModMocks(knobs);
+        enableAdminFlags('ModerationEnabled');
+        flagWith(Service, [...categories]);
+        const find = keyWith([...categories]);
+
+        await service.process({ body: keyTurn, logger: mockLogger });
+
+        expect(completeModel).toHaveBeenCalledOnce();
+        expect(find).toHaveBeenCalledExactlyOnceWith('key-1');
+        expect(applyModerationHit).not.toHaveBeenCalled();
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          expect.stringContaining('continued under its API key exception'),
+          expect.objectContaining({ apiKeyId: 'key-1', categories: [...categories] })
+        );
+      }
+    );
+
+    it.each([
+      ['one flagged category is outside the exception', ['violence', 'hate'], () => keyWith(['violence'])],
+      [
+        'the key has no exception',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockResolvedValue(null) }),
+      ],
+      ['the key belongs to another user', ['violence'], () => keyWith(['violence'], { userId: 'user2' })],
+      ['the key is disabled', ['violence'], () => keyWith(['violence'], { status: 'disabled' })],
+      ['the key has expired', ['violence'], () => keyWith(['violence'], { expiresAt: new Date(0) })],
+      [
+        'the lookup fails',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockRejectedValue(new Error('db down')) }),
+      ],
+      ['no key repository is wired', ['violence'], () => undefined],
+    ] as const)('keeps the block and records the hit when %s', async (_label, flagged, arrange) => {
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, [...flagged]);
+      arrange();
+
+      await service.process({ body: keyTurn, logger: mockLogger });
+
+      expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining('continued under its API key exception'),
+        expect.anything()
+      );
+
+      expect(applyModerationHit).toHaveBeenCalledWith(
+        expect.objectContaining({ hit: expect.objectContaining({ source: 'openai', categories: [...flagged] }) })
+      );
+    });
+
+    it('never reads the exception for a turn no API key started', async () => {
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, ['violence']);
+      const find = keyWith(['violence']);
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
+
+      expect(find).not.toHaveBeenCalled();
+      expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('records a moderation hit with source bedrock when Bedrock Guardrails blocks a prompt', async () => {
     wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
     enableAdminFlags('ModerationEnabled');
@@ -15704,15 +15833,57 @@ describe('prompt moderation', () => {
       this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
     } as any);
 
-    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-      FlaggedContentError
-    );
+    await service.process({ body: startParams, logger: mockLogger });
 
     expect(applyModerationHit).toHaveBeenCalledWith(
       expect.objectContaining({
         hit: expect.objectContaining({ source: 'bedrock', categories: ['violence'] }),
       })
     );
+  });
+
+  it.each([
+    ['openai', { openaiKey: 'demo-key', guardrailId: null }, OpenaiModerationsService],
+    ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService],
+  ] as const)(
+    'settles a turn the %s check refuses as a content_blocked error quest',
+    async (_source, knobs, Service) => {
+      wireModMocks(knobs);
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('refusal text', ['violence']));
+      } as never);
+
+      // Resolves: a rethrow would send the queue path to retry and the wait route to a 500.
+      await service.process({ body: startParams, logger: mockLogger });
+
+      const quest = await service.db.quests.findById('q1');
+      expect(quest).toMatchObject({
+        type: 'error',
+        status: 'done',
+        errorCode: 'content_blocked',
+        reply: 'refusal text',
+        replies: ['refusal text'],
+      });
+      expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves errorCode unset on a turn that fails for an unclassified reason', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+      this.checkPrompt = vi.fn().mockRejectedValue(new Error('moderation service unreachable'));
+    } as never);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toThrow(
+      'moderation service unreachable'
+    );
+
+    const quest = await service.db.quests.findById('q1');
+    expect(quest?.type).toBe('error');
+    expect(quest?.errorCode).toBeUndefined();
+    expect(applyModerationHit).not.toHaveBeenCalled();
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

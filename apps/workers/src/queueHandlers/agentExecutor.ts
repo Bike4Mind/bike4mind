@@ -91,6 +91,7 @@ import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index'
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@bike4mind/server-utils/decisions/runDecisionTool';
 import { executionTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -361,7 +362,7 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // Single source for the gate defaults: the schema defaults in common.
 const CONFIDENCE_GATE_FALLBACK = OrchestrationDefaultsSchema.parse({});
 
-// `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
+// `persistRunAsQuest` lives in `@bike4mind/server-utils/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
 // write contract - both code paths produce identical Quest docs.
 
@@ -1135,6 +1136,7 @@ async function runExecution(
     // as the HTTP doors do through apiKeyAuth.
     const storedUser = await User.findById(execution.userId);
     if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    await resolveRoleAdminPermissions(storedUser);
     const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
@@ -2584,6 +2586,7 @@ async function runExecution(
       artifactsEnabled: enableArtifacts,
       isNewExecution,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     // Each agent round's output is capped at what the payer can afford; the loop below turns the
@@ -3822,7 +3825,7 @@ async function runExecution(
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
     // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
     // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
-    // apps/client/server/websocket/agentExecute.ts).
+    // packages/server-utils/src/agentExecution/gateResponse.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';
@@ -4379,6 +4382,7 @@ async function processSubagentDispatch(
       });
       return;
     }
+    await resolveRoleAdminPermissions(storedUser);
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
@@ -5097,6 +5101,7 @@ async function processSubagentDispatch(
     const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
       artifactsEnabled: childArtifactsEnabled,
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
     });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {

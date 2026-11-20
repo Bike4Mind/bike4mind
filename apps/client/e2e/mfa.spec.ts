@@ -2,7 +2,7 @@ import { type APIRequestContext, type Page, type Request } from '@playwright/tes
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiCreateTestUser, apiCreateThrowawayUser, apiGetOtcCode } from './helpers/api';
-import { enrollMfa, generateTotp, trustedDeviceCookieName } from './helpers/mfa';
+import { enrollMfa, generateTotp, signInWithTotp, trustedDeviceCookieName } from './helpers/mfa';
 import { seedAuthOnPage } from './helpers/auth-seed';
 import type { LoginPage } from './pages/LoginPage';
 
@@ -22,26 +22,7 @@ const MFA_SETUP_PATH = '/api/auth/mfa/setup';
 const isMfaSetupCall = (req: Request): boolean =>
   req.method() === 'POST' && new URL(req.url()).pathname === MFA_SETUP_PATH;
 
-/** Sign in through the UI with an emailed code and a TOTP code, optionally ticking "remember this device". */
-async function signInWithTotp(
-  loginPage: LoginPage,
-  request: APIRequestContext,
-  email: string,
-  totp: string,
-  { rememberDevice = false }: { rememberDevice?: boolean } = {}
-): Promise<void> {
-  await loginPage.goto();
-  await loginPage.fillOtc(await sendOtcAndReadCode(loginPage, request, email));
-  await loginPage.submitOtcExpectingMfa();
-  await loginPage.expectMfaChallenge();
-  await loginPage.fillMfaCode(totp);
-  if (rememberDevice) {
-    await loginPage.checkMuiCheckbox(
-      loginPage.page.getByTestId('mfa-modal-remember-device-checkbox').getByRole('checkbox')
-    );
-  }
-  await loginPage.submitMfa();
-}
+const UNENROLLED = { mfa: 'unenrolled' } as const;
 
 async function cookieNames(page: Page): Promise<string[]> {
   return (await page.context().cookies()).map(c => c.name);
@@ -56,6 +37,7 @@ test.describe('MFA', () => {
       email,
       name: `MFA Signin ${timestamp} e2e`,
       password: 'E2eMfaSigninPass123!',
+      mfa: 'unenrolled',
     });
     const { secret, enrolledStep } = await enrollMfa(request, created.accessToken);
 
@@ -81,6 +63,7 @@ test.describe('MFA', () => {
       email,
       name: `MFA Backup ${timestamp} e2e`,
       password: 'E2eMfaBackupPass123!',
+      mfa: 'unenrolled',
     });
     const { backupCodes } = await enrollMfa(request, created.accessToken);
 
@@ -114,6 +97,7 @@ test.describe('MFA', () => {
       name: `MFA Admin ${timestamp} e2e`,
       password: 'E2eMfaAdminPass123!',
       isAdmin: true,
+      mfa: 'unenrolled',
     });
     const {
       secret: adminSecret,
@@ -157,7 +141,7 @@ test.describe('MFA', () => {
 
 // Each account is held to MFA enforcement on its own (mfaEnforcement: 'force'), so these tests
 // reach the server's real gate on any stage while the stage-wide enforceMFA setting stays as it is.
-const FORCED = { mfaEnforcement: 'force' } as const;
+const FORCED = { mfaEnforcement: 'force', mfa: 'unenrolled' } as const;
 
 test.describe('MFA enforcement', () => {
   test('refuses a gated route until the account enrolls', async ({ request }) => {
@@ -323,8 +307,8 @@ test.describe('MFA remembered device', () => {
     page,
     request,
   }) => {
-    const userA = await apiCreateThrowawayUser(request, 'mfaremembera');
-    const userB = await apiCreateThrowawayUser(request, 'mfarememberb');
+    const userA = await apiCreateThrowawayUser(request, 'mfaremembera', UNENROLLED);
+    const userB = await apiCreateThrowawayUser(request, 'mfarememberb', UNENROLLED);
     const mfaA = await enrollMfa(request, userA.accessToken);
     const mfaB = await enrollMfa(request, userB.accessToken);
     const cookieA = trustedDeviceCookieName(userA.userId);

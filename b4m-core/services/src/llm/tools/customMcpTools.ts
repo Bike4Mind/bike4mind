@@ -36,10 +36,20 @@ export interface CustomMcpToolCallInput {
   toolName: string;
   args: Record<string, unknown>;
   approved: boolean;
+  /** Platform connectors the user switched on, by id; a platform connector not named here is not found. */
+  platformConnectionIds?: readonly string[];
+}
+
+export interface CustomMcpListOptions {
+  /**
+   * Platform connectors the user switched on in the Tools menu, by id. A platform connector is off
+   * for each user until they switch it on, so one not named here is not listed.
+   */
+  platformConnectionIds?: readonly string[];
 }
 
 export interface CustomMcpToolHost {
-  listConnections(userId: string): Promise<CustomMcpConnectionOffer[]>;
+  listConnections(userId: string, options?: CustomMcpListOptions): Promise<CustomMcpConnectionOffer[]>;
   callTool(input: CustomMcpToolCallInput): Promise<{ result: { content?: unknown[]; isError?: boolean } }>;
 }
 
@@ -56,6 +66,8 @@ export interface CustomMcpToolOptions {
    * whose permission gate has already authorized any call that reaches the tool.
    */
   requestApproval?: (request: CustomMcpApprovalRequest) => Promise<void>;
+  /** The same switched-on platform connector ids the connections were listed with. */
+  platformConnectionIds?: readonly string[];
 }
 
 export { CUSTOM_MCP_DATA_NOTICE } from '@bike4mind/common';
@@ -80,11 +92,12 @@ export async function loadCustomMcpConnections(
   host: CustomMcpToolHost,
   userId: string,
   logger: Pick<Logger, 'warn'>,
-  maxTools = MAX_CUSTOM_TOOLS_PER_TURN
+  maxTools = MAX_CUSTOM_TOOLS_PER_TURN,
+  listOptions: CustomMcpListOptions = {}
 ): Promise<CustomMcpConnectionOffer[]> {
   let remaining = maxTools;
   const kept: CustomMcpConnectionOffer[] = [];
-  for (const connection of await host.listConnections(userId)) {
+  for (const connection of await host.listConnections(userId, listOptions)) {
     const tools = connection.tools.filter(tool => isCustomToolOffered(tool, connection));
     if (tools.length > remaining) {
       logger.warn(`[MCP] Custom tool cap of ${maxTools} reached; dropping tools from ${connection.slug}`);
@@ -121,7 +134,7 @@ function wrapUntrusted(connection: CustomConnectorPendingRef, body: string): str
 /** Tool definitions for one connection's offered tools (see `loadCustomMcpConnections`). */
 export function generateCustomMcpTools(
   connection: CustomMcpConnectionOffer,
-  { userId, host, requestApproval }: CustomMcpToolOptions
+  { userId, host, requestApproval, platformConnectionIds }: CustomMcpToolOptions
 ): Array<{ name: string } & ICompletionOptionTools> {
   const ref: CustomConnectorPendingRef = {
     connectionId: connection.connectionId,
@@ -150,6 +163,7 @@ export function generateCustomMcpTools(
             toolName: tool.name,
             args,
             approved: needsApproval,
+            platformConnectionIds,
           });
           return wrapUntrusted(ref, flattenContent(result.content));
         },

@@ -17,6 +17,8 @@ import {
   RekognitionImageModerationService,
   UnsupportedImageFormatError,
 } from './index';
+import { jimpFromRgba } from './jimpBitmap';
+import { decodeWebp, isWebp } from './webpDecode';
 
 // Encoded by Pillow, an independent encoder, with the real-world delta encoding: after the first
 // frame each frame only covers the region that changed. Frames are white, then the top half red,
@@ -142,8 +144,11 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
     }
   });
 
-  it('blocks an animated WebP when only a later frame is flagged', async () => {
-    const flagged = (await extractAnimationFrames(fixture('keyframes.webp')))![2];
+  it('blocks an animated WebP when only a later frame is flagged, sending each frame as JPEG', async () => {
+    // Rekognition rejects WebP, so each frame reaches it as the JPEG transcode of that frame.
+    const frame = (await extractAnimationFrames(fixture('keyframes.webp')))![2];
+    const { data, width, height } = await decodeWebp(frame);
+    const flagged = Buffer.from(await (await jimpFromRgba(data, width, height)).getBuffer('image/jpeg'));
     const send = vi.fn(async (command: DetectModerationLabelsCommand) => ({
       ModerationLabels: Buffer.from(command.input.Image!.Bytes!).equals(flagged)
         ? [{ Name: 'Explicit', ParentName: '', Confidence: EXPLICIT_NUDITY_CONFIDENCE + 1 }]
@@ -156,6 +161,7 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
     await expect(service.checkImage(fixture('keyframes.webp'), 'image/webp')).rejects.toThrow(
       ImageModerationBlockedError
     );
+    for (const [command] of send.mock.calls) expect(isWebp(Buffer.from(command.input.Image!.Bytes!))).toBe(false);
   });
 
   it.each(['over-cap.gif', 'delta.webp'])('blocks %s as unsupported without calling Rekognition', async name => {

@@ -9,7 +9,7 @@ const route = vi.hoisted(() => ({
   handler: null as RouteHandler | null,
   admit: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: route.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: route.admit }));
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,

@@ -1,3 +1,7 @@
+import {
+  currentPublishedIndexKey,
+  downloadPublishedIndex,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
@@ -426,7 +430,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   }
 
   const storage = getPublishedArtifactsStorage();
-  const signFile = makeFileSigner(storage, artifact.storageKeyPrefix, req);
+  const signFile = makeFileSigner(storage, artifact, req);
 
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
@@ -827,7 +831,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       }
     }
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
+      const buf = await (assetPath === 'index.html'
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(`${artifact.storageKeyPrefix}${assetPath}`));
       // The edge adapter text-converts any body whose type it does not list as binary.
       res.setHeader('Content-Type', bufferedContentType(fileEntry.mimeType));
       // Publishers control MIME metadata; every asset navigation must download, even with an unknown type.
@@ -874,11 +880,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     !!requestedVersion && requestedVersion !== currentSha && versionsList.some(v => v.sha256Index === requestedVersion);
   const indexKey = isKnownOlderVersion
     ? `${artifact.storageKeyPrefix}versions/${requestedVersion}.html`
-    : `${artifact.storageKeyPrefix}${pagePath}`;
+    : pagePath === 'index.html'
+      ? currentPublishedIndexKey(artifact)
+      : `${artifact.storageKeyPrefix}${pagePath}`;
 
   let indexHtml: string;
   try {
-    indexHtml = (await storage.download(indexKey)).toString('utf-8');
+    indexHtml = (
+      await (pagePath === 'index.html' && !isKnownOlderVersion
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(indexKey))
+    ).toString('utf-8');
   } catch {
     return res.status(isKnownOlderVersion ? 404 : 500).json({
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
@@ -1585,6 +1597,7 @@ interface PublishedArtifactLean {
   discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   manifest: Array<{ path: string; mimeType: string; size?: number }>;
   renderedBody?: string;
   /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
@@ -2203,7 +2216,7 @@ type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) =>
  */
 function makeFileSigner(
   storage: ReturnType<typeof getPublishedArtifactsStorage>,
-  storageKeyPrefix: string,
+  page: { storageKeyPrefix: string; indexObjectPath?: string | null },
   req: Request
 ): FileSigner {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
@@ -2222,7 +2235,8 @@ function makeFileSigner(
     const allowed = await originOnce();
     if (!allowed) return null;
     try {
-      const url = await storage.getSignedUrl(`${storageKeyPrefix}${path}`, 'get', {
+      const key = path === 'index.html' ? currentPublishedIndexKey(page) : `${page.storageKeyPrefix}${path}`;
+      const url = await storage.getSignedUrl(key, 'get', {
         audience: 'browser',
         expiresIn: ttlSeconds,
         ...signedResponseFor(path, wantsDownload),

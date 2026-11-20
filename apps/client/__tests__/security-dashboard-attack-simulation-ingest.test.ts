@@ -49,14 +49,6 @@ vi.mock('@bike4mind/auth/crypto', () => ({
   safeCompareTokens: mockSafeCompareTokens,
 }));
 
-vi.mock('@bike4mind/common', () => ({
-  isPlaceholderValue: vi.fn((v: string | undefined | null) => {
-    if (!v) return true;
-    const normalized = v.trim().toLowerCase();
-    return normalized === 'not-configured' || normalized === 'my-secret-placeholder-value';
-  }),
-}));
-
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
     post: (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => fn(req, res),
