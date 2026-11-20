@@ -5,6 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   normalizeReferralCode,
+  parseShareLinkVia,
   setReferralCookie,
   SHARE_LINK_VIA,
   shareLinkDestination,
@@ -28,7 +29,7 @@ const handler = baseApi({ auth: false })
       void emitProductEvent({
         productId: HOST_PRODUCT_ID,
         event: 'referral_link_visit',
-        metadata: { known, via: SHARE_LINK_VIA.find(value => value === req.query.via) ?? 'direct' },
+        metadata: { known, via: parseShareLinkVia(req.query.via) ?? 'direct' },
         metadataFields: { known: z.boolean(), via: z.enum([...SHARE_LINK_VIA, 'direct']) },
       }).catch(() => undefined);
 

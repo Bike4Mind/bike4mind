@@ -101,9 +101,14 @@ export function publishMarketingUrl(via: ShareLinkVia): string | null {
     : null;
 }
 
+/** The published-page link a visit's `via` query names; undefined for anything else, a repeated `via` included. */
+export function parseShareLinkVia(via: unknown): ShareLinkVia | undefined {
+  return SHARE_LINK_VIA.find(value => value === via);
+}
+
 /** Where a share-link visit goes: a published-page link keeps its marketing landing, anything else signs up. */
 export function shareLinkDestination(via: unknown): string {
-  const known = SHARE_LINK_VIA.find(value => value === via);
+  const known = parseShareLinkVia(via);
   return (known && publishMarketingUrl(known)) || '/register';
 }
 
