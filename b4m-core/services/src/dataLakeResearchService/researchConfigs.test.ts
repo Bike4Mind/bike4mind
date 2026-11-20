@@ -1190,6 +1190,7 @@ describe('research schedule pause', () => {
       const off = adaptersFor(weekly({ schedulePaused: true }));
       await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, off.adapters);
       expect(patchOf(off.repo)).toMatchObject({ cadence: 'off', schedulePaused: false });
+      expect(historyEntries(off.record).some(entry => entry.startsWith('research schedule resumed'))).toBe(false);
     });
   });
 

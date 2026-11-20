@@ -426,7 +426,9 @@ export async function updateResearchConfig(
   // nothing, so it earns no `researchConfig: updated: <name>` row - a resubmit-without-edits is not
   // an event a History reader needs to see.
   // Outside the nothingMoved gate: a pause-only change moves no lever and must still be recorded.
-  const pauseChanges = nextPaused !== wasPaused ? [researchSchedulePausedChange(updated.name, nextPaused)] : [];
+  // Switching the cadence off clears the flag, but that is the schedule going off, not a resume.
+  const pauseChanges =
+    nextPaused !== wasPaused && cadence !== 'off' ? [researchSchedulePausedChange(updated.name, nextPaused)] : [];
   if (nothingMoved && pauseChanges.length > 0) {
     await recordLakeConfigChange(
       { actor, lake, grants, action: 'update-research-config', changes: pauseChanges },
