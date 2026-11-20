@@ -60,7 +60,9 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitApiKeyCompletion: mockAdmitApiKeyCompletion }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+}));
 
 vi.mock('@bike4mind/server-utils/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
@@ -68,7 +70,7 @@ vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
 }));
 
-vi.mock('@server/utils/agentExecutorFunctionName', () => ({
+vi.mock('@bike4mind/server-utils/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 

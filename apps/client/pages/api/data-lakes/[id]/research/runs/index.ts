@@ -20,7 +20,7 @@ import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchMa
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { respond } from '@server/utils/respond';
 
 const StartInput = z.object({ configId: z.string() });

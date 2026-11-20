@@ -51,6 +51,8 @@ export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 
   updatedAt: Date;
   accessGate?: PublishedArtifactAccessGate | null;
   thumbnail?: PublishedArtifactThumbnail | null;
+  /** Current index payload relative to storageKeyPrefix; missing on legacy canonical writes. */
+  indexObjectPath?: string | null;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -215,6 +217,7 @@ const PublishedArtifactSchema = new Schema(
     source: { type: SourceSubSchema, required: true },
 
     storageKeyPrefix: { type: String, default: '' },
+    indexObjectPath: { type: String, default: null },
     size: { type: SizeSubSchema, required: true, default: () => ({ totalBytes: 0, fileCount: 0 }) },
     sha256Index: { type: String },
     manifest: { type: [ArtifactFileSubSchema], default: [] },

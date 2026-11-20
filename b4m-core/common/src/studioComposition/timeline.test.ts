@@ -77,6 +77,37 @@ describe('StudioTimelineSchema', () => {
     );
   });
 
+  it('leaves crop unset on a clip that has none, so old specs keep the centre crop', () => {
+    const [video] = parse(baseTimeline()).tracks;
+    expect(video.kind === 'video' && video.clips[0].crop).toBeUndefined();
+  });
+
+  const withCrop = (crop: unknown) =>
+    baseTimeline({
+      tracks: [
+        { id: 'video-1', kind: 'video', clips: [{ id: 'v1', fileId: FILE_A, startMs: 0, durationMs: 5000, crop }] },
+      ],
+    } as Partial<StudioTimelineInput>);
+
+  it('keeps a per-aspect-ratio crop rect, including one flush with the frame edge', () => {
+    const crop = {
+      '9:16': { x: 0.1, y: 0, width: 0.316406, height: 1 },
+      '1:1': { x: 0.4375, y: 0, width: 0.5625, height: 1 },
+    };
+    const [video] = parse(withCrop(crop)).tracks;
+    expect(video.kind === 'video' && video.clips[0].crop).toEqual(crop);
+  });
+
+  it.each([
+    ['a rect past the right edge', { '9:16': { x: 0.8, y: 0, width: 0.3, height: 1 } }],
+    ['a rect past the bottom edge', { '9:16': { x: 0, y: 0.5, width: 0.3, height: 0.6 } }],
+    ['a negative origin', { '9:16': { x: -0.1, y: 0, width: 0.3, height: 1 } }],
+    ['a rect below the minimum edge', { '9:16': { x: 0, y: 0, width: 0.01, height: 1 } }],
+    ['an unknown aspect ratio key', { '3:2': { x: 0, y: 0, width: 0.5, height: 1 } }],
+  ])('rejects %s', (_label, crop) => {
+    expect(StudioTimelineSchema.safeParse(withCrop(crop)).success).toBe(false);
+  });
+
   it('lists each referenced file once, skipping captions', () => {
     expect(studioTimelineFileIds(parse(baseTimeline()))).toEqual([FILE_A, FILE_B]);
   });

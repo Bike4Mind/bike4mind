@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   findOrgById: vi.fn(),
   findActiveFreeze: vi.fn(),
   resolveWebSearchProviders: vi.fn(),
+  resolveSearchRedirect: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
@@ -84,6 +85,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
       FeedUnavailableError: real.FeedUnavailableError,
       parseFeed: real.parseFeed,
       trustedEntryForUrl: real.trustedEntryForUrl,
+      resolveSearchRedirect: (url: string) => h.resolveSearchRedirect(url),
     },
     recordOperationalUsage: h.recordOperationalUsage,
   };
@@ -158,6 +160,7 @@ beforeEach(() => {
   h.findOrgById.mockResolvedValue(null);
   h.findActiveFreeze.mockResolvedValue(null);
   h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
+  h.resolveSearchRedirect.mockImplementation(async (url: string) => ({ url, resolved: 'not_redirect' }));
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
@@ -721,6 +724,51 @@ describe('runLakeResearch', () => {
       expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
     });
 
+    it('classifies on the resolved url, keeps unresolved hits as-is, drops duplicates and counts resolutions', async () => {
+      const goto = 'https://www.google.com/goto?url=tok-1';
+      const stuck = 'https://www.google.com/goto?url=tok-2';
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () => [
+          { title: 'Wiki', url: goto, snippet: 's' },
+          { title: 'Wiki again', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+          { title: 'Stuck', url: stuck, snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed', via: 'script' };
+        if (url === stuck) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
+        return { url, resolved: 'not_redirect' };
+      });
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([
+        { title: 'Wiki', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+        { title: 'Stuck', url: stuck, snippet: 's' },
+      ]);
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        expect.objectContaining({
+          hits: 2,
+          redirects: { decoded: 0, followed: 1, unresolved: 1 },
+          followedVia: { script: 1 },
+          unresolvedDetails: [{ reason: 'status', status: 429 }],
+          hosts: ['en.wikipedia.org', 'www.google.com'],
+        })
+      );
+      expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
+    });
+
     it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
       const backup = {
         name: 'searxng',
@@ -743,6 +791,9 @@ describe('runLakeResearch', () => {
           maxResults: 5,
           recencyDays: 30,
           hits: 2,
+          redirects: { decoded: 0, followed: 0, unresolved: 0 },
+          followedVia: {},
+          unresolvedDetails: [],
           hosts: ['arxiv.org', 'www.ieee.org'],
         }
       );

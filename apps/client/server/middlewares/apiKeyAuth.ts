@@ -250,9 +250,13 @@ export const apiKeyAuth = (
 
       // Judged before the admin role is withheld: trust is about the account, not the key's
       // authority, so an admin's key without the admin scope is still an admin-owned key.
-      const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(
+      const { rateLimit, ownerUntrusted, unpaidAccountLimits } = await resolveUntrustedKeyLimits(
         user,
-        { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+        {
+          rateLimit: validation.rateLimit!,
+          billingOwnerType: validation.billingOwnerType,
+          oauthExchangeClientId: validation.oauthExchangeClientId,
+        },
         req
       );
 
@@ -275,6 +279,7 @@ export const apiKeyAuth = (
         scopes: validation.scopes!,
         rateLimit,
         ownerUntrusted,
+        unpaidAccountLimits,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,

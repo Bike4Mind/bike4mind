@@ -154,7 +154,7 @@ export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema
 /**
  * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
  * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
- * names; `automation` is the stale-detection grader (apps/client/server/security/shadowDetectionAutoGrade.ts),
+ * names; `automation` is the stale-detection grader (apps/workers/src/security/shadowDetectionAutoGrade.ts),
  * which never counts as a human verdict. Absent on entries written before the field existed, which
  * were all reviews.
  */

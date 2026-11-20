@@ -68,10 +68,15 @@ variable, a contributed secret or an earlier declaration.
 
 A registered pair gets a DLQ alarm and dashboard widget, and is listed in the admin
 DLQ registry. Only the web app is linked to it, and no consumer is subscribed: the
-package must wire its own consumer. Server code narrows its names with
-`contributedDlqLabel()` and `contributedSourceQueueName()` from
-`@bike4mind/server-utils/utils/dlqRegistry` before passing them to `getDlqUrl` or
-`getSourceQueueUrl`; both throw for a dropped or undeclared name.
+package must wire its own consumer. `sst.config.ts` can hand the registered pairs to a
+package's `contributeInfra` as `contributedQueues`, keyed by queue name with
+`{ spec, queue, dlq }` values, next to the shared event bus (`eventBus`) and the alarm
+topic (`alarmTopic`, undefined on a stage without monitoring). A package must treat
+each of them as optional, since a host revision that predates the wiring passes none.
+Server code narrows its names with `contributedDlqLabel()` and
+`contributedSourceQueueName()` from `@bike4mind/server-utils/utils/dlqRegistry` before
+passing them to `getDlqUrl` or `getSourceQueueUrl`; both throw for a dropped or
+undeclared name.
 
 ## DLQ registries
 

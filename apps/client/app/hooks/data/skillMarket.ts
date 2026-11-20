@@ -65,7 +65,12 @@ export type MarketFilters = {
 
 export type MyListing = MarketListing & { versions: ISkillListingVersion[] };
 
-export type MarketMe = { organizations: Array<{ id: string; name: string }>; isReviewer: boolean; isAdmin: boolean };
+export type MarketMe = {
+  organizations: Array<{ id: string; name: string }>;
+  spaces?: Array<{ id: string; name: string }>;
+  isReviewer: boolean;
+  isAdmin: boolean;
+};
 
 export type SubmitResult = { listing: MarketListing; version: ISkillListingVersion };
 

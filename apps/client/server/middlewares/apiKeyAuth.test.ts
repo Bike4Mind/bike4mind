@@ -719,6 +719,26 @@ describe('apiKeyAuth with an exchange key', () => {
     ...extra,
   });
 
+  it('judges the exchange client and puts its unpaid account limits on req.apiKeyInfo', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 5, requestsPerDay: 50 },
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+    });
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(true);
+    expect(resolveUntrustedKeyLimitsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      req
+    );
+    expect(
+      (req as unknown as { apiKeyInfo: { unpaidAccountLimits?: unknown } }).apiKeyInfo.unpaidAccountLimits
+    ).toEqual(unpaidAccountLimits);
+  });
+
   it('refuses it on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
     const { passed, error } = await run(undefined, makeReq());

@@ -119,6 +119,7 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
           { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
           { field: 'federatedIdp', before: null, after: null },
           { field: 'rateLimit', before: null, after: null },
+          { field: 'unpaidAccountLimits', before: null, after: null },
           { field: 'unpaidAccountsAllowed', before: null, after: null },
         ],
       })
@@ -171,6 +172,21 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
       );
     }
   );
+
+  it('audits an unpaidAccountLimits update before/after', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 10_000, maxConcurrent: 1 };
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ unpaidAccountLimits }) });
+    const { req, res } = makeReqRes('PATCH', { body: { unpaidAccountLimits } });
+    await handlers.update.patch(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { unpaidAccountLimits });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'unpaidAccountLimits', before: null, after: unpaidAccountLimits }]),
+      })
+    );
+  });
 
   it('audits an unpaidAccountsAllowed opt-out', async () => {
     db.updateOAuthClient.mockResolvedValue({

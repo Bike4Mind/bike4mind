@@ -120,6 +120,14 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
   no team. Nothing is gated. Once an Apple Developer team id is configured: set `DEVELOPMENT_TEAM`, enable the Push
   Notifications and Associated Domains capabilities on the App ID, and publish the AASA file on app.bike4mind.com.
   Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
+- **Signing config**: `Config/Signing.xcconfig` supplies the team, the three bundle ids and the three entitlements paths to every
+  target, with defaults equal to the team/CI values. It ends with an optional `#include? "Local.xcconfig"`; that file is gitignored,
+  so a developer overrides the values in it without touching the project. To build to a personal device, copy
+  `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, `B4M_APP_BUNDLE_ID` and the personal
+  entitlements (`Config/Entitlements/*.personal.entitlements`, empty because a free team signs none of these capabilities); see
+  [DEVICE_TESTING.md](DEVICE_TESTING.md). `Tools/check-entitlements-parity.sh` checks the team entitlements against `B4MKit`, requires the
+  personal variants to declare nothing, and checks the xcconfig defaults point at the committed files. CI's `fastlane` passes
+  `DEVELOPMENT_TEAM` on the command line, which overrides the xcconfig.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
   opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).
 
@@ -152,8 +160,9 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 - **Voice** records with `AVAudioRecorder` and transcribes through `POST /api/v1/transcriptions/uploads` + `POST /api/v1/transcriptions`.
 - **Shared access**: both targets carry the `group.com.bike4mind.app` App Group and the `$(AppIdentifierPrefix)com.bike4mind.shared`
   keychain group so the extension can read the app's refresh token. The team prefix is resolved at runtime; with no entitlement in
-  effect (an unsigned build) the keychain item stays private to the app, the App Group falls back to Application Support, and the
-  extension simply reports it is signed out. The share flow works end to end only on a signed build with both capabilities enabled.
+  effect (an unsigned build, or a signed build without Keychain Sharing) the keychain item stays private to the app, the App Group
+  falls back to Application Support, and the extension simply reports it is signed out. The share flow works end to end only on a
+  signed build with both capabilities enabled.
 - `B4M_UI_FIXTURES=1` swaps in fixture destinations, submission and transcription, in the app and in the extension.
 
 ## App icon and launch screen

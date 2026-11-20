@@ -72,6 +72,27 @@ interface ImageGenerationModelSelectionModalProps {
   onClose: () => void;
 }
 
+interface ImageSettingBase {
+  label: string;
+  testId: string;
+  tooltip?: string;
+  // Set when the selected model ignores the setting: row stays visible but is not editable.
+  disabled?: boolean;
+}
+interface ImageSelectSetting extends ImageSettingBase {
+  type: 'select';
+  value: string | undefined;
+  options: { value: string; label: string }[];
+  onChange(value: string | null): void;
+}
+interface ImageInputSetting extends ImageSettingBase {
+  type: 'input';
+  value: string;
+  inputProps?: Record<string, unknown>;
+  onChange(value: number | undefined): void;
+}
+type ImageSetting = ImageSelectSetting | ImageInputSetting;
+
 // Always defaults to GPT_IMAGE_2 for best chat-based editing experience (no mask required)
 const getDefaultEditModel = (generationModel: string): ModelName => {
   // For Gemini generation, use the same Gemini model for editing (they support it well)
@@ -266,14 +287,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     width: '100%',
     borderRadius: 6,
     border: 'none',
-    backgroundColor: (theme: any) => theme.palette.aiSettings.inputBackground,
     color: 'text.primary',
   };
 
   const commonSelectStyles = {
     borderRadius: 6,
     border: 'none',
-    backgroundColor: (theme: any) => theme.palette.aiSettings.inputBackground,
     color: 'text.primary',
   };
 
@@ -295,7 +314,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     setLLM({ quality: validQualities.includes(clamped) ? clamped : getDefaultQuality(contextImageModel) });
   }, [open, contextImageModel, _quality, setLLM]);
 
-  const imageSettings = [
+  const imageSettings: ImageSetting[] = [
     // Temperature (generic input like AdvancedAIModal renders via imageSettings mapping here)
     {
       label: 'Temperature',
@@ -605,8 +624,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '20px' }}>
                     {/* A row is only disabled when the selected model ignores it, and then the label
                       carries the reason - the rest of this list has no tooltip surface. */}
-                    {(setting as { disabled?: boolean }).disabled ? (
-                      <Tooltip title={(setting as { tooltip?: string }).tooltip ?? ''}>
+                    {setting.disabled ? (
+                      <Tooltip title={setting.tooltip ?? ''}>
                         <Typography level="body-sm">{setting.label}</Typography>
                       </Tooltip>
                     ) : (
@@ -616,13 +635,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                       {setting.type === 'select' && (
                         <Select
                           value={setting.value}
-                          onChange={(_, newValue: any) => setting.onChange(newValue)}
-                          disabled={(setting as { disabled?: boolean }).disabled}
+                          onChange={(_, newValue) => setting.onChange(newValue)}
+                          disabled={setting.disabled}
                           sx={commonSelectStyles}
                           slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
-                          data-testid={(setting as any).testId}
+                          data-testid={setting.testId}
                         >
-                          {(setting as any).options.map((option: any) => (
+                          {setting.options.map(option => (
                             <Option key={option.value} value={option.value}>
                               {option.label}
                             </Option>
@@ -635,15 +654,15 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                           size="sm"
                           variant="outlined"
                           color="primary"
-                          value={(setting as any).value}
-                          disabled={(setting as { disabled?: boolean }).disabled}
-                          {...(setting as any).inputProps}
-                          onChange={(e: any) => {
+                          value={setting.value}
+                          disabled={setting.disabled}
+                          {...setting.inputProps}
+                          onChange={e => {
                             const raw = e.target.value;
                             const val = raw === '' ? undefined : Number(raw);
-                            (setting as any).onChange(val);
+                            setting.onChange(val);
                           }}
-                          data-testid={(setting as any).testId}
+                          data-testid={setting.testId}
                         />
                       )}
                     </Box>
@@ -742,9 +761,9 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
 
               {/* Edit Model Selection */}
               <Box sx={{ mb: 2 }}>
-                <Select
-                  value={selectedEditModel as any}
-                  onChange={(_, newValue: any) => handleEditModelChange(newValue as ModelName)}
+                <Select<ModelName>
+                  value={selectedEditModel}
+                  onChange={(_, newValue) => newValue && handleEditModelChange(newValue)}
                   sx={{ ...commonSelectStyles, width: '100%' }}
                   slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                   data-testid="edit-model-select"
@@ -753,7 +772,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                     const modelInfo = modelInfoRepo?.find(m => m.id === modelId);
                     const isMaskRequired = modelId === ImageModels.FLUX_PRO_FILL;
                     return (
-                      <Option key={modelId} value={modelId as any}>
+                      <Option key={modelId} value={modelId}>
                         {modelInfo?.name || modelId}
                         {isMaskRequired && ' (requires mask)'}
                         {!isMaskRequired && ' ✓'}

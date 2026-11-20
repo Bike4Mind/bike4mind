@@ -300,7 +300,7 @@ const { mockAdmitApiKeyCompletion, mockQuotaRelease } = vi.hoisted(() => ({
   mockAdmitApiKeyCompletion: vi.fn(async () => ({ release: async () => {} })),
   mockQuotaRelease: vi.fn(),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   admitApiKeyCompletion: (...a: unknown[]) => mockAdmitApiKeyCompletion(...a),
 }));

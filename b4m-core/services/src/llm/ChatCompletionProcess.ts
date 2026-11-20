@@ -249,6 +249,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
@@ -3163,13 +3164,15 @@ export class ChatCompletionProcess {
           try {
             await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
+            if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
-            if (moderationError instanceof FlaggedContentError) {
+            // A flag the turn's key is excepted from does neither: the turn continues.
+            if (!(await this.keyModerationExceptionApplies('openai', moderationError.categories, questId, logger))) {
               await this.recordModerationHit('openai', moderationError.categories, questId, logger);
+              throw moderationError;
             }
-            throw moderationError;
           }
           logger.info(
             `⏱️ [${Date.now() - processStartTime}ms] Moderation check completed in ${
@@ -3183,10 +3186,11 @@ export class ChatCompletionProcess {
             try {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
-              if (moderationError instanceof FlaggedContentError) {
+              if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
+              if (!(await this.keyModerationExceptionApplies('bedrock', moderationError.categories, questId, logger))) {
                 await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
+                throw moderationError;
               }
-              throw moderationError;
             }
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] Bedrock Guardrails check completed in ${
@@ -9129,6 +9133,35 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
+  }
+
+  /**
+   * Whether the key that authenticated this turn is excepted from every category the check
+   * flagged. Only an API-key turn can be, and a failed lookup keeps the block.
+   */
+  private async keyModerationExceptionApplies(
+    source: 'openai' | 'bedrock',
+    categories: string[],
+    questId: string,
+    logger: Logger
+  ): Promise<boolean> {
+    const userApiKeys = this.db.userApiKeys;
+    if (!this.turnApiKeyId || !userApiKeys) return false;
+    try {
+      const keyCategories = await findKeyModerationExceptionCategories(this.turnApiKeyId, this.user.id, {
+        userApiKeys,
+      });
+      if (!moderationExceptionCovers(categories, keyCategories)) return false;
+    } catch (lookupError) {
+      logger.warn(`[Moderation] Key exception lookup failed for quest ${questId}; keeping the block`, lookupError);
+      return false;
+    }
+    logger.info(`[Moderation] Quest ${questId} continued under its API key exception`, {
+      source,
+      categories,
+      apiKeyId: this.turnApiKeyId,
+    });
+    return true;
   }
 
   private getBedrockGuardrailsService(

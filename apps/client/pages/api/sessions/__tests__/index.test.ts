@@ -50,7 +50,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: 
 vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
-vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
 
