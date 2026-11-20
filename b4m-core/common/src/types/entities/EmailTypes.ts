@@ -3,6 +3,9 @@ import { PaginatedResponse } from '../common';
 
 // ================== ENUMS ==================
 
+/** What the transport did with one message: `at` is when it accepted it. */
+export type EmailDeliveryOutcome = { ok: true; at: Date } | { ok: false; error: string };
+
 export enum EmailJobStatus {
   DRAFT = 'draft',
   SCHEDULED = 'scheduled',
@@ -16,6 +19,8 @@ export enum EmailJobStatus {
 export enum EmailSendStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
+  /** Accepted by the event bus; the email-send worker writes SENT or FAILED once it has tried the transport. */
+  QUEUED = 'queued',
   SENT = 'sent',
   DELIVERED = 'delivered',
   OPENED = 'opened',
@@ -235,6 +240,8 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
     }
   ) => Promise<PaginatedResponse<IEmailSendAttemptDocument>>;
   updateStatus: (id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttempt>) => Promise<void>;
+  markQueued: (id: string, updates: { sentAt: Date; retryCount: number }) => Promise<boolean>;
+  recordDeliveryOutcome: (id: string, outcome: EmailDeliveryOutcome) => Promise<string | null>;
   markOpened: (trackingToken: string) => Promise<IEmailSendAttemptDocument | null>;
   recordClick: (trackingToken: string, link: string) => Promise<IEmailSendAttemptDocument | null>;
   getJobSummary: (jobId: string) => Promise<{

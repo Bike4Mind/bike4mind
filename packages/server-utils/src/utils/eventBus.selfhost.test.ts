@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { sendToQueueMock, sendEmailMock, hostedSend } = vi.hoisted(() => ({
+const { sendToQueueMock, sendEmailMock, hostedSend, recordOutcomeMock } = vi.hoisted(() => ({
   sendToQueueMock: vi.fn(),
   sendEmailMock: vi.fn(),
   hostedSend: vi.fn(),
+  recordOutcomeMock: vi.fn(),
 }));
 
 vi.mock('./sqs', () => ({ sendToQueue: sendToQueueMock }));
@@ -18,6 +19,7 @@ vi.mock('@aws-sdk/client-eventbridge', () => ({
 vi.mock('sst', () => ({ Resource: { App: { name: 'local' }, AppEventBus: { name: 'events' } } }));
 
 vi.mock('./mailer/index', () => ({ default: { sendEmail: sendEmailMock } }));
+vi.mock('./mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: recordOutcomeMock }));
 
 const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = await import('./eventBus');
 
@@ -121,6 +123,23 @@ describe('eventBus publishSelfHost', () => {
       { category: 'otc', mirror: false, logRecipient: false }
     );
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sent', { messageId: 'smtp-1' }, { ok: true, at: expect.any(Date) }],
+    ['failed', false, { ok: false, error: expect.any(String) }],
+  ])('records a %s delivery against the ref of a direct publish', async (_label, mailResult, outcome) => {
+    sendEmailMock.mockResolvedValue(mailResult);
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'att-1' };
+
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x', ref });
+
+    expect(recordOutcomeMock).toHaveBeenCalledExactlyOnceWith(ref, outcome);
+  });
+
+  it('records nothing for a self-host email without a ref', async () => {
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x' });
+    expect(recordOutcomeMock).not.toHaveBeenCalled();
   });
 
   it('enqueues a non-email event to SELF_HOST_EVENT_QUEUE as { detailType, detail }', async () => {

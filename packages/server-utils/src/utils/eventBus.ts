@@ -28,10 +28,10 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
 
   if (eventName === 'email.send') {
     const { default: mailer } = await import('./mailer/index');
-    const { to, subject, body, text, attachments, category, mirror, logRecipient } = detail as z.infer<
+    const { to, subject, body, text, attachments, category, mirror, logRecipient, ref } = detail as z.infer<
       typeof EmailEvents.Send.schema
     >;
-    await mailer.sendEmail(
+    const result = await mailer.sendEmail(
       to,
       {
         subject,
@@ -45,6 +45,13 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
       },
       { category, mirror, logRecipient }
     );
+    if (ref) {
+      const { recordEmailDeliveryOutcome } = await import('./mailer/deliveryOutcome');
+      await recordEmailDeliveryOutcome(
+        ref,
+        result ? { ok: true, at: new Date() } : { ok: false, error: 'The mail transport did not accept the message' }
+      );
+    }
     return;
   }
 

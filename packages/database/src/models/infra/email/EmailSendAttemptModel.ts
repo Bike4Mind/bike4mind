@@ -1,5 +1,10 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { IEmailSendAttemptDocument, IEmailSendAttemptRepository, EmailSendStatus } from '@bike4mind/common';
+import {
+  IEmailSendAttemptDocument,
+  IEmailSendAttemptRepository,
+  EmailDeliveryOutcome,
+  EmailSendStatus,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { PaginatedResponse } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -140,6 +145,41 @@ export class EmailSendAttemptRepository
     await this.model.findByIdAndUpdate(id, { status, ...updates });
   }
 
+  /**
+   * PENDING/PROCESSING -> QUEUED once the event bus accepts the mail. Returns false when the
+   * email-send worker already wrote its outcome, which can land before this write.
+   */
+  async markQueued(id: string, updates: { sentAt: Date; retryCount: number }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] } },
+      { $set: { status: EmailSendStatus.QUEUED, ...updates } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Writes the transport's result, never downgrading an attempt already SENT or past it
+   * (delivered, opened, clicked, bounced, complained, cancelled). FAILED -> SENT is allowed: a
+   * retried send can succeed. Returns the attempt's jobId when the write applied, else null.
+   */
+  async recordDeliveryOutcome(id: string, outcome: EmailDeliveryOutcome): Promise<string | null> {
+    const update = outcome.ok
+      ? { $set: { status: EmailSendStatus.SENT, sentAt: outcome.at }, $unset: { errorMessage: 1 } }
+      : { $set: { status: EmailSendStatus.FAILED, errorMessage: outcome.error }, $inc: { retryCount: 1 } };
+    const result = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        status: {
+          $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING, EmailSendStatus.QUEUED, EmailSendStatus.FAILED],
+        },
+      },
+      update,
+      { new: true, projection: { jobId: 1 }, runValidators: true }
+    );
+    return result?.jobId ?? null;
+  }
+
   async markOpened(trackingToken: string): Promise<IEmailSendAttemptDocument | null> {
     const result = await this.model.findOneAndUpdate(
       {
@@ -241,6 +281,7 @@ export class EmailSendAttemptRepository
       if (status === EmailSendStatus.PENDING) statusCounts.pending = item.count;
       else if (status === EmailSendStatus.PROCESSING) statusCounts.processing = item.count;
       else if (status === EmailSendStatus.SENT || status === EmailSendStatus.DELIVERED) statusCounts.sent += item.count;
+      else if (status === EmailSendStatus.QUEUED) statusCounts.sent += item.count;
       else if (status === EmailSendStatus.OPENED || status === EmailSendStatus.CLICKED) statusCounts.sent += item.count;
       else if (status === EmailSendStatus.FAILED || status === EmailSendStatus.BOUNCED)
         statusCounts.failed += item.count;
@@ -254,6 +295,7 @@ export class EmailSendAttemptRepository
       else if (status === EmailSendStatus.PROCESSING) testStatusCounts.processing = item.count;
       else if (status === EmailSendStatus.SENT || status === EmailSendStatus.DELIVERED)
         testStatusCounts.sent += item.count;
+      else if (status === EmailSendStatus.QUEUED) testStatusCounts.sent += item.count;
       else if (status === EmailSendStatus.OPENED || status === EmailSendStatus.CLICKED)
         testStatusCounts.sent += item.count;
       else if (status === EmailSendStatus.FAILED || status === EmailSendStatus.BOUNCED)

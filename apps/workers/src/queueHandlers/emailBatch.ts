@@ -7,7 +7,6 @@ import {
 } from '@bike4mind/database';
 import {
   EmailJobStatus,
-  EmailJobOverallStatus,
   EmailSendStatus,
   IEmailTemplateDocument,
   IEmailSendAttemptDocument,
@@ -16,6 +15,7 @@ import {
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { reconcileEmailJob } from '@bike4mind/server-utils/email/reconcileEmailJob';
 import { SQSBatchResponse } from 'aws-lambda';
 import { z } from 'zod';
 
@@ -102,16 +102,9 @@ export const dispatch = dispatchWithLogger<SQSBatchResponse>(async (event, conte
         }
       }
 
-      if (sentCount > 0) {
-        await emailJobRepository.incrementCountsBy(jobId, 'sentCount', sentCount);
-      }
-      if (failedCount > 0) {
-        await emailJobRepository.incrementCountsBy(jobId, 'failedCount', failedCount);
-      }
+      logger.info(`Batch ${(batchIndex ?? 0) + 1} complete: ${sentCount} queued, ${failedCount} failed`);
 
-      logger.info(`Batch ${(batchIndex ?? 0) + 1} complete: ${sentCount} sent, ${failedCount} failed`);
-
-      await checkJobCompletion(jobId, logger);
+      await reconcileEmailJob(jobId);
     } catch (error) {
       logger.error('Failed to process batch record', error);
       // Report this record as failed so SQS retries/DLQs it; keep processing the rest.
@@ -128,8 +121,6 @@ async function processAttempt(
   template: IEmailTemplateDocument,
   logger: { error: (msg: string) => void; info: (msg: string) => void }
 ): Promise<{ success: boolean }> {
-  await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.PROCESSING);
-
   // Render once, outside the retry loop. In test mode, personalize with originalRecipient
   // (so {{userEmail}} shows the real recipient) but the email is actually sent to
   // attempt.recipientEmail (the test address).
@@ -153,25 +144,33 @@ async function processAttempt(
 
   const finalSubject = attempt.testSubjectIndicator ? `[TEST] ${rendered.subject}` : rendered.subject;
 
+  // Written before the publish because the worker's outcome write can land before markQueued.
+  await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.PROCESSING, {
+    renderedSubject: finalSubject,
+    renderedHtml: rendered.html,
+  });
+
   let lastError: string = '';
   const startRetryCount = attempt.retryCount || 0;
 
   for (let retryAttempt = 0; retryAttempt < MAX_RETRY_ATTEMPTS; retryAttempt++) {
     try {
-      const result = await queuedMailer.sendEmail(attempt.recipientEmail, {
-        subject: finalSubject,
-        html: rendered.html,
-      });
+      const result = await queuedMailer.sendEmail(
+        attempt.recipientEmail,
+        { subject: finalSubject, html: rendered.html },
+        { ref: { kind: 'emailAttempt', attemptId: attempt.id } }
+      );
 
-      // On a hosted stage a truthy result only means the event bus accepted the mail, so SENT here is
-      // "queued": a transport failure in the email-send worker is retried there and dead-lettered, not written back.
       if (result) {
-        await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.SENT, {
-          sentAt: new Date(),
-          renderedSubject: finalSubject,
-          renderedHtml: rendered.html,
-          retryCount: startRetryCount + retryAttempt,
-        });
+        if ('queued' in result) {
+          // The email-send worker writes SENT or FAILED (packages/server-utils/src/utils/mailer/deliveryOutcome.ts).
+          await emailSendAttemptRepository.markQueued(attempt.id, {
+            sentAt: new Date(),
+            retryCount: startRetryCount + retryAttempt,
+          });
+        } else {
+          await emailSendAttemptRepository.recordDeliveryOutcome(attempt.id, { ok: true, at: new Date() });
+        }
         if (retryAttempt > 0) {
           logger.info(`Email to ${attempt.recipientEmail} succeeded after ${retryAttempt} retries`);
         }
@@ -191,6 +190,7 @@ async function processAttempt(
 
   logger.error(`Failed to send to ${attempt.recipientEmail} after ${MAX_RETRY_ATTEMPTS} attempts: ${lastError}`);
 
+  // Nothing was queued, so no worker outcome can race this write.
   await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.FAILED, {
     errorMessage: `Failed after ${MAX_RETRY_ATTEMPTS} attempts: ${lastError}`,
     retryCount: startRetryCount + MAX_RETRY_ATTEMPTS,
@@ -307,48 +307,4 @@ function wrapLinksForTracking(html: string, token: string, baseUrl: string): str
       }
     }
   );
-}
-
-async function checkJobCompletion(jobId: string, logger: { info: (msg: string) => void }): Promise<void> {
-  const job = await emailJobRepository.findById(jobId);
-  if (!job) return;
-
-  // Count pending and processing attempts (not yet finished)
-  const pendingCount = await emailSendAttemptRepository.count({
-    jobId,
-    status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] },
-  });
-
-  if (pendingCount === 0) {
-    const sentCount = await emailSendAttemptRepository.count({
-      jobId,
-      status: EmailSendStatus.SENT,
-    });
-    const failedCount = await emailSendAttemptRepository.count({
-      jobId,
-      status: EmailSendStatus.FAILED,
-    });
-    const cancelledCount = await emailSendAttemptRepository.count({
-      jobId,
-      status: EmailSendStatus.CANCELLED,
-    });
-
-    let overallStatus: EmailJobOverallStatus;
-    if (failedCount === 0 && cancelledCount === 0) {
-      overallStatus = EmailJobOverallStatus.COMPLETE;
-    } else if (sentCount === 0) {
-      overallStatus = EmailJobOverallStatus.FAILED;
-    } else {
-      overallStatus = EmailJobOverallStatus.PARTIAL;
-    }
-
-    await emailJobRepository.update({
-      id: jobId,
-      status: EmailJobStatus.COMPLETED,
-      overallStatus,
-      completedAt: new Date(),
-      cancelledCount,
-    });
-    logger.info(`Job ${jobId} completed with overallStatus: ${overallStatus}`);
-  }
 }
