@@ -63,6 +63,10 @@ import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { buildSlackInteractiveActionRegistry } from '@bike4mind/server-utils/integrations/slack/interactiveActionRegistry';
+import { coreSlackInteractiveActions } from '@bike4mind/server-utils/integrations/slack/coreInteractiveActions';
+import { SLACK_INTERACTIVE_RESERVED_ACTIONS } from '@bike4mind/server-utils/integrations/slack/interactiveReservedActions';
+import { premiumSlackInteractiveActions } from '@bike4mind/server-utils/premium-generated/premiumSlackInteractiveActions.generated';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -419,13 +423,31 @@ async function handleScheduleMessageSubmission(
   }
 }
 
+const interactiveActionRegistry = buildSlackInteractiveActionRegistry(
+  coreSlackInteractiveActions,
+  premiumSlackInteractiveActions,
+  SLACK_INTERACTIVE_RESERVED_ACTIONS
+);
+let registryProblemsLogged = false;
+
+function logRegistryProblemsOnce() {
+  if (registryProblemsLogged) return;
+  registryProblemsLogged = true;
+  if (interactiveActionRegistry.problems.length > 0) {
+    Logger.error('[Slack Interactive] Left out contributed action handlers', {
+      problems: interactiveActionRegistry.problems,
+    });
+  }
+}
+
 // Handler for different interactive actions
 async function handleInteractiveAction(
   payload: SlackInteractivePayload,
   botToken?: string,
   prefetchedUser?: SlackDbUser | null,
   appName?: string,
-  workspaceId?: string
+  workspaceId?: string,
+  deferredWork: Promise<void>[] = []
 ): Promise<object> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
 
@@ -631,33 +653,25 @@ async function handleInteractiveAction(
     }
   }
 
-  if (actions?.[0]?.action_id === 'liveops_approve_issue' || actions?.[0]?.action_id === 'liveops_reject_issue') {
-    const { handleLiveopsApprovalAction } =
-      await import('@bike4mind/server-utils/integrations/slack/liveopsTriageApproval');
-    const { response, deferred } = await handleLiveopsApprovalAction(actions[0].action_id, actions[0].value, user.id, {
-      workspaceId,
+  // Registered handlers run without a linked account and authorize the Slack user themselves.
+  const firstAction = actions?.[0];
+  const registeredHandler = firstAction ? interactiveActionRegistry.find(firstAction.action_id) : undefined;
+  if (firstAction && registeredHandler) {
+    const { response, deferred } = await registeredHandler.handle({
+      actionId: firstAction.action_id,
+      value: firstAction.value,
+      user,
+      teamId: payload.team?.id,
       channelId: payload.channel?.id,
+      messageTs: payload.message?.ts,
+      responseUrl: response_url,
+      triggerId: trigger_id,
+      workspaceId,
       botToken,
+      appName,
     });
-    (payload as Record<string, unknown>).__sreDeferred = deferred;
+    if (deferred) deferredWork.push(deferred);
     return response;
-  }
-
-  // Handle SRE approval actions (no linked account required - admin-only Slack action)
-  if (actions && actions.length > 0) {
-    const sreAction = actions[0];
-    if (sreAction.action_id === 'sre_approve_fix' || sreAction.action_id === 'sre_reject_fix') {
-      const { handleSreApprovalAction } = await import('@bike4mind/server-utils/integrations/slack/sreSlackApproval');
-      const { response, deferred } = await handleSreApprovalAction(
-        sreAction.action_id,
-        sreAction.value,
-        user,
-        response_url
-      );
-      // Stash deferred work - will be awaited after res.json()
-      (payload as Record<string, unknown>).__sreDeferred = deferred;
-      return response;
-    }
   }
 
   // Find the user in our system (required for other actions)
@@ -840,15 +854,6 @@ async function handleInteractiveAction(
             text: '❓ Unknown attachment action',
             response_type: 'ephemeral',
           };
-        }
-
-        // URL-only buttons (sre_view_github_issue, sre_review_github_issue_fix_loop)
-        // Slack sends interaction payloads even for link buttons; just acknowledge.
-        if (
-          action.action_id.startsWith('sre_view_github_issue') ||
-          action.action_id.startsWith('sre_review_github_issue')
-        ) {
-          return {};
         }
 
         Logger.error('[Slack Interactive] Unknown action_id', { actionId: action.action_id });
@@ -2092,12 +2097,15 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     });
 
     try {
+      const deferredWork: Promise<void>[] = [];
+      logRegistryProblemsOnce();
       const response = await handleInteractiveAction(
         validatedPayload.data,
         botToken,
         prefetchedUser,
         appName,
-        workspace.id
+        workspace.id,
+        deferredWork
       );
 
       auditLogger.success();
@@ -2119,11 +2127,10 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
         }
       }
 
-      // Post-response: await SRE deferred work (approval processing).
+      // Post-response: await work a handler deferred until after the acknowledgement.
       // Same pattern as refreshAppHomeForAdmin - prevents Lambda freeze from killing it.
-      const sreDeferred = (validatedPayload.data as Record<string, unknown>).__sreDeferred as Promise<void> | undefined;
-      if (sreDeferred) {
-        await sreDeferred;
+      for (const work of deferredWork) {
+        await work;
       }
     } catch (handlerError) {
       auditLogger.failure(handlerError instanceof Error ? handlerError.message : 'Handler error');
