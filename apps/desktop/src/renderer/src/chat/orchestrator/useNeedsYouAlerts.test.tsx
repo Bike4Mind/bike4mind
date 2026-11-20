@@ -153,6 +153,31 @@ describe('useNeedsYouAlerts', () => {
       expect(setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
+    it('claims the viewed plain session, so another window cannot announce it', async () => {
+      viewingId = 'plain';
+      focused = true;
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(claim).toHaveBeenCalledWith(['plain']);
+      expect(chime.playChime).not.toHaveBeenCalled();
+    });
+
+    it('stays silent in a second window when the viewing window claimed the entry first', async () => {
+      claim.mockResolvedValueOnce([]);
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('still announces an agent the user is viewing in a focused window', async () => {
+      viewingId = 'child';
+      focused = true;
+      await render({ child: 'processing' });
+      await render({ child: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+    });
+
     it('announces the viewed plain session once the window is in the background', async () => {
       viewingId = 'plain';
       await render({ plain: 'processing' });

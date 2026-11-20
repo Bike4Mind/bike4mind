@@ -49,12 +49,18 @@ export function useNeedsYouAlerts(
     // Agent alerts keep firing for the viewed session, as they always have; only the wider scope skips it.
     const agentTree = alertableSessions(latestSessions.current, 'agents');
     const inView = (id: string) => id === latestViewingId.current && !agentTree.has(id) && document.hasFocus();
-    const entered = previous.current
-      ? enteredNeedsYou(previous.current, statuses).filter(id => alertable.has(id) && !inView(id))
-      : [];
+    const entered = previous.current ? enteredNeedsYou(previous.current, statuses).filter(id => alertable.has(id)) : [];
     previous.current = statuses;
-    if (entered.length === 0) return;
-    void announce(entered, latestSessions.current);
+    const viewed = entered.filter(inView);
+    // Claimed without announcing, so another open window does not announce what this one shows.
+    if (viewed.length > 0) {
+      window.b4m.attention
+        .claim(viewed)
+        .catch((error: unknown) => console.warn(`Could not claim the viewed needs-you entry: ${String(error)}`));
+    }
+    const announced = entered.filter(id => !inView(id));
+    if (announced.length === 0) return;
+    void announce(announced, latestSessions.current);
   }, [statuses, loaded]);
 
   const count = needsYouCount(statuses, sessions, scope);
