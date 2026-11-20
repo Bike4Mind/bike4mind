@@ -54,7 +54,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         scope.launch { pager.animateScrollToPage(pager.currentPage - 1) }
     }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().safeDrawingPadding().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp),

@@ -8,7 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -40,7 +42,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             B4MTheme {
                 // Exposes Compose test tags as resource ids, which is how the shared Maestro flows address elements.
-                Box(Modifier.semantics { testTagsAsResourceId = true }) {
+                // The Surface gives screens without a Scaffold (welcome, sign-in, upgrade) the theme background and
+                // content color instead of the light window behind them.
+                Surface(
+                    modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
+                    color = MaterialTheme.colorScheme.background,
+                ) {
                     AppRoot(
                         app = app,
                         signInError = signInError,
