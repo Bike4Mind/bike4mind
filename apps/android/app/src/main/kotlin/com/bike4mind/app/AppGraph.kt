@@ -19,6 +19,7 @@ import com.bike4mind.kit.account.AccountWire
 import com.bike4mind.kit.account.SettingsController
 import com.bike4mind.kit.account.StepUpController
 import com.bike4mind.kit.account.StepUpWire
+import com.bike4mind.kit.approvals.PendingActionWire
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
@@ -80,7 +81,12 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val briefs = BriefWire(environment, http)
     private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
     private val stepUp = StepUpWire(environment, http)
-    private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
+    private val chatBackend = LiveChatBackend(
+        sessions,
+        ChatSendWire(environment, http),
+        RealtimeConnection(environment, http),
+        PendingActionWire(environment, http),
+    )
 
     /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
     val push = PushRegistrationCoordinator(

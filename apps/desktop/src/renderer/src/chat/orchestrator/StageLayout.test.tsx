@@ -5,6 +5,7 @@ import type { ViewSnapshot } from '@shared/viewSnapshot';
 import { MIN_PANE_FRACTION, singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
 import { snapshotView, type SnapshotViewProps } from './snapshotView';
+import { presenterAgentTitle } from './presenter';
 import { RESIZE_KEY_STEP } from './StageLayout';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
 
@@ -100,6 +101,30 @@ describe('StageLayout in the stage', () => {
     const board = snapshotsByView.get('board');
     expect(board?.agents.map(agent => agent.id).sort()).toEqual(['a1', 'a2']);
     expect(snapshotsByView.get('transit')).toEqual(board);
+  });
+
+  it('hands every pane the redacted snapshot in Presenter mode', async () => {
+    const titled = [
+      agentFixture('a1', 'working', { title: 'Secret one' }),
+      agentFixture('a2', 'needs-you', { title: 'Secret two' }),
+    ];
+    await themed.render(
+      <OrchestratorStage
+        agents={titled}
+        rootId="root"
+        layout={SIDE_BY_SIDE}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={renderProbeView}
+        presenter={{ on: true, onToggle: vi.fn() }}
+      />
+    );
+    const board = snapshotsByView.get('board');
+    const titles = board?.agents.map(agent => agent.title).sort();
+    expect(titles).toEqual([presenterAgentTitle(1), presenterAgentTitle(2)]);
+    expect(snapshotsByView.get('transit')).toEqual(board);
+    expect(el('orchestrator-layout').textContent).not.toContain('Secret');
   });
 
   it.each([

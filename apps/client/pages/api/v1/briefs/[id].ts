@@ -13,7 +13,7 @@ const route = nextRouteForContract(getBriefContract, {
 }).get(async (req, res) => {
   const brief = await assistantBriefRepository.findByIdForUser(req.validatedParams.id, req.user.id);
   if (!brief) throw new NotFoundError('Brief not found');
-  return res.json(serializeBrief(brief));
+  return res.json(await serializeBrief(brief));
 });
 
 export const config = {

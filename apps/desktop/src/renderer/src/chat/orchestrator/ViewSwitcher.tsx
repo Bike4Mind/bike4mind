@@ -184,6 +184,7 @@ export function ViewSwitcher({
   onLayoutChange,
   ambient,
   focus,
+  presenter,
 }: {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -191,6 +192,8 @@ export function ViewSwitcher({
   ambient?: Toggle;
   /** Focus mode, on top of whichever layout is chosen; also toggled with Mod+Shift+F. */
   focus?: Toggle;
+  /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
+  presenter?: Toggle;
 }) {
   const view = layout.panes[0].view;
   const current = ORCHESTRATOR_VIEW_INFO[view];
@@ -315,6 +318,25 @@ export function ViewSwitcher({
                   </Typography>
                 </Box>
                 {focus.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
+          {presenter && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={presenter.on}
+                onClick={() => presenter.onToggle(!presenter.on)}
+                data-testid="orchestrator-presenter-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Presenter mode</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Hide titles, activity, questions, PRs and costs for screen sharing
+                  </Typography>
+                </Box>
+                {presenter.on && <CheckIcon />}
               </MenuItem>
             </>
           )}

@@ -42,6 +42,7 @@ describe('resolveFieldLimits', () => {
       signupActivity: false,
       apiKeyId: false,
       oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
@@ -185,6 +186,7 @@ describe('resolveFieldLimits', () => {
       signupActivity: false,
       apiKeyId: false,
       oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
