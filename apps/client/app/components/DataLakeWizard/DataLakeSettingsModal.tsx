@@ -68,7 +68,7 @@ import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
 /** The modal's tabs. Settings is always present; the other four are each permission-gated - see
  *  showSpendTab / showHistoryTab / showProposalsTab / showResearchTab. */
-type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
+export type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
 const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
@@ -190,7 +190,16 @@ const formSeed = (lake: EditableLake) => ({
 
 const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
 
-export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
+export function DataLakeSettingsModal({
+  lake,
+  onClose,
+  initialTab,
+}: {
+  lake: EditableLake | null;
+  onClose: () => void;
+  /** Tab to open on when the lake changes. A tab the user cannot see falls back to Settings. */
+  initialTab?: DataLakeSettingsTab;
+}) {
   // Save toasts per call so it can say when a visibility change made in this modal was refused.
   const updateLake = useUpdateDataLake({ notifySuccess: false });
   const setVisibility = useSetLakeVisibility();
@@ -367,7 +376,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setLakeMemoryEnabled(initial.lakeMemoryEnabled);
       setRequiredPassageTokenTarget(initial.requiredPassageTokenTarget);
     }
-    setTab('settings');
+    setTab(initialTab ?? 'settings');
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lake?.id]);

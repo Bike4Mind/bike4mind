@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import {
   Box,
   Button,
@@ -102,6 +102,8 @@ interface ManagerNavProps {
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
+  /** Opens the lake's settings on the Proposals tab. */
+  onReviewProposals: (lakeId: string) => void;
 }
 
 export default function ManagerNav({
@@ -119,6 +121,7 @@ export default function ManagerNav({
   onCreateLake,
   onDiscover,
   onReviewTaxonomy,
+  onReviewProposals,
 }: ManagerNavProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -541,6 +544,19 @@ export default function ManagerNav({
                                     color="primary"
                                     sx={COUNT_CHIP_SX}
                                     data-testid={`datalake-manager-pending-proposals-${lake.id}`}
+                                    slotProps={{
+                                      action: {
+                                        'aria-labelledby': undefined,
+                                        'aria-label': `Review ${lake.pendingProposalCount} ${
+                                          lake.pendingProposalCount === 1 ? 'source' : 'sources'
+                                        } in ${lake.name}`,
+                                        'data-testid': `datalake-manager-review-proposals-${lake.id}`,
+                                      },
+                                    }}
+                                    onClick={(e: MouseEvent) => {
+                                      e.stopPropagation();
+                                      onReviewProposals(lake.id);
+                                    }}
                                   >
                                     {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
                                   </Chip>

@@ -154,6 +154,36 @@ describe('DataLakeResearchPanel', () => {
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
+  describe('opening the form', () => {
+    afterEach(() => {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    });
+
+    it('scrolls the edit form into view and focuses its first field', () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      renderPanel({ configs: [config()] });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId('datalake-research-form'));
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('does the same for a new configuration', () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+  });
+
   it('starts a run for the configuration whose button was pressed', () => {
     const spies = renderPanel({ configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })] });
 
