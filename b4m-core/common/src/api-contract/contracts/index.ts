@@ -68,6 +68,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { getSessionByIdContract } from './sessionGetById.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
 import { listSessionFilesContract } from './sessionFiles.contract';
 import { searchSessionsContract } from './sessionSemanticSearch.contract';
@@ -225,6 +226,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
+  getSessionByIdContract,
   listSessionQuestsContract,
   listSessionFilesContract,
   searchSessionsContract,

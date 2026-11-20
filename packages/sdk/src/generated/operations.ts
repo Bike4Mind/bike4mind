@@ -309,6 +309,10 @@ export const operations = {
     method: 'GET',
     path: '/api/sessions/{id}',
   },
+  getSessionById: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}',
+  },
   getSessionMessage: {
     method: 'GET',
     path: '/api/v1/sessions/{id}/messages/{messageId}',

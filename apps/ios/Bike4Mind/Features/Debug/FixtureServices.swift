@@ -315,6 +315,12 @@
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()
 
+      func session(id: String) async throws -> SessionSummary {
+        let page = try await listSessions(cursor: nil, limit: 50)
+        guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return session
+      }
+
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]
         let sessions = names.enumerated().map { index, name in
