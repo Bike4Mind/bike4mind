@@ -359,6 +359,18 @@ describe('buildReplyStats', () => {
     expect(silent).toMatchObject({ firstTokenMs: 300, totalMs: 6_000, modelMs: 6_000 });
   });
 
+  it('totals from the first request held or sent, while the round keeps model time from its model start', () => {
+    const held = round(
+      { startedAt: 5_000, firstTokenAt: 5_300, firstTextAt: 5_300, endedAt: 6_000 },
+      { sentAt: 1_000, usage: { outputTokens: 20 } }
+    );
+    expect(buildReplyStats({ endedAt: 6_000, rounds: [held], toolMs: 0, local: false })).toMatchObject({
+      firstTokenMs: 300,
+      modelMs: 1_000,
+      totalMs: 5_000,
+    });
+  });
+
   it('times a plain hosted reply from its request, leaving out the setup before it', () => {
     expect(
       buildReplyStats({

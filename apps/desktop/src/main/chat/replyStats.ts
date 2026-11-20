@@ -15,6 +15,8 @@ export interface StatsRound {
   /** Readable thinking, including blocks that only became readable once the round stopped. */
   reasoning?: string;
   usage?: ChatUsage;
+  /** When the request was first held or sent, if earlier than `timing.startedAt`; the reply's total keeps the wait. */
+  sentAt?: number;
 }
 
 export interface ReplyStatsInput {
@@ -181,7 +183,7 @@ export function buildReplyStats(input: ReplyStatsInput): ChatReplyStats {
   }
 
   // From this run's first request: the turn's setup before it (servers, catalog, memory) is not the reply's.
-  const startedAt = rounds[0]?.timing.startedAt ?? input.endedAt;
+  const startedAt = rounds[0]?.sentAt ?? rounds[0]?.timing.startedAt ?? input.endedAt;
   return {
     totalMs: (earlier?.totalMs ?? 0) + nonNegative(input.endedAt - startedAt),
     modelMs,

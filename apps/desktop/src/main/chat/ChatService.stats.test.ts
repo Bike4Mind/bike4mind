@@ -10,6 +10,7 @@ import { buildReplyStats } from './replyStats';
 import type { ModelCatalog } from './ModelCatalog';
 import { MessageQueue } from './MessageQueue';
 import { OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
+import { PrefixWarmGate } from './prefixWarmGate';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -551,5 +552,86 @@ describe('ChatService reply stats', () => {
     const end = await settled();
     expect(end).toMatchObject({ type: 'error' });
     expect(end).not.toHaveProperty('stats');
+  });
+
+  describe('a request held on a sibling prompt prefix', () => {
+    const T0 = Date.UTC(2026, 10, 2);
+    const FIRST_TOKEN_MS = 300;
+    const OUTPUT_MS = 200;
+
+    beforeEach(() => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], now: T0 }));
+    afterEach(() => vi.useRealTimers());
+
+    // Not vi.waitUntil: under fake timers it advances the clock while it polls.
+    async function until(done: () => boolean): Promise<void> {
+      for (let spins = 0; !done(); spins++) {
+        if (spins > 5_000) throw new Error('condition never held');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
+
+    /** An agent's first request; `occupy` leaves another request with its prefix key waiting on the gate. */
+    async function agentReply(occupy: boolean, hold: (releaseLeader: () => void) => Promise<void>) {
+      const parent = await services[0].createSession();
+      const { id } = await store.create('test-model', {
+        origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'go' },
+      });
+      let releaseLeader = () => undefined as void;
+      const enter = PrefixWarmGate.prototype.enter;
+      const entered = vi.spyOn(PrefixWarmGate.prototype, 'enter');
+      if (occupy) {
+        entered.mockImplementationOnce(async function (this: PrefixWarmGate, key: string, signal?: AbortSignal) {
+          releaseLeader = await enter.call(this, key, signal);
+          return enter.call(this, key, signal);
+        });
+      }
+      await services[0].send(id, 'go');
+      await until(() => entered.mock.calls.length === 1);
+      await hold(() => releaseLeader());
+      await until(() => streams.length === 1);
+      vi.setSystemTime(Date.now() + FIRST_TOKEN_MS);
+      streams[0].write(frame({ type: 'content', text: 'Hello' }));
+      await until(() => events.some(event => event.type === 'delta'));
+      vi.setSystemTime(Date.now() + OUTPUT_MS);
+      streams[0].write(frame({ type: 'content', text: ' there', usage: { inputTokens: 10, outputTokens: 2 } }));
+      streams[0].write(frame('[DONE]'));
+      await until(() => events.some(event => event.type === 'done'));
+      return (await store.get(id))?.messages.find(message => message.role === 'assistant')?.stats;
+    }
+
+    it('leaves a wait that ends on the leader first token out of model time but keeps it in the total', async () => {
+      const stats = await agentReply(true, async releaseLeader => {
+        await vi.advanceTimersByTimeAsync(4_000);
+        releaseLeader();
+      });
+
+      expect(stats).toMatchObject({
+        firstTokenMs: FIRST_TOKEN_MS,
+        modelMs: FIRST_TOKEN_MS + OUTPUT_MS,
+        totalMs: 4_000 + FIRST_TOKEN_MS + OUTPUT_MS,
+      });
+    });
+
+    it('leaves a wait that ends by timeout out of model time but keeps it in the total', async () => {
+      const stats = await agentReply(true, async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(stats).toMatchObject({
+        firstTokenMs: FIRST_TOKEN_MS,
+        modelMs: FIRST_TOKEN_MS + OUTPUT_MS,
+        totalMs: 15_000 + FIRST_TOKEN_MS + OUTPUT_MS,
+      });
+    });
+
+    it('is unchanged for a request with no sibling to wait for', async () => {
+      const stats = await agentReply(false, async () => undefined);
+
+      expect(stats).toMatchObject({
+        firstTokenMs: FIRST_TOKEN_MS,
+        modelMs: FIRST_TOKEN_MS + OUTPUT_MS,
+        totalMs: FIRST_TOKEN_MS + OUTPUT_MS,
+      });
+    });
   });
 });

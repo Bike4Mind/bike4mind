@@ -6,7 +6,8 @@ import type { ChatRoundTiming } from '@shared/chat';
  * `reasoning` takes a thinking frame's text, '' for a bare marker; `text` is called on visible text.
  */
 export function startRoundTimer(now: () => number = Date.now) {
-  const startedAt = now();
+  const sentAt = now();
+  let startedAt = sentAt;
   let firstTokenAt: number | undefined;
   let firstReasoningAt: number | undefined;
   let lastReasoningAt: number | undefined;
@@ -29,6 +30,12 @@ export function startRoundTimer(now: () => number = Date.now) {
     markerFirstAt = markerLastAt = undefined;
   };
   return {
+    /** When the request was first held or sent; `end().startedAt` is later when a hold came first. */
+    sentAt: () => sentAt,
+    /** The request is now going to the model: time before it (a hold on a shared prefix) is not the model's. */
+    modelStarted(): void {
+      startedAt = now();
+    },
     firstToken(): void {
       firstTokenAt ??= now();
     },

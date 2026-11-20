@@ -32,6 +32,19 @@ describe('startRoundTimer', () => {
     });
   });
 
+  it('starts the round at the model start, keeping when the request was first held', () => {
+    let clock = 1_000;
+    const timer = startRoundTimer(() => clock);
+    clock = 6_000;
+    timer.modelStarted();
+    clock = 6_400;
+    timer.firstToken();
+    clock = 7_000;
+
+    expect(timer.sentAt()).toBe(1_000);
+    expect(timer.end()).toEqual({ startedAt: 6_000, firstTokenAt: 6_400, endedAt: 7_000 });
+  });
+
   it('leaves the stamps out of a round that neither thought nor wrote', () => {
     let clock = 0;
     const timer = startRoundTimer(() => clock);

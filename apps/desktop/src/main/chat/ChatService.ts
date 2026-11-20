@@ -766,6 +766,7 @@ interface RawRound {
   toolCallIds: string[];
   reasoning: string;
   timing: ChatRoundTiming;
+  sentAt: number;
   reasoningFrames: number;
   usage?: ChatUsage;
   sent: ChatSentRound;
@@ -4655,7 +4656,10 @@ export class ChatService {
           : await this.withPrefixWarm(
               warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
               controller.signal,
-              release => (releasePrefix = release),
+              release => {
+                releasePrefix = release;
+                timer.modelStarted();
+              },
               () =>
                 streamRound(() =>
                   withRunFallback(
@@ -4699,6 +4703,7 @@ export class ChatService {
           // round has stopped. See readableThinking.
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
+          sentAt: timer.sentAt(),
           reasoningFrames: timer.reasoningFrames(),
           ...(turnUsage ? { usage: turnUsage } : {}),
           ...(turnRequestId ? { requestId: turnRequestId } : {}),
