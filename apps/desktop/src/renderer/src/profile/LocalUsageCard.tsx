@@ -3,6 +3,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { LocalUsage, LocalUsageFigures, LocalUsageResult, LocalUsageRow } from '@shared/usage';
+import { formatShare } from '../chat/replyStats';
 import { formatTokens } from '../chat/statusLine';
 import { formatSeconds, formatTokenRate } from '../chat/tokenRate';
 import { Stat } from './Stat';
@@ -119,7 +120,7 @@ export function LocalUsageCard({ usage }: { usage: LocalUsage }) {
           {totals.draftTokens > 0 && (
             <Stat
               label="Draft acceptance"
-              value={`${Math.round((totals.draftAccepted / totals.draftTokens) * 100)}%`}
+              value={formatShare(totals.draftAccepted / totals.draftTokens)}
               caption={`${formatCount(totals.draftAccepted)} of ${formatCount(totals.draftTokens)} tokens`}
               testId="profile-local-draft"
             />
