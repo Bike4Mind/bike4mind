@@ -130,7 +130,7 @@ class PendingActionWire(private val environment: ServerEnvironment, private val 
                     )
                 }
                 401 -> PendingActionFailure.SignedOut
-                403, 404 -> PendingActionFailure.NotFound
+                404 -> PendingActionFailure.NotFound
                 409 -> when (parse(body, ErrorEnvelope.serializer())?.errorCode) {
                     "action_replaced" -> PendingActionFailure.Replaced
                     "action_expired" -> PendingActionFailure.Expired

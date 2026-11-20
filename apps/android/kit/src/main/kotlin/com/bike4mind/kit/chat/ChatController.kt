@@ -225,10 +225,9 @@ class ChatController(
                 prompt = update.prompt ?: existing?.prompt,
                 // Replies are cumulative: replace, and keep the last text when a frame carries none.
                 reply = update.reply ?: existing?.reply,
-                // A frame carries the current action (or none); a REST poll carries none, so keep it until settled.
+                // A frame carries the current action (or none); a REST poll carries none, so keep it. The server parks actions on done quests, so status does not clear it.
                 pendingAction = when {
                     heard -> update.pendingAction
-                    update.status.isTerminal -> null
                     else -> update.pendingAction ?: existing?.pendingAction
                 },
             )

@@ -127,7 +127,7 @@ private fun Turn(turn: Quest, chat: ChatState, onRespond: (PendingAction, Pendin
             reply.isNullOrEmpty() && !turn.status.isTerminal -> Text(stringResource(R.string.chat_reply_pending), style = MaterialTheme.typography.bodyLarge)
             reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("message-assistant"))
         }
-        turn.pendingAction?.takeUnless { turn.status.isTerminal }?.let { action ->
+        turn.pendingAction?.let { action ->
             ApprovalCard(action, chat.approval(turn.id, action)) { decision -> onRespond(action, decision) }
         }
     }

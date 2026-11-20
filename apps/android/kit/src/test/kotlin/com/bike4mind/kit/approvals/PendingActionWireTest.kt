@@ -45,7 +45,6 @@ class PendingActionWireTest {
     @Test
     fun otherClientErrorsAreSettledRefusals() {
         assertEquals(PendingActionFailure.NotFound, failure(404))
-        assertEquals(PendingActionFailure.NotFound, failure(403))
         assertEquals(PendingActionFailure.SignedOut, failure(401))
         assertEquals(PendingActionFailure.UpgradeRequired, failure(426))
         assertEquals(PendingActionFailure.Refused("Repository not enabled"), failure(400, """{"error":"  Repository not enabled "}"""))

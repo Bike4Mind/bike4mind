@@ -129,7 +129,7 @@ class ChatControllerTest {
     }
 
     private val action = PendingAction("web_search", mapOf("query" to "weather"), requestedAtMs = 1_000)
-    private val parked = Quest("q1", "s1", "Search", null, QuestStatus.RUNNING, "message", null, action)
+    private val parked = Quest("q1", "s1", "Search", null, QuestStatus.DONE, "message", null, action)
 
     @Test
     fun approvingAnswersThatActionAndReloadsTheTranscript() = runTest {
@@ -213,5 +213,21 @@ class ChatControllerTest {
         backend.frames.send(StreamedCompletion(parked.copy(pendingAction = null), null))
         runCurrent()
         assertNull(chat.state.value.turns.single().pendingAction)
+    }
+
+    @Test
+    fun aPolledDoneTurnKeepsItsAction() = runTest {
+        val backend = FakeBackend()
+        backend.polled = quest(QuestStatus.DONE, "Polled reply")
+        val chat = controller(backend)
+        chat.send("Hi")
+        runCurrent()
+
+        backend.frames.send(StreamedCompletion(parked.copy(sessionId = "s-new", status = QuestStatus.RUNNING), null))
+        runCurrent()
+        advanceTimeBy(12_000)
+        runCurrent()
+        assertEquals(QuestStatus.DONE, chat.state.value.turns.single().status)
+        assertEquals(action, chat.state.value.turns.single().pendingAction)
     }
 }
