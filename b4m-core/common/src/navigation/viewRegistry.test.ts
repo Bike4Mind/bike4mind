@@ -388,6 +388,18 @@ describe('contributed views', () => {
     ]);
   });
 
+  it('keeps the valid views either side of an invalid one when the list overflows the cap', () => {
+    const views = Array.from({ length: MAX_CONTRIBUTED_VIEWS - 1 }, (_, i) => contributed({ id: `admin.ext.v${i}` }));
+    views.splice(2, 0, contributed({ id: 'admin.ext.bad', target: '/admin/users' }));
+    views.push(contributed({ id: 'admin.ext.last' }), contributed({ id: 'admin.ext.overflow' }));
+
+    const result = registerContributedViews(views);
+    expect(result.registered).toHaveLength(MAX_CONTRIBUTED_VIEWS);
+    expect(result.registered).toContain('admin.ext.last');
+    expect(result.rejected).toEqual(['admin.ext.bad', 'admin.ext.overflow']);
+    expect(getViewById('admin.ext.overflow')).toBeUndefined();
+  });
+
   it('leaves VIEW_REGISTRY and the feature path prefixes untouched', () => {
     const staticIds = VIEW_REGISTRY.map(v => v.id);
     const prefixes = [...FEATURE_PATH_PREFIXES];

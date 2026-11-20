@@ -76,4 +76,15 @@ describe('registerContributedViews module', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('already contributed'), { ids: ['admin.ext.kept'] });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('failed validation'), { ids: ['admin.ext.bad'] });
   });
+
+  it('warns about a valid view dropped past the cap', async () => {
+    const { MAX_CONTRIBUTED_VIEWS } = await import('@bike4mind/common');
+    const views = Array.from({ length: MAX_CONTRIBUTED_VIEWS + 1 }, (_, i) => view(`v${i}`));
+    const common = await loadRegistrationWith(views);
+    expect(common.getViewById(`admin.ext.v${MAX_CONTRIBUTED_VIEWS}`)).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('view cap'), {
+      ids: [`admin.ext.v${MAX_CONTRIBUTED_VIEWS}`],
+    });
+  });
 });
