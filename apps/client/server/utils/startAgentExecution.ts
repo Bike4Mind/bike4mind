@@ -160,7 +160,8 @@ export type StartAgentExecutionInput = {
    * The Studio production a Direct launch directs. Once the run is accepted, the session is marked with it
    * (`ISession.productionCompositionId`) so every later turn runs as the director, but only for a signed-in caller
    * with Productions open who owns the composition. Anything else is ignored rather than refused: the run itself
-   * is an ordinary agent run, and the executor re-checks access on every run anyway.
+   * is an ordinary agent run. The executor re-checks Productions access for the user on every run, and the
+   * production tools check ownership of the composition themselves.
    */
   productionCompositionId?: string;
   /**
