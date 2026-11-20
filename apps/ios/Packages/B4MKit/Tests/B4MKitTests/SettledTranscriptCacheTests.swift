@@ -81,6 +81,28 @@ final class SettledTranscriptCacheTests: XCTestCase {
     XCTAssertNil(cache.load(sessionID: "a", pageSize: 2))
   }
 
+  func testRealtimeReconciliationBypassesCachedHistory() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    let realtime = FakeRealtime()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("1")], nextCursor: nil)])
+    await TranscriptViewModel(sessionID: "s", api: api, cache: cache).load()
+    let chat = ChatViewModel(sessionID: "s", api: api, realtime: realtime, transcriptCache: cache)
+    await chat.load()
+    let listener = Task { await chat.listen() }
+    await eventually { await realtime.listenerCount == 1 }
+    await api.setQuestPages([
+      nil: Page(items: [Samples.quest("1"), Samples.quest("2")], nextCursor: nil)
+    ])
+    await realtime.emit(.refetchNeeded)
+    await eventually { await MainActor.run { chat.turns.count == 2 } }
+    XCTAssertEqual(chat.turns.map(\.id), ["1", "2"])
+    let cursors = await api.questCursors
+    XCTAssertEqual(cursors, [nil, nil])
+    listener.cancel()
+    chat.stop()
+  }
+
   func testInvalidationRejectsLateWritesFromPreviousAuthGeneration() async {
     let api = FakeAPI()
     let cache = SettledTranscriptCache()
