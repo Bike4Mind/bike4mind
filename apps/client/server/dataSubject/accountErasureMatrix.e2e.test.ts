@@ -10,7 +10,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { setPath, valuesAt } from '@bike4mind/server-utils/dataSubject/documentPaths';
 import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
-import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
 import type { UserReference } from '@bike4mind/server-utils/dataSubject/types';
 
