@@ -143,8 +143,8 @@ import {
   writeAmbientHintSeen,
   writeIntroSeen,
   writeSurface,
-  type OrchestratorViewId,
 } from './orchestrator/orchestratorPrefs';
+import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
 import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
@@ -229,6 +229,8 @@ export type AccountStrip = (status: ReactNode) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
+/** The intro always plays in the Tavern alone, whatever layout the session is on. */
+const INTRO_LAYOUT = singlePaneLayout('tavern');
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -789,7 +791,7 @@ export function ChatShell({
     activeId,
     orchestrationProject && projectGroupDirectory(orchestrationProject)
   );
-  const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
+  const { setDockOpen, setLayout: setOrchestratorLayout, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
@@ -834,7 +836,10 @@ export function ChatShell({
     // introEntry too: a switch between two orchestrating sessions keeps the phase 'playing', and the
     // new session's intro still needs its full run.
   }, [introPhase, introEntry]);
-  const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
+  const orchestratorView = orchestratorLayout.panes[0].view;
+  // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
+  const orchestratorSplit = orchestratorLayout.panes.length > 1;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
@@ -875,6 +880,7 @@ export function ChatShell({
       orchestrating &&
       activeId !== null &&
       ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
+      !orchestratorSplit &&
       !orchestratorPrefs.focus &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
@@ -982,12 +988,12 @@ export function ChatShell({
     },
     [setDockOpen, fillComposer]
   );
-  const changeOrchestratorView = useCallback(
-    (view: OrchestratorViewId) => {
+  const changeOrchestratorLayout = useCallback(
+    (layout: OrchestratorLayout) => {
       setIntroPhase('off');
-      setOrchestratorView(view);
+      setOrchestratorLayout(layout);
     },
-    [setOrchestratorView]
+    [setOrchestratorLayout]
   );
 
   const agentActions = useMemo<AgentActions>(
@@ -1503,7 +1509,10 @@ export function ChatShell({
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
-    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+    orchestratorShown &&
+    !orchestratorPrefs.focus &&
+    !orchestratorSplit &&
+    ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
   const handledConversationClicks = useRef(new WeakSet<Event>());
   useEffect(() => {
     if (!sceneConversation || !dockVisible) return;
@@ -1795,8 +1804,8 @@ export function ChatShell({
                     statuses={statuses}
                     preparing={preparing}
                     prSummaries={prSummaries}
-                    view={orchestratorView}
-                    onViewChange={changeOrchestratorView}
+                    layout={orchestratorLayout}
+                    onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}

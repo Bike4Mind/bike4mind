@@ -3,6 +3,7 @@ import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
+import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
 import { Aquarium } from './aquarium/Aquarium';
@@ -19,7 +20,7 @@ const FIXTURE = [
 const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
 vi.mock('./chime', () => chime);
 
-const onViewChange = vi.fn();
+const onLayoutChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
@@ -27,8 +28,8 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
   themed.render(
     <OrchestratorStage
       agents={agents}
-      view="table"
-      onViewChange={onViewChange}
+      layout={singlePaneLayout('table')}
+      onLayoutChange={onLayoutChange}
       actions={actions}
       introPlaying={false}
       dockControl={dockControl}
@@ -78,8 +79,8 @@ describe('OrchestratorStage', () => {
       themed.render(
         <OrchestratorStage
           agents={[]}
-          view={view}
-          onViewChange={onViewChange}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           renderView={(id, props: OrchestratorViewProps) =>
@@ -165,8 +166,8 @@ describe('OrchestratorStage', () => {
         agents={[agentFixture('w', 'working')]}
         parent={{ status: 'needs-action' }}
         onParentFocus={onParentFocus}
-        view="table"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('table')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
       />
@@ -188,8 +189,8 @@ describe('OrchestratorStage', () => {
           agents={[agentFixture('w', 'working')]}
           onParentFocus={onParentFocus}
           onParentToggle={onParentToggle}
-          view={view}
-          onViewChange={onViewChange}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           renderView={(_view, props) => <button data-testid="scene-parent-action" onClick={props.onInnkeeperSelect} />}
@@ -245,8 +246,8 @@ describe('OrchestratorStage', () => {
       await themed.render(
         <OrchestratorStage
           agents={FIXTURE}
-          view={view}
-          onViewChange={onViewChange}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           renderView={(_id, props) => (
@@ -287,8 +288,8 @@ describe('OrchestratorStage', () => {
     await themed.render(
       <OrchestratorStage
         agents={FIXTURE}
-        view="tavern"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('tavern')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
         renderView={(_id, props) => <TavernView {...props} />}
@@ -305,8 +306,8 @@ describe('OrchestratorStage', () => {
     await themed.render(
       <OrchestratorStage
         agents={FIXTURE}
-        view="aquarium"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('aquarium')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
         renderView={(_id, props) => <AquariumView {...props} />}
@@ -358,14 +359,14 @@ describe('OrchestratorStage', () => {
     await renderStage(FIXTURE);
     act(() => el('orchestrator-view-menu-btn').click());
     act(() => el('orchestrator-view-option-board').click());
-    expect(onViewChange).toHaveBeenCalledWith('board');
+    expect(onLayoutChange).toHaveBeenCalledWith(singlePaneLayout('board'));
   });
 
   it('reports Office selection from the stage picker', async () => {
     await renderStage(FIXTURE);
     act(() => el('orchestrator-view-menu-btn').click());
     act(() => el('orchestrator-view-option-office').click());
-    expect(onViewChange).toHaveBeenCalledWith('office');
+    expect(onLayoutChange).toHaveBeenCalledWith(singlePaneLayout('office'));
   });
 
   it('uses Office ambient copy and opens the parent attention request', async () => {
@@ -375,8 +376,8 @@ describe('OrchestratorStage', () => {
       <OrchestratorStage
         agents={[]}
         parent={{ status: 'needs-action' }}
-        view="office"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('office')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
         onParentFocus={onParentFocus}
@@ -405,8 +406,8 @@ describe('OrchestratorStage', () => {
         <OrchestratorStage
           agents={agents}
           parent={parentStatus ? { status: parentStatus } : undefined}
-          view="tavern"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('tavern')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           onParentFocus={onParentFocus}
@@ -548,8 +549,8 @@ describe('OrchestratorStage', () => {
           parent={parent}
           rootId="root"
           report={REPORT}
-          view="table"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           onReadReport={onReadReport}
@@ -703,8 +704,8 @@ describe('OrchestratorStage', () => {
             agents={agents}
             rootId="root"
             report={REPORT}
-            view="tavern"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('tavern')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
             renderView={renderView}
@@ -724,8 +725,8 @@ describe('OrchestratorStage', () => {
             agents={agents}
             rootId="root"
             report={REPORT}
-            view="tavern"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('tavern')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
             renderView={(_view, props) => <TavernView {...props} />}
@@ -745,8 +746,8 @@ describe('OrchestratorStage', () => {
             agents={finished}
             rootId="root"
             report={REPORT}
-            view="office"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('office')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
             focus={{ on: focus, onToggle: vi.fn() }}
@@ -770,8 +771,8 @@ describe('OrchestratorStage', () => {
           <OrchestratorStage
             agents={agents}
             rootId="root"
-            view="table"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('table')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
           />
@@ -792,8 +793,8 @@ describe('OrchestratorStage', () => {
           parent={{ status: 'needs-action' }}
           onParentFocus={onParentFocus}
           rootId="root"
-          view="table"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           focus={{ on, onToggle: vi.fn() }}
@@ -842,8 +843,8 @@ describe('OrchestratorStage', () => {
         agents={[agentFixture('w1', 'working')]}
         parent={{ status: 'needs-action' }}
         rootId="root"
-        view="table"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('table')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
         focus={{ on: true, onToggle: vi.fn() }}
@@ -864,8 +865,8 @@ describe('OrchestratorStage', () => {
       themed.render(
         <OrchestratorStage
           agents={FIXTURE}
-          view="table"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           focusAgent={focusAgent}
