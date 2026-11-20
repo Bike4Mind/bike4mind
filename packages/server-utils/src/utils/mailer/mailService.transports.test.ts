@@ -2,7 +2,7 @@
  * The MailService contract run against both transports: whatever the backend, callers get the same
  * result shape, the same failure handling, the same Slack mirror and the same log redaction.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
@@ -275,5 +275,82 @@ describe('createMailTransport', () => {
         auth: { user: 'user@example.com', pass: 'secret' },
       })
     );
+  });
+});
+
+describe('SMTP without auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    Object.assign(configValues, { MAIL_HOST: 'smtp.example.com', MAIL_FROM: 'noreply@example.com' });
+  });
+
+  afterEach(() => {
+    Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: 'secret' });
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['unset', ''],
+    ['placeholders', 'not-configured'],
+  ])('omits auth from the transport when both credentials are %s', async (_label, value) => {
+    Object.assign(configValues, { MAIL_USERNAME: value, MAIL_PASSWORD: value });
+    const nodemailer = await import('nodemailer');
+    const { createMailTransport } = await import('./index');
+
+    createMailTransport('smtp');
+
+    expect(nodemailer.default.createTransport).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ auth: expect.anything() })
+    );
+  });
+
+  it('omits auth when only one credential is set', async () => {
+    Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: '' });
+    const nodemailer = await import('nodemailer');
+    const { createMailTransport } = await import('./index');
+
+    createMailTransport('smtp');
+
+    expect(nodemailer.default.createTransport).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ auth: expect.anything() })
+    );
+  });
+
+  it('points a self-host deploy at its env file, not sst, when a setting is missing', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: '' });
+    const { Logger } = await import('@bike4mind/observability');
+    const { MailService } = await import('./index');
+
+    new MailService();
+
+    const message = vi.mocked(Logger.warn).mock.calls.at(-1)?.[0];
+    expect(message).toContain('MAIL_PASSWORD');
+    expect(message).toContain('.env.selfhost');
+    expect(message).not.toContain('sst secret set');
+  });
+
+  it('keeps the sst hint off self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: '' });
+    const { Logger } = await import('@bike4mind/observability');
+    const { MailService } = await import('./index');
+
+    new MailService();
+
+    const message = vi.mocked(Logger.warn).mock.calls.at(-1)?.[0];
+    expect(message).toContain('sst secret set MAIL_PASSWORD');
+    expect(message).not.toContain('.env.selfhost');
+  });
+
+  it('does not warn about a relay without auth', async () => {
+    Object.assign(configValues, { MAIL_USERNAME: '', MAIL_PASSWORD: '' });
+    const { Logger } = await import('@bike4mind/observability');
+    const { MailService } = await import('./index');
+
+    new MailService();
+
+    expect(Logger.warn).not.toHaveBeenCalled();
   });
 });

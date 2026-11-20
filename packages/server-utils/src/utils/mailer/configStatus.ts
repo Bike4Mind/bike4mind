@@ -8,6 +8,8 @@ export interface EmailConfigStatus {
   configured: boolean;
   transport: MailTransportKind;
   missingSecrets: MailSecretName[];
+  /** Settings that may stay unset: the SMTP credentials when neither is set, for a relay without auth. */
+  optionalSecrets: MailSecretName[];
   /** Only the secrets this transport needs, so an SES stage never lists the SMTP credentials. */
   secrets: Partial<Record<MailSecretName, boolean>>;
 }
@@ -20,9 +22,15 @@ const SMTP_SECRETS: readonly MailSecretName[] = [
   'MAIL_FROM',
 ];
 
+const SMTP_CREDENTIALS: readonly MailSecretName[] = ['MAIL_USERNAME', 'MAIL_PASSWORD'];
+
 /** SES authenticates with the execution role, so it needs only the sender. */
 export function requiredMailSecrets(kind: MailTransportKind): MailSecretName[] {
   return kind === 'ses' ? ['MAIL_FROM'] : [...SMTP_SECRETS];
+}
+
+export function isUnsetMailValue(value: string | undefined | null): boolean {
+  return isPlaceholderValue(value) || !value?.trim();
 }
 
 /**
@@ -39,7 +47,10 @@ export function statusTransportKind(env: MailTransportEnv = process.env): MailTr
 export function getMailConfigStatus(kind: MailTransportKind = statusTransportKind()): EmailConfigStatus {
   const required = requiredMailSecrets(kind);
   const secrets: Partial<Record<MailSecretName, boolean>> = {};
-  for (const name of required) secrets[name] = !isPlaceholderValue(Config[name]);
-  const missingSecrets = required.filter(name => !secrets[name]);
-  return { configured: missingSecrets.length === 0, transport: kind, missingSecrets, secrets };
+  for (const name of required) secrets[name] = !isUnsetMailValue(Config[name]);
+  // The SMTP credentials are a pair: both unset is a relay without auth, one alone is a mistake.
+  const credentialsUnset = kind === 'smtp' && SMTP_CREDENTIALS.every(name => !secrets[name]);
+  const optionalSecrets = credentialsUnset ? [...SMTP_CREDENTIALS] : [];
+  const missingSecrets = required.filter(name => !secrets[name] && !optionalSecrets.includes(name));
+  return { configured: missingSecrets.length === 0, transport: kind, missingSecrets, optionalSecrets, secrets };
 }

@@ -14,8 +14,9 @@ export const SES_CONFIGURATION_SET_HEADER = 'X-SES-CONFIGURATION-SET';
 export interface SmtpTransportOptions {
   host: string;
   port: string;
-  username: string;
-  password: string;
+  /** Leave both unset for a relay that takes no auth; one without the other sends no auth either. */
+  username?: string;
+  password?: string;
   /** SES configuration set for `otc` mail, applied as a header the SES SMTP endpoint honours. */
   otcConfigurationSet?: string;
 }
@@ -32,10 +33,7 @@ export class SmtpTransport implements MailTransport {
     this.transporter = nodemailer.createTransport({
       port,
       host: options.host,
-      auth: {
-        user: options.username,
-        pass: options.password,
-      },
+      ...(options.username && options.password ? { auth: { user: options.username, pass: options.password } } : {}),
       secure: port === 465,
       requireTLS: port === 587,
       // nodemailer's defaults (2 min connect, 30s greeting, 10 min socket idle) all outlive the 60s

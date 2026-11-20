@@ -8,7 +8,7 @@ vi.mock('@bike4mind/common', () => ({
   },
 }));
 
-const configValues = vi.hoisted(() => ({
+const configValues = vi.hoisted((): Record<string, string | undefined> => ({
   MAIL_HOST: 'smtp.example.com',
   MAIL_PORT: '465',
   MAIL_USERNAME: 'user@example.com',
@@ -41,7 +41,13 @@ describe('getMailConfigStatus', () => {
 
     const status = getMailConfigStatus('ses');
 
-    expect(status).toEqual({ configured: true, transport: 'ses', missingSecrets: [], secrets: { MAIL_FROM: true } });
+    expect(status).toEqual({
+      configured: true,
+      transport: 'ses',
+      missingSecrets: [],
+      optionalSecrets: [],
+      secrets: { MAIL_FROM: true },
+    });
   });
 
   it('reports SES as unconfigured without a sender', () => {
@@ -50,13 +56,14 @@ describe('getMailConfigStatus', () => {
     expect(getMailConfigStatus('ses')).toMatchObject({ configured: false, missingSecrets: ['MAIL_FROM'] });
   });
 
-  it('names every SMTP secret when none is set', () => {
+  it('names every required SMTP setting when none is set, leaving the credentials optional', () => {
     for (const key of SMTP_KEYS) Object.assign(configValues, { [key]: 'not-configured' });
 
     const status = getMailConfigStatus('smtp');
 
     expect(status.configured).toBe(false);
-    expect(status.missingSecrets).toEqual(SMTP_KEYS);
+    expect(status.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT', 'MAIL_FROM']);
+    expect(status.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
     expect(Object.keys(status.secrets)).toEqual(SMTP_KEYS);
     expect(Object.values(status.secrets)).toEqual([false, false, false, false, false]);
   });
@@ -66,6 +73,41 @@ describe('getMailConfigStatus', () => {
 
     expect(status.configured).toBe(true);
     expect(status.secrets).toEqual(Object.fromEntries(SMTP_KEYS.map(key => [key, true])));
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace', '   '],
+    ['placeholder', 'not-configured'],
+  ])('reports SMTP without auth as configured when both credentials are %s', (_label, value) => {
+    Object.assign(configValues, { MAIL_USERNAME: value, MAIL_PASSWORD: value });
+
+    const status = getMailConfigStatus('smtp');
+
+    expect(status.configured).toBe(true);
+    expect(status.missingSecrets).toEqual([]);
+    expect(status.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(status.secrets).toMatchObject({ MAIL_USERNAME: false, MAIL_PASSWORD: false });
+  });
+
+  it.each([
+    ['MAIL_USERNAME', 'MAIL_PASSWORD'],
+    ['MAIL_PASSWORD', 'MAIL_USERNAME'],
+  ])('flags the missing partner when only %s is set', (setKey, unsetKey) => {
+    Object.assign(configValues, { [setKey]: 'value', [unsetKey]: '  ' });
+
+    const status = getMailConfigStatus('smtp');
+
+    expect(status.configured).toBe(false);
+    expect(status.missingSecrets).toEqual([unsetKey]);
+    expect(status.optionalSecrets).toEqual([]);
+  });
+
+  it('never marks the credentials optional on SES', () => {
+    Object.assign(configValues, { MAIL_USERNAME: '', MAIL_PASSWORD: '' });
+
+    expect(getMailConfigStatus('ses')).toMatchObject({ configured: true, missingSecrets: [], optionalSecrets: [] });
   });
 
   it('defaults to the status transport from the environment', () => {
