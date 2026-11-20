@@ -1,0 +1,342 @@
+import {
+  SkillListingTemplate,
+  SkillListingVersion,
+  claimSkillTemplateScan,
+  releaseStaleSkillTemplateScan,
+  unpublishSkillTemplate,
+  writeSkillTemplateScanVerdict,
+  type ISkillListingTemplateDocument,
+  type SkillTemplateCopyPatch,
+} from '@bike4mind/database';
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  type ISkillListing,
+  type ISkillListingTemplate,
+  type ISkillScanFinding,
+  type ISkillSnapshot,
+  type ISkillTemplatePreviewImage,
+  type SkillTemplateUpdate,
+} from '@bike4mind/common';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import {
+  findListing,
+  isListingAuthor,
+  loadMarketSettings,
+  type MarketActor,
+  type MarketSettings,
+} from '@bike4mind/server-utils/skillMarket/market';
+import { requireAudienceMembership } from './author';
+import { reviewStatusFor, scanPublicText } from './scanRules';
+import { SCAN_STALE_MS, scanSkillSnapshot, type ScanDeps, type SnapshotScan } from './submitVersion';
+import { firstFreeTemplateSlug, templateSlugBase, validateTemplateSlug } from './templateSlug';
+
+/**
+ * A listing author's template page (SkillListingTemplateModel), shared by the routes under
+ * pages/api/skills/market/[id]/template/*. Only the listing's author reaches any of it, with the same
+ * author check as the other author actions (author.ts); admins get no bypass.
+ */
+
+export type TemplateScanDeps = ScanDeps & {
+  /** Runs before a scan that a copy edit triggers: the scan-spend rate limit. */
+  beforeScan?: () => Promise<void>;
+};
+
+const SLUG_CREATE_ATTEMPTS = 5;
+
+const staleBefore = () => new Date(Date.now() - SCAN_STALE_MS);
+
+const plainTemplate = (doc: ISkillListingTemplateDocument): ISkillListingTemplate =>
+  doc.toJSON() as unknown as ISkillListingTemplate;
+
+export async function requireOwnListing(user: MarketActor, listingId: string): Promise<ISkillListing> {
+  const listing = await findListing(listingId);
+  if (!listing) throw new NotFoundError('Listing not found');
+  if (!isListingAuthor(listing, user)) throw new ForbiddenError("Only the author can manage this listing's template");
+  return listing;
+}
+
+/** Template pages exist only for a listing the market currently serves. */
+function requireLiveListing(listing: ISkillListing): void {
+  if (!isLive(listing)) throw new ConflictError('Only an approved listing can have a template page');
+}
+
+const isLive = (listing: ISkillListing): boolean =>
+  listing.status === 'approved' && !!listing.currentApprovedVersionId && !listing.hiddenByReports;
+
+async function reload(listingId: string): Promise<ISkillListingTemplate> {
+  const doc = await SkillListingTemplate.findOne({ listingId });
+  if (!doc) throw new NotFoundError('Template not found');
+  return plainTemplate(doc);
+}
+
+const duplicateKeyOn = (error: unknown, field: string): boolean =>
+  isDuplicateKeyError(error) &&
+  Boolean((error as { keyPattern?: Record<string, unknown> }).keyPattern?.[field] !== undefined);
+
+export async function getOwnTemplate(user: MarketActor, listingId: string): Promise<ISkillListingTemplate | null> {
+  const listing = await requireOwnListing(user, listingId);
+  const doc = await SkillListingTemplate.findOne({ listingId: String(listing.id) });
+  return doc ? plainTemplate(doc) : null;
+}
+
+/** The listing's approved version snapshot, the only content a draft may be built from. */
+export async function approvedSnapshotForDraft(
+  user: MarketActor,
+  listingId: string
+): Promise<{ snapshot: ISkillSnapshot; versionId: string }> {
+  const listing = await requireOwnListing(user, listingId);
+  requireLiveListing(listing);
+  const versionId = String(listing.currentApprovedVersionId);
+  const version = await SkillListingVersion.findById(versionId).lean();
+  if (!version || version.listingId !== String(listing.id)) throw new NotFoundError('Approved version not found');
+  return { snapshot: version.snapshot, versionId };
+}
+
+function copyPatch(input: SkillTemplateUpdate): SkillTemplateCopyPatch {
+  return {
+    ...(input.headline !== undefined ? { headline: input.headline } : {}),
+    ...(input.inputs !== undefined ? { inputs: input.inputs.map(({ label, required }) => ({ label, required })) } : {}),
+    ...(input.examplePrompt !== undefined ? { examplePrompt: input.examplePrompt } : {}),
+    // Naming the current version is the author regenerating or confirming the copy against it.
+    ...(input.generatedFromVersionId !== undefined
+      ? { generatedFromVersionId: input.generatedFromVersionId, stale: false }
+      : {}),
+  };
+}
+
+function copyChanged(existing: ISkillListingTemplate, patch: SkillTemplateCopyPatch): boolean {
+  if (patch.headline !== undefined && patch.headline !== existing.headline) return true;
+  if (patch.examplePrompt !== undefined && patch.examplePrompt !== existing.examplePrompt) return true;
+  if (patch.inputs === undefined) return false;
+  const before = existing.inputs.map(({ label, required }) => ({ label, required }));
+  return JSON.stringify(before) !== JSON.stringify(patch.inputs);
+}
+
+async function createTemplate(
+  listing: ISkillListing,
+  patch: SkillTemplateCopyPatch,
+  slug: string | undefined
+): Promise<ISkillListingTemplateDocument> {
+  const listingId = String(listing.id);
+  const base = templateSlugBase(listing.name);
+  for (let attempt = 0; attempt < SLUG_CREATE_ATTEMPTS; attempt += 1) {
+    let candidate = slug;
+    if (candidate === undefined) {
+      // `base` is [a-z0-9-] only, so it needs no regex escaping.
+      const clashes = await SkillListingTemplate.find({ slug: { $regex: `^${base}(-[0-9]+)?$` } })
+        .select('slug')
+        .lean();
+      candidate = firstFreeTemplateSlug(base, new Set(clashes.map(t => t.slug)));
+    }
+    try {
+      return await SkillListingTemplate.create({ listingId, slug: candidate, ...patch });
+    } catch (error) {
+      if (duplicateKeyOn(error, 'listingId')) throw new ConflictError('This listing already has a template');
+      if (!duplicateKeyOn(error, 'slug')) throw error;
+      if (slug !== undefined) throw new ConflictError('That link name is taken');
+      // Another template took the derived slug between the read and the insert; derive again.
+    }
+  }
+  throw new ConflictError('Could not pick a free link name. Choose one instead.');
+}
+
+/**
+ * Create the template or edit its copy. The slug is checked here and frozen once the template has
+ * been published. Editing a published template's copy re-runs the scan in the same write that moves
+ * it to `in_review`, so the public page never shows unscanned copy.
+ */
+export async function saveOwnTemplate(
+  user: MarketActor,
+  listingId: string,
+  input: SkillTemplateUpdate,
+  deps: TemplateScanDeps
+): Promise<ISkillListingTemplate> {
+  const listing = await requireOwnListing(user, listingId);
+  requireLiveListing(listing);
+  const id = String(listing.id);
+  if (input.slug !== undefined) validateTemplateSlug(input.slug);
+  if (input.generatedFromVersionId !== undefined && input.generatedFromVersionId !== listing.currentApprovedVersionId) {
+    throw new ConflictError('The listing has a newer approved version. Regenerate the draft and try again.');
+  }
+  const patch = copyPatch(input);
+
+  await releaseStaleSkillTemplateScan(id, staleBefore());
+  const doc = await SkillListingTemplate.findOne({ listingId: id });
+  if (!doc) return plainTemplate(await createTemplate(listing, patch, input.slug));
+  const existing = plainTemplate(doc);
+  if (existing.status === 'in_review') {
+    throw new ConflictError('The template is being scanned. Try again in a moment.');
+  }
+
+  const slugChange = input.slug !== undefined && input.slug !== existing.slug;
+  if (slugChange && existing.firstPublishedAt) {
+    throw new ConflictError('The link name cannot change after the template has been published');
+  }
+
+  if (existing.status === 'published' && copyChanged(existing, patch)) {
+    await requireAudienceMembership(user.id, listing);
+    if (!(patch.headline ?? existing.headline).trim())
+      throw new BadRequestError('A published template needs a headline');
+    await deps.beforeScan?.();
+    const claimedAt = new Date();
+    const claimed = await claimSkillTemplateScan(id, claimedAt, ['published'], patch);
+    if (!claimed) throw new ConflictError('The template changed while saving. Reload and try again.');
+    return runTemplateScan(listing, plainTemplate(claimed), claimedAt, deps);
+  }
+
+  // A published template's copy is unchanged on this path; a change takes the scan branch above.
+  const set: SkillTemplateCopyPatch =
+    existing.status === 'published'
+      ? patch.generatedFromVersionId !== undefined
+        ? { generatedFromVersionId: patch.generatedFromVersionId, stale: false }
+        : {}
+      : patch;
+  let updated: ISkillListingTemplateDocument | null;
+  try {
+    updated = await SkillListingTemplate.findOneAndUpdate(
+      // The `firstPublishedAt` guard keeps a concurrent first publish from letting a rename through.
+      { listingId: id, status: existing.status, ...(slugChange ? { firstPublishedAt: { $exists: false } } : {}) },
+      { $set: { ...set, ...(slugChange ? { slug: input.slug } : {}) } },
+      { new: true, runValidators: true }
+    );
+  } catch (error) {
+    if (duplicateKeyOn(error, 'slug')) throw new ConflictError('That link name is taken');
+    throw error;
+  }
+  if (!updated) throw new ConflictError('The template changed while saving. Reload and try again.');
+  return plainTemplate(updated);
+}
+
+export async function deleteOwnTemplate(user: MarketActor, listingId: string): Promise<void> {
+  const listing = await requireOwnListing(user, listingId);
+  const res = await SkillListingTemplate.deleteOne({ listingId: String(listing.id) });
+  if (res.deletedCount === 0) throw new NotFoundError('Template not found');
+}
+
+/** Scan the draft's copy and publish it on a pass. A failing scan leaves it a draft with the findings. */
+export async function publishOwnTemplate(
+  user: MarketActor,
+  listingId: string,
+  deps: ScanDeps
+): Promise<ISkillListingTemplate> {
+  const listing = await requireOwnListing(user, listingId);
+  requireLiveListing(listing);
+  await requireAudienceMembership(user.id, listing);
+  const id = String(listing.id);
+  await releaseStaleSkillTemplateScan(id, staleBefore());
+  const doc = await SkillListingTemplate.findOne({ listingId: id });
+  if (!doc) throw new NotFoundError('Template not found');
+  if (doc.status === 'published') throw new ConflictError('The template is already published');
+  if (doc.status === 'in_review') throw new ConflictError('The template is already being scanned');
+  if (!doc.headline.trim()) throw new BadRequestError('Add a headline before publishing');
+
+  const claimedAt = new Date();
+  const claimed = await claimSkillTemplateScan(id, claimedAt, ['draft']);
+  if (!claimed) throw new ConflictError('The template changed while publishing. Reload and try again.');
+  return runTemplateScan(listing, plainTemplate(claimed), claimedAt, deps);
+}
+
+export async function unpublishOwnTemplate(user: MarketActor, listingId: string): Promise<ISkillListingTemplate> {
+  const listing = await requireOwnListing(user, listingId);
+  const id = String(listing.id);
+  if (!(await unpublishSkillTemplate(id))) {
+    if (!(await SkillListingTemplate.exists({ listingId: id }))) throw new NotFoundError('Template not found');
+    throw new ConflictError('The template is not published');
+  }
+  return reload(id);
+}
+
+/** The template copy in snapshot form, so it runs through the market scan unchanged (scanSkillSnapshot). */
+export function templateScanSnapshot(
+  listing: Pick<ISkillListing, 'name'>,
+  copy: Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'>
+): ISkillSnapshot {
+  return {
+    name: listing.name,
+    description: copy.headline,
+    body: [
+      `Headline: ${copy.headline}`,
+      ...copy.inputs.map(input => `Input${input.required ? ' (required)' : ''}: ${input.label}`),
+      `Example prompt: ${copy.examplePrompt}`,
+    ].join('\n'),
+    disableModelInvocation: false,
+  };
+}
+
+/**
+ * Where a preview-image scan plugs into the template scan. The market scan has no image path, so an
+ * image adds no findings yet.
+ */
+export async function scanTemplatePreviewImage(
+  _image: ISkillTemplatePreviewImage | null | undefined
+): Promise<ISkillScanFinding[]> {
+  return [];
+}
+
+/**
+ * The market scan over the template copy and preview image. Every copy field is shown on a public
+ * page, so each also gets the public-text rules (links, markup, hidden characters), one finding per rule.
+ */
+export async function scanTemplate(
+  listing: Pick<ISkillListing, 'name'>,
+  template: Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt' | 'previewImage'>,
+  settings: MarketSettings,
+  getClassifier: ScanDeps['getClassifier']
+): Promise<SnapshotScan> {
+  const fields = [template.headline, ...template.inputs.map(input => input.label), template.examplePrompt];
+  const publicFindings = [
+    ...new Map(fields.flatMap(field => scanPublicText(field, settings.urlAllowlist)).map(f => [f.rule, f])).values(),
+  ];
+  const imageFindings = await scanTemplatePreviewImage(template.previewImage);
+  return scanSkillSnapshot(templateScanSnapshot(listing, template), settings, getClassifier, [
+    ...publicFindings,
+    ...imageFindings,
+  ]);
+}
+
+/**
+ * Scan the claimed copy and write the verdict. Templates have no human review step, so only a result
+ * the market would publish without a reviewer goes live (the global-skill bar, globalSkillUpdate.ts);
+ * anything else returns to draft with its findings, and an errored scan fails closed.
+ */
+async function runTemplateScan(
+  listing: ISkillListing,
+  template: ISkillListingTemplate,
+  claimedAt: Date,
+  deps: ScanDeps
+): Promise<ISkillListingTemplate> {
+  const id = String(listing.id);
+  const settings = deps.settings ?? (await loadMarketSettings());
+  const scan = await scanTemplate(listing, template, settings, deps.getClassifier);
+
+  if (scan.status === 'error') {
+    await writeSkillTemplateScanVerdict(
+      id,
+      claimedAt,
+      { scanStatus: 'error', scanFindings: scan.findings, scanError: scan.error, scanModel: scan.model },
+      false
+    );
+    return reload(id);
+  }
+
+  const passed = scan.tier !== 'failed' && reviewStatusFor(scan.tier, listing.visibility) === 'auto_approved';
+  // The listing can be withdrawn or delisted while the scan runs.
+  const current = await findListing(id);
+  const live = current !== null && isLive(current);
+  await writeSkillTemplateScanVerdict(
+    id,
+    claimedAt,
+    {
+      scanStatus: passed ? 'passed' : 'failed',
+      scanFindings: scan.findings,
+      ...(scan.tier !== 'failed' ? { riskTier: scan.tier } : {}),
+      ...(scan.classifier ? { scanModel: scan.classifier.model } : {}),
+    },
+    passed && live
+  );
+  if (passed && !live) throw new ConflictError('The listing is no longer live, so the template was not published');
+  return reload(id);
+}
