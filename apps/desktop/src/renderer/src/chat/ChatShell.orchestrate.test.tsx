@@ -891,6 +891,40 @@ describe('the reply stats rail with the orchestrator', () => {
     expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
   });
 
+  const toggleTitle = async () => {
+    const trigger = el('chat-toggle-reply-stats-btn').parentElement!;
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    const title = document.querySelector('[role="tooltip"]')?.textContent;
+    await act(async () => trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    return title;
+  };
+
+  it.each([
+    ['chat, narrow', 600, false, 'Hide reply stats beside the conversation; the window is too narrow for them now'],
+    ['chat, wide', 1400, false, 'Hide reply stats'],
+    [
+      'orchestrate',
+      1400,
+      true,
+      'Hide reply stats beside the conversation; while orchestrating they show under each reply on hover',
+    ],
+  ])('titles the stats toggle for %s', async (_label, regionWidth, orchestrate, title) => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    reloadReplyStatsPrefs();
+    const width = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width: regionWidth } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+    await openParent();
+    if (orchestrate) await enterOrchestrate();
+
+    expect(await toggleTitle()).toBe(title);
+  });
+
   const statsThread = (): ChatMessage[] => {
     const at = '2026-10-01T00:00:00.000Z';
     return [

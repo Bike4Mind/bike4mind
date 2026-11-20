@@ -514,6 +514,53 @@ describe('a reply with timed and estimated rounds', () => {
     const [timedOnly] = buckets([mixed(at, at)]);
     expect(timedOnly).toMatchObject({ timedReplies: 1, estimatedReplies: 0 });
   });
+
+  it('counts an unrated round beside a rated one for tokens only, and the reply as timed', () => {
+    const at = '2026-11-02T14:06:00.000Z';
+    const result = buckets([
+      {
+        ...reply('2026-11-02T14:05:00.000Z', { outputTokens: 120, rate: timed }),
+        rounds: [round(at, { outputTokens: 20 }), round(at, { outputTokens: 100, rate: timed })],
+      },
+    ]);
+    const { totals } = localUsageWindow(result, 'last-24-hours', NOW, NAMES);
+    expect(totals).toMatchObject({
+      replies: 1,
+      outputTokens: 120,
+      timedReplies: 1,
+      evalTokens: 100,
+      evalMs: 1000,
+      estimatedReplies: 0,
+      estimatedEvalTokens: 0,
+      estimatedEvalMs: 0,
+    });
+  });
+
+  it('counts only the rounds that ended inside the window when the reply began before it', () => {
+    const span = (startedAt: string, endedAt: string, usage: ChatUsage) => ({
+      text: 'x',
+      toolCallIds: [],
+      usage,
+      timing: { startedAt: Date.parse(startedAt), endedAt: Date.parse(endedAt) },
+    });
+    const outside = span('2026-11-01T14:30:00.000Z', '2026-11-01T15:50:00.000Z', {
+      outputTokens: 60,
+      rate: { evalTokens: 60, evalMs: 600 },
+    });
+    const inside = span('2026-11-01T15:55:00.000Z', '2026-11-01T16:20:00.000Z', {
+      outputTokens: 40,
+      rate: { evalTokens: 40, evalMs: 400 },
+    });
+    const result = buckets([
+      {
+        ...reply('2026-11-01T16:30:00.000Z', { outputTokens: 100, rate: { evalTokens: 100, evalMs: 1000 } }),
+        rounds: [outside, inside],
+      },
+    ]);
+    const { totals, allTimeReplies } = localUsageWindow(result, 'last-24-hours', NOW, NAMES);
+    expect(totals).toMatchObject({ replies: 1, outputTokens: 40, evalTokens: 40, evalMs: 400 });
+    expect(allTimeReplies).toBe(1);
+  });
 });
 
 describe('localUsageWindow', () => {
