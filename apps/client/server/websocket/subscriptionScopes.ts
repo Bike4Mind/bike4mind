@@ -1,4 +1,4 @@
-import { InviteType } from '@bike4mind/common';
+import { broadcastSafeSettingKeys, InviteType } from '@bike4mind/common';
 import type { mongoose } from '@bike4mind/database';
 
 /**
@@ -54,4 +54,16 @@ export function inviteSubscriptionScope(
       { $and: [{ type: InviteType.Project }, { documentId: { $in: shareableProjectIds } }] },
     ],
   };
+}
+
+/**
+ * Fan-out scope for AdminSettings subscriptions. The subscriber-fanout service relays the raw
+ * stored document, and a per-query projection cannot mask per setting, so the scope itself keeps
+ * sensitive settings out of the stream for every caller, admins included. Clients still get those
+ * through the redacting REST reads; the admin settings mutation invalidates that cache on save.
+ */
+export function adminSettingsSubscriptionScope(
+  abilityScope: mongoose.FilterQuery<unknown>
+): mongoose.FilterQuery<unknown> {
+  return { $and: [abilityScope, { settingName: { $in: broadcastSafeSettingKeys() } }] };
 }

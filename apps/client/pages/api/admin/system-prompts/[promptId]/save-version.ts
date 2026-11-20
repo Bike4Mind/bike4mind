@@ -1,18 +1,21 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { systemPromptRepository } from '@bike4mind/database';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  SYSTEM_PROMPT_MAX_CONTENT_LENGTH,
+  SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH,
+  systemPromptRepository,
+} from '@bike4mind/database';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   /**
    * POST /api/admin/system-prompts/[promptId]/save-version
    * Save changes to a specific version (update in place)
    */
   async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { promptId } = req.query as { promptId: string };
     const { version, content, name, description, category, tags, variables, enabled } = req.body as {
       version: number;
@@ -43,6 +46,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       return res.status(400).json({
         error: 'Invalid content',
         message: 'content is required',
+      });
+    }
+
+    if (content.length > SYSTEM_PROMPT_MAX_CONTENT_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid content',
+        message: `content must be at most ${SYSTEM_PROMPT_MAX_CONTENT_LENGTH} characters`,
+      });
+    }
+
+    if (typeof description === 'string' && description.length > SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid description',
+        message: `description must be at most ${SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH} characters`,
       });
     }
 
@@ -79,6 +96,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (typeof enabled === 'boolean') {
       await systemPromptRepository.toggleEnabled(promptId, enabled);
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.system_prompt.version_saved',
+      target: { kind: 'settings', id: promptId, displayName: name || prompt.name },
+      summary: `saved changes to version ${version} of system prompt ${promptId}`,
+      details: {
+        version,
+        fieldsSent: Object.entries({ content, name, description, category, tags, variables, enabled })
+          .filter(([, value]) => value !== undefined)
+          .map(([field]) => field),
+      },
+    });
 
     return res.status(200).json({
       success: true,

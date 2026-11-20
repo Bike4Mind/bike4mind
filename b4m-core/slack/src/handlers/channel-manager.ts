@@ -1,5 +1,18 @@
 import { Logger } from '@bike4mind/observability';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { SlackClient } from '../SlackClient';
+
+export interface ChannelCommandUser {
+  isAdmin?: boolean;
+  // isWorkspaceAdmin is not part of IUser['slackSettings'] and nothing syncs it yet, so only isAdmin grants access today.
+  slackSettings?: { slackUserId?: string; isWorkspaceAdmin?: boolean } | null;
+}
+
+export interface ChannelCommandResponse {
+  text: string;
+  response_type?: 'ephemeral' | 'in_channel';
+  blocks?: (KnownBlock | Block)[];
+}
 
 /**
  * Handle channel management commands
@@ -12,12 +25,11 @@ import { SlackClient } from '../SlackClient';
  * - /channel purpose <channel_id> <purpose>
  */
 export async function handleChannelCommand(
-  dbUser: any, // any: User model from MongoDB - used for permission checks
+  dbUser: ChannelCommandUser,
   slackUserId: string,
   commandText: string,
   slackClient: SlackClient
-): Promise<any> {
-  // any: Returns a Slack response object (block kit or simple text)
+): Promise<ChannelCommandResponse> {
   // Check authorization - only admins can manage channels
   // We check both B4M admin status and Slack admin status (if synced)
   if (!dbUser.isAdmin && !dbUser.slackSettings?.isWorkspaceAdmin) {
@@ -58,7 +70,7 @@ export async function handleChannelCommand(
   }
 }
 
-function getHelpResponse() {
+function getHelpResponse(): ChannelCommandResponse {
   return {
     text: '📢 Channel Management Commands',
     blocks: [
@@ -87,7 +99,12 @@ function getHelpResponse() {
   };
 }
 
-async function createChannelResponse(dbUser: any, slackUserId: string, args: string[], slackClient: SlackClient) {
+async function createChannelResponse(
+  dbUser: ChannelCommandUser,
+  slackUserId: string,
+  args: string[],
+  slackClient: SlackClient
+): Promise<ChannelCommandResponse> {
   // Parse args: name [private]
   if (args.length === 0) {
     return {
@@ -161,7 +178,7 @@ async function createChannelResponse(dbUser: any, slackUserId: string, args: str
   }
 }
 
-async function archiveChannelResponse(channelId: string, slackClient: SlackClient) {
+async function archiveChannelResponse(channelId: string, slackClient: SlackClient): Promise<ChannelCommandResponse> {
   if (!channelId) {
     return {
       text: '❌ Please provide a channel ID. Usage: `/channel archive <channel_id>`',
@@ -208,7 +225,11 @@ async function archiveChannelResponse(channelId: string, slackClient: SlackClien
   }
 }
 
-async function renameChannelResponse(channelId: string, newName: string, slackClient: SlackClient) {
+async function renameChannelResponse(
+  channelId: string,
+  newName: string,
+  slackClient: SlackClient
+): Promise<ChannelCommandResponse> {
   if (!channelId || !newName) {
     return {
       text: '❌ Please provide channel ID and new name. Usage: `/channel rename <channel_id> <new_name>`',
@@ -259,7 +280,11 @@ async function renameChannelResponse(channelId: string, newName: string, slackCl
   }
 }
 
-async function setTopicResponse(channelId: string, topic: string, slackClient: SlackClient) {
+async function setTopicResponse(
+  channelId: string,
+  topic: string,
+  slackClient: SlackClient
+): Promise<ChannelCommandResponse> {
   if (!channelId || !topic) {
     return {
       text: '❌ Please provide channel ID and topic. Usage: `/channel topic <channel_id> <topic>`',
@@ -312,7 +337,11 @@ async function setTopicResponse(channelId: string, topic: string, slackClient: S
   }
 }
 
-async function setPurposeResponse(channelId: string, purpose: string, slackClient: SlackClient) {
+async function setPurposeResponse(
+  channelId: string,
+  purpose: string,
+  slackClient: SlackClient
+): Promise<ChannelCommandResponse> {
   if (!channelId || !purpose) {
     return {
       text: '❌ Please provide channel ID and purpose. Usage: `/channel purpose <channel_id> <purpose>`',

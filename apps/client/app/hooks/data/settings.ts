@@ -29,6 +29,7 @@ import {
   SERVER_CONFIG_QUERY_KEY,
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
+import { isMfaEnrollmentRequired } from '@client/app/utils/mfaEnrollmentInterceptor';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
@@ -289,10 +290,11 @@ export function useConfig() {
     enabled: isFullyAuthenticated,
     // Override global retry: false - this query provides the WebSocket URL,
     // so transient failures should not permanently block the connection.
-    // Skip retries on 401 (unauthenticated) to avoid spurious console errors on login page.
+    // Skip retries on 401 (unauthenticated) to avoid spurious console errors on login page, and on
+    // an MFA-enrollment 403: it holds until the user enrolls, and MFAEnforcementWrapper takes over.
     retry: (failureCount, error) => {
       const status = (error as { response?: { status?: number } })?.response?.status;
-      if (status === 401) return false;
+      if (status === 401 || isMfaEnrollmentRequired(error)) return false;
       return failureCount < 3;
     },
   });

@@ -23,6 +23,9 @@ const EXEMPTIONS: Record<string, string> = {
   // v1/events is the external ingest endpoint: authenticated via OVERWATCH_INGEST_WRITE
   // API key scope only - no user session, no entitlement path. Stays core-owned (M1c).
   'apps/client/pages/api/overwatch/v1/events.ts': 'API-key-only ingest endpoint',
+  // v1/hops mints a verified hop for a source product's server, on the same ingest key and scope
+  // as v1/events: no user session, no entitlement path.
+  'apps/client/pages/api/overwatch/v1/hops.ts': 'API-key-only hop mint endpoint',
   // Admin-only operational data backfill (bulk-writes OverwatchUserFirstSeen). Not
   // user-facing product surface - an `overwatch:pro` holder must NOT be able to run
   // it, so it stays gated on `req.user.isAdmin`, strictly narrower than the product gate.

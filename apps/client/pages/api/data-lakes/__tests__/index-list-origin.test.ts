@@ -26,6 +26,8 @@ const { captured, mockToAccessContext, mockFindBoundDataLakeIds, LAKE } = vi.hoi
   },
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: vi.fn(async () => undefined) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -41,11 +43,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   DATA_LAKE_READ_SCOPES: [],
   assertDataLakeWriteScope: vi.fn(),
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));

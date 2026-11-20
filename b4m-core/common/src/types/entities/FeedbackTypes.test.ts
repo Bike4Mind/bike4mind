@@ -4,7 +4,14 @@ import {
   feedbackDeliveryFailed,
   FEEDBACK_ROLLUP_MAX_WINDOW_DAYS,
   FeedbackRollupQuerySchema,
+  FEEDBACK_CLIENT_CONTEXT_LIMITS,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  NO_FEEDBACK_DETAILS_PLACEHOLDER,
+  parseFeedbackClientContext,
   parseFeedbackRollupBound,
+  sanitizeFeedbackPagePath,
 } from './FeedbackTypes';
 
 describe('classifyStage', () => {
@@ -176,5 +183,108 @@ describe('feedbackDeliveryFailed', () => {
   it('is false for a reply with no delivery field at all - a rolling deploy, not bad news', () => {
     expect(feedbackDeliveryFailed(undefined)).toBe(false);
     expect(feedbackDeliveryFailed({})).toBe(false);
+  });
+});
+
+describe('sanitizeFeedbackPagePath', () => {
+  it('drops the query string and hash', () => {
+    expect(sanitizeFeedbackPagePath('/notebooks?token=abc&q=secret#section')).toBe('/notebooks');
+    expect(sanitizeFeedbackPagePath('/admin#top')).toBe('/admin');
+  });
+
+  it('masks opaque long segments but keeps route names and object ids', () => {
+    expect(sanitizeFeedbackPagePath(`/reset/${'a1'.repeat(20)}`)).toBe('/reset/:redacted');
+    expect(sanitizeFeedbackPagePath('/share/123e4567-e89b-12d3-a456-426614174000')).toBe('/share/:redacted');
+    expect(sanitizeFeedbackPagePath('/notebooks/507f1f77bcf86cd799439011')).toBe('/notebooks/507f1f77bcf86cd799439011');
+  });
+
+  it('masks the whole /share/ param whatever its shape', () => {
+    expect(sanitizeFeedbackPagePath('/share/507f1f77bcf86cd799439011,507f191e810c19729de860ea')).toBe(
+      '/share/:redacted'
+    );
+    expect(sanitizeFeedbackPagePath(`/share/${'Ab-_'.repeat(11).slice(0, 43)}`)).toBe('/share/:redacted');
+    expect(sanitizeFeedbackPagePath('/share/507f1f77bcf86cd799439011')).toBe('/share/:redacted');
+    expect(sanitizeFeedbackPagePath('/share/abc/accept')).toBe('/share/:redacted/accept');
+    expect(sanitizeFeedbackPagePath('/share')).toBe('/share');
+    expect(sanitizeFeedbackPagePath('/shared/abc')).toBe('/shared/abc');
+  });
+
+  it('keeps a long kebab-case slug that has no digit', () => {
+    const slug = '/help/getting-started-with-notebooks-and-sessions';
+    expect(sanitizeFeedbackPagePath(slug)).toBe(slug);
+  });
+
+  it('clips to the path limit', () => {
+    const long = `/${'a/'.repeat(500)}`;
+    expect(sanitizeFeedbackPagePath(long).length).toBe(FEEDBACK_CLIENT_CONTEXT_LIMITS.path);
+  });
+});
+
+describe('parseFeedbackClientContext', () => {
+  it('keeps known fields, strips unknown ones and ignores a client-supplied userAgent', () => {
+    expect(
+      parseFeedbackClientContext(
+        { path: '/a?b=c', platform: 'ios', appVersion: ' 1.0.0 ', userAgent: 'forged', other: 1 },
+        'real'
+      )
+    ).toEqual({ path: '/a', platform: 'ios', appVersion: '1.0.0', userAgent: 'real' });
+  });
+
+  it('clips the request user agent', () => {
+    const parsed = parseFeedbackClientContext({}, 'u'.repeat(1000));
+    expect(parsed?.userAgent).toHaveLength(FEEDBACK_CLIENT_CONTEXT_LIMITS.userAgent);
+  });
+
+  it('degrades a malformed object to the user agent alone', () => {
+    expect(parseFeedbackClientContext({ platform: 'toaster' }, 'real')).toEqual({ userAgent: 'real' });
+    expect(parseFeedbackClientContext('not an object', 'real')).toEqual({ userAgent: 'real' });
+  });
+
+  it('drops an invalid field and keeps the rest', () => {
+    expect(
+      parseFeedbackClientContext({ platform: 'tablet', viewport: { width: -1, height: 10 }, appVersion: '1.0.0' })
+    ).toEqual({ appVersion: '1.0.0' });
+    expect(parseFeedbackClientContext({ appVersion: 'v'.repeat(51), path: '/a' })).toEqual({ path: '/a' });
+  });
+
+  it('treats a blank or non-string field as absent', () => {
+    expect(parseFeedbackClientContext({ model: '   ', path: '?only=query' })).toBeUndefined();
+    expect(parseFeedbackClientContext({ path: 42 })).toBeUndefined();
+  });
+
+  it('returns undefined when there is nothing to store', () => {
+    expect(parseFeedbackClientContext(undefined)).toBeUndefined();
+    expect(parseFeedbackClientContext({})).toBeUndefined();
+  });
+});
+
+describe('isFeedbackTriageNoise', () => {
+  it('treats a comment-less thumbs-up as noise but keeps one with a comment', () => {
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_UP, hasContent: false })).toBe(true);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_UP, hasContent: true })).toBe(false);
+  });
+
+  it('keeps a comment-less thumbs-down and other report types in the queue', () => {
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_DOWN, hasContent: false })).toBe(false);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.BUG, hasContent: false })).toBe(false);
+    expect(isFeedbackTriageNoise({ hasContent: false, tags: [] })).toBe(false);
+  });
+
+  it('treats an untyped waitlist-tagged signup as noise, but not a typed report carrying the tag', () => {
+    expect(isFeedbackTriageNoise({ hasContent: true, tags: ['comingSoon', 'marketing'] })).toBe(true);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.BUG, hasContent: true, tags: ['comingSoon'] })).toBe(false);
+  });
+
+  it('treats an empty-string type like a missing one for the waitlist tag', () => {
+    expect(isFeedbackTriageNoise({ type: '', hasContent: true, tags: ['comingSoon'] })).toBe(true);
+  });
+});
+
+describe('hasFeedbackComment', () => {
+  it('rejects blank text and the legacy placeholder, accepts real text', () => {
+    expect(hasFeedbackComment('')).toBe(false);
+    expect(hasFeedbackComment('   ')).toBe(false);
+    expect(hasFeedbackComment(` ${NO_FEEDBACK_DETAILS_PLACEHOLDER} `)).toBe(false);
+    expect(hasFeedbackComment('nice')).toBe(true);
   });
 });

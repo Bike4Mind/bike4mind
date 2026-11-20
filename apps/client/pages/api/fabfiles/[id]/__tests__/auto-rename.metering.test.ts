@@ -6,7 +6,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
+
+const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { quotaAdmission: vi.fn().mockResolvedValue({ release }), quotaRelease: release };
+});
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -38,7 +44,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   FabFile: {
     findById: () => ({
       where: async () => ({
@@ -65,7 +71,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
     if (info?.inputTokens) u.inputTokens = info.inputTokens;
@@ -77,9 +88,11 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }),
+}));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'ops-model',
@@ -119,6 +132,18 @@ describe('POST /api/fabfiles/{id}/auto-rename metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 instead of a 400', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
   it('charges a funded caller the priced usage once', async () => {
     const res = await call();
 
@@ -154,4 +179,59 @@ describe('POST /api/fabfiles/{id}/auto-rename metering', () => {
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call()).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.complete).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'] as const)('keeps a timed-out provider slot through late %s', async outcome => {
+  vi.useFakeTimers();
+  let settle: () => void = () => {};
+  m.complete.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        settle = () => {
+          if (outcome === 'failure') reject(new Error('late provider failure'));
+          else resolve();
+        };
+      })
+  );
+  try {
+    const pending = call();
+    const rejected = expect(pending).rejects.toMatchObject({ statusCode: 400 });
+    await vi.advanceTimersByTimeAsync(30_001);
+    await rejected;
+    expect(m.complete).toHaveBeenCalledTimes(1);
+    expect(quotaRelease).not.toHaveBeenCalled();
+    settle();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  } finally {
+    settle();
+    vi.useRealTimers();
+  }
+});
+
+it.each([false, true])('releases a failed storage response (cancellation rejects: %s)', async cancelFails => {
+  const response = new Response('private upstream payload', { status: 403 });
+  const cancel = vi.spyOn(response.body!, 'cancel');
+  if (cancelFails) cancel.mockRejectedValue(new Error('stream cancellation failed'));
+  const read = vi.spyOn(response, 'text');
+  vi.stubGlobal('fetch', async () => response);
+
+  await expect(call()).rejects.toMatchObject({
+    statusCode: 400,
+    message: 'Failed to fetch file content from storage',
+  });
+
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  expect(m.complete).not.toHaveBeenCalled();
 });

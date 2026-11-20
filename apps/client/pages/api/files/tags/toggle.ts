@@ -1,5 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
+import { toggledFabFileListResponseSchema } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -13,11 +15,14 @@ import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
-import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import {
+  assertDataLakeTagWriteScope,
+  assertDataLakeWriteScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -86,7 +91,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       })
     );
 
-    return res.json(result);
+    return respond(res, toggledFabFileListResponseSchema, result);
   })
 );
 

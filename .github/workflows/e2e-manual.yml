@@ -20,24 +20,31 @@ on:
         type: choice
         options:
           - All tests
-          - Auth
-          - Signup
           - Admin
-          - Notebook
-          - Prompts
-          - Notebook Files
-          - Projects
           - Agents
-          - Image Generation
-          - Profile
-          - Tavern
-          - Search
-          - Data Lake
-          - Skills
+          - Auth
           - Credits
+          - Data Lake
+          - Existing User Login
+          - Free Tier Limits
+          - Image Generation
+          - Launch Readiness
+          - MFA
+          - Notebook
+          - Notebook Files
+          - OAuth Logout
+          - Profile
+          - Projects
+          - Prompts
+          - Referrals
+          - Search
+          - Signup
+          - Skills
+          - Static Asset
+          - Studio
+          - Tavern
           - Teams
           - WebSocket Auth
-          - Static Asset
         default: All tests
       pr_number:
         description: 'PR number for preview env (overrides stage, e.g. 123)'
@@ -74,13 +81,18 @@ jobs:
           GATE_RUN: ${{ inputs.gate_run }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # Map the dropdown to Playwright args (whole projects; Auth/Signup add a
-          # spec-file filter). Scheduled runs have no test_project -> full suite.
+          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup/MFA/OAuth Logout/Free
+          # Tier Limits add a spec-file filter). Scheduled runs have no test_project -> full suite.
           case "$TEST_PROJECT" in
             ""|"All tests")     ARGS="" ;;
             "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
+            "Existing User Login") ARGS="--project=unauthenticated e2e/existing-user-login.spec.ts" ;;
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "MFA")              ARGS="--project=unauthenticated e2e/mfa.spec.ts" ;;
+            "Referrals")        ARGS="--project=referrals" ;;
+            "Launch Readiness") ARGS="--project=launch-readiness" ;;
             "Admin")            ARGS="--project=admin" ;;
+            "OAuth Logout")     ARGS="--project=admin e2e/oauth-logout.spec.ts" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;
             "Notebook Files")   ARGS="--project=notebook-files" ;;
@@ -93,7 +105,9 @@ jobs:
             "Data Lake")        ARGS="--project=data-lake" ;;
             "Skills")           ARGS="--project=skills" ;;
             "Credits")          ARGS="--project=credits" ;;
+            "Free Tier Limits") ARGS="--project=credits e2e/free-tier-limits.spec.ts" ;;
             "Teams")            ARGS="--project=teams" ;;
+            "Studio")           ARGS="--project=studio" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
             "Static Asset")     ARGS="--project=static-asset" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;

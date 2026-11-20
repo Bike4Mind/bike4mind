@@ -1,3 +1,4 @@
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools, ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
@@ -29,8 +30,8 @@ export interface WebSearchToolConfig {
   /**
    * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
    * actual search result before fetching it server-side, rather than trusting the model's copy of
-   * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
-   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset (or an
+   * it unconditionally. The apps supply `signingKey('search-image-url')` from
+   * server-utils/src/security/signingKeys.ts. A caller that leaves this unset (or an
    * empty/placeholder value) degrades to plain prose: no image search, no cards prompt, rather
    * than paying for images that would only fail verification and render as "Image unavailable".
    */
@@ -191,6 +192,8 @@ function placeCitable(place: WebSearchPlace, imageUrlSigningSecret: string, canS
 interface WebSearchResult {
   formattedResults: string;
   citables: CitableSource[];
+  /** The provider whose answer this is. Absent when no provider ran: a cache hit, or none configured. */
+  servedBy?: WebSearchProvider['name'];
 }
 
 // The desktop web search tool matches these by their "Web search is ..." prefix (SERVER_NOTICE in
@@ -263,10 +266,13 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
   if (error instanceof EmptySearchAnswer) return;
-  Logger.globalInstance.error('WebSearch Tool: provider failed while the other answered empty', {
-    provider: provider.name,
-    error: errorMessage(error),
-  });
+  Logger.globalInstance[isExpectedToolError(error) ? 'warn' : 'error'](
+    'WebSearch Tool: provider failed while the other answered empty',
+    {
+      provider: provider.name,
+      error: errorMessage(error),
+    }
+  );
 }
 
 /**
@@ -344,7 +350,8 @@ export async function searchWithHedge(
       logHedgedProviderFailure(lead, leadError);
       return { results: [], servedBy: backup, providerFailed: backup.name === 'searxng' };
     }
-    throw new Error(
+    const FailureError = isExpectedToolError(leadError) && isExpectedToolError(backupError) ? ExpectedToolError : Error;
+    throw new FailureError(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`
     );
@@ -433,6 +440,7 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
+        ...(result.displayHost ? { displayHost: result.displayHost } : {}),
         // Only ever set when images were actually requested/found - keeps the "byte-identical
         // output when include_images is unset" contract honest for the stored citable too, not
         // just the text output below.
@@ -462,7 +470,7 @@ export async function performWebSearch(
         return (
           `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
-          `Source: [${safeHostname(result.url)}](${result.url})\n`
+          `Source: [${stripNewlines(result.displayHost ?? safeHostname(result.url))}](${result.url})\n`
         );
       })
       .join('\n');
@@ -492,16 +500,18 @@ export async function performWebSearch(
       (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '') +
       (withPlaces ? `\n${WEB_SEARCH_MAP_PROMPT}` : '');
 
-    return { formattedResults: formattedOutput, citables };
+    return { formattedResults: formattedOutput, citables, servedBy: cached ? undefined : servedBy.name };
   } catch (error) {
-    Logger.globalInstance.error('❌ WebSearch Tool: Error during search:', error);
+    if (error instanceof Error && error.name === 'AbortError') throw new ExpectedToolError(error.message);
+    if (!isExpectedToolError(error)) Logger.globalInstance.error('WebSearch Tool: Error during search:', error);
     throw error;
   }
 }
 
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
+  implementation: (context: ToolContext, rawConfig: unknown) => {
+    const config = rawConfig as WebSearchToolConfig | undefined;
     let searchCallCount = 0;
     let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {

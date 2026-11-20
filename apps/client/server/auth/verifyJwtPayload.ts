@@ -1,6 +1,8 @@
-import { User } from '@bike4mind/database';
+import { User, authSessionRepository } from '@bike4mind/database';
+import { isAuthSessionActive } from '@bike4mind/common';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
-import { assertAccountStateUsable } from './assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 
 export interface JwtPayloadClaims {
   id: string;
@@ -58,15 +60,26 @@ export async function verifyJwtPayload(
         return done(null, false);
       }
       assertAccountStateUsable(user);
+      if (jwt_payload.impersonatedBy) {
+        const session = jwt_payload.sid ? await authSessionRepository.findBySid(jwt_payload.sid) : null;
+        if (
+          !session ||
+          session.userId !== user.id ||
+          session.impersonatedBy !== jwt_payload.impersonatedBy ||
+          !isAuthSessionActive(session)
+        )
+          return done(null, false);
+        Object.assign(user, { impersonationWriteEnabled: !!session.impersonationWriteEnabled });
+      }
       (user as any).mfaPending = !!jwt_payload.mfaPending;
       if (jwt_payload.mfaPending && jwt_payload.signInStrategy && jwt_payload.signInVia) {
         (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };
       }
       // Propagate the impersonation marker (set by loginAs) so request handlers
-      // can distinguish an admin-driven session from the real customer's - see logout.ts.
+      // can distinguish an admin-driven session from the real customer's - see signOutBrowserSession.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;
       // Surface the session id so per-device logout can revoke exactly THIS session
-      // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
+      // (see signOutBrowserSession.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
       // The realtime connect ticket inherits this token's expiry (see pages/api/websocket/ticket.ts).
       (user as any).accessTokenExpiresAt = jwt_payload.exp ? new Date(jwt_payload.exp * 1000) : undefined;
@@ -80,6 +93,8 @@ export async function verifyJwtPayload(
           aud: jwt_payload.aud,
         };
       }
+      // Per request, so a role or membership change applies on the next request.
+      await resolveRoleAdminPermissions(user);
       return done(null, user);
     } else {
       return done(null, false);

@@ -2,7 +2,7 @@ import type { CatalogLifecycle } from './deprecationHorizon';
 import { DEPRECATED_MODEL_MAP, replacedByOverlayEntries } from './resolveDeprecatedModel';
 
 /**
- * The nightly fallback-chain hygiene check (sec 5.10): every hardcoded id that
+ * The fallback-chain and configured-pin hygiene check: every model id that
  * names a model which is deprecated, retired, unreachable, or gone entirely.
  * Report only - these surfaces are code and an operator edits them, so nothing
  * here rewrites anything.
@@ -11,8 +11,9 @@ import { DEPRECATED_MODEL_MAP, replacedByOverlayEntries } from './resolveDepreca
 /**
  * 'not-invocable': the catalog knows the id but the merged list does not carry
  * it - a metadata-only lifecycle ('discovered', 'unlisted'), or a backend this
- * deployment has no key for. Routing to it fails exactly like 'unknown' does,
- * which is why it is a problem and not a clean bill of health.
+ * deployment has no key for - or lists it as disabled. Routing to it fails
+ * exactly like 'unknown' does, which is why it is a problem and not a clean
+ * bill of health.
  */
 export type StaleReferenceProblem = 'deprecated' | 'retired' | 'not-invocable' | 'unknown';
 
@@ -32,7 +33,8 @@ export type StaleReferenceSurface =
   // is unreachable degrades on every single delegation, while a dead fallback
   // only costs the rung.
   | 'agent-model'
-  | 'agent-fallback';
+  | 'agent-fallback'
+  | 'configured-model';
 
 export interface StaleModelReference {
   surface: StaleReferenceSurface;
@@ -46,6 +48,7 @@ export interface StaleModelReference {
 export interface StaleReferenceModel {
   id: string;
   deprecationDate?: string;
+  disabled?: boolean;
 }
 
 export interface StaleReferenceInput {
@@ -79,6 +82,8 @@ export interface StaleReferenceInput {
    * the user's face.
    */
   agentModels?: Readonly<Record<string, { model?: string; fallbackModels?: readonly string[] }>>;
+  /** Admin settings or application-owned pins, keyed by their configuration path. */
+  configuredModels?: Readonly<Record<string, string>>;
   now?: Date;
 }
 
@@ -108,8 +113,9 @@ function referenceClassifier(input: StaleReferenceInput): (referencedId: string)
     }
     // Known to the catalog but missing from the merged list: invocabilityBlocker
     // kept it out (a status other than 'active', no dispatchable family) or the
-    // caller's keys gate it. Either way new traffic cannot reach it.
-    if (!model) return 'not-invocable';
+    // caller's keys gate it. Either way new traffic cannot reach it. A disabled
+    // model stays listed but admission refuses it (services llm/modelAdmission.ts).
+    if (!model || model.disabled) return 'not-invocable';
     return null;
   };
 }
@@ -142,6 +148,10 @@ export function checkStaleModelReferences(input: StaleReferenceInput): StaleMode
   for (const [agentName, decl] of Object.entries(input.agentModels ?? {})) {
     if (decl.model) check('agent-model', agentName, decl.model);
     for (const referencedId of decl.fallbackModels ?? []) check('agent-fallback', agentName, referencedId);
+  }
+
+  for (const [key, referencedId] of Object.entries(input.configuredModels ?? {})) {
+    if (referencedId) check('configured-model', key, referencedId);
   }
 
   // Only the targets: the keys of a redirect table are dead ids by definition.

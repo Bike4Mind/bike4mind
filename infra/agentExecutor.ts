@@ -13,8 +13,9 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { searxngUrl } from './searxng';
-import { allSecrets, secrets } from './secrets';
+import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
@@ -42,6 +43,8 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     appFilesBucket,
     websocketApi,
     mcpHandler,
+    // Custom (user-supplied URL) connector calls from agent runs execute here, outside the VPC.
+    remoteMcpHandler,
     eventBus,
     imageProcessor,
     agentContinuationQueue,
@@ -51,6 +54,8 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     generationJobQueue,
   ],
   environment: {
+    // First, so a core variable of the same name always wins.
+    ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.

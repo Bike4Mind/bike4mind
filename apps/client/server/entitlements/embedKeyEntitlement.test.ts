@@ -6,7 +6,7 @@ const userRepository = vi.hoisted(() => ({ findById: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
 const getUserEntitlements = vi.hoisted(() => vi.fn());
-vi.mock('./index', () => ({ getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements }));
 
 import { Logger } from '@bike4mind/observability';
 import { embedKeyOwnerHasEntitlement } from './embedKeyEntitlement';

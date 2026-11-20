@@ -1,15 +1,31 @@
+import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import type { ReasoningEffort } from '@bike4mind/common';
+import {
+  isToolChangeMessage,
+  type CompletionRunAttribution,
+  type PromptCacheTtl,
+  type ReasoningEffort,
+} from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
+import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
+
+/**
+ * How long the completion POST waits for response headers (ms), overriding the shared client's
+ * 30 s. The server holds its headers until auth, model resolution and the credit hold are done,
+ * so a cold start or a queued request can take well past 30 s before any byte arrives. It does
+ * not cap total reply length, but axios also keeps it as a socket idle limit after headers, so a
+ * silent gap this long mid-reply still aborts the stream.
+ */
+export const COMPLETION_HEADER_TIMEOUT_MS = 120_000;
 
 /**
  * `content` is a string for an ordinary turn, or an array of provider-shaped blocks
@@ -21,6 +37,17 @@ export interface CompletionMessage {
   content: string | unknown[];
   /** Asks the provider to cache the request up to and including this message. Anthropic only. */
   cache?: boolean;
+  /**
+   * A user message that belongs to the turn before it (tool screenshots), so local history
+   * trimming never starts a turn here. Never sent: streamCompletion and OllamaLocal drop it.
+   */
+  continuesTurn?: boolean;
+  /**
+   * On a system prompt: where its per-session tail starts. withCacheBreakpoints sends the two
+   * halves as separately cached blocks, so sessions that differ only in the tail (sibling agents
+   * in their own worktrees) read the shared half from one cache entry. Never sent.
+   */
+  cacheSplitAt?: number;
 }
 
 /**
@@ -45,6 +72,19 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
 }
 
 /**
+ * The previous request's rolling breakpoint, when that request ended on a tool change: the API looks
+ * back only 20 blocks for an earlier entry, and one block per added tool can push it out of reach
+ * (measured live), so it is marked again and read exactly. -1 when there is none.
+ */
+function lookbackBreakpoint(messages: readonly CompletionMessage[], rolling: number): number {
+  let change = rolling - 1;
+  while (change > 0 && !isToolChangeMessage(messages[change])) change--;
+  if (change <= 0) return -1;
+  const replies = messages.slice(change + 1, rolling).filter(message => message.role === 'assistant').length;
+  return replies === 1 && canCarryBreakpoint(messages[change - 1]) ? change - 1 : -1;
+}
+
+/**
  * The messages as one request should send them: a copy of the system message and of the last
  * message that can carry a breakpoint, marked `cache: true`, the rest untouched. The first
  * breakpoint caches the tools and system prompt, which are stable across a whole turn; the
@@ -59,10 +99,38 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
  */
 export function withCacheBreakpoints(messages: readonly CompletionMessage[]): CompletionMessage[] {
   let rolling = messages.length - 1;
-  while (rolling >= 0 && !canCarryBreakpoint(messages[rolling])) rolling--;
-  return messages.map((message, index) =>
-    index === rolling || message.role === 'system' ? { ...message, cache: true } : message
-  );
+  // A tool change message takes no breakpoint: the provider puts it on the turn before it.
+  while (rolling >= 0 && (isToolChangeMessage(messages[rolling]) || !canCarryBreakpoint(messages[rolling]))) {
+    rolling--;
+  }
+  const lookback = lookbackBreakpoint(messages, rolling);
+  return messages.flatMap((message, index) => {
+    if (message.role === 'system' && !isToolChangeMessage(message)) return splitSystem(message);
+    return index === rolling || index === lookback ? [{ ...message, cache: true }] : [message];
+  });
+}
+
+/**
+ * A system prompt as one cached block, or two when it names where its per-session tail starts. The
+ * tail is left unmarked: the server marks the last system block itself and also marks the last
+ * tool, and a marker here would push that one past the provider's limit of four.
+ */
+function splitSystem({ cacheSplitAt, ...message }: CompletionMessage): CompletionMessage[] {
+  const { content } = message;
+  if (typeof content !== 'string' || !cacheSplitAt || cacheSplitAt >= content.length) {
+    return [{ ...message, cache: true }];
+  }
+  return [
+    { ...message, content: content.slice(0, cacheSplitAt), cache: true },
+    { ...message, content: content.slice(cacheSplitAt) },
+  ];
+}
+
+/** The messages as the server takes them, without the fields this client keeps for itself. */
+export function wireMessages<T extends Pick<CompletionMessage, 'continuesTurn' | 'cacheSplitAt'>>(
+  messages: readonly T[]
+): Omit<T, 'continuesTurn' | 'cacheSplitAt'>[] {
+  return messages.map(({ continuesTurn: _continuesTurn, cacheSplitAt: _cacheSplitAt, ...message }) => message);
 }
 
 export interface CompletionRequest {
@@ -80,11 +148,29 @@ export interface CompletionRequest {
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
   /**
-   * Which conversation this request belongs to, for the developer log only. NOT sent on the
-   * wire - the body below is built field by field - and absent for the requests that are not a
+   * The conversation's overrides that the model's controls list (see requestGeneration); the output
+   * ceiling travels as `maxTokens`. Each transport sends what its backend takes. A conversation's
+   * turns only: titles, suggestions and compaction never set it.
+   */
+  generation?: Omit<GenerationSettings, 'maxOutputTokens'>;
+  /** Prompt-cache lifetime the server's breakpoints take. Absent sends nothing, which is '5m'. */
+  cacheTtl?: PromptCacheTtl;
+  /**
+   * Which conversation this request belongs to. Sent so the server's credit ledger can tie the
+   * spend to it, and tags the developer log. Absent for the requests that are not a
    * conversation's turn, such as naming a session.
    */
   sessionId?: string;
+  /**
+   * Groups the request's spend under an orchestration run the server issued. Absent outside an
+   * orchestrated session. A run the server does not recognise fails the request with
+   * RunNotFoundError; see withRunFallback.
+   */
+  run?: CompletionRunAttribution;
+  /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
+  toolPromptTokens?: number;
+  /** Set when the tools were left out because the listed model reports no tool support. */
+  toolsUnsupported?: true;
 }
 
 /**
@@ -94,6 +180,9 @@ export interface CompletionRequest {
  * an abort is a normal outcome here, since stopping a reply is a user action, not a failure.
  * Rejects on a pre-stream HTTP failure or a mid-stream socket error.
  *
+ * A dropped connection is never retried: the server keeps generating after the client goes
+ * away, so a second request could bill a second completion or replay a server-side tool.
+ *
  * Callback-based rather than an async iterable because every consumer forwards straight to an
  * IPC push, which cannot exert backpressure anyway.
  */
@@ -102,7 +191,53 @@ export async function streamCompletion(
   endpoint: string,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: StreamOptions = {}
+): Promise<void> {
+  try {
+    await streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+  } catch (err) {
+    if (!isConnectionDrop(err)) throw err;
+    if (signal?.aborted) return;
+    throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
+  }
+}
+
+export interface StreamOptions {
+  /** How long the open stream may go without a byte before it is treated as dropped. In ms. */
+  idleTimeoutMs?: number;
+}
+
+/**
+ * The server writes a keepalive every 10s (HEARTBEAT_INTERVAL_MS in the client app's sseRoute),
+ * so this much silence is a dead connection. Generous on purpose: a busy machine can hold the
+ * event loop long enough that bytes already received look late.
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+class StreamIdleError extends Error {
+  readonly code = 'ESTREAMIDLE';
+  constructor(ms: number) {
+    super(`no data for ${Math.round(ms / 1000)}s`);
+  }
+}
+
+const DROP_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ESTREAMIDLE']);
+
+/** A transport failure of an open stream, as opposed to anything the server said. */
+function isConnectionDrop(err: unknown): err is Error {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && DROP_CODES.has(code);
+}
+
+async function streamOnce(
+  axiosInstance: AxiosInstance,
+  endpoint: string,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal: AbortSignal | undefined,
+  options: StreamOptions
 ): Promise<void> {
   if (signal?.aborted) return;
 
@@ -112,31 +247,78 @@ export async function streamCompletion(
       endpoint,
       {
         model: request.model,
-        messages: request.messages,
+        messages: wireMessages(request.messages),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+        ...(request.run ? { run: request.run } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
         options: {
           stream: true,
           tools: request.tools ?? [],
-          ...(request.thinking ? { thinking: { enabled: true } } : {}),
+          ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
+          ...(request.thinking
+            ? {
+                thinking: {
+                  enabled: true,
+                  ...(request.generation?.thinkingBudgetTokens !== undefined
+                    ? { budget_tokens: request.generation.thinkingBudgetTokens }
+                    : {}),
+                },
+              }
+            : {}),
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal }
+      {
+        responseType: 'stream',
+        signal,
+        timeout: COMPLETION_HEADER_TIMEOUT_MS,
+        // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
+        // so a resend under the same id would read as the same charge.
+        headers: { 'X-Request-ID': randomUUID() },
+      }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    throw toRequestError(err, await readErrorBody(err));
+    const body = await readErrorBody(err);
+    if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
+    throw toRequestError(err, body?.message);
   }
 
-  await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId });
+  releaseRequestTimeout(response);
+  await readSseStream(response, onEvent, signal, {
+    model: request.model,
+    sessionId: request.sessionId,
+    idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Lift the client's request timeout off the socket once the stream is open.
+ *
+ * axios hands its `timeout` to follow-redirects, which sets it as the SOCKET's idle timeout with
+ * `socket.destroy` as the handler, and clears only its own wall-clock timer when the response
+ * arrives. Left alone, any gap that long between bytes of a reply - or an event loop held that
+ * long - destroys the socket, and the stream fails with Node's bare "aborted". readSseStream's
+ * idle guard bounds the stream instead.
+ */
+function releaseRequestTimeout(response: AxiosResponse): void {
+  const request: unknown = response.request;
+  if (!request || typeof request !== 'object' || !('socket' in request)) return;
+  const socket: unknown = request.socket;
+  if (socket && typeof socket === 'object' && 'setTimeout' in socket && typeof socket.setTimeout === 'function') {
+    socket.setTimeout(0);
+  }
 }
 
 /** What the dev log tags this request's frames with. See logUpstream. */
 interface StreamContext {
   model: string;
   sessionId?: string;
+  /** See STREAM_IDLE_TIMEOUT_MS. In ms. */
+  idleTimeoutMs: number;
 }
 
 /**
@@ -184,7 +366,24 @@ function readSseStream(
     const stream = response.data as NodeJS.ReadableStream & { destroy(): void };
     let settled = false;
 
+    let lastByteAt = Date.now();
+    let idleTimer: NodeJS.Timeout | undefined;
+    // Checked from setImmediate, after the poll phase: bytes that arrived while the event loop
+    // was busy are read (and refresh lastByteAt) before the stream is judged idle.
+    const armIdle = (delay: number) => {
+      idleTimer = setTimeout(
+        () =>
+          setImmediate(() => {
+            if (settled) return;
+            const quiet = Date.now() - lastByteAt;
+            if (quiet >= context.idleTimeoutMs) fail(new StreamIdleError(quiet));
+            else armIdle(context.idleTimeoutMs - quiet);
+          }),
+        delay
+      );
+    };
     const cleanup = () => {
+      clearTimeout(idleTimer);
       signal?.removeEventListener('abort', onAbort);
       stream.off('data', onData);
       stream.off('end', onEnd);
@@ -233,6 +432,7 @@ function readSseStream(
     // turn both halves into U+FFFD.
     const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => {
+      lastByteAt = Date.now();
       if (signal?.aborted) return;
       parser.feed(decoder.write(chunk));
     };
@@ -245,11 +445,44 @@ function readSseStream(
     stream.on('data', onData);
     stream.on('end', onEnd);
     stream.on('error', onError);
+    armIdle(context.idleTimeoutMs);
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
     }
   });
+}
+
+/** The server did not recognise the request's `run`: deleted, or issued to another account. */
+export class RunNotFoundError extends Error {
+  readonly errorCode = 'run_not_found';
+  constructor(message?: string) {
+    super(message || 'The server does not recognise this orchestration run.');
+    this.name = 'RunNotFoundError';
+  }
+}
+
+function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
+  return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
+}
+
+/**
+ * Send `request` with `run`, and once more without it if the server refuses the run, so a stale
+ * or foreign run id costs the turn nothing. `onRejected` runs before the resend, to forget the id.
+ * Safe to resend: a refused run fails before the provider is called, so nothing was billed.
+ */
+export async function withRunFallback<T>(
+  run: CompletionRunAttribution | undefined,
+  send: (run: CompletionRunAttribution | undefined) => Promise<T>,
+  onRejected: (error: RunNotFoundError) => void | Promise<void>
+): Promise<T> {
+  try {
+    return await send(run);
+  } catch (err) {
+    if (!run || !(err instanceof RunNotFoundError)) throw err;
+    await onRejected(err);
+    return send(undefined);
+  }
 }
 
 /**
@@ -274,6 +507,13 @@ function toRequestError(error: unknown, body?: string): Error {
     if (error.code === 'ECONNREFUSED') {
       return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
     }
+    // Not retried here: the server does not cancel on disconnect, so the abandoned request may
+    // still run and bill, and a silent resend could charge the turn twice.
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      return new Error(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
+    }
   }
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -285,10 +525,22 @@ function toRequestError(error: unknown, body?: string): Error {
  * it a 400 is only ever "status 400" - and the one thing a caller most needs to tell apart, a
  * context window that has run out, is only distinguishable from what the provider wrote.
  */
-async function readErrorBody(error: unknown): Promise<string | undefined> {
+async function readErrorBody(error: unknown): Promise<ErrorBody | undefined> {
+  const text = await readErrorText(error);
+  if (!text) return undefined;
+  return { message: messageOf(text), errorCode: errorCodeOf(text) };
+}
+
+interface ErrorBody {
+  message?: string;
+  /** The envelope's machine-readable classifier, when it carries one. */
+  errorCode?: string;
+}
+
+async function readErrorText(error: unknown): Promise<string | undefined> {
   if (!isAxiosError(error)) return undefined;
   const data = error.response?.data;
-  if (typeof data === 'string') return messageOf(data.slice(0, ERROR_BODY_LIMIT).trim());
+  if (typeof data === 'string') return data.slice(0, ERROR_BODY_LIMIT).trim();
   if (!data || typeof (data as Readable).on !== 'function') return undefined;
 
   try {
@@ -299,7 +551,17 @@ async function readErrorBody(error: unknown): Promise<string | undefined> {
       size += chunk.length;
       if (size >= ERROR_BODY_LIMIT) break;
     }
-    return messageOf(Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim());
+    return Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function errorCodeOf(text: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || !('errorCode' in parsed)) return undefined;
+    return typeof parsed.errorCode === 'string' ? parsed.errorCode : undefined;
   } catch {
     return undefined;
   }

@@ -17,9 +17,9 @@ function artifact(overrides: Partial<ChatArtifact> = {}): ChatArtifact {
 }
 
 /** An axios rejection as the publisher sees it: `isAxiosError` keys on the flag, not the class. */
-function httpError(status: number): AxiosError {
+function httpError(status: number, data?: unknown): AxiosError {
   const error = new AxiosError('request failed');
-  error.response = { status } as AxiosError['response'];
+  error.response = { status, data } as AxiosError['response'];
   return error;
 }
 
@@ -74,11 +74,33 @@ describe('ArtifactPublisher', () => {
     expect(post.mock.calls[0][1].metadata.desktopSessionId).toBe('local-session-42');
   });
 
-  it('reads a 403 as the artifact opt-out rather than a failure', async () => {
-    post.mockRejectedValue(httpError(403));
+  it('reads the opt-out 403 as a skipped library copy rather than a failure', async () => {
+    post.mockRejectedValue(httpError(403, { error: 'Artifacts are disabled for this user' }));
 
     const [result] = await publisher.publish([artifact()], 'session-1');
-    expect(result.save).toEqual({ status: 'disabled', reason: 'Artifacts are turned off for your account.' });
+    expect(result.save).toEqual({
+      status: 'disabled',
+      reason:
+        'Not saved to your Artifacts library. Artifacts are off in your profile settings (Beta Features in the web app).',
+    });
+  });
+
+  it("reports any other 403 as a failure with the server's own reason", async () => {
+    post.mockRejectedValue(httpError(403, { error: 'You are not a member of the selected organization.' }));
+
+    const [result] = await publisher.publish([artifact()], 'session-1');
+    expect(result.save).toEqual({ status: 'failed', reason: 'You are not a member of the selected organization.' });
+  });
+
+  it.each([
+    ['no body', undefined],
+    ['a string body', 'Forbidden'],
+    ['a non-string error', { error: 403 }],
+  ])('reports a 403 with %s as a failure', async (_label, data) => {
+    post.mockRejectedValue(httpError(403, data));
+
+    const [result] = await publisher.publish([artifact()], 'session-1');
+    expect(result.save).toEqual({ status: 'failed', reason: 'The server answered 403.' });
   });
 
   it('reports a server failure without losing the artifact', async () => {

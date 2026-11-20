@@ -1,4 +1,4 @@
-import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
+import { withWebSocketContext, sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { pickRealtimeVoiceTier } from '@server/voice/realtimeVoicePricing';
 import {
@@ -22,6 +22,7 @@ import {
   sessionRepository,
   usageEventRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
@@ -123,6 +124,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
   const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
 
+  await warmExchangeAttribution(session.voiceHoldApiKeyId);
+
   if (responseId) {
     // One response of a live call. Its ledger row, the hold's billed total and the debit commit
     // together, keyed on the response, so a replayed frame moves nothing. The hold stays open, so
@@ -156,6 +159,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           model,
           credits: actualCredits - shortfall,
           transactionId: `realtime-voice:${sessionId}:${responseId}`,
+          apiKeyId: session.voiceHoldApiKeyId,
           ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
         });
         return before;
@@ -238,6 +242,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             model,
             credits: charged,
             transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
+            apiKeyId: claimed.apiKeyId,
             ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
           });
         }

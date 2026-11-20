@@ -64,9 +64,17 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'bucket' } } }));
+const invalidate = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
+  invalidateRouterPaths: invalidate,
+}));
 vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,
 }));
+
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '../upload-logo';
 
@@ -110,6 +118,8 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(storageDelete).not.toHaveBeenCalled();
     expect(appFileFindByIdAndDelete).not.toHaveBeenCalled();
     expect(orgUpdateOne).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -123,6 +133,38 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/put', fileId: 'newfile1' });
     expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
+    expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.logo.updated',
+        actorScope: 'organization',
+        changes: [{ field: 'logoFileId', before: 'oldfile1', after: 'newfile1' }],
+      })
+    );
+  });
+
+  it('still invalidates the old logo when the transaction fails after its bytes were deleted', async () => {
+    storageGetSignedUrl.mockRejectedValueOnce(new Error('presign failed'));
+
+    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('presign failed');
+    expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
+    expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+  });
+
+  it('does not invalidate the old logo when deleting its bytes fails', async () => {
+    storageDelete.mockRejectedValueOnce(new Error('s3 down'));
+
+    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('s3 down');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('invalidates nothing when the org had no logo', async () => {
+    orgFindById.mockReturnValue({ populate: vi.fn(async () => ({ ...ORG, name: 'Acme', logo: null })) });
+
+    const res = await invoke({ id: OWNER, isAdmin: false });
+    expect(res._getStatusCode()).toBe(200);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('binds the declared fileSize into the presigned PUT, so S3 refuses a logo of any other length', async () => {

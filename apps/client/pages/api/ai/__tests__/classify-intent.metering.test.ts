@@ -10,6 +10,8 @@ import { insufficientCreditsError } from '@bike4mind/common';
 import { usdToCredits } from '@bike4mind/utils';
 
 const m = vi.hoisted(() => ({
+  quotaAdmission: vi.fn(),
+  quotaRelease: vi.fn(),
   enforce: true,
   hold: vi.fn(),
   release: vi.fn(),
@@ -24,6 +26,8 @@ const m = vi.hoisted(() => ({
   zeroPricedModelIds: [] as string[],
   disabledModelIds: [] as string[],
 }));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -44,11 +48,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {
     getSettingsValue: async () => ({
       intentClassifier: {
@@ -71,7 +76,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
@@ -80,9 +90,9 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
-  const real = await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>();
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async importOriginal => {
+  const real = await importOriginal<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>();
   return {
     ...real,
     settleCompletion: (...args: Parameters<typeof real.settleCompletion>) => {
@@ -150,6 +160,8 @@ async function call(user: Record<string, unknown> = { id: 'u1' }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.quotaAdmission.mockResolvedValue({ release: m.quotaRelease });
+  m.quotaRelease.mockResolvedValue(undefined);
   m.enforce = true;
   m.canThink = false;
   m.fallbackModels = [];
@@ -177,6 +189,24 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/classify-intent metering', () => {
+  it('refuses quota exhaustion before probing the cache or calling a provider', async () => {
+    m.quotaAdmission.mockRejectedValueOnce(Object.assign(new Error('token quota'), { statusCode: 429 }));
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(m.cached).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.hold).not.toHaveBeenCalled();
+  });
+
+  it('holds a quota slot until the classifier finishes and releases it after a provider failure', async () => {
+    m.complete.mockImplementationOnce(async () => {
+      expect(m.quotaRelease).not.toHaveBeenCalled();
+      throw new Error('provider down');
+    });
+    await call();
+    expect(m.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'u1' } }), { holdSlot: true });
+    expect(m.quotaRelease).toHaveBeenCalledOnce();
+  });
+
   it.each(['ops-model', 'fallback-model'])(
     'skips unpriced %s while retaining the priced candidate and its hold',
     async modelId => {

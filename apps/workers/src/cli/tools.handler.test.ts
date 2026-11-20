@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 
 // Keep @bike4mind/common real so the wrapper's resolveRequestId runs for real.
@@ -25,7 +26,7 @@ function threadedId(): string {
 describe('tools Lambda wrapper — request ID threading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
   });
 
   it('resolves a caller X-Request-ID once and threads it into the inner handler', async () => {
@@ -73,10 +74,9 @@ describe('tools Lambda wrapper — request ID threading', () => {
 
     expect(JSON.parse(result.body as string)).toEqual({ error: 'Internal server error', request_id: threadedId() });
     expect(result.body).not.toContain('inner blew up');
-    expect(console.error).toHaveBeenCalledWith(
-      '[CLI_TOOLS] Handler error:',
-      { requestId: threadedId() },
-      expect.any(Error)
-    );
+    expect(Logger.error).toHaveBeenCalledWith('[CLI_TOOLS] Handler error', {
+      requestId: threadedId(),
+      error: expect.any(Error),
+    });
   });
 });

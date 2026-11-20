@@ -48,13 +48,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: NonNullable<typeof h.rateLimitOptions>) => {
     h.rateLimitOptions = opts;
     return () => undefined;
   },
 }));
-vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,
@@ -88,7 +88,9 @@ vi.mock('@server/auth/oauthRefreshToken', () => ({
   mintRefreshFamily: h.mintRefreshFamily,
   refreshFamilyExpiresAt: () => new Date('2030-01-01T00:00:00Z'),
 }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: h.assertAccountStateUsable }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: h.assertAccountStateUsable,
+}));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 3600,
@@ -205,6 +207,25 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
 
     expect(res.body?.access_token).toBe('a.jwt');
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a code bound to a system account (400 invalid_grant) without issuing a session', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.validateClientSecret as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.findById as Mock).mockResolvedValue({
+      id: 'sys',
+      email: 'sys@x.com',
+      username: 'sys',
+      tokenVersion: 0,
+      isSystem: true,
+    });
+    seedValidCode(authCode(''));
+
+    const res = await call({ ...baseBody, client_secret: 'right' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('still verifies a recorded challenge for a confidential client (no verifier -> 400 invalid_grant)', async () => {
@@ -516,6 +537,15 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     (h.findByFamilyId as Mock).mockResolvedValue(family({ expiresAt: new Date(Date.now() - 1000) }));
 
     expectRejected(await call(refreshBody));
+  });
+
+  it('rejects a family owned by a system account without consuming the token', async () => {
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', tokenVersion: 0, isSystem: true });
+
+    const res = await call(refreshBody);
+    expectRejected(res);
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token' });
+    expect(h.rotate).not.toHaveBeenCalled();
   });
 
   it('rejects a revoked grant without consuming the token', async () => {

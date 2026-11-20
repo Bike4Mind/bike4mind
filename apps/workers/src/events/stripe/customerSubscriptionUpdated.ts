@@ -1,26 +1,32 @@
-import { organizationRepository, withTransaction } from '@bike4mind/database';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { type ISubscription, SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { withTransaction } from '@bike4mind/database';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import {
+  type ISubscription,
+  SubscriptionMetadata,
+  SubscriptionOwnerType,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
 import {
   planChangeDirection,
   planDetails,
   rowTimestamps,
   subscriptionEventUser,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import type Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { setSeats } from '@server/services/organizationService';
+import { applyStripeSubscriptionState } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { StripeEvents } from '@server/utils/eventBus';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
+import { postSubscriptionChangesToSlack } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
+import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { sendToClient } from '@server/websocket/utils';
-import dayjs from 'dayjs';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
+import { Logger } from '@bike4mind/observability';
+import { applyPlanStorageLimit } from '@workers/lib/userSubscriptions/applyPlanStorageLimit';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);
@@ -75,54 +81,27 @@ export const handler = withEventContext(async (event, logger) => {
   // against a state that is already gone. Nothing extra to fail: the sync either writes and
   // returns it, or fails as it always could. The cancel and change routes do not write the row
   // themselves, so an in-app change reaches here exactly as a Billing Portal one does.
-  let before: ISubscription | null = null;
+  // Asserted, not annotated: assigned only inside the closure, so `= null` would narrow it to never below.
+  let before = null as ISubscription | null;
 
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
-    const [item] = subscription.items.data;
     // Reassigned on a retried transaction, so both hold the attempt that committed.
-    before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(subscription.id, {
-      status: subscription.status,
-      periodStartsAt: dayjs.unix(item.current_period_start).toDate(),
-      periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
-      canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
-      priceId: item.price.id,
-      quantity: item.quantity ?? 1,
-    });
+    const result = await applyStripeSubscriptionState(subscription, { ownerType: metadata.ownerType });
+    before = result.before;
     owned = before !== null;
-
-    if (metadata.ownerType === SubscriptionOwnerType.Organization) {
-      // Keep organization.seats and the active Subscription.quantity in sync
-      // with Stripe via the shared setSeats service (validation included).
-      const organization = await organizationRepository.findByStripeCustomerId(subscription.customer as string);
-      if (organization) {
-        const newQuantity = item.quantity ?? 1;
-        try {
-          await setSeats(organization.id, newQuantity, { type: 'stripe' });
-        } catch (err) {
-          // Stripe is the source of truth for billed seat count. If our
-          // local validation (team-size floor / platform min) would reject
-          // this value, we still must NOT drift from Stripe - otherwise the
-          // customer is billed for a different number of seats than our DB
-          // reports. Log loudly and force-write the seat count directly.
-          // The org-internal floor will re-apply on the next manual change.
-          const message = err instanceof Error ? err.message : String(err);
-          logger.warn(
-            `setSeats validation failed for org ${organization.id} on Stripe webhook (quantity=${newQuantity}). Force-syncing to avoid drift. Reason: ${message}`
-          );
-          await organizationRepository.update({ id: organization.id, seats: newQuantity });
-        }
-        return true;
-      }
-    }
-
+    if (result.seats) return true;
     if (!owned) {
       logger.warn(`Subscription not found: ${subscription.id}`);
-      return false;
     }
-
     return false;
   });
+
+  // Straight after the write: a redelivery compares Stripe's state with the row this attempt wrote
+  // and finds no change, so a timeout in the slower work below would lose these posts. Never throws.
+  if (owned && before) {
+    await postSubscriptionChangesToSlack(before, subscription);
+  }
 
   // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
   // only actor and none of our API routes are called - leaves the unpaid invoice
@@ -162,6 +141,15 @@ export const handler = withEventContext(async (event, logger) => {
     await emitSubscriptionChangeEvents(before, subscription);
   }
 
+  // Owner from the stored row, not metadata: legacy metadata loses ownerType.
+  if (owned && before) {
+    if (before.ownerType === SubscriptionOwnerType.Organization) {
+      await applyPlanStorageLimit(subscription, before.ownerId, logger, SubscriptionOwnerType.Organization);
+    } else if (before.ownerType === SubscriptionOwnerType.User) {
+      await applyPlanStorageLimit(subscription, before.ownerId, logger);
+    }
+  }
+
   // sendToClient calls must be outside the transaction to avoid
   // Connection.find() inheriting a committed transaction session.
   // metadata.userId can be undefined on legacy metadata - sendToClient with a
@@ -187,7 +175,7 @@ export const handler = withEventContext(async (event, logger) => {
   // are derived-on-read from the updated Subscription row - this push only
   // wakes the client gate.
   const priceId = subscription.items.data[0]?.price.id;
-  if (priceId && entitlementsForPriceIds([priceId]).size > 0) {
+  if (priceId && priceAffectsEntitlements(priceId)) {
     const isUserOwned = metadata.ownerType !== SubscriptionOwnerType.Organization;
     if (isUserOwned && metadata.userId) {
       logger.info(
@@ -214,11 +202,6 @@ export const handler = withEventContext(async (event, logger) => {
   }
 });
 
-/** Whether a subscription is set to cancel at the end of its period, and is not over yet. */
-function cancelIsPending(status: string, canceling: boolean): boolean {
-  return canceling && status !== 'canceled';
-}
-
 /**
  * The lifecycle events one subscription update carries, read off the row its write replaced and
  * Stripe's state after it: a move to another price, and a period-end cancel being set or
@@ -230,7 +213,7 @@ function cancelIsPending(status: string, canceling: boolean): boolean {
  * The events follow the row, which is only as current as the Stripe state each update fetched.
  * Updates running at once each see the state the other left, so they cannot both report one
  * transition; but one that fetched an older state and wrote it last moves the row back, reports
- * that move, and the next update reports the move forward again.
+ * that move unless the row was terminal, and the next update reports the move forward again.
  *
  * Only user-owned subscriptions, like purchases: no one user's signup can attribute an
  * organization's. Each occurrence names the row version it changed from, so each transition has
@@ -243,10 +226,11 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
     const toPriceId = subscription.items.data[0]?.price.id;
     const version = rowTimestamps(before).updatedAt?.toISOString() ?? 'unversioned';
     const sends: Array<Promise<unknown>> = [];
+    const { plan, cancel } = detectSubscriptionChanges(before, subscription);
 
-    if (toPriceId && before.priceId && toPriceId !== before.priceId) {
-      const from = planDetails(before.priceId);
-      const to = planDetails(toPriceId);
+    if (plan) {
+      const from = planDetails(plan.fromPriceId);
+      const to = planDetails(plan.toPriceId);
       sends.push(
         emitBillingEvent({
           user,
@@ -257,24 +241,17 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
             toPlan: to.plan,
             ...(from.interval && { fromInterval: from.interval }),
             ...(to.interval && { toInterval: to.interval }),
-            direction: planChangeDirection(before.priceId, toPriceId),
+            direction: planChangeDirection(plan.fromPriceId, plan.toPriceId),
           },
         })
       );
     }
 
-    // Before and after are read off the same field, Stripe's canceled_at, which the row stores
-    // verbatim: set when a cancel is requested, and the signal this handler's invoice cleanup
-    // below also acts on. Comparing it with itself, rather than the row's copy with Stripe's
-    // cancel_at_period_end, means a field the two disagree on cannot fire a transition on every
-    // later update; the worst a disagreement can do is miss one.
-    const wasPending = cancelIsPending(before.status, before.canceledAt != null);
-    const isPending = cancelIsPending(subscription.status, subscription.canceled_at != null);
-    if (wasPending !== isPending && subscription.status !== 'canceled') {
+    if (cancel) {
       sends.push(
         emitBillingEvent({
           user,
-          event: isPending ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
+          event: cancel === 'scheduled' ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
           occurrence: `${subscription.id}:cancel:${version}`,
           metadata: { ...planDetails(toPriceId ?? before.priceId) },
         })
@@ -283,6 +260,6 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
 
     await Promise.all(sends);
   } catch {
-    console.warn('[b4m-analytics] subscription change events failed');
+    Logger.warn('[b4m-analytics] subscription change events failed');
   }
 }

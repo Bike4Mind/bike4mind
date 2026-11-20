@@ -10,9 +10,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const handlers = vi.hoisted(() => ({ post: null as null | ((req: any, res: any) => unknown) }));
 
 vi.mock('@server/middlewares/baseApi', () => {
+  const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
   const chain: any = {
+    use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+      middlewares.push(middleware);
+      return chain;
+    },
     post: (fn: any) => {
-      handlers.post = fn;
+      handlers.post = async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return fn(req, res);
+      };
       return chain;
     },
   };
@@ -30,7 +38,9 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+}));
 vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
 
 import '../create';

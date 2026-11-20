@@ -413,12 +413,29 @@ export type ModelCatalog = {
   models: ModelInfo[];
   /** Retired/superseded ids a session may still be pinned to. See SupersededModelInfo. */
   supersededModels: SupersededModelInfo[];
+  /** Models the picker shows as locked (paid-only, or not allowed by the org); display only (see ModelInfo.access). */
+  lockedModels: ModelInfo[];
+  /** The model-list revision the server built this list under; see hooks/data/modelListRevision.ts. */
+  modelListRevision: string | null;
+  /** The server could not read the model catalog and sent its adapter-table fallback; refetched soon. */
+  catalogUnavailable: boolean;
 };
 
-export const getModelCatalog = async (): Promise<ModelCatalog> => {
+/** `organizationId`: the active account-switcher org, whose model policy the server applies. */
+export const getModelCatalog = async (organizationId?: string | null): Promise<ModelCatalog> => {
   try {
-    const response = await api.get('/api/models');
-    return { models: response.data.models, supersededModels: response.data.supersededModels ?? [] };
+    const response = organizationId
+      ? await api.get('/api/models', { params: { organizationId } })
+      : await api.get('/api/models');
+    const listed: ModelInfo[] = response.data.models;
+    return {
+      // Backstop: the server never sends a locked model in `models`.
+      models: listed.filter(model => !model.access?.locked),
+      supersededModels: response.data.supersededModels ?? [],
+      lockedModels: response.data.lockedModels ?? [],
+      modelListRevision: response.data.modelListRevision ?? null,
+      catalogUnavailable: response.data.catalogUnavailable === true,
+    };
   } catch (error: unknown) {
     const axiosError = error as AxiosError;
     perfLogger.log('[Client] Error fetching LLM models:', axiosError);

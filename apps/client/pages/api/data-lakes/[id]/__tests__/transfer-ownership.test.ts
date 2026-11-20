@@ -71,10 +71,10 @@ vi.mock('@bike4mind/database', () => ({
   // The notifier looks the addressee + lake name up here.
   userRepository: { findById: vi.fn().mockResolvedValue({ id: 'recipient', email: 'recipient@example.com' }) },
   organizationRepository: {},
-  // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the transport.
+  // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the queued mailer.
 }));
-vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/utils/mailer/queuedMailer', () => ({ queuedMailer: { sendEmail: h.sendEmail } }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../transfer-ownership';
 
@@ -132,6 +132,28 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
       expect.objectContaining({ db: expect.objectContaining({ ownershipOffers: expect.anything() }) })
     );
     expect(json).toHaveBeenCalledWith({ offer: expect.objectContaining({ id: 'offer-1' }) });
+  });
+
+  it('strips server-only and undeclared fields from the opened offer', async () => {
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.offerLakeOwnership.mockResolvedValue({
+      ...OFFER,
+      auditPrincipal: { principalKind: 'api_key', principalId: 'key1' },
+      priorOwnerUserIds: ['u0'],
+      offeredVia: 'transfer-route',
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await call(req('POST', { id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
+
+    const { offer } = json.mock.calls[0][0];
+    expect(offer).toMatchObject({ id: 'offer-1', dataLakeId: 'lake-oid-1', recipientUserId: 'newOwner' });
+    for (const key of ['auditPrincipal', 'priorOwnerUserIds', 'offeredVia', '_id', '__v', 'notInSchema']) {
+      expect(offer).not.toHaveProperty(key);
+    }
   });
 
   it('emails the recipient after the offer commits', async () => {
@@ -248,6 +270,29 @@ describe('DELETE /api/data-lakes/[id]/transfer-ownership', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith({ offer: expect.objectContaining({ status: 'cancelled' }) });
+  });
+
+  it('strips server-only and undeclared fields from the cancelled offer', async () => {
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.cancelLakeOwnershipOffer.mockResolvedValue({
+      ...OFFER,
+      status: 'cancelled',
+      auditPrincipal: { principalKind: 'api_key', principalId: 'key1' },
+      priorOwnerUserIds: ['u0'],
+      offeredVia: 'transfer-route',
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await call(req('DELETE', { id: 'my-lake' }), res);
+
+    const { offer } = json.mock.calls[0][0];
+    expect(offer).toMatchObject({ id: 'offer-1', dataLakeId: 'lake-oid-1', recipientUserId: 'newOwner' });
+    for (const key of ['auditPrincipal', 'priorOwnerUserIds', 'offeredVia', '_id', '__v', 'notInSchema']) {
+      expect(offer).not.toHaveProperty(key);
+    }
   });
 
   it('does not cancel when the access gate denies the lake', async () => {

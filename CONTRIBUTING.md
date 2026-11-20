@@ -143,7 +143,7 @@ pnpm i -r
 pnpm turbo:core:build
 
 # 5. Verify your environment works before changing anything
-pnpm turbo:typecheck   # TypeScript across all packages
+pnpm turbo:typecheck:fast   # TypeScript across all packages
 pnpm turbo:test        # all test suites (MongoDB tests use mongodb-memory-server — no local DB needed)
 pnpm lint:check        # ESLint, error severity only (mirrors the CI gate)
 ```
@@ -156,7 +156,8 @@ To run the application locally (needed for UI work), see the [README](./README.m
 
 | Task | Command | Notes |
 |---|---|---|
-| Typecheck (fast) | `pnpm turbo:typecheck` | Cached; falls back to `pnpm -r typecheck` |
+| Verify a branch | `pnpm verify` | Typecheck, tests and lint for what your branch changed only |
+| Typecheck (fast) | `pnpm turbo:typecheck:fast` | tsgo with tsc fallback, as CI gates; `pnpm turbo:typecheck` is pure tsc |
 | Run all tests | `pnpm turbo:test` | Parallel across packages |
 | Test one package | `pnpm --filter <package> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 | Lint | `pnpm lint:check` | Mirrors CI |
@@ -253,6 +254,13 @@ The [PR template](./.github/pull_request_template.md) is not decoration; fill in
 - **Screenshots/video** — required for any UI change.
 - **Checklist** — actually do the items, don't just tick them.
 
+When the PR adds or changes a security control (a rate limit, WAF rule, bot challenge, alarm, header check), the description, the commit messages and the review comments describe what the code now does. Everything else about the weakness lives on the private tracker, which the PR may reference by bare number only. Leave out:
+
+- Exposure or impact statements: what an attacker could reach, for how long, how many accounts or how much money.
+- Reproduction inputs: payloads, bypass spellings, header names or exact thresholds paired with the route they protect, commands against production.
+- Names of surfaces that are still unprotected, including "X still holds" or "Y is left for a follow-up" notes.
+- Quoted text or titles from private issues, and teammate names in commit messages or trailers. Thank reviewers in the PR conversation instead.
+
 ### Scope hygiene
 
 - No drive-by reformatting or mass renames mixed into functional changes.
@@ -266,15 +274,14 @@ All of these are required and blocking:
 | Check | What it verifies | Run it locally |
 |---|---|---|
 | **Semantic PR Title** | PR title is a valid conventional commit | — (fix the title) |
-| **Typecheck** | TypeScript across all packages | `pnpm turbo:typecheck` |
+| **Typecheck** | TypeScript across all packages | `pnpm turbo:typecheck:fast` |
 | **Lint** | ESLint error-severity violations | `pnpm lint:check` |
 | **Run Tests** | Full test suite (sharded in CI) | `pnpm turbo:test` |
 | **Secret scan** | No credentials in the diff | gitleaks pre-commit hook |
 | **Lockfile Integrity** | No integrity-less tarballs, and no [overlay paths](#premium-overlays-and-the-tracked-lockfile), in `pnpm-lock.yaml` | `bash scripts/check-no-overlay-lockfile.sh` |
-| **Semgrep** | Static security analysis | — |
 | **CLA** | You've signed the CLA | one-time, via bot |
 
-Run typecheck, lint, and tests locally before pushing — it's dramatically faster than round-tripping through CI.
+Run typecheck, lint, and tests locally before pushing - it's dramatically faster than round-tripping through CI. `pnpm verify` does all three for just what your branch changed.
 
 Two notes specific to fork PRs:
 
@@ -289,6 +296,8 @@ Two details the location tells you:
 
 - A hit named `commit <sha> ...` is in that commit's own diff, which stays in the branch history even if a later commit removes the line. Squash or rewrite that commit; editing the file in a new commit does not clear it.
 - A file GitHub cannot show a diff for (binary, or too large) is checked in full at the commit being checked (for binary files, its readable text), not line by line.
+
+The check does not read issue comments, reviews or review replies, so give those the same care by hand. A force-push does not remove a pushed commit from GitHub: it stays reachable by SHA, so a push that should not have happened needs a maintainer to file a support request, not a history rewrite.
 
 ### Fixing a dependency advisory
 

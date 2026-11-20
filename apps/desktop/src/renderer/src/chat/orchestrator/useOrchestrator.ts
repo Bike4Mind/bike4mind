@@ -1,0 +1,205 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
+import type { PrSummary } from '@shared/pullRequest';
+import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
+import {
+  readAmbient,
+  readDockOpen,
+  readFocus,
+  readSurface,
+  readView,
+  writeAmbient,
+  writeDockOpen,
+  writeFocus,
+  writeSurface,
+  writeView,
+  type OrchestratorViewId,
+  type SessionSurface,
+} from './orchestratorPrefs';
+import { buildRoster, descendantIds, type AgentView, type ParentView } from './roster';
+
+const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
+// Untracked ids remembered at once; the stream carries every session, so this must stay bounded.
+const UNTRACKED_BUFFER_CAP = 16;
+
+/**
+ * What the tracked sessions' agents are doing right now, folded from the shared stream. Events from
+ * any other session never reach state, so unrelated work never re-renders; the latest few are kept
+ * aside and applied if their id becomes tracked.
+ */
+export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<string, AgentActivity> {
+  const [activity, setActivity] = useState(NO_ACTIVITY);
+  // A ref, so a changing roster never resubscribes.
+  const tracked = useRef(trackedIds);
+  tracked.current = trackedIds;
+
+  // Activity for ids not tracked yet, held in a ref so it never re-renders.
+  const untracked = useRef(NO_ACTIVITY);
+
+  useEffect(() => {
+    return window.b4m.chat.onStreamEvent(event => {
+      if (!tracked.current.has(event.sessionId)) {
+        untracked.current = bufferUntrackedActivity(untracked.current, event, UNTRACKED_BUFFER_CAP);
+        return;
+      }
+      // The id can be tracked (set during render) before the effect below adopts its buffered entry,
+      // so the first live event takes that entry over and folds on top of it.
+      const buffered = untracked.current.get(event.sessionId);
+      if (buffered) {
+        const without = new Map(untracked.current);
+        without.delete(event.sessionId);
+        untracked.current = without;
+      }
+      setActivity(current => {
+        const seeded =
+          buffered && !current.has(event.sessionId) ? new Map(current).set(event.sessionId, buffered) : current;
+        return foldActivity(seeded, event);
+      });
+    });
+  }, []);
+
+  // Every session-list change rebuilds the set, so the reconcile below keys on its contents.
+  const trackedKey = useMemo(() => [...trackedIds].sort().join('\n'), [trackedIds]);
+
+  // Drops ids that left the roster and adopts any buffered for ids that joined it.
+  useEffect(() => {
+    const ids = tracked.current;
+    const adopted = [...untracked.current].filter(([id]) => ids.has(id));
+    if (adopted.length > 0) {
+      const remaining = new Map(untracked.current);
+      adopted.forEach(([id]) => remaining.delete(id));
+      untracked.current = remaining;
+    }
+    setActivity(current => {
+      const next = new Map([...current].filter(([id]) => ids.has(id)));
+      adopted.forEach(([id, buffered]) => {
+        if (!next.has(id)) next.set(id, buffered);
+      });
+      return next.size === current.size && adopted.length === 0 ? current : next;
+    });
+  }, [trackedKey]);
+
+  return activity;
+}
+
+/** The roster plus the root session itself, which the Tavern draws as the Innkeeper. */
+export interface OrchestratorScene {
+  agents: AgentView[];
+  parent: ParentView;
+}
+
+export function useOrchestratorRoster(
+  rootId: string | null,
+  sessions: readonly ChatSessionSummary[],
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  prSummaries: ReadonlyMap<string, PrSummary>,
+  preparing?: ReadonlyMap<string, SessionSetupStep>
+): OrchestratorScene {
+  const trackedIds = useMemo(() => {
+    const ids = descendantIds(sessions, rootId);
+    if (rootId !== null) ids.add(rootId);
+    return ids;
+  }, [sessions, rootId]);
+  const activity = useAgentActivity(trackedIds);
+  const agents = useMemo(
+    () => (rootId === null ? [] : buildRoster({ sessions, statuses, preparing, activity, prSummaries, rootId })),
+    [rootId, sessions, statuses, preparing, activity, prSummaries]
+  );
+  const status = rootId === null ? undefined : statuses.get(rootId);
+  const rootActivity = rootId === null ? undefined : activity.get(rootId);
+  const parent = useMemo<ParentView>(
+    () => ({ ...(status && { status }), ...(rootActivity && { activity: rootActivity }) }),
+    [status, rootActivity]
+  );
+  return useMemo(() => ({ agents, parent }), [agents, parent]);
+}
+
+interface OrchestratorPrefs {
+  surface: SessionSurface;
+  setSurface(surface: SessionSurface): void;
+  view: OrchestratorViewId;
+  setView(view: OrchestratorViewId): void;
+  dockOpen: boolean;
+  setDockOpen(open: boolean): void;
+  ambient: boolean;
+  setAmbient(on: boolean): void;
+  focus: boolean;
+  setFocus(on: boolean): void;
+}
+
+interface SessionPrefs {
+  sessionId: string | null;
+  projectDirectory: string | undefined;
+  surface: SessionSurface;
+  view: OrchestratorViewId;
+}
+
+function readSessionPrefs(sessionId: string | null, projectDirectory: string | undefined): SessionPrefs {
+  return sessionId === null
+    ? { sessionId, projectDirectory, surface: 'chat', view: 'tavern' }
+    : { sessionId, projectDirectory, surface: readSurface(sessionId), view: readView(sessionId, projectDirectory) };
+}
+
+/**
+ * Per-session surface and view, plus the global dock, ambient and focus flags.
+ * Setters update state and storage together.
+ */
+export function useOrchestratorPrefs(sessionId: string | null, projectDirectory?: string): OrchestratorPrefs {
+  const [prefs, setPrefs] = useState(() => readSessionPrefs(sessionId, projectDirectory));
+  const [dockOpen, setDockOpenState] = useState(readDockOpen);
+  const [ambient, setAmbientState] = useState(readAmbient);
+  const [focus, setFocusState] = useState(readFocus);
+
+  // Re-read during render rather than in an effect, so a session switch never paints the old session's mode.
+  const current =
+    prefs.sessionId === sessionId && prefs.projectDirectory === projectDirectory
+      ? prefs
+      : readSessionPrefs(sessionId, projectDirectory);
+  if (current !== prefs) setPrefs(current);
+
+  const setSurface = useCallback(
+    (surface: SessionSurface) => {
+      if (sessionId === null) return;
+      writeSurface(sessionId, surface);
+      setPrefs(previous => ({ ...previous, sessionId, surface }));
+    },
+    [sessionId]
+  );
+
+  const setView = useCallback(
+    (view: OrchestratorViewId) => {
+      if (sessionId === null) return;
+      writeView(sessionId, view, projectDirectory);
+      setPrefs(previous => ({ ...previous, sessionId, projectDirectory, view }));
+    },
+    [sessionId, projectDirectory]
+  );
+
+  const setDockOpen = useCallback((open: boolean) => {
+    writeDockOpen(open);
+    setDockOpenState(open);
+  }, []);
+
+  const setAmbient = useCallback((on: boolean) => {
+    writeAmbient(on);
+    setAmbientState(on);
+  }, []);
+
+  const setFocus = useCallback((on: boolean) => {
+    writeFocus(on);
+    setFocusState(on);
+  }, []);
+
+  return {
+    surface: current.surface,
+    setSurface,
+    view: current.view,
+    setView,
+    dockOpen,
+    setDockOpen,
+    ambient,
+    setAmbient,
+    focus,
+    setFocus,
+  };
+}

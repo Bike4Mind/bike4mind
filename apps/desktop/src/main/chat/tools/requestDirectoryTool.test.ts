@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { withRealPath } from './paths';
 import { broadPathWarning, inspectDirectory, inspectDirectoryRequest, requestDirectory } from './requestDirectoryTool';
 
 describe('inspectDirectoryRequest', () => {
@@ -82,6 +83,66 @@ describe('inspectDirectoryRequest', () => {
 
   it("refuses the app's own protected folders", async () => {
     await expect(inspect(wanted, { protectedPaths: [home] })).resolves.toMatchObject({ kind: 'refused' });
+  });
+
+  describe('a shareable folder inside a protected one', () => {
+    it('shares a folder beneath it but not the shareable folder itself or its protected siblings', async () => {
+      const attachments = join(wanted, 'attachments');
+      const one = join(attachments, 'one');
+      const vault = join(wanted, 'vault');
+      await mkdir(one, { recursive: true });
+      await mkdir(vault);
+      const guarded = (path: string) =>
+        inspectDirectoryRequest(
+          { path, reason: 'Hand the file to another tool.' },
+          { roots: [], declined: [], home, protectedPaths: [wanted], shareableUnderProtected: [attachments] }
+        );
+
+      await expect(guarded(one)).resolves.toMatchObject({ kind: 'ask', path: one });
+      await expect(guarded(attachments)).resolves.toMatchObject({ kind: 'refused' });
+      await expect(guarded(vault)).resolves.toMatchObject({ kind: 'refused' });
+    });
+
+    it('matches a shareable folder given through a symlink by its real path', async () => {
+      const attachments = join(wanted, 'attachments');
+      const one = join(attachments, 'one');
+      await mkdir(one, { recursive: true });
+      const linked = join(base, 'attachments-link');
+      await symlink(attachments, linked);
+      const guarded = (path: string) =>
+        inspectDirectoryRequest(
+          { path, reason: 'Hand the file to another tool.' },
+          { roots: [], declined: [], home, protectedPaths: [wanted], shareableUnderProtected: [linked] }
+        );
+
+      await expect(guarded(one)).resolves.toMatchObject({ kind: 'ask', path: one });
+      await expect(guarded(attachments)).resolves.toMatchObject({ kind: 'refused' });
+    });
+  });
+
+  describe('an app folder whose own path runs through a symlink', () => {
+    let config: string;
+    let app: string;
+    let protectedPaths: string[];
+
+    beforeEach(async () => {
+      config = join(base, 'config');
+      app = join(config, 'App');
+      await mkdir(join(app, 'sessions'), { recursive: true });
+      await mkdir(join(config, 'Other'));
+      await symlink(config, join(base, 'cfg-link'));
+      protectedPaths = withRealPath(join(base, 'cfg-link', 'App'));
+    });
+
+    it('refuses the real folder and anything beneath it', async () => {
+      for (const path of [app, join(app, 'sessions'), join(base, 'cfg-link', 'App')]) {
+        await expect(inspect(path, { protectedPaths })).resolves.toMatchObject({ kind: 'refused' });
+      }
+    });
+
+    it('still asks for a sibling of the app folder', async () => {
+      await expect(inspect(join(config, 'Other'), { protectedPaths })).resolves.toMatchObject({ kind: 'ask' });
+    });
   });
 
   it('requires a reason', async () => {

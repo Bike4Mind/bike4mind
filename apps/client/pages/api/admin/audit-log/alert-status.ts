@@ -5,14 +5,14 @@ import {
   type AuditAlertStatus,
 } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 
 // The webhook itself is sensitive, so only whether it is set leaves the server.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     {

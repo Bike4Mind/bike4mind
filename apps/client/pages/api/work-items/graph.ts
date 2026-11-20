@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { WORK_ITEM_RATE_LIMIT, WORK_ITEM_RATE_WINDOW_MS } from '@server/utils/workItemValidation';
 

@@ -21,12 +21,16 @@ const LAKE_B = '89abcdef0123456789abcdef';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: any = {
-      use: () => chain,
+      use: (guard: (req: unknown, res: unknown, next: () => void) => void) => {
+        mockRefs.guard ??= guard;
+        return chain;
+      },
       post: (fn: any) => {
         mockRefs.postHandler = fn;
         return chain;
@@ -69,7 +73,8 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 
@@ -83,7 +88,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockLogEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
   // Matches logEventSafe's contract: a failed write is swallowed, never rethrown.
   logEventSafe: async (event: unknown, options: unknown) => {
@@ -95,7 +100,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
   },
 }));
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',
@@ -109,7 +114,7 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
 
 const targetAccess = vi.hoisted(() => ({ entitlements: new Set<string>(), bypass: false }));
 const mockResolveTargetAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/entitlements', () => ({ toEntitlementUser: (user: unknown) => user }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ toEntitlementUser: (user: unknown) => user }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
   resolveApiKeyScopeAccessForUser: mockResolveTargetAccess.mockImplementation(async () => ({
     bypass: targetAccess.bypass,
@@ -118,12 +123,17 @@ vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
 }));
 
 import '../generate-api-key';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 
 const activeLake = (id: string) => ({ id, status: 'active', createdByUserId: 'someone', name: id, slug: id });
 
-function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) {
+// Runs the permission guard adminApi installs, then the handler, as the router would.
+async function guarded(req: unknown, res: unknown) {
+  mockRefs.guard!(req, res, () => {});
+  return mockRefs.postHandler!(req, res);
+}
+
+function post(body: unknown, opts: { isAdmin?: boolean; userId?: string; adminPermissions?: string[] } = {}) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { userId: opts.userId ?? 'target-user' },
@@ -133,6 +143,7 @@ function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) 
     id: 'caller',
     isAdmin: opts.isAdmin ?? true,
     username: 'admin-user',
+    adminPermissions: opts.adminPermissions,
   };
   (req as any).ability = {};
   (req as any).ip = '127.0.0.1';
@@ -210,7 +221,7 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
 
   it('rejects non-admin callers with ForbiddenError before touching the service', async () => {
     const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] }, { isAdmin: false });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(guarded(req, res)).rejects.toMatchObject({ statusCode: 403 });
     expect(mockCreateKey).not.toHaveBeenCalled();
   });
 
@@ -233,7 +244,7 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
   });
 
   it('allows overwatch-ingest:write (admin-provisioned scope) and calls the service', async () => {
-    const { req, res } = post({ name: 'ingest', scopes: ['overwatch-ingest:write'] });
+    const { req, res } = post({ name: 'ingest', scopes: ['overwatch-ingest:write'], reason: 'Internal service' });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalledWith(
@@ -243,9 +254,26 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     );
   });
 
+  it('refuses ai:end-user-id on its own, since it opens no route without ai:chat or ai:generate', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['ai:end-user-id'], reason: 'Serves end users' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(BadRequestError);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('mints ai:end-user-id beside ai:chat for a full admin', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['ai:chat', 'ai:end-user-id'], reason: 'Serves end users' });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['ai:chat', 'ai:end-user-id'] }),
+      expect.anything()
+    );
+  });
+
   it('allows release-notes:write for a platform-admin target', async () => {
     mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
-    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'], reason: 'Internal service' });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalledWith(
@@ -771,5 +799,117 @@ describe('POST /api/admin/users/:userId/generate-api-key - admin audit', () => {
       expect.any(String),
       expect.objectContaining({ keyId: 'k1' })
     );
+  });
+});
+
+describe('POST /api/admin/users/:userId/generate-api-key - reason for admin-provisioned scopes', () => {
+  const REASON = 'Partner integration: game server credit grants';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', email: 'target@example.com' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'rewards', keyPrefix: 'b4m_live', scopes: ['rewards:grant'] });
+    mockRecordAdminAction.mockResolvedValue(null);
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('refuses an admin-provisioned scope with no reason, before minting', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reason shorter than the shared minimum', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'], reason: 'ok' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/at least 5/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it.each(['overwatch-ingest:write', 'qa:ingest', 'rewards:grant'])('requires a reason for %s', async scope => {
+    const { req, res } = post({ name: 'svc', scopes: [scope] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('stores the reason on the audit entry', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'], reason: `  ${REASON}  ` });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.generated',
+        reason: REASON,
+        details: expect.objectContaining({ name: 'rewards', scopes: ['rewards:grant'] }),
+      })
+    );
+  });
+
+  it('keeps the reason optional for self-service scopes', async () => {
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', keyPrefix: 'b4m_live', scopes: ['notebooks:read'] });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(req, expect.objectContaining({ reason: undefined }));
+  });
+
+  it('records an optional reason given for self-service scopes', async () => {
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', keyPrefix: 'b4m_live', scopes: ['notebooks:read'] });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'], reason: REASON });
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(req, expect.objectContaining({ reason: REASON }));
+  });
+});
+
+describe('POST /api/admin/users/:userId/generate-api-key - delegated admins', () => {
+  const BODY = { name: 'key', scopes: ['notebooks:read'] };
+  const both = ['keys:revoke', 'users:impersonate'];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', scopes: ['notebooks:read'] });
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('refuses a delegate without keys:revoke before any read', async () => {
+    const { req, res } = post(BODY, { isAdmin: false, adminPermissions: ['users:impersonate'] });
+    await expect(guarded(req, res)).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Missing permission: keys:revoke',
+    });
+    expect(mockUserFind).not.toHaveBeenCalled();
+  });
+
+  it('refuses keys:revoke alone, since the key is a working credential for the target', async () => {
+    const { req, res } = post(BODY, { isAdmin: false, adminPermissions: ['keys:revoke'] });
+    await expect(guarded(req, res)).rejects.toMatchObject({ message: 'Missing permission: users:impersonate' });
+    expect(mockUserFind).not.toHaveBeenCalled();
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate holding both permissions mint a key for a non-admin user', async () => {
+    const { req, res } = post(BODY, { isAdmin: false, adminPermissions: both });
+    await guarded(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin user without minting', async () => {
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', adminPermissions: ['support:read'] });
+    const { req, res } = post(BODY, { isAdmin: false, adminPermissions: both });
+    await expect(guarded(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('keeps admin-provisioned scopes to full administrators', async () => {
+    const body = { name: 'ingest', scopes: ['overwatch-ingest:write'], reason: 'Internal service' };
+    const { req, res } = post(body, { isAdmin: false, adminPermissions: both });
+    await expect(guarded(req, res)).rejects.toThrow(/Only full administrators can create API keys/);
+    expect(mockCreateKey).not.toHaveBeenCalled();
   });
 });

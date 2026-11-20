@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -5,6 +6,7 @@ import {
   sessionRepository,
   projectRepository,
   fabFileRepository,
+  spendFreezeRepository,
   userRepository,
   questRepository,
 } from '@bike4mind/database';
@@ -17,6 +19,11 @@ import {
   redactSessionForClient,
 } from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import {
+  billedOrganizationIdForFreeze,
+  spendFreezeSubjectForRequest,
+} from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import {
   buildVoiceInstructions,
   ForbiddenError,
@@ -25,7 +32,7 @@ import {
   getSettingsValue,
   usdToCredits,
 } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
@@ -38,7 +45,9 @@ import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordVoiceRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -65,6 +74,12 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 
 const handler = baseApi().post(async (req, res) => {
   assertAiAccessAllowed(req.user);
+  // Voice bills the user personally, so only an org-billed key's own org can be the frozen org.
+  const organizationId = billedOrganizationIdForFreeze(req.apiKeyInfo);
+  // Before any gate that reads settings or the provider, and whether or not credits are enforced.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(
@@ -101,6 +116,7 @@ const handler = baseApi().post(async (req, res) => {
   // Block voice sessions when user has no credits and credit enforcement is enabled
   const enforceCredits = getSettingsValue('enforceCredits', settings);
   if (enforceCredits && (req.user?.currentCredits ?? 0) <= 0) {
+    await recordVoiceRefusal(req.user.id, 1, req.user?.currentCredits ?? 0);
     throw new ForbiddenError('Out of Credits!');
   }
 
@@ -116,6 +132,7 @@ const handler = baseApi().post(async (req, res) => {
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
 
   const realtimeModel = 'gpt-realtime-1.5';
+  await (await createModelAdmission(req.user!)).assert(realtimeModel);
 
   const openaiApiKey = await apiKeyService.getEffectiveApiKey(
     req.user?.id,
@@ -165,7 +182,9 @@ const handler = baseApi().post(async (req, res) => {
         // follow the creator-identity widening an organization lake uses. Request-free variant: this
         // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
+          (
+            await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')
+          ).resolveRetrievalLakeScopeForUser(req.user!),
       },
       { origin: resolveSessionOrigin(req) }
     );
@@ -192,6 +211,7 @@ const handler = baseApi().post(async (req, res) => {
   if (enforceCredits && !reuseHold) {
     const currentUser = await userRepository.findById(req.user.id);
     if ((currentUser?.currentCredits ?? 0) < reservedCredits) {
+      await recordVoiceRefusal(req.user.id, reservedCredits, currentUser?.currentCredits ?? 0);
       throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
     }
   }
@@ -437,12 +457,19 @@ When you get the tool result back, summarize it conversationally for voice.`;
       userId: req.user.id,
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
+      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      organizationId,
+      spendFreezes: spendFreezeRepository,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
-      unaffordable: () =>
-        new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      unaffordable: () => {
+        void recordVoiceRefusal(req.user.id, reservedCredits);
+        return new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+      },
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

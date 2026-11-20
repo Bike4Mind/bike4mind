@@ -204,6 +204,7 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
       {/* Hidden file input */}
       <input
         type="file"
+        data-testid="upload-actions-file-input"
         ref={fileInputRef}
         style={{ display: 'none' }}
         onChange={handleFileSelect}

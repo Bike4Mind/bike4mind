@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { BadRequestError, UrlBlockedError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 // Hoisted mock for the Lambda client's send method so we can assert on calls.
@@ -100,6 +101,12 @@ describe('downloadImageAsBuffer SSRF guard', () => {
 
     expect(buf.toString()).toBe('png-bytes');
     expect(mockAxiosGet).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a blocked URL as a BadRequestError so it answers 400, not 500', async () => {
+    const err = await downloadImageAsBuffer('http://169.254.169.254/latest/meta-data/').catch(e => e);
+    expect(err).toBeInstanceOf(UrlBlockedError);
+    expect(err).toBeInstanceOf(BadRequestError);
   });
 
   it.each([

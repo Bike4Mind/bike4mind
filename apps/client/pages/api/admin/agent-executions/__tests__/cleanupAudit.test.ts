@@ -13,10 +13,15 @@ type Route = (req: unknown, res: unknown) => unknown;
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, Route> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         post: (fn: Route) => ((routes.POST = fn), chain),
       }
     );
@@ -36,7 +41,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   PostToConnectionCommand: vi.fn(),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://example.test' } } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../cleanup';
 
@@ -63,5 +68,13 @@ describe('POST /api/admin/agent-executions/cleanup admin audit', () => {
       details: { requested: 2, marked: 1, executionIds: ['e1'] },
     });
     expect(h.markAbandoned.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('rejects a support:read-only delegate without sweeping', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { executionIds: ['e1'] } });
+    (req as unknown as Record<string, unknown>).user = { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] };
+
+    await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.markAbandoned).not.toHaveBeenCalled();
   });
 });

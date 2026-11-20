@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: h.encryptToken,
   decryptToken: h.decryptToken,
 }));
@@ -203,7 +203,7 @@ describe('DELETE /api/google-drive/disconnect', () => {
     const { res } = makeRes();
     await run(res);
     expect(h.revokeToken).not.toHaveBeenCalled();
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/), expect.anything());
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/));
     expect(h.userFindByIdAndUpdate).toHaveBeenCalledWith('u1', { googleDrive: null });
     consoleError.mockRestore();
   });

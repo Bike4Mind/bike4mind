@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 /**
  * Minimal logger shape this handler needs. Compatible with the `Logger` on

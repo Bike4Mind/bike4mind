@@ -136,11 +136,28 @@ function NonServingLakeNotice({ status, lakeId }: { status: DataLakeStatus | und
  * to background ingest. No per-file counters exist on this path - the files arrive later, from
  * Drive - so it reports the connection instead of a progress bar it could only ever draw at 0%.
  */
+/** Shown under a lake-cap or plan refusal: unlike other failures, retrying cannot clear it. */
+function EntitlementRefusalNotice() {
+  return (
+    <Alert
+      color="warning"
+      variant="soft"
+      sx={{ maxWidth: 400, textAlign: 'left' }}
+      data-testid="upload-step-entitlement-alert"
+    >
+      <Typography level="body-xs">
+        Retrying will not change this. Nothing was created: do what the message above asks, then start again.
+      </Typography>
+    </Alert>
+  );
+}
+
 function DriveOnlyCommitStatus({
   status,
   lakeStatus,
   lakeId,
   errorMessage,
+  errorKind,
   driveRollback,
   folderLabel,
   onDone,
@@ -150,6 +167,7 @@ function DriveOnlyCommitStatus({
   lakeStatus: DataLakeStatus | undefined;
   lakeId: string | undefined;
   errorMessage: string | undefined;
+  errorKind: UploadProgress['errorKind'];
   driveRollback: UploadProgress['driveRollback'];
   folderLabel: string;
   onDone: () => void;
@@ -197,11 +215,18 @@ function DriveOnlyCommitStatus({
       <Box sx={centered} data-testid="drive-only-commit-error">
         <ErrorOutlineIcon sx={{ fontSize: 64, color: 'danger.500' }} />
         <Typography level="title-lg" color="danger">
-          Could not connect Google Drive
+          {errorKind === 'entitlement' ? `Could not create the ${DATA_LAKE}` : 'Could not connect Google Drive'}
         </Typography>
-        <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
+        <Typography
+          level="body-sm"
+          color="neutral"
+          textAlign="center"
+          sx={{ maxWidth: 420 }}
+          data-testid="drive-only-commit-error-message"
+        >
           {errorMessage || 'The Google Drive folder could not be connected. Please try again.'}
         </Typography>
+        {errorKind === 'entitlement' && <EntitlementRefusalNotice />}
         {/* Say only what the rollback actually did. 'archived' is the reason this can be retried
             from Configure with no cleanup; 'failed' means the archive call itself failed, so the
             empty lake is still live and a blind retry would add a second one next to it. Anything
@@ -292,6 +317,7 @@ export default function UploadStep() {
           lakeStatus={progress.lakeStatus}
           lakeId={progress.lakeId}
           errorMessage={progress.errorMessage}
+          errorKind={progress.errorKind}
           driveRollback={progress.driveRollback}
           folderLabel={driveFolderLabel}
           onDone={resetWizard}
@@ -403,7 +429,13 @@ export default function UploadStep() {
           <Typography level="title-lg" color="danger">
             Upload Failed
           </Typography>
-          <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 400 }}>
+          <Typography
+            level="body-sm"
+            color="neutral"
+            textAlign="center"
+            sx={{ maxWidth: 400 }}
+            data-testid="upload-step-error-message"
+          >
             {progress.errorMessage || `${progress.failedFiles} of ${progress.totalFiles} files failed to upload.`}
           </Typography>
           {/* Hint matches the failure kind: only a validation failure is actually about the
@@ -416,6 +448,7 @@ export default function UploadStep() {
               </Typography>
             </Alert>
           )}
+          {progress.errorKind === 'entitlement' && <EntitlementRefusalNotice />}
           {(progress.errorKind === 'network' || progress.errorKind === 'upload') && (
             <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
               <Typography level="body-xs">

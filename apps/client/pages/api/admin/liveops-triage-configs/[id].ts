@@ -12,9 +12,9 @@ import {
   liveopsTriageConfigAuditLogRepository,
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -75,16 +75,16 @@ const UpdateConfigSchema = z.object({
   regressionLookbackDays: z.number().min(1).max(180).optional(),
   regressionGracePeriodHours: z.number().min(1).max(168).optional(),
   autoCreateIssues: z.boolean().optional(),
+  approverIds: z.string().optional(),
   postWhenNoErrors: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -115,10 +115,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -246,10 +242,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {

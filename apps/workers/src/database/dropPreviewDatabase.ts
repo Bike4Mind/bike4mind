@@ -1,5 +1,6 @@
 import { MongoClient } from 'mongodb';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 interface DropDatabaseInput {
   action: string;
@@ -34,7 +35,7 @@ export const handler = async (event: DropDatabaseInput): Promise<DropDatabaseRes
   }
 
   const resolvedUri = uri.replaceAll('%STAGE%', stage);
-  console.log(`Dropping database for stage: ${stage}`);
+  Logger.info(`Dropping database for stage: ${stage}`);
 
   const client = new MongoClient(resolvedUri, {
     serverSelectionTimeoutMS: 30000,
@@ -47,16 +48,16 @@ export const handler = async (event: DropDatabaseInput): Promise<DropDatabaseRes
 
     const collections = await db.collections();
     for (const collection of collections) {
-      console.log(`Dropping collection: ${collection.collectionName}`);
+      Logger.info(`Dropping collection: ${collection.collectionName}`);
       await collection.drop();
     }
 
     await db.dropDatabase();
-    console.log(`Database cleanup completed for stage: ${stage}`);
+    Logger.info(`Database cleanup completed for stage: ${stage}`);
     return { statusCode: 200, message: `Dropped database for ${stage}` };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Database cleanup failed:', error);
+    Logger.error('Database cleanup failed', { error });
     return { statusCode: 500, error: errorMessage };
   } finally {
     await client.close().catch(() => {});

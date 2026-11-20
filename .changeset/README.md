@@ -19,7 +19,6 @@ A `.changeset/<random-name>.md` file is created — commit it with your PR.
 
 ## What happens automatically
 
-- **Feature branches:** Snapshot versions are published automatically when tests pass. No changeset file needed.
 - **Main branch:** When changeset files are pending, a "Version Packages" PR is created. Merging it publishes stable versions to npm and creates GitHub releases.
 
 ## More info

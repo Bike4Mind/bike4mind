@@ -1,5 +1,9 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
-import { adminRoleWithheldFor, ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import {
+  adminRoleWithheldFor,
+  ownerWithheldUsers,
+  withholdAdminRole,
+} from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -12,13 +16,20 @@ import {
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
   isAgentOwnedByEmbedKey,
-  inlinesReasoningIntoText,
+  reasoningChannelOf,
+  CreditHolderType,
+  isSpendFrozenError,
   type IMessage,
   type ModelInfo,
+  readOrgModelPolicy,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
+import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
@@ -42,6 +53,7 @@ import {
   userRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
   agentRepository,
   userApiKeyRepository,
   projectRepository,
@@ -53,23 +65,25 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
   embedConversationRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
-import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { verifyEmbedApiKey, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
-import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -237,6 +251,8 @@ async function buildEmbedServerTools(args: {
    * per-member credit side-table and can lag membership (a member may have no row yet).
    */
   ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
+  /** The embed key's org policy; governs the models a tool may call (createToolModelAdmission). */
+  orgToolPolicy: ReadOrgModelPolicy;
   /**
    * Resolved once on the request path for the reasoning-channel model gate, which runs
    * before this. Passed in rather than re-derived: both are per-request work, and the gate
@@ -255,6 +271,7 @@ async function buildEmbedServerTools(args: {
     actorUser,
     hydrated,
     ownerOrg,
+    orgToolPolicy,
     apiKeys: toolApiKeys,
     models,
     modelId,
@@ -344,6 +361,7 @@ async function buildEmbedServerTools(args: {
     enabledTools,
     getAbortSignal,
     toolAvailability,
+    orgToolPolicy,
     // Leave imageUrlSigningSecret unset: the embed widget has no card renderer
     // (server/embed/embedWidgetPage.ts appends reply text verbatim into a text bubble) and no
     // JWT for an anonymous visitor to hit the (jwtOnly) image proxy with, so a signed secret here
@@ -512,6 +530,27 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
       const actorUserId = ctx.endUserId ?? ctx.userId;
 
+      // Spend freeze first, on the same subject executeCompletion would check, and before any stream bytes
+      // so it can 403. An anonymous visitor spends the owner org's money under the key's own user.
+      const embedBillingOwnerType = ctx.endUserId ? undefined : CreditHolderType.Organization;
+      try {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForRequest(
+            { user: { id: actorUserId }, apiKeyInfo: { keyId: ctx.keyId } },
+            ctx.endUserId ? null : ctx.organizationId
+          ),
+          { db: { spendFreezes: spendFreezeRepository } }
+        );
+      } catch (freezeErr) {
+        if (!isSpendFrozenError(freezeErr)) throw freezeErr;
+        return res.status(403).json({
+          error: 'spend_frozen',
+          error_description: freezeErr.message,
+          code: resolveQuestErrorCode(freezeErr),
+          ...freezeErr.additionalInfo,
+        });
+      }
+
       // Unconditional pre-flight balance check against whoever pays: the owner org for an
       // anonymous visitor, the identified user's own balance otherwise. A broke identified
       // user is refused - never silently billed to the org pool instead. Runs even when
@@ -542,6 +581,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         if (!ctx.endUserId) assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {
+        await recordUserLimitEvent({
+          userId: ctx.userId,
+          kind: 'api_key_spend_cap',
+          details: { keyId: ctx.keyId, spendCap: ctx.spendCap ?? null, currentSpend: ctx.currentSpend ?? null },
+        });
         const status = (capErr as { statusCode?: number }).statusCode ?? 422;
         return res.status(status).json({
           error: 'spend_cap_exceeded',
@@ -575,7 +619,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // the catalog read can miss its cache and reach a provider, and a caller past its
       // spend cap or rate limit must not be able to drive that work; still before any
       // stream bytes, so the refusal is a clean JSON 422.
-      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
+      // Fail-closed on a model the list cannot describe (see reasoningChannelOf).
       const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(actorUserId, {
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         getSettingsByNames,
@@ -585,11 +629,16 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // ('gpt-4.1-mini') finds its dated catalog entry here instead of reading as an
       // undescribed model and failing closed on one completion would have accepted.
       const embedModelId = resolveOpenAiBareModelAlias(hydrated.model);
-      const embedAdapterFamily = embedModels.find(m => m.id === embedModelId)?.adapterFamily;
-      if (inlinesReasoningIntoText(embedAdapterFamily)) {
+      const embedModel = embedModels.find(m => m.id === embedModelId);
+      // Only a model the catalog resolved carries adapterFamily; an adapter-literal model
+      // routes on backend, so the channel is read the way getLlmByModel dispatches. The
+      // row itself is required: reasoningChannelOf infers from a bare Claude id, and an
+      // id with no row here must not be admitted on its spelling.
+      if (!embedModel || reasoningChannelOf(embedModel) === 'always') {
         logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
           model: embedModelId,
-          adapterFamily: embedAdapterFamily,
+          backend: embedModel?.backend,
+          adapterFamily: embedModel?.adapterFamily,
         });
         return res.status(422).json({
           error: 'unprocessable',
@@ -600,7 +649,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
-      const serverTools = await buildEmbedServerTools({
+      // The embed key's organization owns the agent, so its policy governs the turn's tools and model
+      // even when an identified end user pays personally (see governingOrgModelPolicy below).
+      const orgToolPolicy = readOrgModelPolicy(org?.modelPolicy);
+      const builtServerTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
         modelId: embedModelId,
@@ -610,9 +662,15 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
         ownerOrg: ownedByOrg ? org : null,
+        orgToolPolicy,
         logger,
         getAbortSignal: () => abortController.signal,
       });
+      const orgFiltered = builtServerTools ? applyOrgToolPolicy(builtServerTools, orgToolPolicy) : undefined;
+      if (orgFiltered && orgFiltered.stripped.length > 0) {
+        logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: orgFiltered.stripped });
+      }
+      const serverTools = orgFiltered && orgFiltered.tools.length > 0 ? orgFiltered.tools : undefined;
 
       // --- All gates passed: open the SSE stream ---
       res.setHeader('Content-Type', 'text/event-stream');
@@ -657,6 +715,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
+            cache: cacheRepository,
+            recordLimitEvent: recordUserLimitEvent,
+            spendFreezes: spendFreezeRepository,
             // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
             // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),
@@ -666,7 +727,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           scopeActor: ctx.adminRoleWithheld && !ctx.endUserId ? withholdAdminRole : undefined,
           // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
           // omitted, so executeCompletion bills the acting user's own balance.
-          ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),
+          ...(ctx.endUserId
+            ? { governingOrgModelPolicy: org?.modelPolicy }
+            : { billingOrganizationId: ctx.organizationId }),
+          apiKeyBillingOwnerType: embedBillingOwnerType,
+          spendFreezeChecked: true,
           // Meter usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
           // Server-side tool execution (KB scoped to the agent's project; see

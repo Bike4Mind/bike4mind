@@ -2,7 +2,7 @@ import { ApiKeyScope, JupyterCellOutputAction } from '@bike4mind/common';
 import { Quest } from '@bike4mind/database/content';
 import { Connection } from '@bike4mind/database/social';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
-import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
+import { withWebSocketContext, sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /**

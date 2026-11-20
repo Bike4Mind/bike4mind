@@ -1,6 +1,7 @@
 import {
   type AttachmentLakeAccess,
   CHUNK_STALL_REASONS,
+  EXTRACTION_REFUSAL_REASONS,
   CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
@@ -34,7 +35,6 @@ import {
   chargedBytes,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
-  type FabFileTypeFilter,
   LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
@@ -48,6 +48,7 @@ import {
   buildLakeArms,
   buildOwnershipConditions,
   escapeRegex,
+  type FabFileSearchParams,
 } from '../../queries/fabFileSearchQuery';
 import {
   buildDataLakeMembershipFilter,
@@ -955,15 +956,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async search(
     userId: string,
     search: string,
-    filters: {
-      tags?: string[];
-      type?: FabFileTypeFilter;
-      shared?: boolean;
-      curated?: boolean;
-      generated?: boolean;
-      fileIds?: string[];
-      restrictToFileIds?: string[];
-    },
+    filters: FabFileSearchParams['filters'],
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },
     options?: {
@@ -986,6 +979,44 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
     return this.executeSearch(query, pagination.limit);
+  }
+
+  /**
+   * The distinct generation models behind the caller's own live files, sorted, for a model filter's
+   * options. Owner-only on purpose: a shared file's model is not worth a scope-widening query.
+   */
+  async listGenerationModelIds(userId: string): Promise<string[]> {
+    const modelIds: unknown[] = await this.fabFileModel.distinct('sourceMetadata.generation.modelId', {
+      userId,
+      // The same live-file conjuncts as buildFabFileSearchQuery, so every option can match a file.
+      deletedAt: null,
+      archivedAt: null,
+      'sourceMetadata.generation.modelId': { $type: 'string' },
+    });
+    return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
+  }
+
+  /**
+   * One page of ids of the live generated files that list `fileId` in their `derivedFrom`, newest
+   * first. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, { limit, skip = 0 }: { limit: number; skip?: number }): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find(
+        {
+          'derivedFrom.fileId': fileId,
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        { _id: 1 }
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
   }
 
   async executeSearch(
@@ -1193,6 +1224,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findAllByIds(ids: string[]) {
     const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
+  }
+
+  /**
+   * One ascending-by-`_id` page of the given ids, summary fields only. Same liveness as `findAllByIds`
+   * (the soft-delete plugin hides deleted rows); ids that cannot address a row are skipped.
+   */
+  async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
+    if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
+    const idCondition: Record<string, unknown> = {
+      $in: convertIds(usableObjectIds(ids, 'FabFileModel.findPageByIds')),
+    };
+    if (afterId !== undefined) idCondition.$gt = convertId(afterId);
+
+    const result = await this.fabFileModel
+      .find({ _id: idCondition })
+      .select('fileName mimeType fileSize moderationStatus createdAt')
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore: result.length > limit };
   }
 
   /**
@@ -1436,6 +1488,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $push: { dispatchedNotifications: { channel, at: new Date() } } }
     );
     return res.modifiedCount === 1;
+  }
+
+  /** Live files the legacy Questmaster conversion wrote for `userId` (see legacyQuestPlanConversion.ts). */
+  async countQuestmasterArchiveFiles(userId: string): Promise<number> {
+    return this.fabFileModel.countDocuments({
+      userId,
+      deletedAt: null,
+      sourceType: FabFileSourceType.QUESTMASTER_ARCHIVE,
+    });
   }
 
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
@@ -3107,6 +3168,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
                 chunkStallReason: null,
                 noExtractableTextAt: null,
+                extractionRefusalReason: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -3496,7 +3558,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
-  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+  async hardDeleteWithChunks(
+    fabFileId: string,
+    chunkBatchSize = 1000,
+    beforeBatch?: () => Promise<void>
+  ): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
     }
@@ -3512,6 +3578,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
+      await beforeBatch?.();
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
         .limit(chunkBatchSize + 1)
         .lean();
@@ -3523,6 +3590,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         continue;
       }
       const completed = await withTransaction(async () => {
+        await beforeBatch?.();
         // Include chunks committed between the candidate read and transaction start.
         const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
           .limit(chunkBatchSize + 1)
@@ -4007,6 +4075,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationRevision: { type: Number, required: false },
     // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
     clientUpload: { type: Boolean, required: false },
+    apiKeyId: { type: String, required: false },
     uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
@@ -4015,6 +4084,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationLastAttemptAt: { type: Date, required: false },
     // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
+    // Server-stamped only; claimStorageCharge never charges an exempt row (see IFabFile.storageExempt).
+    storageExempt: { type: Boolean, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -4022,12 +4093,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
     // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
-    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
-    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
-    // no writer here does. TypeScript is what actually stops a typo producing a value
-    // `isChunkStalled` silently reads as "not stalled".
+    // IFabFile.notes. The enum is enforced on updates by rejectOutOfEnumStatusUpdate below, so a
+    // typo cannot store a value `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
+    // Why the chunker declined to read the file, refining noExtractableTextAt (see IFabFile).
+    extractionRefusalReason: { type: String, enum: [...EXTRACTION_REFUSAL_REASONS, null], default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
@@ -4117,6 +4188,49 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
 FabFileSchema.plugin(softDeletePlugin);
 
+// Mongoose runs schema enums on create/save only; update paths skip them unless the caller passes
+// `runValidators`. Gating these paths here instead covers every writer, including the repository's
+// generic update(). Not `runValidators` via this hook: that would also validate every other path
+// in the same update. Pipeline updates are checked for literal values only; an expression (`$cond`,
+// a `$field` reference) is computed server-side and cannot be checked before the write.
+const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason', 'extractionRefusalReason'] as const;
+
+function rejectOutOfEnumStatusUpdate(this: mongoose.Query<unknown, unknown>): void {
+  const update = this.getUpdate();
+  if (!update) return;
+  const containers: unknown[] = Array.isArray(update)
+    ? update.flatMap((stage: Record<string, unknown>) => [stage?.$set, stage?.$addFields])
+    : [update, update.$set, update.$setOnInsert];
+  const isPipeline = Array.isArray(update);
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') continue;
+    for (const path of ENUM_GATED_UPDATE_PATHS) {
+      if (!Object.hasOwn(container, path)) continue;
+      const value: unknown = (container as Record<string, unknown>)[path];
+      if (value == null) continue;
+      if (isPipeline && (typeof value === 'object' || (typeof value === 'string' && value.startsWith('$')))) continue;
+      const allowed: readonly unknown[] = FabFileSchema.path(path).options.enum;
+      if (typeof value === 'string' && allowed.includes(value)) continue;
+      const error = new mongoose.Error.ValidationError();
+      error.addError(
+        path,
+        new mongoose.Error.ValidatorError({
+          path,
+          value,
+          type: 'enum',
+          message: `\`${String(value)}\` is not a valid enum value for path \`${path}\`.`,
+        })
+      );
+      throw error;
+    }
+  }
+}
+
+FabFileSchema.pre(
+  ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace'],
+  rejectOutOfEnumStatusUpdate
+);
+
 // Add critical FabFiles indexes for performance optimization
 FabFileSchema.index({ isChunk: 1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, sessionId: 1, createdAt: 1 });
@@ -4168,8 +4282,8 @@ FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // the prefix arm both bound on it, and some callers filter on nothing else.
 //
 // Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
-// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
-// on a cold boot of whichever Lambda touches this collection first.
+// autoIndex builds are fire-and-forget (a failure is silent) and would start lazily on a cold boot
+// of whichever Lambda touches this collection first.
 FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
@@ -4232,11 +4346,33 @@ FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
 );
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  { name: 'retention_files_present', partialFilterExpression: { organizationId: { $exists: true } } }
+);
+FabFileSchema.index(
+  { 'sourceMetadata.retentionOrganizationId': 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  {
+    name: 'retention_generated_files_present',
+    partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $exists: true } },
+  }
+);
+
+// An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
+// completed rows whose charge transaction has not committed. Pre-built by
+// 20260921239800_ensure-fabfile-pending-upload-index.
+FabFileSchema.index(
+  { organizationId: 1, createdAt: 1 },
+  {
+    name: 'organizationId_1_createdAt_1_clientUpload',
+    partialFilterExpression: { organizationId: { $type: 'string' }, clientUpload: true },
+  }
+);
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
-// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
@@ -4247,6 +4383,10 @@ FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 // row; createdAt trails as the tiebreaker. The sweep's remaining predicates (the createdAt age
 // floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
 FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
+
+// Generated-media purges (purgeDeletedNotebookMedia) ask whether a library file still holds a
+// generated key. Sparse: only files copied from generated media carry it.
+FabFileSchema.index({ 'sourceMetadata.generatedCopyKey': 1 }, { sparse: true });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

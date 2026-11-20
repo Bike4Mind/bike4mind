@@ -19,11 +19,22 @@ import { toast } from 'sonner';
 import { QueryClient } from '@tanstack/react-query';
 import perfLogger from '../../utils/performanceLogger';
 import { CommandArgExtra } from '@client/app/utils/commands';
-import { classifyQueryComplexity } from '@bike4mind/common';
+import { classifyQueryComplexity, DAILY_FREE_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 import { createOptimisticSessionId } from '@client/app/utils/llm';
 import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/modelAccessRevision';
+import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
+import { useQuestMasterUpgrade } from '../subscription/questMasterUpgrade';
+
+// modelAdmission's refusal of a model the caller's access entry does not admit (b4m-core/services/src/llm/modelAdmission.ts).
+const MODEL_ACCESS_REFUSAL = /^Model ".+" is not accessible\b/;
+
+export const isModelAccessRefusal = (body: unknown): boolean => {
+  const message = (body as { error?: unknown } | undefined)?.error;
+  return typeof message === 'string' && MODEL_ACCESS_REFUSAL.test(message);
+};
 
 export type LLMCommandArgs = {
   params: string;
@@ -76,6 +87,10 @@ export type LLMCommandArgs = {
   };
   setChatCompletion?: (updater: (prev: any) => any) => void;
   mcpServers?: string[];
+  /** Custom MCP connector slugs switched off in the Tools menu (LLMContext.disabledMcpConnections). */
+  disabledMcpConnections?: string[];
+  /** Platform connector ids switched on in the Tools menu (LLMContext.enabledPlatformMcpConnections). */
+  enabledPlatformMcpConnections?: string[];
   optimisticSessionId?: string;
   /** Agent-mode toggle state forwarded through to the chat completion payload. */
   agentMode?: LLMApiRequestBody['agentMode'];
@@ -152,6 +167,8 @@ export async function handleLLMCommand(
       audioConfig,
       deepResearchConfig,
       mcpServers,
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
       optimisticSessionId,
       agentMode,
     } = args;
@@ -198,6 +215,8 @@ export async function handleLLMCommand(
       currentSession: _currentSession,
       agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
+      disabledMcpConnections: _omitDisabledMcpConnections,
+      enabledPlatformMcpConnections: _omitEnabledPlatformMcpConnections,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
@@ -290,6 +309,12 @@ export async function handleLLMCommand(
         ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
+        ...(Array.isArray(disabledMcpConnections) && disabledMcpConnections.length > 0
+          ? { disabledMcpConnections }
+          : {}),
+        ...(Array.isArray(enabledPlatformMcpConnections) && enabledPlatformMcpConnections.length > 0
+          ? { enabledPlatformMcpConnections }
+          : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),
         ...(audioConfig ? { audioConfig } : {}),
@@ -389,10 +414,19 @@ export async function handleLLMCommand(
 
       if (status === 404) {
         toast.error(i18n.t('session.errors.notebookDeleted'));
+      } else if (status === 403 && error.response?.data?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+        useQuestMasterUpgrade.getState().open();
+      } else if (status === 403 && isModelAccessRefusal(error.response?.data)) {
+        // An admin turned the model off after this picker loaded; refetch access so the picker drops it now
+        // rather than when the access revision reaches this tab.
+        void args.queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY });
+        toast.error(i18n.t('session.errors.modelUnavailable'));
       } else if (status === 401 || status === 403) {
         toast.error(i18n.t('session.errors.noPermission'));
       } else if (status === 400) {
         toast.error(i18n.t('session.errors.invalidRequest'));
+      } else if (status === 429 && error.response?.data?.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE) {
+        toast.error(i18n.t('session.errors.dailyFreeLimitReached'));
       } else if (status === 429) {
         toast.error(i18n.t('session.errors.tooManyRequests'));
       } else if (status && status >= 500) {

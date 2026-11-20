@@ -104,6 +104,44 @@ describe('handleCommand("/llm") - composer preferences on the wire', () => {
   });
 });
 
+describe('handleLLMCommand - custom MCP connectors switched off in the Tools menu', () => {
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('sends the opt-out list at the top level, through the /llm command map too', async () => {
+    await handleCommand({ '/llm': handleLLMCommand }, {
+      ...baseArgs(),
+      command: '/llm',
+      mcpServers: ['notion'],
+      disabledMcpConnections: ['acme'],
+    } as unknown as Parameters<typeof handleCommand>[1]);
+
+    const body = llmRequestBody();
+    expect(body.disabledMcpConnections).toEqual(['acme']);
+    expect(body.mcpServers).toEqual(['notion']);
+    expect(body.params).not.toHaveProperty('disabledMcpConnections');
+  });
+
+  it('omits an empty list, which means every connector is on', async () => {
+    await handleLLMCommand({ ...baseArgs(), disabledMcpConnections: [] });
+
+    expect(llmRequestBody()).not.toHaveProperty('disabledMcpConnections');
+  });
+
+  it('sends the platform connectors switched on as a top-level list, and omits an empty one', async () => {
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: ['p1'] });
+    const body = llmRequestBody();
+    expect(body.enabledPlatformMcpConnections).toEqual(['p1']);
+    expect(body.params).not.toHaveProperty('enabledPlatformMcpConnections');
+
+    post.mockClear();
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: [] });
+    expect(llmRequestBody()).not.toHaveProperty('enabledPlatformMcpConnections');
+  });
+});
+
 // The `/new` composer's Agents panel only updates local `workBenchAgents`; those ids have to ride
 // the first turn (the one that creates the session) or the selection is silently dropped. They are
 // session-creation inputs, so they must be top-level and must NOT also nest inside `params`.

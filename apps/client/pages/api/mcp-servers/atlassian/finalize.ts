@@ -4,7 +4,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { z } from 'zod';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 /**
@@ -144,7 +144,7 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
 
     // Try to get and store available tools (non-blocking)
     try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+      const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
       const result = await invokeMcpHandler<any>({
         envVariables: plaintextEnvVariables,
         name: 'atlassian',

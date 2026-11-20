@@ -474,7 +474,7 @@ const WebhookAuditLogsTab: React.FC = () => {
   };
 
   return (
-    <Box data-testid="webhook-audit-logs-tab" sx={{ p: { xs: 1.5, sm: 3 } }}>
+    <Box data-testid="webhook-audit-logs-tab">
       {/* Page Header */}
       <Box mb={{ xs: 1.5, sm: 3 }}>
         <Typography level="h2">GitHub Webhook Logs</Typography>

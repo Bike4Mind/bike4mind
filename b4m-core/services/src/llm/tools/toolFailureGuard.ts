@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { isTerminalToolError, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { isTerminalToolError, ToolBlockedError, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 /** From this many consecutive failures of one tool, its error tells the model to stop retrying it. */
 export const TOOL_FAILURE_NUDGE_AFTER = 2;
@@ -52,7 +52,7 @@ export function createToolFailureGuard() {
             const failures = consecutiveFailures.get(name) ?? 0;
             if (failures >= TOOL_FAILURE_BLOCK_AFTER) {
               Logger.globalInstance.log(`Tool ${name} blocked after ${failures} consecutive failures`);
-              throw new Error(
+              throw new ToolBlockedError(
                 `Not run: "${name}" has failed ${failures} times in a row this turn. Do not call it again. ` +
                   `Answer now without it, working the result out yourself, and say plainly if anything ` +
                   `could not be computed.`

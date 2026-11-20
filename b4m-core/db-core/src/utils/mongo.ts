@@ -93,16 +93,22 @@ export function isConnectionLostError(error: unknown): boolean {
   return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
 }
 
-// A failed socket is already invalidated by the driver, so an immediate re-ping lands on a fresh
+// A failed socket is already invalidated by the driver, so an immediate retry lands on a fresh
 // one. A server-selection timeout has already waited serverSelectionTimeoutMS, so retrying it only
 // doubles the failure latency.
-const PING_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
+const NETWORK_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
 
-const isRetryablePingError = (error: unknown): boolean => {
+/**
+ * True when an operation died on its socket (reset, or no reply within socketTimeoutMS) - the case
+ * where retrying once on a fresh connection is worth it. Excludes server selection, which has
+ * already waited its full timeout. Matched by name because more than one copy of the driver can
+ * be installed.
+ */
+export function isMongoNetworkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { name } = error as { name?: unknown };
-  return typeof name === 'string' && PING_RETRY_ERROR_NAMES.includes(name);
-};
+  return typeof name === 'string' && NETWORK_RETRY_ERROR_NAMES.includes(name);
+}
 
 const pingServer = () => mongoose.connection.getClient().db().command({ ping: 1 });
 
@@ -131,7 +137,7 @@ const checkWarmConnection = async (logger: Logger): Promise<void> => {
   try {
     await pingServer();
   } catch (error) {
-    if (!isRetryablePingError(error)) throw error;
+    if (!isMongoNetworkError(error)) throw error;
     // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
     logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
       error: error instanceof Error ? error.message : String(error),
@@ -249,6 +255,24 @@ export const getDB = () => {
   return mongoose;
 };
 
+const afterCommitBySession = new WeakMap<mongoose.mongo.ClientSession, Map<string, () => Promise<unknown>>>();
+
+/**
+ * Queues `work` to run once the withTransaction owning `session` commits; withTransaction awaits it
+ * before returning, so a Lambda cannot freeze mid-way. Latest wins per `key`; an aborted run's work
+ * is dropped. Returns false when withTransaction does not own `session`.
+ */
+export function runAfterCommit(
+  session: mongoose.mongo.ClientSession,
+  key: string,
+  work: () => Promise<unknown>
+): boolean {
+  const queue = afterCommitBySession.get(session);
+  if (!queue) return false;
+  queue.set(key, work);
+  return true;
+}
+
 /**
  * Execute a function within a MongoDB transaction with automatic retry on transient errors.
  *
@@ -288,12 +312,24 @@ export const withTransaction = async <T>(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await mongoose.connection.transaction(async session => {
+      let afterCommit = new Map<string, () => Promise<unknown>>();
+      const result = await mongoose.connection.transaction(async session => {
         logger?.debug('Starting transaction...', { attempt: attempt + 1 });
+        // Reset per callback run: the driver re-runs it in the same session on a transient commit error.
+        afterCommit = new Map();
+        afterCommitBySession.set(session, afterCommit);
         const result = await fn(session);
         logger?.debug('Transaction completed');
         return result;
       }, transactionOptions);
+      for (const work of afterCommit.values()) {
+        try {
+          await work();
+        } catch (error) {
+          logger?.warn('After-commit work failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return result;
     } catch (error) {
       lastError = error;
 

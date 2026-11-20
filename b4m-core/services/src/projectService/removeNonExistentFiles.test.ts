@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, IUserDocument, Permission } from '@bike4mind/common';
 import { removeNonExistentFiles } from './removeNonExistentFiles';
 
 type Grant = { userId: string; permissions: Permission[]; projectId?: string };
@@ -11,7 +11,7 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
   let db: {
     users: { findById: Mock };
     projects: { shareable: { findAccessibleById: Mock }; update: Mock };
-    fabFiles: { findAllByIds: Mock; update: Mock };
+    fabFiles: { findAllByIds: Mock; update: Mock; shareable: { updateUserShares: Mock } };
   };
   let project: { id: string; userId: string; fileIds: string[] };
   let files: { id: string; users: Grant[] }[];
@@ -48,6 +48,7 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
       fabFiles: {
         findAllByIds: vi.fn(async () => files),
         update: vi.fn(async () => undefined),
+        shareable: { updateUserShares: vi.fn(async () => null) },
       },
     };
   });
@@ -59,14 +60,10 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
   it('writes only the file with a project grant and a narrowed project partial', async () => {
     await run();
 
-    expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
-    expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({
-      id: 'f-live-granted',
-      users: [
-        { userId: 'member-2', permissions: [Permission.read], projectId: 'other-project' },
-        { userId: 'member-3', permissions: [Permission.read] },
-      ],
-    });
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares.mock.calls).toStrictEqual([
+      ['f-live-granted', { remove: { projectId: PROJECT_ID } }],
+    ]);
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
@@ -76,6 +73,13 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
     });
   });
 
+  it('rejects with a ForbiddenError when the caller does not own the project', async () => {
+    project.userId = 'someone-else';
+
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
   it('writes nothing when the project has no files', async () => {
     project.fileIds = [];
 
@@ -83,6 +87,7 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
 
     expect(db.fabFiles.findAllByIds).not.toHaveBeenCalled();
     expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
     expect(db.projects.update).not.toHaveBeenCalled();
   });
 
@@ -92,6 +97,7 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
     await run();
 
     expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
     expect(db.projects.update).not.toHaveBeenCalled();
   });
 });

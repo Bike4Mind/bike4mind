@@ -1,16 +1,24 @@
 /**
  * The hosted cron handler and the self-host worker's scheduled task
- * (`@server/modelDiscovery/scheduledRun`) must reach `runModelDiscovery` with the
+ * (`@bike4mind/server-utils/modelDiscovery/scheduledRun`) must reach `runModelDiscovery` with the
  * same wiring. Asserted against one spy so a driver that grows its own adapters
  * fails here. The worker-side cases live in
- * apps/client/server/modelDiscovery/scheduledRun.test.ts; the mock setup below mirrors it.
+ * packages/server-utils/src/modelDiscovery/scheduledRun.test.ts; the mock setup below mirrors it.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 
-const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sourceFactories } = vi.hoisted(() => {
+const {
+  runModelDiscovery,
+  publishModelPriceSnapshot,
+  repos,
+  emitMetrics,
+  connectDB,
+  whenCatalogSeeded,
+  sourceFactories,
+} = vi.hoisted(() => {
   // One stub instance per source name, so two builds of the adapters produce
   // arrays that compare equal and the registry stays inspectable by name.
   const stubs = new Map<string, unknown>();
@@ -22,6 +30,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sou
   };
   return {
     runModelDiscovery: vi.fn(),
+    publishModelPriceSnapshot: vi.fn(async () => {}),
     emitMetrics: vi.fn(async () => {}),
     connectDB: vi.fn(async () => undefined),
     whenCatalogSeeded: vi.fn(async () => true),
@@ -67,6 +76,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
+vi.mock('./modelPriceSnapshotWriter', () => ({ publishModelPriceSnapshot }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -79,6 +89,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   diff: [],
   droppedRecords: [],
   absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
+  lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
   metrics: {
     ModelsDiscovered: 0,
     ModelsPromoted: 0,
@@ -94,7 +105,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const { runScheduledDiscovery } = await import('@server/modelDiscovery/scheduledRun');
+const { runScheduledDiscovery } = await import('@bike4mind/server-utils/modelDiscovery/scheduledRun');
 const { handler } = await import('./modelDiscovery');
 
 const lambdaContext = (remainingMs: number) => ({ getRemainingTimeInMillis: () => remainingMs }) as unknown as Context;
@@ -149,6 +160,7 @@ describe('hosted cron handler', () => {
     const [namespace, data] = emitMetrics.mock.calls[0];
     expect(namespace).toBe('Lumina5/ModelDiscovery');
     expect(data.map((d: { name: string }) => d.name)).toContain('ModelsDiscovered');
+    expect(data).toContainEqual(expect.objectContaining({ name: 'LifecycleDateChanges', value: 0 }));
   });
 
   it('emits nothing for a skipped run, so lease contention is not a zero-discovery run', async () => {
@@ -203,5 +215,22 @@ describe('hosted cron handler', () => {
     emitMetrics.mockRejectedValueOnce(new Error('cloudwatch down'));
 
     await expect(handler({})).rejects.toThrow('mongo unreachable');
+  });
+
+  it('publishes the price snapshot after a run, including a skipped one', async () => {
+    await handler({});
+    runModelDiscovery.mockResolvedValue(runResult({ outcome: 'skipped', skipReason: 'lease-held' }));
+    await handler({});
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes the price snapshot when the run throws after connecting, but not before', async () => {
+    runModelDiscovery.mockRejectedValueOnce(new Error('boom'));
+    await expect(handler({})).rejects.toThrow('boom');
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(1);
+
+    connectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+    await expect(handler({})).rejects.toThrow('mongo unreachable');
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(1);
   });
 });

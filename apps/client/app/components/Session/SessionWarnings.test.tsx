@@ -7,10 +7,15 @@ import { getThemeConfig } from '../../utils/themes';
 // The offer actions pull in account/org/data hooks; stub them, their own behavior is tested in
 // CreditOfferActions.test.tsx. Only that each warning renders them for the right moment is checked here.
 vi.mock('./CreditOfferActions', () => ({
-  CreditOfferActions: ({ moment }: { moment: string }) => (
-    <div data-testid="credit-offer-actions" data-moment={moment} />
+  CREDIT_OFFER_SURFACES: { lowCreditsWarning: 'low_credits_warning', outOfCreditsBanner: 'out_of_credits_banner' },
+  CREDIT_OFFER_TRIGGERS: { low: 'low_balance', out: 'insufficient_credits' },
+  CreditOfferActions: ({ moment, surface }: { moment: string; surface: string }) => (
+    <div data-testid="credit-offer-actions" data-moment={moment} data-surface={surface} />
   ),
 }));
+
+const { trackUpsell } = vi.hoisted(() => ({ trackUpsell: vi.fn() }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 
 import { CreditsWarning, LowCreditsWarning, NoModelsPlaceholder, noModelsPlaceholder } from './SessionWarnings';
 
@@ -129,6 +134,29 @@ describe('LowCreditsWarning', () => {
     expect(screen.getByTestId('session-low-credits-warning')).toHaveTextContent('1,234');
     fireEvent.click(screen.getByTestId('low-credits-warning-dismiss'));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the dismissal as an upsell_dismiss on its surface', () => {
+    trackUpsell.mockClear();
+    render(
+      <TestWrapper>
+        <LowCreditsWarning show currentCredits={1234} onDismiss={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('credit-offer-actions')).toHaveAttribute('data-surface', 'low_credits_warning');
+    fireEvent.click(screen.getByTestId('low-credits-warning-dismiss'));
+    expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'low_credits_warning', trigger: 'low_balance' });
+  });
+
+  it('reports nothing when a preview supplies its own actions', () => {
+    trackUpsell.mockClear();
+    render(
+      <TestWrapper>
+        <LowCreditsWarning show currentCredits={1234} onDismiss={vi.fn()} actions={<span />} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('low-credits-warning-dismiss'));
+    expect(trackUpsell).not.toHaveBeenCalled();
   });
 
   it('renders the low-balance offer without covering the message box', () => {

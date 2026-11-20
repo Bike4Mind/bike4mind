@@ -25,7 +25,7 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, driveLakeIngestQueue: { url: 'ingest-queue-url' } },
 }));
 
-import { handler } from './driveLakeResyncPoll';
+import { handler, runDriveLakeResyncPoll } from './driveLakeResyncPoll';
 
 // Both gate flags on unless a test overrides one.
 const bothFlagsOn = () =>
@@ -166,5 +166,14 @@ describe('driveLakeResyncPoll cron', () => {
 
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(JSON.parse(res.body)).toMatchObject({ enqueued: 0 });
+  });
+
+  it('runDriveLakeResyncPoll polls without opening a DB connection; handler connects first', async () => {
+    await runDriveLakeResyncPoll();
+    expect(h.connectDB).not.toHaveBeenCalled();
+    expect(h.findDueForPoll).toHaveBeenCalledTimes(1);
+
+    await handler();
+    expect(h.connectDB).toHaveBeenCalledExactlyOnceWith('mongodb://dev/db');
   });
 });

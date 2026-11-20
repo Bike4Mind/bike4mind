@@ -7,9 +7,9 @@
 
 import { liveopsTriageConfigRepository, liveopsTriageConfigAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 /**
@@ -66,16 +66,16 @@ const CreateConfigSchema = z.object({
   regressionLookbackDays: z.number().min(1).max(180).optional().default(30),
   regressionGracePeriodHours: z.number().min(1).max(168).optional().default(48),
   autoCreateIssues: z.boolean().optional().default(false),
+  approverIds: z.string().optional(),
   postWhenNoErrors: z.boolean().optional().default(true),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       // Optional org filter: list only that organization's configs
       const { organizationId } = req.query;
       const configs =
@@ -90,10 +90,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       // Validate request body
       const parseResult = CreateConfigSchema.safeParse(req.body);
       if (!parseResult.success) {

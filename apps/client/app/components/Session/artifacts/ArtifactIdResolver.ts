@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
-import { findExistingArtifactId } from '@client/app/utils/artifactPersistence';
-import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
+import { findReadableArtifactId } from '@client/app/utils/artifactPersistence';
+import { generateCompleteArtifactId, getArtifactTimestamp } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 // Module-level caches shared across all instances (client-side only). Persist
 // across mount/unmount and avoid the infinite loop from state values in
@@ -110,7 +110,7 @@ function lookupArtifactId(type: string, identifier: string, sessionId?: string):
 
   // Started from a resolved promise so the cleanup below can never run before the set.
   const lookup = Promise.resolve()
-    .then(() => findExistingArtifactId(type, identifier, sessionId))
+    .then(() => findReadableArtifactId(type, identifier, sessionId))
     .then(existingId => {
       if (existingId) {
         const artifactIdCache = getArtifactIdCache();

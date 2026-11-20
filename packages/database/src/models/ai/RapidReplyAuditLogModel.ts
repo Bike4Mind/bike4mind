@@ -6,12 +6,12 @@ export interface IRapidReplyAuditLogDocument extends Document {
   entityType: 'mapping' | 'prompt' | 'settings' | 'result';
   entityId: string;
   action: 'create' | 'update' | 'delete' | 'activate' | 'deactivate' | 'bulk_update';
-  changes: Record<string, { before?: any; after?: any }>; // Field-level changes
+  changes: Record<string, { before?: unknown; after?: unknown }>; // Field-level changes
   userId: string;
   userEmail?: string;
   ipAddress?: string;
   userAgent?: string;
-  metadata?: Record<string, any>; // Additional context
+  metadata?: Record<string, unknown>; // Additional context
   createdAt: Date;
   updatedAt: Date;
 }

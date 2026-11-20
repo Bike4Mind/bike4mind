@@ -146,4 +146,27 @@ describe('renaming the open session from the sidebar', () => {
     expect(el('chat-session-title').textContent).toBe('Open thread');
     expect(el('chat-session-title-text').textContent).toBe('Open thread');
   });
+
+  it('claims Escape when it cancels the header rename, so the dock does not also hide', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <ChatShell />
+        </CssVarsProvider>
+      );
+    });
+    await act(async () => el('chat-session-item').click());
+    await act(async () => undefined);
+    act(() => el('chat-session-title').click());
+    const input = el('chat-rename-input');
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      input.dispatchEvent(escape);
+    });
+    expect(escape.defaultPrevented).toBe(true);
+    expect(el('chat-session-title').textContent).toBe('Open thread');
+  });
 });

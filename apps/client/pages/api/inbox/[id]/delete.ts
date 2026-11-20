@@ -3,8 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { inboxRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { sendToClient } from '@server/websocket/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
 

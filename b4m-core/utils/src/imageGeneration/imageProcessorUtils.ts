@@ -1,3 +1,4 @@
+import { UrlBlockedError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import type { AxiosResponse } from 'axios';
@@ -249,7 +250,7 @@ export async function downloadImageAsBuffer(
     if (!isTrustedStorageHop) {
       const validation = await validateUrlForFetch(currentUrl);
       if (!validation.valid) {
-        throw new Error(`Image URL blocked for security reasons: ${validation.error}`);
+        throw new UrlBlockedError(`Image URL blocked for security reasons: ${validation.error}`);
       }
     }
 

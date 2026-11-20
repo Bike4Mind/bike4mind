@@ -132,6 +132,22 @@ export const SupportedEmbeddingModelSchema = z.union([
 
 export type SupportedEmbeddingModel = z.infer<typeof SupportedEmbeddingModelSchema>;
 
+export enum GeminiEmbeddingModel {
+  GEMINI_EMBEDDING_001 = 'gemini-embedding-001',
+}
+
+export enum ApiBedrockEmbeddingModel {
+  COHERE_EMBED_V4 = 'cohere.embed-v4:0',
+}
+
+// Additional API models stay outside the stored lake-model schema until retrieval supports them.
+export const ApiEmbeddingModelSchema = z.union([
+  SupportedEmbeddingModelSchema,
+  z.enum(GeminiEmbeddingModel),
+  z.enum(ApiBedrockEmbeddingModel),
+]);
+export type EmbeddingModelId = z.infer<typeof ApiEmbeddingModelSchema>;
+
 export function isSupportedEmbeddingModel(model: string): model is SupportedEmbeddingModel {
   return SupportedEmbeddingModelSchema.safeParse(model).success;
 }

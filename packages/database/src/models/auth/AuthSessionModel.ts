@@ -1,6 +1,7 @@
 import { IAuthSessionDocument, IAuthSessionRepository, IAuthSessionStepUpEmailChallenge } from '@bike4mind/common';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { pushTokenRepository } from './PushTokenModel';
 
 const AuthSessionDeviceSchema = new Schema(
   {
@@ -9,6 +10,7 @@ const AuthSessionDeviceSchema = new Schema(
     os: { type: String },
     ip: { type: String },
     location: { type: String },
+    displayName: { type: String },
   },
   { _id: false }
 );
@@ -35,6 +37,8 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     device: { type: AuthSessionDeviceSchema, default: undefined },
     createdVia: { type: String, required: true },
     impersonatedBy: { type: String, default: null },
+    impersonationExpiresAt: { type: Date, default: null },
+    impersonationWriteEnabled: { type: Boolean, default: false },
     clientId: { type: String, default: null },
     lastUsedAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true },
@@ -53,6 +57,7 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
 // Performance/lifecycle indexes (declared together; sid uniqueness is on the field above).
 AuthSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL: drop expired sessions
 AuthSessionSchema.index({ userId: 1, revokedAt: 1 }); // active-sessions lookups
+AuthSessionSchema.index({ 'device.ip': 1, lastUsedAt: -1 }, { name: 'auth_session_ip_search' });
 
 export type IAuthSessionModel = Model<IAuthSessionDocument>;
 
@@ -67,6 +72,18 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async findBySid(sid: string): Promise<IAuthSessionDocument | null> {
     return this.findOne({ sid });
+  }
+
+  /** The subset of `sids` that are unrevoked and unexpired, in one query. */
+  async findLiveSids(sids: readonly string[]): Promise<Set<string>> {
+    if (sids.length === 0) return new Set();
+    const rows = await AuthSessionModel.find(
+      { sid: { $in: [...sids] }, revokedAt: null, expiresAt: { $gt: new Date() } },
+      { sid: 1, _id: 0 }
+    )
+      .lean<Array<{ sid: string }>>()
+      .exec();
+    return new Set(rows.map(row => row.sid));
   }
 
   async findActiveByUserId(userId: string): Promise<IAuthSessionDocument[]> {
@@ -254,17 +271,23 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
   }
 
   async revokeBySid(sid: string): Promise<IAuthSessionDocument | null> {
-    return AuthSessionModel.findOneAndUpdate(
+    const revoked = await AuthSessionModel.findOneAndUpdate(
       { sid, revokedAt: null },
       { $set: { revokedAt: new Date() } },
       { new: true }
     ).exec();
+    // Pruned even when the row was already revoked, so a token registered in the gap is still cleared.
+    // Here rather than in each route/service: every revoke path (logout, refresh-reuse, admin, impersonation
+    // end) funnels through this method or revokeAllByUserId, including the ones that call the repository directly.
+    await pushTokenRepository.removeBySid(sid);
+    return revoked;
   }
 
   async revokeAllByUserId(userId: string, options?: { exceptSid?: string }): Promise<number> {
     const filter: Record<string, unknown> = { userId, revokedAt: null };
     if (options?.exceptSid) filter.sid = { $ne: options.exceptSid };
     const result = await AuthSessionModel.updateMany(filter, { $set: { revokedAt: new Date() } }).exec();
+    await pushTokenRepository.removeByUser(userId, options);
     return result.modifiedCount ?? 0;
   }
 }

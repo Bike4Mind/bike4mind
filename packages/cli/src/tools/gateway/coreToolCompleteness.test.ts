@@ -26,6 +26,7 @@ import { createReviewGateTool, createReviewGateStore } from '../reviewGateTool.j
 import { createFindDefinitionTool } from '../findDefinitionTool.js';
 import { createGetFileStructureTool } from '../getFileStructure/index.js';
 import { createWorkItemTools } from '../workItemTools.js';
+import { createPeerTools } from '../peerTools.js';
 import { createSkillTool } from '../skillTool.js';
 import { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 import { ToolCatalog } from './toolCatalog.js';
@@ -45,25 +46,29 @@ function makePermissionManager(): PermissionManager {
 describe('core descriptor completeness', () => {
   it('covers every tool generateCliTools builds with every option on', async () => {
     const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-complete-'));
-    const { tools } = await generateCliTools(
-      'user-1',
-      {} as never, // llm: not exercised while tool schemas are built
-      'test-model',
-      makePermissionManager(),
-      vi.fn(async () => ({ action: 'allow-once' as const })),
-      { currentAgent: null },
-      {} as ConfigStore,
-      {} as ApiClient,
-      undefined, // toolFilter: a filter only removes tools
-      vi.fn(async () => ({ answers: {} }) as never), // showUserQuestion
-      { createCheckpoint: vi.fn() } as never, // checkpointStore
-      { shouldSandbox: vi.fn() } as never, // sandboxOrchestrator
-      [dir],
-      'normal'
-    );
+    try {
+      const { tools } = await generateCliTools(
+        'user-1',
+        {} as never, // llm: not exercised while tool schemas are built
+        'test-model',
+        makePermissionManager(),
+        vi.fn(async () => ({ action: 'allow-once' as const })),
+        { currentAgent: null },
+        {} as ConfigStore,
+        {} as ApiClient,
+        undefined, // toolFilter: a filter only removes tools
+        vi.fn(async () => ({ answers: {} }) as never), // showUserQuestion
+        { createCheckpoint: vi.fn() } as never, // checkpointStore
+        { shouldSandbox: vi.fn() } as never, // sandboxOrchestrator
+        [dir],
+        'normal'
+      );
 
-    expect(tools.length).toBeGreaterThan(0);
-    expect(missingDescriptors(names(tools))).toEqual([]);
+      expect(tools.length).toBeGreaterThan(0);
+      expect(missingDescriptors(names(tools))).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('covers every tool buildCliToolList can assemble', () => {
@@ -83,6 +88,7 @@ describe('core descriptor completeness', () => {
         findDefinitionTool: createFindDefinitionTool([]),
         getFileStructureTool: createGetFileStructureTool([]),
         workItemTools: createWorkItemTools({} as never),
+        peerTools: createPeerTools(() => null, vi.fn()),
         skillTool: createSkillTool({ customCommandStore: {} as never, permission: {} as never }),
         dynamicAgentTool: createDynamicAgentTool(orchestrator, 'session-1'),
         coordinateTaskTool: createCoordinateTaskTool(orchestrator, agentStore, 'session-1'),

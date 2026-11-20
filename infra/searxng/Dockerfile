@@ -5,6 +5,10 @@
 # stack mounts, so both deployments share one config. The secret is NOT in the image: it comes
 # from the SEARXNG_SECRET env var set by infra. Pinned by digest so an upstream push to the tag
 # cannot change the image silently; bump tag + digest together.
+#
+# The image tag hashes only this Dockerfile, .dockerignore and the contract's hashInputs for
+# this image, so it stays put across deploys that do not touch them. Every file a COPY below
+# reads must be listed there, or an edit to it reuses the old image.
 FROM docker.io/searxng/searxng:2026.9.29-4e2c1ea7f@sha256:3284e8900e9b3e5df284ae8c48a26851ae2eff6f99b4b0b18ec3da5a4d9095c3
 
 COPY selfhost/searxng/settings.yml /etc/searxng/settings.yml

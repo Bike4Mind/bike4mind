@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { LakeRagKind } from './bank';
 import {
   buildLakeRagReport,
@@ -25,6 +25,16 @@ function turn(arm: LakeRagArm, kind: LakeRagKind, passed: boolean, ran = false):
 }
 
 const META = { model: 'm', samples: 1, generatedAt: '2026-01-01T00:00:00.000Z' };
+
+const tempDirs: string[] = [];
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'lakerag-'));
+  tempDirs.push(dir);
+  return dir;
+}
+afterAll(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('buildLakeRagReport', () => {
   const turns = [
@@ -70,7 +80,7 @@ describe('buildLakeRagReport', () => {
   });
 
   it('round-trips through the JSON file, overwriting rather than appending', () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'nested', 'report.json');
+    const path = join(tempDir(), 'nested', 'report.json');
     writeLakeRagReport(path, buildLakeRagReport([turn('lake', 'fact', false)], META));
     writeLakeRagReport(path, report);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(report);
@@ -78,7 +88,7 @@ describe('buildLakeRagReport', () => {
   });
 
   it('names the path when the baseline is truncated JSON, keeping the parse error as the cause', () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'cut.json');
+    const path = join(tempDir(), 'cut.json');
     writeFileSync(path, '{"arms":');
     const err = (() => {
       try {
@@ -93,7 +103,7 @@ describe('buildLakeRagReport', () => {
   });
 
   it('reports a missing baseline as a read error, not a malformed report', () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'absent.json');
+    const path = join(tempDir(), 'absent.json');
     const err = (() => {
       try {
         readLakeRagReport(path);
@@ -111,7 +121,7 @@ describe('buildLakeRagReport', () => {
     ['a non-numeric drop', { arms: {}, multiLakeDrop: 'x' }, /multiLakeDrop/],
     ['an arm without rates', { arms: { lake: { pass: {} } }, multiLakeDrop: null }, /arm lake lacks/],
   ])('rejects a baseline with %s by name', (_label, body, error) => {
-    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'bad.json');
+    const path = join(tempDir(), 'bad.json');
     writeFileSync(path, JSON.stringify(body));
     expect(() => readLakeRagReport(path)).toThrow(error);
   });

@@ -2,6 +2,8 @@ import { IFabFileDocument } from '@bike4mind/common';
 import { createContext, useContext } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useFileBrowser } from '../fileBrowserStore';
+import type { FileBrowserFilters } from './browserFilters';
+import type { ViewMode } from './ViewActions';
 
 /**
  * Per-instance surface the file browser reads instead of talking to the module-level
@@ -20,6 +22,16 @@ export interface FileBrowserConfig {
   addedFileIds?: Set<string>;
   /** i18n key for the add-button label; undefined uses the default notebook copy. */
   addButtonLabelKey?: string;
+  /** Where the user's own filters start. Read once, on mount. */
+  initialFilters?: FileBrowserFilters;
+  /** ANDed into every query and shown as chips the user cannot remove; their controls are hidden. */
+  lockedFilters?: FileBrowserFilters;
+  /** A star toggle on each file and a Starred filter. Stars are the shared Favorite entity. */
+  enableStar?: boolean;
+  /** A filter over the generation model behind each file. */
+  enableModelFilter?: boolean;
+  /** The tab the browser opens on; undefined is the Overview tab. Read once, on mount. */
+  initialViewMode?: ViewMode;
 }
 
 export interface FileBrowserInstanceValue {
@@ -30,6 +42,8 @@ export interface FileBrowserInstanceValue {
   fileToShare: IFabFileDocument | null;
   setFileToShare: (file: IFabFileDocument | null) => void;
   config: FileBrowserConfig;
+  /** False for an instance rendered inline, which has nothing to close back to. Undefined = closable. */
+  closable?: boolean;
 }
 
 const EMPTY_CONFIG: FileBrowserConfig = {};

@@ -118,11 +118,54 @@ describe('useSessionContextUsage', () => {
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cachingIneffective).toBe(false);
   });
 
+  it('sets cacheExpiresAt only when the latest turn read or wrote the cache', () => {
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    mockPages([{ ...quest('q1', { cacheReadInputTokens: 0 }), timestamp }]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cacheExpiresAt).toBeNull();
+
+    mockPages([{ ...quest('q1', { cacheReadInputTokens: 5_000 }), timestamp }]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cacheExpiresAt).toBe(
+      Date.parse(timestamp) + 5 * 60 * 1000
+    );
+  });
+
   it('surfaces compactedTurns from the latest turn (0 when absent)', () => {
     mockPages([quest('q1', { verbatimTurnsExcluded: 3 })]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(3);
 
     mockPages([quest('q1', {})]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(0);
+  });
+
+  describe('providerInputTokens', () => {
+    const settled = (tokenUsage: Record<string, unknown>, functionCalls?: unknown[]) => {
+      const q = quest('q1');
+      return { ...q, promptMeta: { ...q.promptMeta, tokenUsage, functionCalls } };
+    };
+    const read = () => renderHook(() => useSessionContextUsage('s1')).result.current?.providerInputTokens;
+
+    it('sums uncached, cache-read and cache-write input from a provider-settled turn', () => {
+      mockPages([
+        settled({
+          settledBasis: 'provider',
+          actualInputTokens: 1_741,
+          cacheReadInputTokens: 7_856,
+          cacheCreationInputTokens: 135_894,
+        }),
+      ]);
+      expect(read()).toBe(145_491);
+    });
+
+    it('is absent for a locally settled turn and for a turn that called tools', () => {
+      mockPages([settled({ settledBasis: 'local', actualInputTokens: 1_000 })]);
+      expect(read()).toBeUndefined();
+
+      mockPages([
+        settled({ settledBasis: 'provider', actualInputTokens: 1_000, cacheReadInputTokens: 9_000 }, [
+          { name: 'math_evaluate' },
+        ]),
+      ]);
+      expect(read()).toBeUndefined();
+    });
   });
 });

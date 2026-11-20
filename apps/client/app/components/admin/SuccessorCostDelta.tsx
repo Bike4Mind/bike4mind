@@ -1,6 +1,5 @@
 import React from 'react';
-import { Box, Chip, Stack, Typography } from '@mui/joy';
-import type { ColorPaletteProp } from '@mui/joy/styles';
+import { Box, Stack, Typography } from '@mui/joy';
 import {
   formatPctChange,
   formatPerMTok,
@@ -9,6 +8,8 @@ import {
   type RateChange,
   type SuccessorCostVerdict,
 } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { StatusChip } from './shared';
 
 /**
  * What replacing `modelId` with `successorId` costs. A successor that raises a
@@ -21,11 +22,11 @@ export interface SuccessorCostProps {
   rates: Readonly<Record<string, PerMTokRate>>;
 }
 
-const VERDICT_COLOR: Record<SuccessorCostVerdict, ColorPaletteProp> = {
-  'cheaper-or-equal': 'success',
-  'more-expensive': 'danger',
+const VERDICT_TONE: Record<SuccessorCostVerdict, AdminStatusTone> = {
+  'cheaper-or-equal': 'good',
+  'more-expensive': 'bad',
   // Unpriced is a work item, not a pass: the automation refuses this case too.
-  unverifiable: 'warning',
+  unverifiable: 'warn',
 };
 
 const VERDICT_LABEL: Record<SuccessorCostVerdict, string> = {
@@ -62,9 +63,7 @@ export const SuccessorCostChip: React.FC<SuccessorCostProps> = ({ modelId, succe
       : VERDICT_LABEL[delta.verdict];
 
   return (
-    <Chip size="sm" variant="soft" color={VERDICT_COLOR[delta.verdict]} data-testid={`successor-cost-chip-${modelId}`}>
-      {summary}
-    </Chip>
+    <StatusChip tone={VERDICT_TONE[delta.verdict]} label={summary} data-testid={`successor-cost-chip-${modelId}`} />
   );
 };
 
@@ -83,12 +82,14 @@ export const SuccessorCostPanel: React.FC<SuccessorCostProps> = ({ modelId, succ
   const delta = successorCostDelta(modelId, successorId, rates);
 
   return (
-    <Box sx={{ mt: 1, p: 1, borderRadius: 'sm', bgcolor: 'background.level1' }} data-testid="successor-cost-panel">
+    <Box sx={{ mt: 1, p: 1, borderRadius: 'md', bgcolor: 'admin.surfaceSubtle' }} data-testid="successor-cost-panel">
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-        <Chip size="sm" variant="soft" color={VERDICT_COLOR[delta.verdict]}>
-          {VERDICT_LABEL[delta.verdict]}
-        </Chip>
-        <Typography level="body-xs" color="neutral">
+        <StatusChip
+          tone={VERDICT_TONE[delta.verdict]}
+          label={VERDICT_LABEL[delta.verdict]}
+          data-testid="successor-cost-panel-verdict"
+        />
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           {modelId} to {successorId}
         </Typography>
       </Stack>
@@ -98,7 +99,7 @@ export const SuccessorCostPanel: React.FC<SuccessorCostProps> = ({ modelId, succ
           <RateRow label="Output" change={delta.output} />
         </Stack>
       ) : (
-        <Typography level="body-xs" color="neutral">
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           One of the two models has no price row in force, so the cost effect of this mapping cannot be checked.
         </Typography>
       )}

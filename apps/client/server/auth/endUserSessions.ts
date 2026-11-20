@@ -9,7 +9,7 @@ import {
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 
-export type SessionEndReason = 'password_changed' | 'email_changed' | 'account_blocked';
+export type SessionEndReason = 'password_changed' | 'email_changed' | 'account_blocked' | 'account_deletion_requested';
 
 export type SessionEnd = { userId: string; reason: SessionEndReason; actorUserId?: string };
 

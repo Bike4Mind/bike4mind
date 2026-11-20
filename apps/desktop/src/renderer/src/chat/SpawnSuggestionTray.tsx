@@ -16,6 +16,7 @@ import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import {
+  defaultSpawnPlacement,
   SPAWN_CHOICE_TEXT,
   type ChatSpawnSuggestion,
   type SpawnSuggestionPlacement,
@@ -65,7 +66,7 @@ function rememberChoice(choice: SpawnSuggestionPlacement): void {
 function initialChoice(repository: boolean): SpawnSuggestionPlacement {
   const remembered = readRememberedChoice();
   if (remembered && (remembered !== 'worktree' || repository)) return remembered;
-  return repository ? 'worktree' : 'local';
+  return defaultSpawnPlacement(repository);
 }
 
 /**

@@ -35,11 +35,15 @@ export function emailDomainOf(email: string): string | null {
  * matches a burner service's random subdomains by checking every candidate.
  */
 export function emailDomainCandidates(email: string): string[] {
-  let domain = emailDomainOf(email);
+  const domain = emailDomainOf(email);
+  return domain ? domainCandidates(domain) : [];
+}
+
+/** The domain followed by each parent domain, most specific first: `np.kashre.com` -> `['np.kashre.com', 'kashre.com']`. */
+function domainCandidates(domain: string): string[] {
   const candidates: string[] = [];
-  while (domain?.includes('.')) {
-    candidates.push(domain);
-    domain = domain.slice(domain.indexOf('.') + 1);
+  for (let candidate = domain; candidate.includes('.'); candidate = candidate.slice(candidate.indexOf('.') + 1)) {
+    candidates.push(candidate);
   }
   return candidates;
 }
@@ -47,6 +51,11 @@ export function emailDomainCandidates(email: string): string[] {
 /** True when the email is on one of the domains or on any subdomain of one. */
 export function isEmailInDomains(email: string, domains: ReadonlySet<string>): boolean {
   return emailDomainCandidates(email).some(candidate => domains.has(candidate));
+}
+
+/** True when the domain is one of the domains or a subdomain of one. */
+export function isDomainInDomains(domain: string, domains: ReadonlySet<string>): boolean {
+  return domainCandidates(domain).some(candidate => domains.has(candidate));
 }
 
 /**

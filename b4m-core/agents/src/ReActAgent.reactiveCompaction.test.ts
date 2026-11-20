@@ -72,6 +72,20 @@ describe('ReActAgent reactive compaction recovery', () => {
     expect(result.completionInfo.iterations).toBe(1);
   });
 
+  it('compacts and retries when a local model server reports the conversation is full', async () => {
+    const llm = createFailThenSucceedLlm(
+      1,
+      "This conversation no longer fits qwen-small's 4096-token context window on gpu-box with room for a reply. Start a new conversation, or use a model with a larger context."
+    );
+    const agent = new ReActAgent(createContext(llm));
+    const onContextLimit = vi.fn(async (messages: IMessage[]) => [messages[0]]);
+
+    const result = await agent.run('do the thing', { onContextLimit });
+
+    expect(onContextLimit).toHaveBeenCalledTimes(1);
+    expect(result.finalAnswer).toBe('final answer');
+  });
+
   it('does not double-count tokens/steps from the failed attempt', async () => {
     // First call throws mid-stream after reporting partial usage; second call succeeds.
     let callIndex = 0;

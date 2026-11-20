@@ -6,10 +6,15 @@ type Route = (req: unknown, res: unknown) => unknown;
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, Route> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method: string }).method]?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method: string }).method]?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: Route) => ((routes.GET = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
         delete: (fn: Route) => ((routes.DELETE = fn), chain),
@@ -24,10 +29,11 @@ const h = vi.hoisted(() => ({
   findOne: vi.fn(),
   findOneAndUpdate: vi.fn(),
   deleteOne: vi.fn(),
+  byKey: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  gearOverrideRepository: { byKey: vi.fn() },
+  gearOverrideRepository: { byKey: h.byKey },
   GearOverride: {
     findOne: () => ({ lean: () => h.findOne() }),
     findOneAndUpdate: () => ({ lean: () => h.findOneAndUpdate() }),
@@ -39,17 +45,22 @@ vi.mock('@server/services/gears/catalog', () => ({
   GEAR_DEFAULTS: [{ key: 'daily', kind: 'reward', credits: 10 }],
   GEAR_CREDITS_SCALE: 1,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import indexHandler from '../index';
 import keyHandler from '../[key]';
 
 const invoke = async (
   handler: unknown,
-  options: { method: 'PUT' | 'DELETE'; body?: object; query?: Record<string, string> }
+  options: {
+    method: 'GET' | 'PUT' | 'DELETE';
+    body?: object;
+    query?: Record<string, string>;
+    user?: { isAdmin: boolean; adminPermissions?: string[] };
+  }
 ) => {
   const { req, res } = createMocks({ method: options.method, body: options.body, query: options.query });
-  (req as unknown as { user: { id: string; isAdmin: boolean } }).user = { id: 'admin-1', isAdmin: true };
+  (req as unknown as { user: object }).user = { id: 'admin-1', ...(options.user ?? { isAdmin: true }) };
   await (handler as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   return { req, res };
 };
@@ -109,5 +120,22 @@ describe('DELETE /api/admin/gears/[key] admin audit', () => {
     await invoke(keyHandler, { method: 'DELETE', query: { key: 'daily' } });
 
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegated access to /api/admin/gears', () => {
+  const read = (permission: string) => ({ isAdmin: false, adminPermissions: [permission] });
+
+  it.each(['settings:manage', 'support:read'])('lets a %s-only delegate read', async permission => {
+    h.byKey.mockResolvedValue(new Map());
+    const { res } = await invoke(indexHandler, { method: 'GET', user: read(permission) });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('rejects a support:read-only PUT', async () => {
+    await expect(
+      invoke(indexHandler, { method: 'PUT', body: { key: 'daily', credits: 0 }, user: read('support:read') })
+    ).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

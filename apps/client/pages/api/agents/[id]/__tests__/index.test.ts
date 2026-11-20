@@ -44,6 +44,9 @@ vi.mock('@bike4mind/database', () => ({
 const creditServiceMock = vi.hoisted(() => ({ addCredits: vi.fn(), subtractCredits: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ creditService: creditServiceMock }));
 
+const getCallerModelList = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
+
 const refreshAgentAvatarUrls = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls }));
 
@@ -82,6 +85,7 @@ describe('/api/agents/[id] access levels', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.API_KEY_SCOPE_STAGING;
+    getCallerModelList.mockReset();
     agentRepositoryMock.findById.mockResolvedValue(AGENT);
     refreshAgentAvatarUrls.mockImplementation(async (agents: unknown[]) => agents);
   });
@@ -143,6 +147,38 @@ describe('/api/agents/[id] access levels', () => {
       await run();
       expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
+    });
+
+    it('accepts a catalog-only model and forwards the caller and logger to the lookup', async () => {
+      getCallerModelList.mockResolvedValue({ models: [{ id: 'gpt-6-astra', type: 'text' }], supersededModels: [] });
+      agentRepositoryMock.update.mockResolvedValue({ id: 'a1', preferredModel: 'gpt-6-astra' });
+      const logger = { warn: vi.fn() };
+      const { run } = invoke('PUT', 'owner', { body: { preferredModel: 'gpt-6-astra' }, logger });
+      await run();
+      expect(getCallerModelList).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner' }), logger);
+      expect(agentRepositoryMock.update).toHaveBeenCalledWith(
+        { preferredModel: 'gpt-6-astra', id: 'a1' },
+        { new: true }
+      );
+    });
+
+    it('does not re-check a model that matches the stored one, so a rename survives a partial catalog', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, preferredModel: 'gpt-6-astra' });
+      agentRepositoryMock.update.mockResolvedValue({ id: 'a1', name: 'renamed' });
+      const { run } = invoke('PUT', 'owner', { body: { name: 'renamed', preferredModel: 'gpt-6-astra' } });
+      await run();
+      expect(getCallerModelList).not.toHaveBeenCalled();
+      expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
+    });
+
+    it.each([
+      ['an empty catalog', () => getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] })],
+      ['a failing catalog', () => getCallerModelList.mockRejectedValue(new Error('catalog down'))],
+    ])('rejects without writing when the model lookup hits %s', async (_, arrange) => {
+      arrange();
+      const { run } = invoke('PUT', 'owner', { body: { preferredModel: 'gpt-9-nope' } });
+      await expect(run()).rejects.toThrow();
+      expectNoMutation();
     });
 
     it('reads its whole agent, owner-only fields included', async () => {

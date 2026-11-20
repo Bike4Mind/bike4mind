@@ -13,7 +13,7 @@ const SIZE_PATTERN = /^(\d+)x(\d+)$/;
  * of positive numbers. Lets callers tell a resolution that breaks a rule apart from
  * a value that expresses no resolution at all ('auto', 'wide', undefined).
  */
-function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
+export function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
   if (typeof size !== 'string') {
     return null;
   }
@@ -27,6 +27,21 @@ function parseSizeEdges(size?: string | null): { width: number; height: number }
     return null;
   }
   return { width, height };
+}
+
+/** Reduces a width and height to their smallest whole-number ratio ('3:2'); undefined when both are zero. */
+export function reduceAspectRatio(width: number, height: number): string | undefined {
+  let a = width;
+  let b = height;
+  while (b !== 0) {
+    const temp = b;
+    b = a % b;
+    a = temp;
+  }
+  if (a === 0) {
+    return undefined;
+  }
+  return `${Math.round(width / a)}:${Math.round(height / a)}`;
 }
 
 /**

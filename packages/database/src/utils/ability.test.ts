@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { IUserDocument } from '@bike4mind/common';
+import { attachOrgApiKeyReach, type IUserDocument } from '@bike4mind/common';
 
 // The ability builder pulls in the Mongoose models purely as CASL subject types;
 // stub them so this stays a pure permission-rule unit test (no DB).
@@ -21,13 +21,13 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile, FeedbackModel, Project } from '../models';
+import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings, Organization } from '../models';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({ id: 'u1', isAdmin: false, tags: [], groups: [], email: 'user@example.com', ...overrides }) as IUserDocument;
 
-// Mirrors the HTTP ability (apps/client/server/auth/ability.ts) - both must gate
+// Mirrors the HTTP ability (packages/server-utils/src/auth/ability.ts) - both must gate
 // Prompt writes on admin-or-developer and stay in sync (the two definitions
 // diverging on the retired 'Analyst' tag is exactly what this guards against).
 describe('db-core defineAbilitiesFor - Prompt library', () => {
@@ -69,7 +69,35 @@ describe('db-core defineAbilitiesFor - Prompt library', () => {
 // Org Groups (#1172): the db-core ability is the copy the quest/slack processors and the
 // image/video generators compile into a Mongo query via accessibleBy - the path where a
 // cross-element group match actually bites. Must stay in sync with the HTTP ability
-// (apps/client/server/auth/ability.ts); these mirror that file's group tests exactly.
+// (packages/server-utils/src/auth/ability.ts); these mirror that file's group tests exactly.
+describe('db-core defineAbilitiesFor - Modal management', () => {
+  const canManageModals = (a: ReturnType<typeof defineAbilitiesFor>) =>
+    a.can('create', ModalModel) && a.can('update', ModalModel) && a.can('delete', ModalModel);
+
+  it('lets a full admin and a settings:manage delegate create/update/delete modals', () => {
+    expect(canManageModals(defineAbilitiesFor(makeUser({ isAdmin: true })))).toBe(true);
+    expect(canManageModals(defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] })))).toBe(true);
+  });
+
+  it.each([
+    ['no permissions', { adminPermissions: undefined }],
+    ['an empty grant list', { adminPermissions: [] }],
+    ['a different permission', { adminPermissions: ['support:read'] }],
+  ])('denies modal writes to a user with %s', (_label, overrides) => {
+    const a = defineAbilitiesFor(makeUser(overrides as Partial<IUserDocument>));
+    expect(a.can('create', ModalModel)).toBe(false);
+    expect(a.can('update', ModalModel)).toBe(false);
+    expect(a.can('delete', ModalModel)).toBe(false);
+    expect(a.can('read', ModalModel)).toBe(true);
+  });
+
+  it('does not extend a settings:manage delegate to User or AdminSettings writes', () => {
+    const a = defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] }));
+    expect(a.can('delete', User)).toBe(false);
+    expect(a.can('update', AdminSettings)).toBe(false);
+  });
+});
+
 describe('db-core defineAbilitiesFor - group-shared document access', () => {
   type GroupShare = { groupId: string; permissions: string[] };
   const sharedWithGroups = (groups: GroupShare[]) =>
@@ -108,7 +136,120 @@ describe('db-core defineAbilitiesFor - group-shared document access', () => {
   });
 });
 
-// Mirrors the HTTP ability's Feedback block (apps/client/server/auth/ability.ts). Both grant a
+describe('db-core defineAbilitiesFor - Organization read is membership-only', () => {
+  type AclRow = { userId?: string; groupId?: string; permissions: string[] };
+  const org = (fields: { userId?: string; users?: AclRow[]; groups?: AclRow[]; isGlobalRead?: boolean }) =>
+    Object.assign(new Organization(), { userId: 'owner', users: [], groups: [], ...fields });
+
+  it('grants read to the owner and to a users[] row that confers membership', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', org({ userId: 'u1' }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['read'] }] }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['write'] }] }))).toBe(true);
+  });
+
+  it('refuses a users[] row that grants nothing conferring membership', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['share'] }] }))).toBe(false);
+  });
+
+  it('does not grant read on isGlobalRead alone', () => {
+    expect(defineAbilitiesFor(makeUser()).can('read', org({ isGlobalRead: true }))).toBe(false);
+  });
+
+  it('does not grant read on a group share alone, including an org-owned key grant', () => {
+    const groupShare = org({ groups: [{ groupId: 'g1', permissions: ['read'] }] });
+    expect(defineAbilitiesFor(makeUser({ groups: ['g1'] })).can('read', groupShare)).toBe(false);
+    const keyAccount = attachOrgApiKeyReach(makeUser({ id: 'svc', groups: [] }), {
+      organizationId: 'org-1',
+      readGroupIds: ['g1'],
+      dataLakeOrgIds: [],
+    });
+    expect(defineAbilitiesFor(keyAccount).can('read', groupShare)).toBe(false);
+  });
+
+  it('still lets a platform admin read any org', () => {
+    expect(defineAbilitiesFor(makeUser({ isAdmin: true })).can('read', org({}))).toBe(true);
+  });
+
+  it('compiles a list query with no isGlobalRead or groups arm', () => {
+    const query = JSON.stringify(
+      accessibleBy(defineAbilitiesFor(makeUser({ groups: ['g1'] })), 'read').ofType(Organization)
+    );
+    expect(query).not.toContain('isGlobalRead');
+    expect(query).not.toContain('groups');
+    expect(query).toContain('"userId":"u1"');
+  });
+
+  it('keeps read on the other shareables unchanged (isGlobalRead and group shares still read)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    expect(ability.can('read', Object.assign(new Project(), { userId: 'x', isGlobalRead: true }))).toBe(true);
+    expect(
+      ability.can(
+        'read',
+        Object.assign(new FabFile(), { userId: 'x', groups: [{ groupId: 'g1', permissions: ['read'] }] })
+      )
+    ).toBe(true);
+  });
+});
+
+// An org-owned API key's service account owns nothing and is in no group; its per-key grants
+// (b4m-core/common utils/orgApiKeyReach.ts) widen only the READ arm, never update/delete/share.
+describe('db-core defineAbilitiesFor - org-owned API key reach', () => {
+  type GroupShare = { groupId: string; permissions: string[] };
+  const keyUser = (readGroupIds: string[]) =>
+    attachOrgApiKeyReach(makeUser({ id: 'svc', groups: [] }), {
+      organizationId: 'org-1',
+      readGroupIds,
+      dataLakeOrgIds: [],
+    });
+  const fullAccess = ['read', 'update', 'delete', 'share'];
+  const projectSharedWith = (groups: GroupShare[]) =>
+    Object.assign(new Project(), { userId: 'member', users: [], groups });
+  const fileSharedWith = (groups: GroupShare[]) =>
+    Object.assign(new FabFile(), { userId: 'member', users: [], groups });
+
+  it('reads a project and a file shared with a granted group', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g1', permissions: fullAccess }]))).toBe(true);
+    expect(ability.can('read', fileSharedWith([{ groupId: 'g1', permissions: fullAccess }]))).toBe(true);
+  });
+
+  it('never updates, deletes or shares through a granted group, even when the share allows it', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    const project = projectSharedWith([{ groupId: 'g1', permissions: fullAccess }]);
+    expect(ability.can('update', project)).toBe(false);
+    expect(ability.can('delete', project)).toBe(false);
+    expect(ability.can('share', project)).toBe(false);
+  });
+
+  it("cannot read a member's private project or one shared only with an ungranted group", () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(ability.can('read', projectSharedWith([]))).toBe(false);
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g2', permissions: ['read'] }]))).toBe(false);
+  });
+
+  it('loses read once the project is unshared from the granted group', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    const project = projectSharedWith([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', project)).toBe(true);
+    project.groups = [];
+    expect(ability.can('read', project)).toBe(false);
+  });
+
+  it('denies by default with an empty reach', () => {
+    const ability = defineAbilitiesFor(keyUser([]));
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g1', permissions: ['read'] }]))).toBe(false);
+  });
+
+  it('compiles the granted groups into the read query only', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(JSON.stringify(accessibleBy(ability, 'read').ofType(Project))).toContain('"g1"');
+    expect(JSON.stringify(accessibleBy(ability, 'update').ofType(Project))).not.toContain('"g1"');
+  });
+});
+
+// Mirrors the HTTP ability's Feedback block (packages/server-utils/src/auth/ability.ts). Both grant a
 // reporter { userId }-scoped read and delete; if one side drops the condition, that side hands
 // every logged-in user the admin view, so both are pinned separately.
 describe('db-core defineAbilitiesFor - Feedback read/delete scoping', () => {
@@ -221,7 +362,33 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
-// The user/group share arm used to be hand-copied into apps/client/server/auth/ability.ts, and the
+// Mirrors the HTTP ability's FabFile export block (packages/server-utils/src/auth/ability.ts). The
+// knowledge-files export route compiles this into a Mongo query via accessibleBy, so a missing
+// rule here empties the archive exactly as a missing rule there does.
+describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
+  const ownDoc = () => Object.assign(new FabFile(), { userId: 'u1' });
+  const othersDoc = () => Object.assign(new FabFile(), { userId: 'someone-else' });
+
+  it("lets a user export their own files but not someone else's", () => {
+    const a = defineAbilitiesFor(makeUser());
+    expect(a.can('export', ownDoc())).toBe(true);
+    expect(a.can('export', othersDoc())).toBe(false);
+  });
+
+  it("scopes the export query to the caller and to an admin's own files, and fails closed without one", () => {
+    expect(accessibleBy(defineAbilitiesFor(makeUser()), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(undefined), 'export').ofType(FabFile)).toEqual({
+      $expr: { $eq: [0, 1] },
+    });
+  });
+});
+
+// The user/group share arm used to be hand-copied into packages/server-utils/src/auth/ability.ts, and the
 // copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
 // is now one exported function both builders call, so it cannot drift and the behavioural tests
 // above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
@@ -230,7 +397,7 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
 describe('shared shareable arm', () => {
   const dbCoreSource = fs.readFileSync(path.resolve(__dirname, './ability.ts'), 'utf-8');
   const clientSource = fs.readFileSync(
-    path.resolve(__dirname, '../../../../apps/client/server/auth/ability.ts'),
+    path.resolve(__dirname, '../../../../packages/server-utils/src/auth/ability.ts'),
     'utf-8'
   );
 
@@ -256,6 +423,13 @@ describe('shared shareable arm', () => {
 
   it('covers Project, whose absence from db-core made shared projects unreachable in queue handlers', () => {
     expect(resourcesPassedTo(dbCoreSource)).toContain('Project');
+  });
+
+  it('routes Organization through the membership-only arm in both builders, never the shared one', () => {
+    for (const source of [dbCoreSource, clientSource]) {
+      expect(source).toContain('applyOrganizationShareableRules(allow, user, Organization);');
+      expect(resourcesPassedTo(source)).not.toContain('Organization');
+    }
   });
 
   it('does not reintroduce the dotted cross-entry filter in either copy', () => {

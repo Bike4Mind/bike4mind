@@ -1,6 +1,6 @@
 import { AppFile } from '@bike4mind/database';
-import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
-import { TEXT_EDIT_BACKUP_PREFIX } from '@bike4mind/server-utils/utils/textEditBackupPrefix';
+import { decodeS3Key, findWithRetry, withContext } from '@bike4mind/server-utils/s3/utils';
+import { isUntrackedAppFileKey } from '@bike4mind/server-utils/s3/untrackedAppFileKey';
 
 export const func = withContext(async (event, context, logger) => {
   for (const record of event.Records) {
@@ -9,38 +9,7 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ objectKey });
 
-    // Skip keys that intentionally have no AppFile metadata record.
-    // - backup/temp files: excluded by design
-    // - exports/: quest/plan exports uploaded directly by queue handlers and
-    //   delivered to users via WebSocket URL (no AppFile record is created)
-    // - proxied-images/: external image cache written by cacheExternalImage util
-    // - tavern-sounds/: music & ambiance files uploaded via presigned URLs in
-    //   seed.ts/promote.ts without AppFile records (streamed directly from S3)
-    // - cc-bridge/: compiled binaries uploaded via upload-binaries.ts CLI script
-    // - cc-bridge-downloads/: per-user zip bundles created by the download endpoint
-    //   (no AppFile records; served directly from S3)
-    // - transcribe-uploads/: transient audio uploads for /api/ai/transcribe
-    //   (consumed and deleted by the endpoint; no AppFile records)
-    // - transcripts/: AWS Transcribe job outputs (consumed and deleted by
-    //   speechService; no AppFile records)
-    // - app-config/: public settings config artifact written by
-    //   publicSettingsArtifact.ts (M2.5); a system file served via CDN, never an AppFile
-    // - text-edit-backups/: pre-overwrite backups from a text AI edit (apply-edit.ts),
-    //   expired by lifecycle; no AppFile records
-    if (
-      objectKey.includes('/backups/') ||
-      objectKey.startsWith(TEXT_EDIT_BACKUP_PREFIX) ||
-      objectKey.startsWith('temp/') ||
-      objectKey.startsWith('tmp/') ||
-      objectKey.startsWith('exports/') ||
-      objectKey.startsWith('proxied-images/') ||
-      objectKey.startsWith('tavern-sounds/') ||
-      objectKey.startsWith('cc-bridge/') ||
-      objectKey.startsWith('cc-bridge-downloads/') ||
-      objectKey.startsWith('transcribe-uploads/') ||
-      objectKey.startsWith('transcripts/') ||
-      objectKey.startsWith('app-config/')
-    ) {
+    if (isUntrackedAppFileKey(objectKey)) {
       logger.info(`Skipping S3 event for untracked file: ${objectKey}`);
       continue;
     }
@@ -51,6 +20,8 @@ export const func = withContext(async (event, context, logger) => {
     // the Lambda's default timeout while maximising lookup attempts.
     const metadata = await findWithRetry(() => AppFile.findOne({ path: objectKey }), 4, 500);
 
+    // Every tracked writer creates the AppFile row before issuing the upload, so a miss here is
+    // not a replication race: it is an untracked writer missing from UNTRACKED_APP_FILE_PREFIXES.
     if (!metadata) {
       logger.error(`Metadata not found for file: ${objectKey}`);
       continue;

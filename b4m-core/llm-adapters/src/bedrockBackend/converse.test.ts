@@ -5,6 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import { ConverseBedrockBackend, CONVERSE_BEDROCK_MODELS } from './converse';
 import { UndifferentiatedBedrockBackend } from './undifferentiated';
 import { getLlmByModel } from '../index';
+import { buildIdentityReminder } from '../identityReminder';
 import type { ICompletionOptionTools, ICompletionOptions } from '../backend';
 
 type SentCommand = ConverseCommand | ConverseStreamCommand;
@@ -257,7 +258,7 @@ describe('ConverseBedrockBackend', () => {
     expect(sent[0]).toBeInstanceOf(ConverseCommand);
     const input = sent[0].input;
     expect(input.modelId).toBe(NOVA);
-    expect(input.system).toEqual([{ text: 'Be brief.' }]);
+    expect(input.system).toEqual([{ text: `Be brief.\n\n${buildIdentityReminder(NOVA)}` }]);
     expect(input.messages).toEqual([{ role: 'user', content: [{ text: 'hi' }] }]);
     // Clamped to the record's max_tokens.
     expect(input.inferenceConfig).toEqual({ maxTokens: 10_000, temperature: 0.2 });

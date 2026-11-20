@@ -5,8 +5,8 @@ import {
   emailPreferencesRepository,
   emailSendAttemptRepository,
 } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
 interface RecipientWithStatus {
@@ -24,11 +24,10 @@ interface RecipientWithStatus {
  * Get list of recipients for a job based on its recipientFilter.
  * Includes send status for each recipient.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const { id } = req.query as { id: string };
   const { page = '1', limit = '50', search } = req.query as { page?: string; limit?: string; search?: string };
 

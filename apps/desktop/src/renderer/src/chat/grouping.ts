@@ -44,7 +44,15 @@ export interface SidebarSections {
    * the user put them.
    */
   imported: ChatSessionSummary[];
+  /**
+   * Spawned sessions drawn under the session that started them, keyed by that parent's id. Empty
+   * when nesting is off. A session listed here appears in no other list above - only under its
+   * parent, wherever that parent is drawn.
+   */
+  children: ReadonlyMap<string, ChatSessionSummary[]>;
 }
+
+const NO_CHILDREN: ReadonlyMap<string, ChatSessionSummary[]> = new Map();
 
 /** A Claude import the user has not carried on with; a continued one is ordinary work. */
 export function isUntouchedImport(session: Pick<ChatSessionSummary, 'importOrigin'>): boolean {
@@ -62,15 +70,19 @@ export function groupSessions(
   sessions: readonly ChatSessionSummary[],
   mode: ChatSessionMode,
   userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS,
-  importedInline = false
+  importedInline = false,
+  nested = false
 ): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
   // leaving it at the top would make archive the one action with no visible effect.
   const archived = inMode.filter(session => session.archived);
   const visible = inMode.filter(session => !session.archived);
-  const pinned = visible.filter(session => session.pinned);
-  const rest = visible.filter(session => !session.pinned);
+  const children = nested ? nestSpawned(visible, userSections) : NO_CHILDREN;
+  const attached = new Set([...children.values()].flat().map(session => session.id));
+  const byGroupActivity = activityOrder(children);
+  const pinned = visible.filter(session => session.pinned).sort(byGroupActivity);
+  const rest = visible.filter(session => !session.pinned && !attached.has(session.id)).sort(byGroupActivity);
 
   const modesBySection = new Map<string, Set<ChatSessionMode>>();
   for (const session of sessions) {
@@ -113,7 +125,98 @@ export function groupSessions(
     else byDirectory.set(directory, { directory, name, sessions: [session] });
   }
 
-  return { pinned, custom, projects: [...byDirectory.values()], loose, archived, imported };
+  return { pinned, custom, projects: [...byDirectory.values()], loose, archived, imported, children };
+}
+
+/**
+ * Which visible sessions hang under which. A child stays where the user put it when they put it
+ * somewhere on purpose - pinned, or filed in a section of their own - and falls back to its own
+ * row when its parent is archived, deleted or in the other mode, since there is nothing visible
+ * to hang it under.
+ */
+function nestSpawned(
+  visible: readonly ChatSessionSummary[],
+  userSections: SidebarSectionsState
+): Map<string, ChatSessionSummary[]> {
+  const byId = new Map(visible.map(session => [session.id, session]));
+  const parentOf = (session: ChatSessionSummary): ChatSessionSummary | undefined => {
+    const parentId = session.origin?.parentSessionId;
+    if (!parentId || session.pinned || sectionOf(userSections, session.id) !== undefined) return undefined;
+    return byId.get(parentId);
+  };
+  // Origins are written once at spawn, so a cycle needs a corrupt file - but one would hide every
+  // session in it, so it is checked for rather than assumed away.
+  const cyclic = (session: ChatSessionSummary): boolean => {
+    const seen = new Set([session.id]);
+    for (let parent = parentOf(session); parent; parent = parentOf(parent)) {
+      if (seen.has(parent.id)) return true;
+      seen.add(parent.id);
+    }
+    return false;
+  };
+
+  const children = new Map<string, ChatSessionSummary[]>();
+  for (const session of visible) {
+    const parent = parentOf(session);
+    if (!parent || cyclic(session)) continue;
+    const siblings = children.get(parent.id);
+    if (siblings) siblings.push(session);
+    else children.set(parent.id, [session]);
+  }
+  // Creation order keeps a group's rows still while its members work; recency decides the group's place.
+  for (const siblings of children.values()) siblings.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return children;
+}
+
+/** The latest updatedAt among a session and everything nested under it, at any depth. */
+function groupActivity(
+  children: ReadonlyMap<string, readonly ChatSessionSummary[]>,
+  session: ChatSessionSummary
+): string {
+  return descendantsOf(children, session.id).reduce(
+    (latest, child) => (child.updatedAt > latest ? child.updatedAt : latest),
+    session.updatedAt
+  );
+}
+
+/**
+ * Newest group first, judged by its most recently active member rather than the parent alone, so a
+ * busy child keeps its group near the top. Stable, and a no-op on a list with nothing nested.
+ */
+function activityOrder(children: ReadonlyMap<string, readonly ChatSessionSummary[]>) {
+  if (children.size === 0) return () => 0;
+  return (a: ChatSessionSummary, b: ChatSessionSummary): number =>
+    groupActivity(children, b).localeCompare(groupActivity(children, a));
+}
+
+/**
+ * The title of the parent a spawned session is drawn away from, for its small "from X" label: its
+ * parent is archived or in another mode, the user pinned or filed it, or a search flattened the
+ * list. `all` is every session, not just the matching ones, so a hint survives a search that skips
+ * the parent. A deleted parent has no title to show, so its child gets none.
+ */
+export function parentHints(
+  all: readonly ChatSessionSummary[],
+  children: ReadonlyMap<string, readonly ChatSessionSummary[]>
+): ReadonlyMap<string, string> {
+  const byId = new Map(all.map(session => [session.id, session]));
+  const nestedIds = new Set([...children.values()].flat().map(session => session.id));
+
+  const hints = new Map<string, string>();
+  for (const session of all) {
+    const parent = session.origin && byId.get(session.origin.parentSessionId);
+    if (!parent || parent.id === session.id || nestedIds.has(session.id)) continue;
+    hints.set(session.id, parent.title);
+  }
+  return hints;
+}
+
+/** Every session nested under `sessionId`, at any depth, in drawn order. */
+export function descendantsOf(
+  children: ReadonlyMap<string, readonly ChatSessionSummary[]>,
+  sessionId: string
+): ChatSessionSummary[] {
+  return (children.get(sessionId) ?? []).flatMap(child => [child, ...descendantsOf(children, child.id)]);
 }
 
 /** A project picked inside a Claude Code worktree belongs with its repository, not a group of its own. */
@@ -121,6 +224,11 @@ function projectGroupOf(project: ChatProject): { directory: string; name: string
   const repository = claudeWorktreeOf(project.directory)?.repository;
   if (!repository) return { directory: project.directory, name: project.name };
   return { directory: repository, name: repository.split(/[\\/]/).filter(Boolean).pop() ?? repository };
+}
+
+/** The sidebar group directory a project belongs to: its repository when picked inside a Claude Code worktree. */
+export function projectGroupDirectory(project: ChatProject): string {
+  return projectGroupOf(project).directory;
 }
 
 /** The most recent session's project for a sidebar group, including grouped Claude worktrees. */
@@ -140,14 +248,26 @@ export const QUICK_SWITCH_LIMIT = 9;
  * The quick-switch shortcut counts positions in THIS list, so it has to come from the same
  * order the eye reads rather than from any one section.
  */
-export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
+export function orderedSessions(
+  sections: SidebarSections,
+  {
+    isOpen = () => false,
+    includeImported = false,
+  }: { isOpen?: (sessionId: string) => boolean; includeImported?: boolean } = {}
+): ChatSessionSummary[] {
+  // A folded parent's children are left out too: the sidebar does not draw them.
+  const withChildren = (session: ChatSessionSummary): ChatSessionSummary[] => [
+    session,
+    ...(isOpen(session.id) ? (sections.children.get(session.id) ?? []).flatMap(withChildren) : []),
+  ];
   // Archived and imported rows are left out: the shortcut counts what the sidebar draws, and
-  // those sit behind disclosures that are shut by default. SessionList appends the imported
+  // those sit behind disclosures that are shut by default. SessionList asks for the imported
   // rows while their section is open.
   return [
     ...sections.pinned,
     ...sections.custom.flatMap(group => group.sessions),
     ...sections.projects.flatMap(group => group.sessions),
     ...sections.loose,
-  ];
+    ...(includeImported ? sections.imported : []),
+  ].flatMap(withChildren);
 }

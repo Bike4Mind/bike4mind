@@ -30,6 +30,14 @@ export type ICreditHolderIncrementer = (
   }
 ) => Promise<ICreditHolder | null>;
 
+/**
+ * Debit up to `credits` in one atomic update without taking the balance below zero (a balance that is
+ * already negative is left as is). Resolves the credits actually debited, so a caller can see a shortfall.
+ */
+export interface ICreditHolderFlooredDebit {
+  decrementCreditsFloored(ownerId: string, credits: number): Promise<number>;
+}
+
 export enum CreditHolderType {
   User = 'User',
   Organization = 'Organization',
@@ -54,13 +62,14 @@ export interface ICreditHolderIdentifier {
 /**
  * Type guard to check if an entity implements ICreditHolder
  */
-export function isCreditHolder(entity: any): entity is ICreditHolder {
+export function isCreditHolder(entity: unknown): entity is ICreditHolder {
+  if (typeof entity !== 'object' || entity === null) return false;
+  const e = entity as Partial<ICreditHolder>;
   return (
-    entity &&
-    typeof entity.currentCredits === 'number' &&
-    (entity.lastCreditsPurchasedAt === null ||
-      entity.lastCreditsPurchasedAt === undefined ||
-      entity.lastCreditsPurchasedAt instanceof Date)
+    typeof e.currentCredits === 'number' &&
+    (e.lastCreditsPurchasedAt === null ||
+      e.lastCreditsPurchasedAt === undefined ||
+      e.lastCreditsPurchasedAt instanceof Date)
   );
 }
 

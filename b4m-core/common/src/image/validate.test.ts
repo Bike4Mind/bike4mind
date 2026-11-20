@@ -1,0 +1,420 @@
+import { describe, expect, it } from 'vitest';
+import { ImageModels } from '../models';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
+import { getImageModelCatalogEntry } from './catalog';
+import { imageFailureReason, type ImageFailureDetail } from './reasons';
+import { IMAGE_VALIDATION_ERROR_CODES, validateImageRequest, type ImageCapabilityRequest } from './validate';
+
+const gptImage1 = getImageModelCatalogEntry(ImageModels.GPT_IMAGE_1);
+const gptImage2 = getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2);
+const fluxPro = getImageModelCatalogEntry(ImageModels.FLUX_PRO_1_1);
+const fill = getImageModelCatalogEntry(ImageModels.FLUX_PRO_FILL);
+const kontext = getImageModelCatalogEntry(ImageModels.FLUX_KONTEXT_PRO);
+const ultra = getImageModelCatalogEntry(ImageModels.FLUX_PRO_ULTRA);
+const gemini = getImageModelCatalogEntry(ImageModels.GEMINI_3_PRO_IMAGE);
+const flux3 = getImageModelCatalogEntry(ImageModels.FLUX_3_IMAGE);
+const grok = getImageModelCatalogEntry(ImageModels.GROK_IMAGINE_IMAGE_QUALITY);
+
+const codesOf = (result: ReturnType<typeof validateImageRequest>) =>
+  result.ok ? [] : result.failures.map(f => f.code);
+
+describe('validateImageRequest', () => {
+  it('returns the request itself when every field is honoured', () => {
+    const request: ImageCapabilityRequest = {
+      mode: 'generate',
+      size: '1536x1024',
+      quality: 'high',
+      outputFormat: 'webp',
+      count: 4,
+      transparentBackground: true,
+      inputs: [{ role: 'reference' }, { role: 'reference' }],
+    };
+    expect(validateImageRequest(request, gptImage1)).toEqual({ ok: true, request });
+  });
+
+  it('reports every failing field at once, each with its field', () => {
+    const result = validateImageRequest(
+      { mode: 'generate', size: '4096x4096', quality: 'max', seed: 7, style: 'vivid' },
+      gptImage1
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failures.map(({ code, field }) => [code, field])).toEqual([
+      ['unsupported_size', 'size'],
+      ['unsupported_quality', 'quality'],
+      ['unsupported_style', 'style'],
+      ['unsupported_seed', 'seed'],
+    ]);
+    expect(result.failures[0].message).toContain('1024x1024');
+  });
+
+  describe('transparent background', () => {
+    it('fails on gpt-image-2 instead of stepping down', () => {
+      expect(validateImageRequest({ mode: 'generate', transparentBackground: true }, gptImage2)).toEqual({
+        ok: false,
+        failures: [
+          {
+            code: 'unsupported_transparent_background',
+            field: 'transparentBackground',
+            message: expect.stringContaining('transparent'),
+            reason: 'This model cannot render a transparent background',
+            detail: { code: 'unsupported_transparent_background' },
+          },
+        ],
+      });
+    });
+
+    it('rejects jpeg, which cannot carry alpha, rather than promoting it to png', () => {
+      const result = validateImageRequest(
+        { mode: 'generate', transparentBackground: true, outputFormat: 'jpeg' },
+        gptImage1
+      );
+      expect(codesOf(result)).toEqual(['unsupported_output_format']);
+    });
+
+    it('reports only the missing transparency, not jpeg, on a model with no alpha at all', () => {
+      const result = validateImageRequest(
+        { mode: 'generate', transparentBackground: true, outputFormat: 'jpeg' },
+        fluxPro
+      );
+      expect(codesOf(result)).toEqual(['unsupported_transparent_background']);
+    });
+  });
+
+  describe('inputs', () => {
+    it('requires an edit_source for edit', () => {
+      const result = validateImageRequest({ mode: 'edit' }, gemini);
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'missing_input', role: 'edit_source' }] });
+    });
+
+    it('requires the mask Fill declares mandatory', () => {
+      const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }] }, fill);
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'missing_input', field: 'inputs', role: 'mask' }] });
+      expect(validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }] }, fill).ok).toBe(
+        true
+      );
+    });
+
+    it('rejects an edit_source or mask on generate', () => {
+      const result = validateImageRequest({ mode: 'generate', inputs: [{ role: 'mask' }] }, gptImage1);
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'unexpected_input', role: 'mask' }] });
+    });
+
+    it('rejects reference images on a model that would silently drop them', () => {
+      const result = validateImageRequest(
+        { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'reference' }] },
+        gemini
+      );
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'unsupported_input_role', role: 'reference' }] });
+    });
+
+    it('takes a BFL image_prompt as a single generate reference', () => {
+      expect(validateImageRequest({ mode: 'generate', inputs: [{ role: 'reference' }] }, ultra).ok).toBe(true);
+      const two = validateImageRequest(
+        { mode: 'generate', inputs: [{ role: 'reference' }, { role: 'reference' }] },
+        ultra
+      );
+      expect(codesOf(two)).toEqual(['too_many_inputs']);
+    });
+
+    it('caps each role at its declared max', () => {
+      const inputs = Array.from({ length: 16 }, () => ({ role: 'reference' as const }));
+      expect(codesOf(validateImageRequest({ mode: 'generate', inputs }, gptImage1))).toEqual(['too_many_inputs']);
+    });
+  });
+
+  describe('mode', () => {
+    it('rejects generate on an edit-only model', () => {
+      expect(codesOf(validateImageRequest({ mode: 'generate' }, kontext))).toEqual(['unsupported_mode']);
+    });
+
+    it('rejects edit on a generate-only model', () => {
+      const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }] }, grok);
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'unsupported_mode', field: 'mode' }] });
+    });
+
+    it('still reports model-level fields when the mode is unsupported', () => {
+      const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], seed: 1 }, grok);
+      expect(codesOf(result)).toEqual(['unsupported_mode', 'unsupported_seed']);
+    });
+  });
+
+  describe('size', () => {
+    it('accepts a custom gpt-image-2 size within its limits and auto', () => {
+      expect(validateImageRequest({ mode: 'generate', size: '1920x1088' }, gptImage2).ok).toBe(true);
+      expect(validateImageRequest({ mode: 'generate', size: 'auto' }, gptImage2).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', size: '1920x1080' }, gptImage2))).toEqual([
+        'unsupported_size',
+      ]);
+    });
+
+    it('accepts BFL presets as declared and only on-step custom sizes', () => {
+      expect(validateImageRequest({ mode: 'generate', size: '1440x810' }, fluxPro).ok).toBe(true);
+      expect(validateImageRequest({ mode: 'generate', size: '640x480' }, fluxPro).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', size: '650x480' }, fluxPro))).toEqual([
+        'unsupported_size',
+      ]);
+      expect(codesOf(validateImageRequest({ mode: 'generate', size: '1472x800' }, fluxPro))).toEqual([
+        'unsupported_size',
+      ]);
+    });
+
+    it('rejects a size on a model sized by ratio, input image or nothing', () => {
+      for (const caps of [ultra, gemini, grok]) {
+        expect(codesOf(validateImageRequest({ mode: 'generate', size: '1024x1024' }, caps))).toEqual([
+          'unsupported_size',
+        ]);
+      }
+    });
+  });
+
+  describe('aspect ratio', () => {
+    it('checks a BFL range numerically', () => {
+      expect(validateImageRequest({ mode: 'generate', aspectRatio: '21:9' }, ultra).ok).toBe(true);
+      expect(validateImageRequest({ mode: 'generate', aspectRatio: '5:7' }, ultra).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '3:1' }, ultra))).toEqual([
+        'unsupported_aspect_ratio',
+      ]);
+      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: 'wide' }, ultra))).toEqual([
+        'unsupported_aspect_ratio',
+      ]);
+    });
+
+    it('is checked per mode: Kontext edits honour one', () => {
+      const request = { mode: 'edit', inputs: [{ role: 'edit_source' }], aspectRatio: '16:9' } as const;
+      expect(validateImageRequest(request, kontext).ok).toBe(true);
+    });
+
+    it('checks a discrete list by membership', () => {
+      const caps = {
+        ...gptImage1,
+        modes: {
+          generate: { ...gptImage1.modes.generate!, aspectRatios: { kind: 'discrete', values: ['1:1', '4:3'] } },
+        },
+      } as const;
+      expect(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, caps).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '16:9' }, caps))).toEqual([
+        'unsupported_aspect_ratio',
+      ]);
+    });
+
+    it('rejects a ratio on a model that sends none, including Gemini', () => {
+      for (const caps of [gptImage1, gemini]) {
+        expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, caps))).toEqual([
+          'unsupported_aspect_ratio',
+        ]);
+      }
+    });
+  });
+
+  describe('output', () => {
+    it('rejects webp where the provider has none, and any format where it takes none', () => {
+      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'webp' }, fluxPro))).toEqual([
+        'unsupported_output_format',
+      ]);
+      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, gemini))).toEqual([
+        'unsupported_output_format',
+      ]);
+      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, grok))).toEqual([
+        'unsupported_output_format',
+      ]);
+    });
+
+    it('bounds count to 1..maxOutputs', () => {
+      expect(validateImageRequest({ mode: 'generate', count: 10 }, fluxPro).ok).toBe(true);
+      for (const count of [0, 11, 1.5]) {
+        expect(codesOf(validateImageRequest({ mode: 'generate', count }, fluxPro))).toEqual([
+          'unsupported_output_count',
+        ]);
+      }
+    });
+
+    it('caps an edit at one image even where generate takes ten', () => {
+      expect(validateImageRequest({ mode: 'generate', count: 4 }, gptImage1).ok).toBe(true);
+      for (const caps of [gptImage1, gemini, kontext]) {
+        const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], count: 2 }, caps);
+        expect(codesOf(result)).toEqual(['unsupported_output_count']);
+      }
+    });
+
+    it('accepts a seed only where the model honours one', () => {
+      expect(validateImageRequest({ mode: 'generate', seed: 42 }, fluxPro).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', seed: 42 }, gemini))).toEqual(['unsupported_seed']);
+    });
+  });
+
+  describe('why-not reasons', () => {
+    const reasonsOf = (result: ReturnType<typeof validateImageRequest>) =>
+      result.ok ? [] : result.failures.map(f => f.reason);
+
+    it('explains a role the model does not take', () => {
+      const result = validateImageRequest(
+        { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }, { role: 'reference' }] },
+        fill
+      );
+      expect(reasonsOf(result)).toEqual(['This model takes no reference images when editing']);
+    });
+
+    it('names the limit and the requested value', () => {
+      const inputs = Array.from({ length: 2 }, () => ({ role: 'reference' as const }));
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs }, ultra))).toEqual([
+        'This model takes up to 1 reference image when generating; you added 2',
+      ]);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', count: 11 }, fluxPro))).toEqual([
+        'This model makes up to 10 images per request when generating; you asked for 11',
+      ]);
+    });
+
+    it('scopes per-mode limits to the mode and does not point at a mode the model lacks', () => {
+      const gemini25 = getImageModelCatalogEntry(ImageModels.GEMINI_2_5_FLASH_IMAGE);
+      const editWithReference = validateImageRequest(
+        { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'reference' }] },
+        gemini25
+      );
+      expect(reasonsOf(editWithReference)).toEqual(['This model takes no reference images when editing']);
+      // Synthetic, so the case survives catalog entries gaining an edit mode.
+      const generateOnly = { ...gptImage1, modes: { generate: gptImage1.modes.generate } };
+      expect(
+        reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'edit_source' }] }, generateOnly))
+      ).toEqual(['This model does not edit images, so it takes no source image']);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'mask' }] }, gptImage1))).toEqual([
+        'A mask only applies when editing',
+      ]);
+    });
+
+    it('explains a count that is not a whole number from 1 up', () => {
+      for (const count of [0, 1.5]) {
+        expect(reasonsOf(validateImageRequest({ mode: 'generate', count }, fluxPro))).toEqual([
+          `Ask for a whole number of images from 1 to 10; you asked for ${count}`,
+        ]);
+      }
+    });
+
+    it('asks for one image when the model makes only one', () => {
+      expect(
+        reasonsOf(
+          validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }], count: 0 }, fill)
+        )
+      ).toEqual(['Ask for one image; you asked for 0']);
+    });
+
+    it('carries the typed detail the reason was built from', () => {
+      const result = validateImageRequest({ mode: 'generate', count: 11 }, fluxPro);
+      expect(result).toMatchObject({
+        ok: false,
+        failures: [{ detail: { code: 'unsupported_output_count', mode: 'generate', requested: 11, max: 10 } }],
+      });
+    });
+
+    it('tells a format the model lacks apart from one that cannot carry alpha', () => {
+      const alpha = validateImageRequest(
+        { mode: 'generate', transparentBackground: true, outputFormat: 'jpeg' },
+        gptImage1
+      );
+      expect(reasonsOf(alpha)).toEqual(['JPEG cannot keep a transparent background; pick PNG or WEBP']);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, grok))).toEqual([
+        'This model has no output format setting',
+      ]);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', outputFormat: 'webp' }, fluxPro))[0]).toBe(
+        'This model outputs PNG or JPEG; you asked for WEBP'
+      );
+    });
+
+    it('explains input-image sizing that supports an aspect ratio', () => {
+      expect(
+        reasonsOf(validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], size: '1024x1024' }, kontext))
+      ).toEqual(['This model takes an aspect ratio, not a size']);
+    });
+
+    // One sample detail per code; the it.each below fails when a code is added without one (tests are not type-checked).
+    const SAMPLES = {
+      unsupported_mode: { code: 'unsupported_mode', mode: 'edit' },
+      missing_input: { code: 'missing_input', role: 'mask' },
+      unexpected_input: { code: 'unexpected_input', role: 'edit_source', editSupported: true },
+      unsupported_input_role: { code: 'unsupported_input_role', role: 'reference', mode: 'edit' },
+      too_many_inputs: { code: 'too_many_inputs', role: 'reference', mode: 'generate', max: 4, requested: 6 },
+      unsupported_size: {
+        code: 'unsupported_size',
+        requested: '999x999',
+        sizing: { kind: 'presets', presets: ['1024x1024', '1792x1024'], defaultSize: '1024x1024' },
+      },
+      unsupported_aspect_ratio: {
+        code: 'unsupported_aspect_ratio',
+        requested: '1:4',
+        mode: 'generate',
+        allowed: { kind: 'range', tallest: '9:21', widest: '21:9' },
+      },
+      unsupported_quality: { code: 'unsupported_quality', requested: 'hd', allowed: [] },
+      unsupported_style: { code: 'unsupported_style', requested: 'vivid', allowed: ['natural'] },
+      unsupported_output_format: {
+        code: 'unsupported_output_format',
+        requested: 'webp',
+        allowed: ['png', 'jpeg'],
+        needsAlpha: false,
+      },
+      unsupported_output_count: { code: 'unsupported_output_count', mode: 'edit', requested: 2, max: 1 },
+      unsupported_transparent_background: { code: 'unsupported_transparent_background' },
+      unsupported_seed: { code: 'unsupported_seed' },
+      unsupported_edit_regions: { code: 'unsupported_edit_regions', mode: 'edit', requested: 9, max: 8 },
+    } satisfies { [C in ImageFailureDetail['code']]: Extract<ImageFailureDetail, { code: C }> };
+
+    it.each(IMAGE_VALIDATION_ERROR_CODES)('has a short ASCII reason for %s', code => {
+      const reason = imageFailureReason(SAMPLES[code]);
+      expect(reason).toMatch(/^[\x20-\x7e]+$/);
+      expect(reason.length).toBeLessThanOrEqual(120);
+    });
+
+    it('phrases each sample for a person, not a developer', () => {
+      expect(imageFailureReason(SAMPLES.unsupported_mode)).toBe('This model cannot edit images');
+      expect(imageFailureReason(SAMPLES.too_many_inputs)).toBe(
+        'This model takes up to 4 reference images when generating; you added 6'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_size)).toBe(
+        'This model supports 1024x1024 or 1792x1024; you asked for 999x999'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_aspect_ratio)).toBe(
+        'This model supports 9:21 to 21:9 when generating; you asked for 1:4'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_quality)).toBe('This model has no quality setting');
+      expect(imageFailureReason(SAMPLES.unsupported_output_count)).toBe(
+        'This model makes one image per request when editing; you asked for 2'
+      );
+    });
+  });
+});
+
+describe('validateImageRequest edit regions', () => {
+  const regions = (count: number) => Array.from({ length: count }, () => ({}));
+  const edit = { mode: 'edit', inputs: [{ role: 'edit_source' }] } as const;
+
+  it('accepts regions up to the maximum on a FLUX 3 edit', () => {
+    const request: ImageCapabilityRequest = { ...edit, editRegions: regions(MAX_BFL_EDIT_REGIONS) };
+    expect(validateImageRequest(request, flux3).ok).toBe(true);
+  });
+
+  it('rejects more regions than the maximum, with a reason naming both counts', () => {
+    const result = validateImageRequest({ ...edit, editRegions: regions(MAX_BFL_EDIT_REGIONS + 1) }, flux3);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+    if (result.ok) return;
+    expect(result.failures[0].field).toBe('editRegions');
+    expect(result.failures[0].reason).toBe(
+      `This model takes up to ${MAX_BFL_EDIT_REGIONS} regions when editing; you marked ${MAX_BFL_EDIT_REGIONS + 1}`
+    );
+  });
+
+  it('rejects regions when generating', () => {
+    const result = validateImageRequest({ mode: 'generate', editRegions: regions(1) }, flux3);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+  });
+
+  it('rejects regions on an edit with a model that takes none', () => {
+    const result = validateImageRequest({ ...edit, editRegions: regions(1) }, kontext);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+  });
+
+  it('words the no-regions case without a count', () => {
+    expect(imageFailureReason({ code: 'unsupported_edit_regions', mode: 'edit', requested: 1, max: 0 })).toBe(
+      'This model cannot target regions when editing'
+    );
+  });
+});

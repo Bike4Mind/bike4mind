@@ -82,7 +82,7 @@ export function useSendSystemMessage({
 }: { onSuccess?: () => void; onError?: (error: Error) => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<unknown, Error, { title: string; message: string; receiverId: string }>({
+  return useMutation<unknown, Error, { title: string; message: string; receiverId: string; reason: string }>({
     mutationFn: data => sendSystemMessage(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inbox/admin-send'] });

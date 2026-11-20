@@ -16,16 +16,18 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: h.getSignedUrl }));
-vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
   dataLakeRepository: { findByDatalakeTag: vi.fn(), find: vi.fn().mockResolvedValue([]) },
   dataLakeBatchRepository: { findById: vi.fn() },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+  // The personal quota check re-reads the uploader (createPresignedUpload.ts).
+  userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string } }) => ({
     userId: req.user.id,
     isAdmin: false,
@@ -149,13 +151,13 @@ describe('POST /api/files/generate-presigned-url - callers that keep today behav
     const persisted = h.createFabFile.mock.calls[0][0];
     expect(persisted.tags).toEqual([{ name: 'a', strength: 1 }]);
     expect(persisted.sourceMetadata).toBeUndefined();
-    // Length-bound like every presign, but neither type-bound nor create-only.
-    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'Key']);
+    // Length-bound and create-only like every presign, but not type-bound.
+    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'IfNoneMatch', 'Key']);
   });
 
   it('lets a JWT caller (no apiKeyInfo) upload a non-png, unmarked', async () => {
     await run({ fileName: 'r.txt', mimeType: 'text/plain', fileSize: 10 });
     expect(h.createFabFile.mock.calls[0][0].sourceMetadata).toBeUndefined();
-    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'Key']);
+    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'IfNoneMatch', 'Key']);
   });
 });

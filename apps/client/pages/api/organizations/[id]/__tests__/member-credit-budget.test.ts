@@ -31,7 +31,7 @@ const setMemberCreditDefault = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({ organizationService: { setMemberCreditDefault } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { marker: 'orgRepo' } }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/organizations/[id]/member-credit-budget';
 

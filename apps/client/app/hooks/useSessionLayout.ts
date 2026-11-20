@@ -75,6 +75,12 @@ export interface PendingMessageFile {
    * whichever notebook the user happens to be looking at.
    */
   uploadSessionId: string | null;
+  /** The attached file itself, previewed locally (see MessageFileThumbnails). */
+  localFile?: File;
+  /** The temp id minted when the upload started; survives the swap to the real FabFile id. */
+  clientId?: string;
+  /** Why an 'error' item failed, shown on its tile. */
+  errorMessage?: string;
 }
 
 /**
@@ -119,11 +125,15 @@ interface SessionLayoutControlState {
   // SessionFilePond's upload `.then`), so the composer thumbnail doesn't get stuck on
   // 'scanning' forever. Consumed (and cleared) via consumeBufferedModerationStatus once the
   // real id is known. Not persisted - a stale buffered event is meaningless across reloads.
-  pendingModerationEvents: Record<string, { moderationStatus: 'clean' | 'blocked'; fileUrl?: string }>;
+  pendingModerationEvents: Record<
+    string,
+    { moderationStatus: 'clean' | 'blocked'; fileUrl?: string; fileUrlExpireAt?: Date | string }
+  >;
   // Floating chat window state
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
+  floatingChatPillPosition: { x: number; y: number } | null;
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
@@ -165,6 +175,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
+      floatingChatPillPosition: null,
       dockChatWidth: 40,
       dockChatHeight: 40,
     }),
@@ -181,6 +192,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Floating chat window position/size persisted for cross-session memory
         floatingChatPosition: state.floatingChatPosition,
         floatingChatSize: state.floatingChatSize,
+        floatingChatPillPosition: state.floatingChatPillPosition,
         // floatingChatMinimized intentionally excluded - controlled at mount time
         // to avoid hydration race where persisted false overwrites auto-minimize on mobile
         // Docked chat panel sizing persisted for cross-session memory
@@ -414,7 +426,8 @@ export const patchPendingMessageFileModerationStatus = (
   files: PendingMessageFile[],
   fabFileId: string,
   moderationStatus: 'pending' | 'clean' | 'blocked',
-  fileUrl?: string
+  fileUrl?: string,
+  fileUrlExpireAt?: Date | string
 ): PendingMessageFile[] => {
   if (moderationStatus === 'pending') return files;
 
@@ -424,14 +437,23 @@ export const patchPendingMessageFileModerationStatus = (
     return {
       ...item,
       status: moderationStatus === 'clean' ? 'complete' : 'blocked',
+      errorMessage: undefined,
       fabFile: {
         ...item.fabFile,
         moderationStatus,
-        ...(fileUrl ? { fileUrl, fileUrlExpireAt: new Date(Date.now() + 3600 * 1000) } : {}),
+        ...(fileUrl
+          ? {
+              fileUrl,
+              fileUrlExpireAt: fileUrlExpireAt ? new Date(fileUrlExpireAt) : new Date(Date.now() + 3600 * 1000),
+            }
+          : {}),
       },
     };
   });
 };
+
+export const MODERATION_TIMEOUT_MESSAGE =
+  "The safety check is taking longer than usual. We're still checking - it will attach once it clears, or you can remove it.";
 
 /**
  * Gives up on images whose moderation scan never reported back: `'scanning'` -> `'error'`,
@@ -441,7 +463,9 @@ export const patchPendingMessageFileModerationStatus = (
  */
 export const markModerationScanTimedOut = (files: PendingMessageFile[], fabFileIds: string[]): PendingMessageFile[] =>
   files.map(item =>
-    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id) ? { ...item, status: 'error' } : item
+    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id)
+      ? { ...item, status: 'error', errorMessage: MODERATION_TIMEOUT_MESSAGE }
+      : item
   );
 
 /**
@@ -500,7 +524,8 @@ export const getSendableMessageFileIds = (
 export const recordModerationStatus = (
   fabFileId: string,
   moderationStatus: 'pending' | 'clean' | 'blocked',
-  fileUrl?: string
+  fileUrl?: string,
+  fileUrlExpireAt?: Date | string
 ): void => {
   if (moderationStatus === 'pending') return;
 
@@ -513,7 +538,8 @@ export const recordModerationStatus = (
         pendingMessageFiles,
         fabFileId,
         moderationStatus,
-        fileUrl
+        fileUrl,
+        fileUrlExpireAt
       ),
     });
     return;
@@ -522,7 +548,7 @@ export const recordModerationStatus = (
   useSessionLayout.setState({
     pendingModerationEvents: {
       ...pendingModerationEvents,
-      [fabFileId]: { moderationStatus, fileUrl },
+      [fabFileId]: { moderationStatus, fileUrl, fileUrlExpireAt },
     },
   });
 };
@@ -537,7 +563,7 @@ export const recordModerationStatus = (
  */
 export const consumeBufferedModerationStatus = (
   fabFileId: string
-): { moderationStatus: 'clean' | 'blocked'; fileUrl?: string } | undefined => {
+): { moderationStatus: 'clean' | 'blocked'; fileUrl?: string; fileUrlExpireAt?: Date | string } | undefined => {
   const { pendingModerationEvents } = useSessionLayout.getState();
   const buffered = pendingModerationEvents[fabFileId];
   if (!buffered) return undefined;

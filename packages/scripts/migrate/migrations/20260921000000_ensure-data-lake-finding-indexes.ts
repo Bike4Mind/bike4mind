@@ -13,7 +13,7 @@ import { type MigrationFile } from './index';
  *
  * Migration rather than autoIndex, for the reasons the sibling ensure-*-index migrations give:
  * `mongo.ts` sets autoIndex but only awaits `connect`, so a build is fire-and-forget and a failure
- * is silent; and prod runs DocumentDB, where a build takes a foreground collection lock - taken by
+ * is silent; and the build would start on
  * whichever Lambda cold-boots onto the collection first, i.e. a user's request rather than a
  * migration window. An already-applied sibling cannot backfill this one either: `selectPending`
  * filters on the applied-id set, so it will never re-run to pick up a later-declared index.

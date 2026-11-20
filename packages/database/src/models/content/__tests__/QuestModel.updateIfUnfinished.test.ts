@@ -6,8 +6,8 @@ import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Quest, questRepository } from '../QuestModel';
 
 /**
- * The chat pipeline's mid-turn saves (streaming heartbeat, tools, research mode) write a whole
- * in-memory quest whose status is 'running'. This is the interleaving a user Stop has to survive:
+ * The chat pipeline's mid-turn saves (streaming heartbeat, tools, research mode) write the changed
+ * fields of an in-memory quest whose status is 'running'. This is the interleaving a user Stop has to survive:
  * stopReply writes 'stopped', a save lands, then the cancellation watcher polls the status.
  */
 describe('QuestModel.updateIfUnfinished', () => {
@@ -62,5 +62,26 @@ describe('QuestModel.updateIfUnfinished', () => {
 
     expect(saved?.status).toBe('running');
     expect(saved?.replies).toEqual(['partial answer']);
+  });
+
+  it('refreshes updatedAt on a save with no changed fields', async () => {
+    const inMemory = await createRunningQuest();
+    const before = (await Quest.findById(inMemory.id))!.updatedAt as Date;
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const saved = await questRepository.updateIfUnfinished({ id: inMemory.id });
+
+    expect(saved?.status).toBe('running');
+    expect((await Quest.findById(inMemory.id))!.updatedAt.getTime()).toBeGreaterThan(before.getTime());
+  });
+
+  it('does not write to a quest soft-deleted before the save', async () => {
+    const inMemory = await createRunningQuest();
+    await Quest.updateOne({ _id: inMemory.id }, { deletedAt: new Date() });
+
+    expect(await questRepository.updateIfUnfinished({ id: inMemory.id, replies: ['late'] })).toBeNull();
+    const stored = await Quest.findById(inMemory.id).setOptions({ includeDeleted: true });
+    expect(stored?.deletedAt).toBeInstanceOf(Date);
+    expect(stored?.replies).toEqual([]);
   });
 });

@@ -1,5 +1,8 @@
+import { resolveAudioVendorBackend } from '@bike4mind/common';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
+  DEFAULT_MUSIC_MODEL_ID,
   ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
@@ -11,12 +14,15 @@ import {
 import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -54,6 +60,10 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
+
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
+  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID, { orgModelBackend: resolveAudioVendorBackend(provider) });
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,

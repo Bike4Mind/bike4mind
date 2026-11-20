@@ -6,7 +6,7 @@ import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 import { Request } from 'express';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 /**
  * PATCH /api/sessions/[id]/surface - move the caller's own session into another registered

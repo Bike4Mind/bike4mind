@@ -8,6 +8,11 @@ describe('ttsUsdPer1kChars', () => {
     expect(ttsUsdPer1kChars('openai', 'tts-1-hd')).toBe(0.03);
   });
 
+  it('prices gpt-4o-mini-tts at or above the slowest bundled voice (marin: 82 chars in 6.46s at $0.015/min)', () => {
+    const marinUsdPer1k = (0.015 / ((82 / 6.46) * 60)) * 1000;
+    expect(ttsUsdPer1kChars('openai', 'gpt-4o-mini-tts')).toBeGreaterThanOrEqual(marinUsdPer1k);
+  });
+
   it('returns the per-model rate for known ElevenLabs models', () => {
     expect(ttsUsdPer1kChars('elevenlabs', 'eleven_multilingual_v2')).toBe(0.1);
     expect(ttsUsdPer1kChars('elevenlabs', 'eleven_turbo_v2_5')).toBe(0.05);

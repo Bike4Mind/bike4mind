@@ -14,7 +14,7 @@ vi.mock('@bike4mind/database/social', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -23,7 +23,7 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { Quest } from '@bike4mind/database/content';
 import { Connection } from '@bike4mind/database/social';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 
 describe('jupyterNotebookProgress WebSocket handler', () => {
   let mockEvent: {

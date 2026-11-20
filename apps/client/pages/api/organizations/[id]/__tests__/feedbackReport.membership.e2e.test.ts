@@ -48,15 +48,15 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: vi.fn().mockResolvedValue({ outcome: 'skipped', reason: 'disabled' }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn().mockResolvedValue(undefined) } },
 }));
 
@@ -210,13 +210,17 @@ async function seedOrgA() {
   return { orgA, owner, member, lapsed, unstamped, offAcl, departed, rows };
 }
 
-const WIDE = { from: dayjs().subtract(2, 'days').format('YYYY-MM-DD'), to: dayjs().format('YYYY-MM-DD') };
+// Read one UTC instant per request so module loading cannot pin yesterday's range.
+const wideWindow = () => {
+  const now = dayjs.utc();
+  return { from: now.subtract(2, 'days').format('YYYY-MM-DD'), to: now.format('YYYY-MM-DD') };
+};
 
 describe('org feedback report - membership population and denials', () => {
   it('counts both arms of the union and no row outside it', async () => {
     const s = await seedOrgA();
 
-    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...WIDE }, s.owner);
+    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...wideWindow() }, s.owner);
     expect(res._getStatusCode()).toBe(200);
     const report = res._getJSONData();
 
@@ -235,7 +239,7 @@ describe('org feedback report - membership population and denials', () => {
   it('reports the disagreement between the two populations instead of hiding it', async () => {
     const s = await seedOrgA();
 
-    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...WIDE }, s.owner);
+    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...wideWindow() }, s.owner);
     const { membership } = res._getJSONData();
 
     expect(membership.memberCount).toBe(5); // owner, member, lapsed, unstamped, offAcl
@@ -254,7 +258,7 @@ describe('org feedback report - membership population and denials', () => {
     const foreign = await submitFeedback(otherOwner, 'other org says hello');
     expect(String(foreign.organizationId)).toBe(String(orgB._id));
 
-    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...WIDE }, s.owner);
+    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...wideWindow() }, s.owner);
     const report = res._getJSONData();
     expect(report.totals.count).toBe(4);
     expect(report.byMember.map((m: { userId: string }) => m.userId)).not.toContain(otherOwner.id);
@@ -263,7 +267,7 @@ describe('org feedback report - membership population and denials', () => {
   it('answers a plain member with a denial, not an empty report', async () => {
     const s = await seedOrgA();
 
-    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...WIDE }, s.member);
+    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...wideWindow() }, s.member);
 
     expect(res._getStatusCode()).toBe(404);
     expect(res._getJSONData()).not.toHaveProperty('totals');
@@ -273,7 +277,7 @@ describe('org feedback report - membership population and denials', () => {
     const s = await seedOrgA();
     const stranger = await makeUser('stranger');
 
-    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...WIDE }, stranger);
+    const res = await callReport(reportHandler, { id: String(s.orgA._id), ...wideWindow() }, stranger);
     expect(res._getStatusCode()).toBe(404);
   });
 
@@ -350,7 +354,7 @@ describe('org feedback drill-down - verbatim stays out of reach', () => {
   it('lists only the scoped rows, with no text on any of them', async () => {
     const s = await seedOrgA();
 
-    const res = await callReport(itemsHandler, { id: String(s.orgA._id), ...WIDE }, s.owner);
+    const res = await callReport(itemsHandler, { id: String(s.orgA._id), ...wideWindow() }, s.owner);
 
     expect(res._getStatusCode()).toBe(200);
     const page = res._getJSONData();
@@ -361,6 +365,21 @@ describe('org feedback drill-down - verbatim stays out of reach', () => {
     for (const item of page.items) {
       expect(item).not.toHaveProperty('content');
       expect(item).not.toHaveProperty('promptMeta');
+    }
+  });
+});
+
+describe('org feedback report - request date window', () => {
+  it('computes the UTC range again after midnight', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-17T23:59:00.000Z'));
+      expect(wideWindow()).toEqual({ from: '2026-11-15', to: '2026-11-17' });
+
+      vi.setSystemTime(new Date('2026-11-18T00:01:00.000Z'));
+      expect(wideWindow()).toEqual({ from: '2026-11-16', to: '2026-11-18' });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

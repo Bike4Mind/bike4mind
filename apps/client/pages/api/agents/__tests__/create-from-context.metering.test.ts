@@ -5,7 +5,20 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
+import {
+  BadRequestError,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  ForbiddenError,
+  TooManyRequestsError,
+  insufficientCreditsError,
+} from '@bike4mind/common';
+
+const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -28,7 +41,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   sessionRepository: { findById: vi.fn().mockResolvedValue({ id: 'sess-1', userId: 'user-1', knowledgeIds: [] }) },
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ prompt: 'hello', fabFileIds: [] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
@@ -50,7 +63,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
@@ -63,8 +81,10 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: m.admissionAssert }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({ createAttachmentLakeAccess: () => async () => ({}) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: () => async () => ({}),
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 const MODEL = { id: 'gpt-4-test', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
@@ -79,11 +99,13 @@ await import('../create-from-context');
 
 const PROFILE = JSON.stringify({ description: 'A helper', systemPrompt: 'You are Helper.' });
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call() {
   const req = {
     body: { agentName: 'Helper', sessionId: '67dbe18a7f9cf1fa5d9686aa' },
     user: { id: 'user-1', level: 'Free', groups: [] },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() },
+    logger: testLogger,
   };
   const res = { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis() };
   await m.handler!(req, res);
@@ -110,6 +132,19 @@ describe('POST /api/agents/create-from-context metering', () => {
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
     expect(m.agentCreate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
   });
 
   it('keeps the 403 when the model is not admitted, without reserving or calling the provider', async () => {
@@ -152,4 +187,14 @@ describe('POST /api/agents/create-from-context metering', () => {
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call()).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.complete).not.toHaveBeenCalled();
 });

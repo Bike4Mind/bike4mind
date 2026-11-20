@@ -4,6 +4,7 @@ import { createMongoServer } from '../../__test__/createMongoServer';
 import {
   PublishedArtifact,
   publishedArtifactRepository,
+  liveShareTokenMatch,
   liveShareTokens,
   shareTokenFilter,
 } from './PublishedArtifactModel';
@@ -188,9 +189,82 @@ describe('per-entry view counting (#3255 step 2)', () => {
     const find = (token: string) => PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) }).lean();
 
     expect((await find('ARRAY-LIVE'))?.publicId).toBe(arrayed.publicId);
-    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength - still the
-    // load-bearing part now that the filter is the $elemMatch alone (#3523).
+    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength.
     expect(await find('ARRAY-DEAD')).toBeNull();
     expect(await find('SCALAR-ONLY')).toBeNull();
+  });
+
+  it('shareTokenFilter is answered from the shareTokens.token index, not a collection scan', async () => {
+    await make({ shareTokens: [{ token: 'INDEXED-LIVE' }] });
+    await make({ shareTokens: [] });
+
+    for (const [token, returned] of [
+      ['INDEXED-LIVE', 1],
+      ['NO-SUCH-TOKEN', 0],
+    ] as const) {
+      const explained = (await PublishedArtifact.find({ deletedAt: null, ...shareTokenFilter(token) }).explain(
+        'executionStats'
+      )) as unknown as {
+        queryPlanner: { winningPlan: unknown };
+        executionStats: { totalDocsExamined: number; nReturned: number };
+      };
+      const plan = JSON.stringify(explained.queryPlanner.winningPlan);
+      expect(plan).toContain('"stage":"IXSCAN"');
+      expect(plan).toContain('"indexName":"shareTokens.token_1"');
+      expect(plan).not.toContain('COLLSCAN');
+      expect(explained.executionStats.totalDocsExamined).toBeLessThanOrEqual(1);
+      expect(explained.executionStats.nReturned).toBe(returned);
+    }
+  });
+});
+
+describe('share-link expiry', () => {
+  const past = () => new Date(Date.now() - 60_000);
+  const future = () => new Date(Date.now() + 60 * 60_000);
+  const find = (token: string) => PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) }).lean();
+
+  it('shareTokenFilter refuses an expired entry and resolves future, null and missing expiry', async () => {
+    const live = await make({
+      shareTokens: [
+        { token: 'EXP-FUTURE', expiresAt: future() },
+        { token: 'EXP-NULL', expiresAt: null },
+      ],
+    });
+    await make({ shareTokens: [{ token: 'EXP-PAST', expiresAt: past() }] });
+    const legacy = await make({ shareTokens: [{ token: 'EXP-MISSING' }] });
+    await PublishedArtifact.collection.updateOne({ _id: legacy._id }, { $unset: { 'shareTokens.0.expiresAt': '' } });
+
+    expect((await find('EXP-FUTURE'))?.publicId).toBe(live.publicId);
+    expect((await find('EXP-NULL'))?.publicId).toBe(live.publicId);
+    expect((await find('EXP-MISSING'))?.publicId).toBe(legacy.publicId);
+    expect(await find('EXP-PAST')).toBeNull();
+    expect(await publishedArtifactRepository.findByShareToken('EXP-PAST')).toBeFalsy();
+  });
+
+  it('an expired entry does not resolve on the strength of a live sibling', async () => {
+    await make({ shareTokens: [{ token: 'EXP-DEAD', expiresAt: past() }, { token: 'EXP-SIBLING' }] });
+    expect(await find('EXP-DEAD')).toBeNull();
+    expect(await find('EXP-SIBLING')).not.toBeNull();
+  });
+
+  it('liveShareTokens and liveShareTokenMatch agree on which entries are live', async () => {
+    const now = new Date();
+    const row = await make({
+      shareTokens: [
+        { token: 'AGREE-PAST', expiresAt: past() },
+        { token: 'AGREE-FUTURE', expiresAt: future() },
+        { token: 'AGREE-NONE' },
+        { token: 'AGREE-REVOKED', revokedAt: now, expiresAt: future() },
+      ],
+    });
+    const lean = await PublishedArtifact.findById(row._id).lean();
+    expect(liveShareTokens(lean!, now).map(e => e.token)).toEqual(['AGREE-FUTURE', 'AGREE-NONE']);
+    const matched = await PublishedArtifact.aggregate([
+      { $match: { _id: row._id } },
+      { $unwind: '$shareTokens' },
+      { $replaceRoot: { newRoot: '$shareTokens' } },
+      { $match: liveShareTokenMatch(now) },
+    ]);
+    expect(matched.map(e => e.token)).toEqual(['AGREE-FUTURE', 'AGREE-NONE']);
   });
 });

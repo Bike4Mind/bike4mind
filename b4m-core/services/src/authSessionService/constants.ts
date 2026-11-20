@@ -2,6 +2,12 @@
 export const DEFAULT_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
+ * Idle window of a session minted with the persona key (createdVia 'persona-mint'): issued with it
+ * and slid by it on rotation, so a test persona's refresh token never grows into a 30-day one.
+ */
+export const PERSONA_SESSION_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
  * How long the one-generation-back refresh secret is still accepted after a rotation supersedes it.
  *
  * Presenting a secret inside this window buys an ACCESS token only - it never rotates the chain and

@@ -3,6 +3,7 @@ import {
   COMPLETION_SOURCES,
   isApiKeyCompletionSource,
   resolveApiCompletionSource,
+  resolveClientSurface,
   resolveRequestClient,
 } from './analytics';
 
@@ -94,5 +95,40 @@ describe('resolveApiCompletionSource', () => {
 describe('isApiKeyCompletionSource', () => {
   it('is true only for api, cli and desktop', () => {
     expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli', 'desktop']);
+  });
+});
+
+describe('resolveClientSurface', () => {
+  it('names the first-party client and keeps its version', () => {
+    expect(resolveClientSurface({ 'user-agent': 'b4m-desktop/1.4.2' }, { delegatedCredential: false })).toEqual({
+      surface: 'desktop',
+      version: '1.4.2',
+    });
+    expect(resolveClientSurface({ 'x-b4m-client': 'B4M-CLI/0.9.3' }, { delegatedCredential: true })).toEqual({
+      surface: 'cli',
+      version: '0.9.3',
+    });
+  });
+
+  it('drops a version that is too long to persist', () => {
+    expect(
+      resolveClientSurface({ 'user-agent': `b4m-desktop/${'9'.repeat(33)}` }, { delegatedCredential: false })
+    ).toEqual({ surface: 'desktop' });
+  });
+
+  it('falls back to api for a delegated credential and web for a session', () => {
+    expect(resolveClientSurface({ 'user-agent': 'curl/8' }, { delegatedCredential: true })).toEqual({ surface: 'api' });
+    expect(resolveClientSurface({ 'user-agent': 'Mozilla/5.0' }, { delegatedCredential: false })).toEqual({
+      surface: 'web',
+    });
+    expect(resolveClientSurface({}, { delegatedCredential: false })).toEqual({ surface: 'web' });
+  });
+
+  it('does not accept a first-party name buried inside another user agent', () => {
+    expect(
+      resolveClientSurface({ 'user-agent': 'Mozilla/5.0 b4m-desktop/1.0' }, { delegatedCredential: false })
+    ).toEqual({
+      surface: 'web',
+    });
   });
 });

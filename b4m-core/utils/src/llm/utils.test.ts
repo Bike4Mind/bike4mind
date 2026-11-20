@@ -6,6 +6,7 @@ import {
   computeCosineSimilarity,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  fetchAgentRecentGeneratedImages,
   isStoppedBeforeReply,
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
@@ -1916,6 +1917,46 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('recentImageJobs', () => {
+      it('collects image job ids newest turn first with their prompt, skipping other kinds', async () => {
+        const items = [
+          makeItem(4, { generationJobs: [{ id: 'j-current', kind: 'image' }] }),
+          makeItem(3, {
+            generationJobs: [
+              { id: 'v-1', kind: 'video' },
+              { id: 'j-3', kind: 'image' },
+            ],
+          }),
+          makeItem(2, {
+            generationJobs: [
+              { id: 'j-2a', kind: 'image' },
+              { id: 'j-2b', kind: 'image' },
+            ],
+          }),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toEqual([
+          { jobId: 'j-3', prompt: 'prompt 3' },
+          { jobId: 'j-2a', prompt: 'prompt 2' },
+          { jobId: 'j-2b', prompt: 'prompt 2' },
+        ]);
+      });
+
+      it('caps the list at 6 jobs', async () => {
+        const generationJobs = Array.from({ length: 8 }, (_, i) => ({ id: `j${i}`, kind: 'image' as const }));
+        const items = [makeItem(3), makeItem(2, { generationJobs }), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toHaveLength(6);
+      });
+    });
+
     describe('Research Mode turns', () => {
       // Research Mode stores its answers in researchModeResults and leaves replies empty.
       const makeResearchItem = (n: number, researchModeResults: unknown[]) =>
@@ -2008,6 +2049,46 @@ describe('Context Management Tests', () => {
         const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
 
         expect(meta.priorToolNames).toEqual([]);
+      });
+    });
+
+    describe('toolTurns', () => {
+      it('pairs each replayed prompt message, by reference, with the tools its turn offered and called', async () => {
+        const items = [
+          makeItem(3),
+          makeItem(2, {
+            promptMeta: { offeredTools: ['web_search'], functionCalls: [{ id: 'c', name: 'web_search' }] },
+          }),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.toolTurns?.map(t => ({ offeredTools: t.offeredTools, calledTools: t.calledTools }))).toEqual([
+          { offeredTools: undefined, calledTools: [] },
+          { offeredTools: ['web_search'], calledTools: ['web_search'] },
+        ]);
+        for (const toolTurn of meta.toolTurns ?? []) expect(messages).toContain(toolTurn.prompt);
+      });
+
+      it("leaves out a session's first prompt, kept in history as the current turn", async () => {
+        const items = [makeItem(1, { promptMeta: { offeredTools: [] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages.some(m => m.role === 'user')).toBe(true);
+        expect(meta.toolTurns).toEqual([]);
+      });
+
+      it('keeps the only prior turn once the current prompt is popped', async () => {
+        const items = [makeItem(2), makeItem(1, { promptMeta: { offeredTools: ['web_fetch'] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.toolTurns?.map(t => t.offeredTools)).toEqual([['web_fetch']]);
       });
     });
 
@@ -2104,6 +2185,48 @@ describe('Context Management Tests', () => {
         expect((messages[1].content as { input: unknown }[])[1].input).toEqual({});
       });
 
+      it('replays the final answer after the tool results on a multi-slot turn', async () => {
+        const item = makeItem(1, {
+          structuredReplies: undefined,
+          replies: ['<think>plan</think>', 'Let me search.', '<think>read results</think>', 'It is sunny.'],
+          promptMeta: { functionCalls: [call()] },
+        });
+
+        const messages = await runWith(item);
+
+        expect(messages).toEqual([
+          { role: 'user', content: 'prompt 1' },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Let me search.' },
+              { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false }],
+          },
+          { role: 'assistant', content: 'It is sunny.' },
+        ]);
+      });
+
+      it('joins every slot after the preamble into the trailing answer', async () => {
+        const item = makeItem(1, {
+          structuredReplies: undefined,
+          replies: ['Searching.', 'Checking one more source.', 'Final answer.'],
+          promptMeta: { functionCalls: [call()] },
+        });
+
+        const messages = await runWith(item);
+
+        expect((messages[1].content as { type: string; text?: string }[])[0]).toEqual({
+          type: 'text',
+          text: 'Searching.',
+        });
+        expect(messages[3]).toEqual({ role: 'assistant', content: 'Checking one more source.\n\nFinal answer.' });
+      });
+
       it('keeps preferring structuredReplies when both are present', async () => {
         const item = makeItem(1, {
           structuredReplies: [{ role: 'assistant', content: [{ type: 'text', text: 'from structured' }] }],
@@ -2121,6 +2244,19 @@ describe('Context Management Tests', () => {
         const messages = await runWith(makeToolItem(1, [call()]), { model: 'gemini-2.5-flash' });
 
         expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+      });
+
+      it('replays every visible slot in order when the text-only path takes a multi-slot turn', async () => {
+        const item = makeItem(1, {
+          structuredReplies: undefined,
+          replies: ['Let me search.', '<think>read results</think>', 'It is sunny.'],
+          promptMeta: { functionCalls: [call()] },
+        });
+
+        const messages = await runWith(item, { model: 'gemini-2.5-flash' });
+
+        expect(messages[1]).toEqual({ role: 'assistant', content: 'Let me search.\n\nIt is sunny.' });
+        expect(messages).toHaveLength(2);
       });
 
       // Positive control for the case above: a non-Gemini model (or no model at all) still gets
@@ -2220,6 +2356,18 @@ describe('Context Management Tests', () => {
       expect(messages.every(m => typeof m.content === 'string')).toBe(true);
     });
 
+    it("keeps a tool turn's final answer, not just its pre-tool preamble", async () => {
+      const items = [makeItem(1, { replies: ['Let me search.', '<think>read results</think>', 'It is sunny.'] })];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const messages = await fetchAgentConversationHistory(makeSession(), 20, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 1' },
+        { role: 'assistant', content: 'Let me search.\n\nIt is sunny.' },
+      ]);
+    });
+
     it('skips a prompt stopped before any reply, but keeps a stopped turn that streamed text', async () => {
       const items = [
         makeItem(3, { status: 'stopped', replies: [], reply: '' }),
@@ -2242,6 +2390,42 @@ describe('Context Management Tests', () => {
         db: { quests: { getMostRecentChatHistory } },
       });
       expect(messages).toEqual([]);
+      expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fetchAgentRecentGeneratedImages', () => {
+    it('returns legacy image keys and image job refs newest first, like the chat path', async () => {
+      const items = [
+        { id: '3', prompt: 'make it blue', generationJobs: [{ id: 'job-2', kind: 'image' }] },
+        { id: '2', prompt: 'a song', generationJobs: [{ id: 'music-1', kind: 'music' }] },
+        {
+          id: '1',
+          prompt: 'a fox',
+          images: ['fox.png', 'sheet.xlsx'],
+          generationJobs: [{ id: 'job-1', kind: 'image' }],
+        },
+      ];
+      const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 20, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+
+      expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 20);
+      expect(result.recentGeneratedImages).toEqual([{ key: 'fox.png', prompt: 'a fox' }]);
+      expect(result.recentImageJobs).toEqual([
+        { jobId: 'job-2', prompt: 'make it blue' },
+        { jobId: 'job-1', prompt: 'a fox' },
+      ]);
+    });
+
+    it('returns empty without querying when questCount <= 0', async () => {
+      const getMostRecentChatHistory = vi.fn();
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 0, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+      expect(result).toEqual({ recentGeneratedImages: [], recentImageJobs: [] });
       expect(getMostRecentChatHistory).not.toHaveBeenCalled();
     });
   });
@@ -2671,10 +2855,9 @@ describe('processFabFilesServer chunk retrieval', () => {
 
   const runRetrieval = async (chunks: ReturnType<typeof makeChunks>, maxTokens: number) => {
     const embeddingFactory = {
-      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
-      createEmbeddingService: () => ({
-        getModelInfo: () => ({ model: 'text-embedding-ada-002', contextWindow: 8192 }),
-        generateEmbedding: async () => [1, 0],
+      defaultModel: 'text-embedding-ada-002',
+      get: () => ({
+        embed: async () => ({ vectors: [[1, 0]] }),
       }),
     };
 
@@ -4532,15 +4715,39 @@ describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
     expect(content[1].type).toBe('tool_use');
   });
 
-  it('does not attach a block when the first visible slot is not the last', async () => {
+  it('attaches the block after the final slot of a multi-slot turn', async () => {
     const item = makeItem(1, {
       replies: ['partial answer before tool call', 'final answer after tool call'],
       suggestedChoices: { options },
     });
     const messages = await fetchWith(item, true);
-    // historyTextReply picks the FIRST non-<think> slot ('partial answer...'), which is not the
-    // last slot carrying visible text ('final answer...') - so no block is attached.
-    expect(messages[1]).toEqual({ role: 'assistant', content: 'partial answer before tool call' });
+    expect(messages[1]).toEqual({
+      role: 'assistant',
+      content: 'partial answer before tool call\n\nfinal answer after tool call' + formatChoicesBlock(options),
+    });
+  });
+
+  it('does not attach a block when the last visible slot opens with a thinking block', async () => {
+    const item = makeItem(1, {
+      replies: ['answer', '<think>more</think>trailing text'],
+      suggestedChoices: { options },
+    });
+    const messages = await fetchWith(item, true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'answer' });
+  });
+
+  it('attaches the block to the answer after the tool results, never to the preamble', async () => {
+    const item = makeItem(1, {
+      replies: ['Let me search.', 'final answer'],
+      suggestedChoices: { options },
+      promptMeta: { functionCalls: [{ id: 'toolu_1', name: 'web_search', parameters: {}, returnValue: 'ok' }] },
+    });
+    const messages = await fetchWith(item, true);
+    expect((messages[1].content as Array<{ type: string; text?: string }>)[0]).toEqual({
+      type: 'text',
+      text: 'Let me search.',
+    });
+    expect(messages[3]).toEqual({ role: 'assistant', content: 'final answer' + formatChoicesBlock(options) });
   });
 });
 

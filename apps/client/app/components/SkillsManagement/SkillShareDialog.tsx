@@ -94,10 +94,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
         setError('That user is already on the share list');
         return;
       }
-      setRows(prev => [
-        ...prev,
-        { userId: user.id, permissions: [Permission.read], label: user.email ?? user.name ?? user.id },
-      ]);
+      setRows(prev => [...prev, { userId: user.id, permissions: [Permission.read], label: trimmed }]);
       setEmail('');
     } catch {
       setError('Failed to look up that user. Try again.');

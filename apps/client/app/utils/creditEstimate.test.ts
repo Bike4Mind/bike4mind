@@ -199,6 +199,21 @@ describe('preflight affordability', () => {
     );
   });
 
+  it('prices a model that always thinks as sent: with no thinking field, whatever the stored toggle', () => {
+    const alwaysOn = {
+      ...SONNET_55,
+      id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
+      can_think: true,
+      thinkingStyle: 'legacy',
+      thinkingAlwaysOn: true,
+    } as ModelInfo;
+    const thinking = { enabled: true, budget_tokens: 32_000 };
+
+    expect(preflightAnswerCredits(alwaysOn, INPUT_TOKENS, 4_096, thinking)).toBe(
+      preflightAnswerCredits(alwaysOn, INPUT_TOKENS, 4_096)
+    );
+  });
+
   it('offers the cheapest model the balance can admit when the selected model cannot', () => {
     const balance = preflightAnswerCredits(GPT_MINI, INPUT_TOKENS, MAX_TOKENS)!;
     const offer = findAffordableModelOffer(

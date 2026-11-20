@@ -5,6 +5,7 @@ import type { ChatQueuedMessage } from '@shared/chat';
 import { CloseIcon, SkipAheadIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { queuedPreview } from './queuedMessages';
+import { AUTOMATIC_TAGS } from './relayRows';
 
 /**
  * What is waiting to be sent, above the composer.
@@ -62,7 +63,11 @@ export function QueuedMessageList({
             noWrap
             sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25, maxWidth: 160 }}
           >
-            {message.automatic ? 'Auto-fix' : message.relay ? `From ${message.relay.fromTitle}` : 'Queued'}
+            {message.automatic
+              ? AUTOMATIC_TAGS[message.automatic.kind]
+              : message.relay
+                ? `From ${message.relay.fromTitle}`
+                : 'Queued'}
           </Typography>
 
           <Typography

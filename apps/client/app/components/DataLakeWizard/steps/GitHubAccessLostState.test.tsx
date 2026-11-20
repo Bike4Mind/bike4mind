@@ -26,6 +26,7 @@ const accessLost = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnect
   lastSyncedAt: null,
   syncStale: false,
   fileCount: 3,
+  isLastInstallationBinding: true,
   disconnecting: false,
   disconnectStalled: false,
   fixAccessUrl: FIX_URL,

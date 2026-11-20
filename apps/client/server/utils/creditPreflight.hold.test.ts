@@ -13,7 +13,7 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: (...a: unknown[]) => mocks.reserve(...a),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -102,6 +102,12 @@ describe('holdPreflightCredits', () => {
     );
   });
 
+  it('hands a key that only joins the freeze subject through to the reservation', async () => {
+    await hold({ spendFreezeApiKey: { keyId: 'key-1' } });
+
+    expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeApiKey: { keyId: 'key-1' } }));
+  });
+
   it('settles the measured cost against the reservation and reports who was billed', async () => {
     const reservation = held({ ownerId: 'org1', ownerType: CreditHolderType.Organization });
     mocks.reserve.mockResolvedValue(reservation);
@@ -155,6 +161,21 @@ describe('holdPreflightCredits', () => {
         expect.anything()
       );
       expect(mocks.reservedSettle).not.toHaveBeenCalled();
+    });
+
+    it('records the authenticating API key on the direct charge', async () => {
+      const preflight = await holdPreflightCredits({
+        req: { user: user as never, logger: logger as never, apiKeyInfo: { keyId: 'key-1' } as never },
+        requiredCredits: 100,
+        featureLabel: 'text-to-speech',
+      });
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything()
+      );
     });
 
     it('logs the billing miss and resolves when the direct charge fails', async () => {

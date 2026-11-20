@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
 import {
   decideIterationConfidencePause,
+  DEFAULT_LOW_CONFIDENCE_COMPLETION,
   evaluateConfidenceGate,
+  evaluateLowConfidenceCompletion,
   formatConfidenceGateReason,
   isPausingLowConfidenceStreak,
   LOW_CONFIDENCE_STREAK_TO_PAUSE,
@@ -56,22 +58,56 @@ describe('evaluateConfidenceGate', () => {
     });
   });
 
+  it('does not flag a mixed iteration: one empty result beside a usable one', () => {
+    // The mean (0.5) would be below 0.6; the usable 0.7 result is what the gate decides on.
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.7)]))).toEqual({
+      iteration: 2,
+      confidence: 0.7,
+      belowThreshold: false,
+      pausable: true,
+      overridden: false,
+    });
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.3), observation(0.7)]))?.belowThreshold).toBe(
+      false
+    );
+  });
+
+  it('flags an iteration where every call that ran came back empty', () => {
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.3)]))).toEqual({
+      iteration: 2,
+      confidence: 0.3,
+      belowThreshold: true,
+      pausable: true,
+      overridden: false,
+    });
+  });
+
   it('counts a low-scored result that did not fail (e.g. text starting with "Error:")', () => {
-    const gate = evaluateConfidenceGate(input([observation(0.1), observation(0.7)]));
-    expect(gate?.confidence).toBeCloseTo(0.4);
+    const gate = evaluateConfidenceGate(input([observation(0.1), observation(0.3)]));
+    expect(gate?.confidence).toBe(0.3);
     expect(gate?.belowThreshold).toBe(true);
   });
 
   it("falls back to the agent's own confidence when the steps do not reproduce it", () => {
-    const steps = [failed(), observation(0.7)];
+    const steps = [failed(), observation(0.3)];
     expect(evaluateConfidenceGate(input(steps, { gate: { iteration: 2, confidence: 0.25 } }))).toEqual({
       iteration: 2,
-      confidence: 0.25,
+      confidence: 0.3,
       belowThreshold: true,
       pausable: true,
       overridden: false,
     });
     expect(evaluateConfidenceGate(input([], { gate: { iteration: 2, confidence: 0.25 } }))?.confidence).toBe(0.25);
+    expect(evaluateConfidenceGate(input([failed()], { gate: { iteration: 2, confidence: 0.25 } }))?.confidence).toBe(
+      0.25
+    );
+  });
+
+  it('trusts a visible usable result even when the steps do not cover the whole iteration', () => {
+    const steps = [failed(), observation(0.7)];
+    expect(evaluateConfidenceGate(input(steps, { gate: { iteration: 2, confidence: 0.25 } }))?.belowThreshold).toBe(
+      false
+    );
   });
 
   it('evaluates but cannot pause a completed or iteration-capped run', () => {
@@ -194,6 +230,26 @@ describe('decideIterationConfidencePause', () => {
       });
     });
 
+    it('replaces mixed usable evidence and excludes the scripted score from telemetry', async () => {
+      const record = vi.fn(async () => LOW_CONFIDENCE_STREAK_TO_PAUSE);
+      const gate = evaluateConfidenceGate(
+        input([observation(0.3), observation(0.7)], { confidenceOverrides: [0.95, 0.1] })
+      );
+
+      expect(gate).toEqual({
+        iteration: 2,
+        confidence: 0.1,
+        belowThreshold: true,
+        pausable: true,
+        overridden: true,
+      });
+      expect(await decideIterationConfidencePause(gate, record)).toEqual({
+        pause: true,
+        lowConfidenceStreak: LOW_CONFIDENCE_STREAK_TO_PAUSE,
+      });
+      expect(record).toHaveBeenCalledWith(0.1, { belowThreshold: true, recordTelemetry: false });
+    });
+
     it('can force a pass over a low real score', () => {
       const gate = evaluateConfidenceGate(input([observation(0.1)], { confidenceOverrides: [0, 0.9] }));
       expect(gate).toMatchObject({ confidence: 0.9, belowThreshold: false, overridden: true });
@@ -248,5 +304,33 @@ describe('decideIterationConfidencePause', () => {
       }
       expect(pauses).toEqual([...Array(script.length - 1).fill(false), true]);
     });
+  });
+});
+
+describe('evaluateLowConfidenceCompletion', () => {
+  const low = { lowConfidenceStreak: 1, lastConfidence: 0.42, threshold: 0.6 };
+
+  it('defaults to annotate', () => {
+    expect(DEFAULT_LOW_CONFIDENCE_COMPLETION).toBe('annotate');
+  });
+
+  it.each(['annotate', 'block'] as const)('flags the answer in %s mode with the last confidence and a reason', mode => {
+    expect(evaluateLowConfidenceCompletion({ mode, ...low })).toEqual({
+      mode,
+      confidence: 0.42,
+      reason: 'Answered after an iteration below the 60% confidence threshold (latest 42%)',
+    });
+  });
+
+  it('returns null in off mode', () => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'off', ...low })).toBeNull();
+  });
+
+  it.each([undefined, 0])('returns null when the streak is %s', lowConfidenceStreak => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'annotate', ...low, lowConfidenceStreak })).toBeNull();
+  });
+
+  it('returns null when no confidence was ever recorded', () => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'annotate', ...low, lastConfidence: undefined })).toBeNull();
   });
 });

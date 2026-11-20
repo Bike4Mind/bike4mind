@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Button,
   Card,
-  Sheet,
   Tooltip,
   Stack,
   Typography,
@@ -13,8 +12,6 @@ import {
   Badge,
   Select,
   Option,
-  Input,
-  FormControl,
 } from '@mui/joy';
 import { IModal, IModalDocument } from '@bike4mind/common';
 
@@ -28,8 +25,6 @@ import PowerOffIcon from '@mui/icons-material/PowerOff';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import PriorityHighIcon from '@mui/icons-material/PriorityHigh';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import SearchIcon from '@mui/icons-material/Search';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FirstPageIcon from '@mui/icons-material/FirstPage';
@@ -51,6 +46,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 
 import EditModalNew from './AdminModalTabNew';
+import { AdminPageHeader, AdminSearchInput, EmptyState } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 interface ModalActionButtonsProps {
   modal: IModalDocument;
@@ -287,85 +284,53 @@ const ModalsAdminTab: React.FC = () => {
     setIsConfirmDeleteOpen(true);
   };
 
-  return (
-    <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        spacing={2}
-        sx={{ mb: 3 }}
-      >
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h2">Modals Management</Typography>
-          <ContextHelpButton helpId="admin/modals" tooltipText="Modals Help" />
-        </Stack>
-        <Button
-          startDecorator={<AddIcon />}
-          onClick={() => {
-            setCurrentModal(null);
-            setIsEditModalOpen(true);
-          }}
-          color="primary"
-          variant="solid"
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
-        >
-          Create New Modal
-        </Button>
-      </Stack>
+  const openCreateModal = () => {
+    setCurrentModal(null);
+    setIsEditModalOpen(true);
+  };
 
-      {/* Search Bar */}
-      <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
-        <FormControl sx={{ flex: 1 }}>
-          <Input
-            placeholder="Search modals by title, message, description, or tags..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            startDecorator={<SearchIcon />}
-            sx={{ width: '100%' }}
-          />
-        </FormControl>
+  return (
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-modals-tab">
+      <AdminPageHeader
+        title="Modals"
+        count={modals.data?.length}
+        description="Modals and banners shown to users in the app. What's New announcements live in their own tab."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/modals" tooltipText="Modals help" />
+            <Button
+              size="sm"
+              startDecorator={<AddIcon />}
+              onClick={openCreateModal}
+              data-testid="admin-modals-create-btn"
+            >
+              Create modal
+            </Button>
+          </>
+        }
+      />
+
+      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+        <AdminSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          label="Search modals"
+          data-testid="admin-modals-search-input"
+        />
       </Stack>
 
       {modals.isFetching && <LinearProgress />}
 
       {(!modals.data || modals.data.length === 0) && !modals.isFetching ? (
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            py: 8,
-            px: 2,
-            bgcolor: 'background.level1',
-            borderRadius: 'lg',
-            border: '2px dashed',
-            borderColor: 'divider',
-          }}
-        >
-          <AutoAwesomeIcon sx={{ fontSize: 64, color: 'primary.300', mb: 2 }} />
-          <Typography level="h3" sx={{ mb: 1 }}>
-            No Modals Yet
-          </Typography>
-          <Typography level="body-md" sx={{ mb: 3, color: 'text.secondary', textAlign: 'center' }}>
-            Create your first modal or banner to engage with your users
-          </Typography>
-          <Button
-            size="lg"
-            startDecorator={<AddIcon />}
-            onClick={() => {
-              setCurrentModal(null);
-              setIsEditModalOpen(true);
-            }}
-            sx={{
-              background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-              boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)',
-            }}
-          >
-            Create Your First Modal
-          </Button>
-        </Box>
+        <EmptyState
+          title="No modals yet"
+          description="Create a modal or banner to show users in the app."
+          action={
+            <Button size="sm" variant="outlined" startDecorator={<AddIcon />} onClick={openCreateModal}>
+              Create modal
+            </Button>
+          }
+        />
       ) : isMobile ? (
         <Stack spacing={1}>
           {paginatedModals.map(modal => (
@@ -711,7 +676,7 @@ const ModalsAdminTab: React.FC = () => {
           spacing={1}
           alignItems={{ xs: 'stretch', sm: 'center' }}
           justifyContent="space-between"
-          sx={{ mt: 2, px: 1 }}
+          sx={{ px: 1 }}
         >
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
             <Typography level="body-sm">Rows per page:</Typography>
@@ -813,7 +778,7 @@ const ModalsAdminTab: React.FC = () => {
           isPreview={true}
         />
       )}
-    </Sheet>
+    </Stack>
   );
 };
 export default ModalsAdminTab;

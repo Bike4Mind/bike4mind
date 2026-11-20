@@ -3,14 +3,14 @@ import type { SQSEvent } from 'aws-lambda';
 import { questRepository, sessionRepository, userApiKeyRepository, TERMINAL_QUEST_STATUSES } from '@bike4mind/database';
 import { ApiKeyStatus, GENERATION_CALLBACK_EVENT_TYPE, type IQuestCallback } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   getDeliveryAttempt,
   isFinalDeliveryAttempt,
 } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@bike4mind/server-utils/generationCallback/messages';
-import { toQuestPollBody } from '@server/utils/questPollBody';
+import { toQuestPollBody } from '@bike4mind/server-utils/utils/questPollBody';
 import { assertUrlAllowed, fetchPinned, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 

@@ -10,7 +10,7 @@ import {
 import { KnowledgeType, Permission } from '@bike4mind/common';
 import { FabFile, PublishedArtifact, User } from '@bike4mind/database';
 import { Session } from '@bike4mind/database/auth';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -46,7 +46,7 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: () => Promise.resolve(0) }));
@@ -55,9 +55,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getPublishedArtifactsStorage: () => ({ download: vi.fn() }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/services/publish/invalidatePublishCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/services/publish/invalidatePublishCdn')>()),
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/publish/invalidatePublishCdn')>()),
   invalidatePublishCdn: vi.fn().mockResolvedValue(undefined),
   invalidatePublishCdnMany: vi.fn().mockResolvedValue(undefined),
 }));

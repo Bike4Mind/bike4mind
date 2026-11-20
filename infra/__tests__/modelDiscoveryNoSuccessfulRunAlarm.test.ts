@@ -26,8 +26,24 @@ const discoveryCron = cronSource.match(
 const checkerErrorAlarm = alarmsSource.match(
   /new aws\.cloudwatch\.MetricAlarm\('modelDiscoveryStalenessCheckErrors', \{[\s\S]*?\n {4}\}\);/
 )?.[0];
+const unavailableAlarm = alarmsSource.match(
+  /new aws\.cloudwatch\.MetricAlarm\('unavailableModelReferences', \{[\s\S]*?\n {4}\}\);/
+)?.[0];
 
 describe('model discovery no-successful-run alarm', () => {
+  it('audits pins on the independent watchdog and alarms on unavailable references and date changes', () => {
+    expect(checkerSource).toMatch(/await auditModelReferences\(stage\)/);
+    expect(unavailableAlarm).toMatch(/metricName: 'UnavailableModelReferences'/);
+    expect(unavailableAlarm).toMatch(/dimensions: modelDiscoveryDimensions/);
+    expect(unavailableAlarm).toMatch(/treatMissingData: 'breaching'/);
+    expect(unavailableAlarm).toMatch(/evaluationPeriods: 2/);
+    expect(unavailableAlarm).toMatch(/datapointsToAlarm: 2/);
+    expect(alarmsSource).not.toMatch(/'LifecycleSuggestions'/);
+    expect(unavailableAlarm).toMatch(/alarmActions: \[dlqAlarmTopic\.arn\]/);
+    expect(alarmsSource).toMatch(/\['ModelsDeprecated', 'LifecycleDateChanges'\]/);
+    expect(unavailableAlarm).toMatch(/name: .*unavailable-model-references/);
+  });
+
   it('runs the staleness check independently wherever discovery runs', () => {
     expect(discoveryCron).toBeDefined();
     expect(stalenessCron).toMatch(/schedule: 'rate\(15 minutes\)'/);

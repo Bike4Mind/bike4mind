@@ -86,6 +86,25 @@ All API errors follow a standardized format:
 }
 ```
 
+### Account Suspended
+
+When an administrator suspends the account that owns your API key or session, every authenticated request returns `403` with `errorCode: "account_suspended"`. Suspension also disables the account's API keys, but a request made with one of them still gets this `403` rather than a `401`, so you can tell a suspension from a wrong key. Retrying or rotating the key does not help. If the account is reinstated, its old keys stay disabled; create new ones.
+
+```json
+{
+  "error": "This account is suspended for automated or scripted misuse of the service, which our Usage Policy does not allow. If you believe this is a mistake, you can appeal at https://example.com/support.",
+  "errorCode": "account_suspended",
+  "suspension": {
+    "reason_category": "automated_misuse",
+    "terms_url": "https://example.com/usage-policy",
+    "appeal_url": "https://example.com/support"
+  },
+  "request_id": "req_123"
+}
+```
+
+`reason_category` is one of `multiple_accounts`, `automated_misuse`, `payment_fraud`, `prohibited_content` or `terms_violation`. New categories may be added, so treat an unknown value like `terms_violation`. `terms_url` and `appeal_url` are absent on self-hosted deployments. Branch on `errorCode`, not on the message text.
+
 ### Organization Access Denied
 ```json
 {
@@ -241,19 +260,9 @@ All API errors follow a standardized format:
 }
 ```
 
-### Credit Insufficient
-```json
-{
-  "error": {
-    "code": "INSUFFICIENT_CREDITS",
-    "message": "Not enough credits to perform this operation",
-    "details": {
-      "required": 100,
-      "available": 25
-    }
-  }
-}
-```
+### Insufficient Credits
+
+Out-of-credit failures return 422 with `errorCode: "insufficient_credits"`, or arrive as an in-band `error` event on an open stream. See [Completions API errors](./completions/errors.md).
 
 ## Server Errors (500)
 
@@ -298,91 +307,13 @@ X-RateLimit-Retry-After: 60
 
 ## Error Handling Best Practices
 
-### Client-Side Handling
+- Branch on the HTTP status and the error code (`errorCode` on completions endpoints, `error.code` on platform endpoints), never on the message text. Parse defensively in case the body is not JSON.
+- On a 429, wait the `Retry-After` seconds. Retry 500 and 503 with exponential backoff. Never retry 400, 401, 403, 413 or 422: the same request fails again.
+- Refresh an expired token (`TOKEN_EXPIRED`) once, then replay the request.
+- On a 422 with `errorCode: "insufficient_credits"`, send the user to billing instead of retrying.
+- Log the status, code and request id, and leave out tokens and request bodies.
 
-```typescript
-async function handleApiCall(endpoint: string, options: RequestInit) {
-  try {
-    const response = await fetch(endpoint, options);
-    
-    if (!response.ok) {
-      const error = await response.json();
-      
-      switch (error.error.code) {
-        case 'TOKEN_EXPIRED':
-          // Refresh token and retry
-          await refreshToken();
-          return handleApiCall(endpoint, options);
-          
-        case 'RATE_LIMIT_EXCEEDED':
-          // Wait and retry
-          const retryAfter = error.details.retryAfter || 60;
-          setTimeout(() => handleApiCall(endpoint, options), retryAfter * 1000);
-          return;
-          
-        case 'INSUFFICIENT_CREDITS':
-          // Redirect to billing
-          window.location.href = '/billing';
-          return;
-          
-        default:
-          // Show error to user
-          showErrorMessage(error.error.message);
-          throw new Error(error.error.message);
-      }
-    }
-    
-    return response.json();
-  } catch (error) {
-    console.error('API call failed:', error);
-    throw error;
-  }
-}
-```
-
-### Retry Logic
-
-```typescript
-async function apiCallWithRetry(
-  endpoint: string, 
-  options: RequestInit, 
-  maxRetries: number = 3
-) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await handleApiCall(endpoint, options);
-    } catch (error) {
-      if (attempt === maxRetries) throw error;
-      
-      // Exponential backoff
-      const delay = Math.pow(2, attempt) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-```
-
-### Error Logging
-
-```typescript
-function logError(error: any, context: any) {
-  const errorData = {
-    message: error.error?.message || error.message,
-    code: error.error?.code,
-    details: error.error?.details,
-    context,
-    timestamp: new Date().toISOString(),
-    userAgent: navigator.userAgent,
-    url: window.location.href
-  };
-  
-  // Send to logging service
-  console.error('API Error:', errorData);
-  
-  // Optional: Send to error tracking service
-  // errorTracker.captureError(errorData);
-}
-```
+The retry table and the in-stream error codes are in [Completions errors](./completions/errors.md#retry-guidance). Ready-made retry helpers are in the [JavaScript](./completions/examples/javascript.md#retry-helper) and [Python](./completions/examples/python.md#retry-helper) examples.
 
 ## Troubleshooting Guide
 
@@ -394,6 +325,7 @@ function logError(error: any, context: any) {
 - Ensure token is properly formatted: `Bearer <token>`
 
 **403 Forbidden**
+- A 403 with `errorCode: "account_suspended"` means the account is suspended; see [Account Suspended](#account-suspended). On the completions endpoint, a 403 without `required_scopes` or an `errorCode` may mean the account is under a payment dispute (contact support), or a JWT caller needs to enroll in MFA in the web app. Changing key scopes does not resolve these account restrictions
 - Verify user has required permissions
 - Check organization membership
 - Confirm subscription tier supports the feature

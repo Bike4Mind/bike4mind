@@ -63,7 +63,7 @@ describe('buildToolPrompt conversation context', () => {
     const failure = new Error('session store unavailable');
     vi.mocked(extractAndSaveEntitiesFromUserMessage).mockRejectedValue(failure);
 
-    await expect(build()).resolves.toEqual({ guidance: null, context: null });
+    await expect(build()).resolves.toEqual({ guidance: null, deferredGuidance: [], context: null });
     expect(logger.debug).toHaveBeenCalledWith('[ConversationContext] Failed to add context:', failure);
   });
 

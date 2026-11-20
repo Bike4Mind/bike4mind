@@ -5,7 +5,7 @@ const mockCreateUser = vi.fn();
 const mockSendOTC = vi.fn();
 const mockStoreNonce = vi.fn();
 const mockEmitSignupFunnelEvents = vi.fn();
-const mockRecordSyntheticIdentity = vi.fn();
+const mockRecordAccountLane = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   userService: {
@@ -37,9 +37,10 @@ const mockRequireStepUp = vi.fn();
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...args: unknown[]) => mockRequireStepUp(...args) }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (handler: (...args: unknown[]) => unknown) => handler,
-  }),
+  baseApi: () => {
+    const chain = { use: () => chain, post: (handler: (...args: unknown[]) => unknown) => handler };
+    return chain;
+  },
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
@@ -51,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn() } },
 }));
 
@@ -65,13 +66,13 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => mockEmitSignupFunnelEvents(...args),
-  recordSyntheticIdentity: (...args: unknown[]) => mockRecordSyntheticIdentity(...args),
+  recordAccountLane: (...args: unknown[]) => mockRecordAccountLane(...args),
 }));
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => {
     insideTransactionAtAudit = inTransaction;
     return mockRecordAdminAction(...args);
@@ -99,7 +100,7 @@ describe('admin/create-user', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendOTC.mockResolvedValue({ nonce: null });
-    mockRecordSyntheticIdentity.mockResolvedValue(false);
+    mockRecordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: false });
     mockRecordAdminAction.mockResolvedValue(null);
     insideTransactionAtAudit = undefined;
   });
@@ -214,13 +215,26 @@ describe('admin/create-user', () => {
   it('passes a synthetic classification into the signup emitter', async () => {
     const user = { id: 'u-synthetic', email: 'seed@test.example', username: 'persona-seed', currentCredits: 50 };
     mockCreateUser.mockResolvedValue(user);
-    mockRecordSyntheticIdentity.mockResolvedValue(true);
+    mockRecordAccountLane.mockResolvedValue({ isSynthetic: true, isInternal: false });
 
     await runHandler(makeReq({ username: 'persona-seed', email: 'seed@test.example', name: 'Seed' }), makeRes());
 
-    expect(mockRecordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(mockRecordAccountLane).toHaveBeenCalledWith(user);
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'u-synthetic', isSynthetic: true }) })
+    );
+  });
+
+  it('passes an internal classification into the signup emitter', async () => {
+    const user = { id: 'u-staff', email: 'a@staff.example', username: 'staffer', currentCredits: 50 };
+    mockCreateUser.mockResolvedValue(user);
+    mockRecordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: true });
+
+    await runHandler(makeReq({ username: 'staffer', email: 'a@staff.example', name: 'Staff' }), makeRes());
+
+    expect(mockRecordAccountLane).toHaveBeenCalledWith(user);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-staff', isInternal: true }) })
     );
   });
 
@@ -281,6 +295,32 @@ describe('admin/create-user', () => {
       await expect(runHandler(req, makeRes())).rejects.toThrow(/signed-in session/);
       expect(mockRequireStepUp).not.toHaveBeenCalled();
       expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a settings:manage delegate creating an admin account before any write', async () => {
+      const req = {
+        ...makeReq({ ...base, isAdmin: true }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow('Only full administrators can grant full admin access');
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses starting credits from a delegate without credits:adjust before any write', async () => {
+      const req = {
+        ...makeReq({ ...base, initialCredits: 50 }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow('Missing permission: credits:adjust');
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('lets a settings:manage delegate create a non-admin account', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'u4', email: 'new@example.com', username: 'new' });
+      const req = { ...makeReq(base), user: { isAdmin: false, adminPermissions: ['settings:manage'] } };
+      await runHandler(req, makeRes());
+      expect(mockCreateUser).toHaveBeenCalledOnce();
     });
 
     it.each([

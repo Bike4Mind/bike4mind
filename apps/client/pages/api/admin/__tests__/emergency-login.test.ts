@@ -25,7 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_q: any, _s: any, next: any) => next() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_q: any, _s: any, next: any) => next(),
+}));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_q: any, _s: any, next: any) => next(),
 }));
@@ -39,9 +41,9 @@ const mockResolveSecondFactor = vi.fn();
 vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 const mockRecordForActor = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionForActor: (...a: unknown[]) => mockRecordForActor(...a),
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
   toUserActor: (user: { id: string }, scope: string) => ({ kind: 'user', scope, userId: user.id }),
@@ -173,6 +175,15 @@ describe('POST /api/admin/emergency-login', () => {
       expect(outcome).toBeInstanceOf(UnauthorizedError);
       expect(mockRecordForActor).not.toHaveBeenCalled();
     });
+  });
+
+  it('refuses a delegate even with every permission and an enrolled second factor', async () => {
+    const { ADMIN_PERMISSIONS } = await import('@bike4mind/common');
+    mockRefs.userDoc = { ...mockRefs.userDoc, isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] };
+    const { outcome, res } = await callHandler();
+    expect(outcome).toBeInstanceOf(UnauthorizedError);
+    expect(res._getData()).toBe('');
+    expect(mockResolveSecondFactor).not.toHaveBeenCalled();
   });
 
   it('refuses an admin with no second factor enrolled, generically, without a session or challenge', async () => {

@@ -60,8 +60,8 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
         ? next()
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
@@ -69,11 +69,13 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 // Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
 // context bypasses lake access and must never reach `assertLakeAccess` on this member-scoped route.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
   toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));
-vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
+vi.mock('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope', () => ({
+  resolveRetrievalLakeScope: mockResolveScope,
+}));
 vi.mock('@server/dataLakes/runLakeSemanticSearch', () => ({ runLakeSemanticSearch: mockRunSearch }));
 vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
   resolveDefaultEmbeddingModel: async () => 'text-embedding-3-small',

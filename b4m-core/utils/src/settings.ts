@@ -1,7 +1,9 @@
 import {
+  AdminAiStoredConfigSchema,
   IAdminSettings,
   IAdminSettingsRepository,
   IScopedSettingsRepository,
+  isEnforceCreditsLocked,
   ScopeRef,
   SettingKey,
   settingsMap,
@@ -87,6 +89,8 @@ export function getSettingsValue<K extends SettingKey>(
   settings: Record<string, string>,
   defaultValue?: z.output<(typeof settingsMap)[K]['schema']>
 ): z.output<(typeof settingsMap)[K]['schema']> | undefined {
+  if (key === 'enforceCredits' && isEnforceCreditsLocked()) return true as z.output<(typeof settingsMap)[K]['schema']>;
+
   const settingConfig = resolveSettingDefinition(key);
   if (!settingConfig) {
     // Log warning but don't break existing code
@@ -95,7 +99,7 @@ export function getSettingsValue<K extends SettingKey>(
   }
 
   const rawValue = settings[key];
-  const parsed = settingConfig.schema.safeParse(rawValue);
+  const parsed = (key === 'adminAiConfig' ? AdminAiStoredConfigSchema : settingConfig.schema).safeParse(rawValue);
 
   if (parsed.success) {
     // A cleared string setting is stored as '' which passes `z.string()`, so without this a blank

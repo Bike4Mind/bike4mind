@@ -2,7 +2,7 @@ import { Typography } from '@mui/joy';
 
 /**
  * What a Drive connection can read, shown next to every control that leads to Google's consent
- * screen. The grant is `drive.readonly` (server/integrations/google/drive/common.ts), which covers
+ * screen. The grant is `drive.readonly` (packages/server-utils/src/integrations/google/drive/common.ts), which covers
  * the connecting account's whole Drive: `drive.file` would only cover items picked in the Picker,
  * and picking a folder does not grant the files inside it. Ingest itself is confined to the folder
  * (the full walk starts there and the changes feed is filtered by isUnderRoot), so the honest

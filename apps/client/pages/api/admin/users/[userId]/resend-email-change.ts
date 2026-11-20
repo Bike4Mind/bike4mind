@@ -1,18 +1,13 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, ConflictError, assertCanActOnAdminTarget } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { BadRequestError } from '@bike4mind/utils';
-import { EmailEvents } from '@server/utils/eventBus';
-import {
-  generateVerificationLink,
-  getLogoUrl,
-  buildEmailLogoImg,
-  escapeHtml,
-} from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError, hashEmailToken } from '@bike4mind/utils';
+import { randomUUID } from 'crypto';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { buildEmailChangeMailer, type EmailChangeMessage } from '@server/users/emailChangeMailer';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { userService } from '@bike4mind/services';
 
 interface RequestQuery {
@@ -20,15 +15,14 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to resend email change verification for a specific user
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
@@ -41,18 +35,27 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (!user) {
         throw new BadRequestError('User not found');
       }
+      assertCanActOnAdminTarget(req.user, user, 'resend an email change to');
 
       // Check if user has pending email change
       if (!user.pendingEmail || !user.pendingEmailToken) {
         throw new BadRequestError('No pending email change found for this user');
       }
 
-      // Auto-cancel if token is expired
-      if (user.pendingEmailExpires && new Date(user.pendingEmailExpires) < new Date()) {
+      const now = new Date();
+      const expiresAt = user.pendingEmailExpires
+        ? new Date(user.pendingEmailExpires)
+        : user.pendingEmailSentAt
+          ? new Date(new Date(user.pendingEmailSentAt).getTime() + userService.EMAIL_VERIFICATION_TOKEN_EXPIRY)
+          : null;
+      if (!expiresAt) throw new BadRequestError('Pending email change has no issue date');
+
+      // Auto-cancel if token is expired.
+      if (expiresAt <= now) {
         // Store the email addresses before cancellation for logging
         const oldEmail = user.email;
         const expiredPendingEmail = user.pendingEmail;
-        const expiredAt = new Date(user.pendingEmailExpires);
+        const expiredAt = expiresAt;
 
         // Cancel the email change
         await userService.cancelEmailChange({ userId: user.id }, { db: { users: userRepository } });
@@ -77,76 +80,21 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         );
       }
 
-      // Resend the email change verification email
-      const brand = process.env.APP_NAME || '';
-      const logoUrl = getLogoUrl();
-      const verificationLink = `${generateVerificationLink(user.pendingEmailToken).replace('/verify-email', '/verify-change')}`;
+      // Only a hash of the token is stored, so a resend issues a fresh token (keeping the original
+      // expiry); the link in any earlier email stops working.
+      const token = randomUUID();
+      const rotated = await userRepository.rotatePendingEmailToken(user, hashEmailToken(token), expiresAt, now);
+      if (!rotated) throw new ConflictError('The pending email change was updated. Reload before resending.');
 
-      const emailBody = `
-      <!DOCTYPE html>
-        <html>
-          <head>
-            <style>
-              body {
-                font-family: Arial, sans-serif;
-                line-height: 1.5;
-                color: #333333;
-              }
-              .content {
-                margin: 20px;
-              }
-              .logo {
-                display: block;
-                margin-bottom: 20px;
-              }
-              a {
-                color: #1a82e2;
-              }
-              .button {
-                display: inline-block;
-                padding: 12px 24px;
-                background-color: #1a82e2;
-                color: #ffffff;
-                text-decoration: none;
-                border-radius: 4px;
-                margin: 20px 0;
-              }
-              .admin-note {
-                background-color: #e3f2fd;
-                border-left: 4px solid #2196f3;
-                padding: 12px;
-                margin: 20px 0;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="content">
-              ${buildEmailLogoImg(brand, logoUrl)}
-              <h2>Verify Your New Email Address</h2>
-              <p>Hello ${escapeHtml(user.username)},</p>
-              <div class="admin-note">
-                <strong>Note:</strong> An administrator has resent your email change verification link.
-              </div>
-              <p>You requested to change your email address from <strong>${escapeHtml(user.email ?? '')}</strong> to <strong>${escapeHtml(user.pendingEmail)}</strong>.</p>
-              <p>Please verify your new email address by clicking the button below:</p>
-              <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Verify New Email Address</a></p>
-              <p>Or copy and paste this link into your browser:</p>
-              <p><a href="${verificationLink}">${verificationLink}</a></p>
-              <p>This link will expire in 24 hours.</p>
-              <p>If you did not request this email change, please contact support immediately.</p>
-            </div>
-          </body>
-        </html>
-    `;
-
-      await EmailEvents.Send.publish({
-        to: user.pendingEmail,
-        subject: 'Verify Your New Email Address',
-        body: emailBody,
-      });
-
-      // Update the resent timestamp
-      await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
+      const outbox: EmailChangeMessage[] = [];
+      await buildEmailChangeMailer(outbox, { adminNote: 'resent' }).sendEmailChangeVerification(
+        user,
+        user.pendingEmail,
+        token
+      );
+      for (const email of outbox) {
+        await EmailEvents.Send.publish(email);
+      }
 
       // Log admin action
       await recordAdminActionFromRequest(req, {

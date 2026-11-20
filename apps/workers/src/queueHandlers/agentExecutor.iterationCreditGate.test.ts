@@ -5,10 +5,15 @@ import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import { nextIterationCredits } from './agentExecutor.billing';
 import {
+  ACCOUNT_CHECK_FAILED_MESSAGE,
+  createSubagentAccountCheck,
+  latchedAccountDenial,
   aggregationWakeStartIteration,
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
+  stopSpendFrozenIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 
@@ -39,6 +44,7 @@ function args(overrides: Record<string, unknown> = {}) {
     modelInfo: model,
     lastInputTokens: 0,
     readBalance: vi.fn().mockResolvedValue(required()),
+    checkSpendCap: vi.fn().mockResolvedValue(null),
     snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' as string | undefined }),
     ...overrides,
   };
@@ -98,6 +104,41 @@ describe('stopUnfundedIteration', () => {
     await expect(stopUnfundedIteration(args({ lastInputTokens: 100_000, readBalance }), deps)).resolves.toBe(true);
   });
 
+  it('stops a funded iteration that would take a new account over its spend cap, before the model call', async () => {
+    const deps = makeDeps();
+    const capMessage = 'New accounts can spend up to 10,000 credits per hour; this resets at 12:11 UTC.';
+    const checkSpendCap = vi.fn().mockResolvedValue(capMessage);
+
+    await expect(
+      stopUnfundedIteration(
+        args({ lastInputTokens: 5_000, readBalance: vi.fn().mockResolvedValue(required(5_000)), checkSpendCap }),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(checkSpendCap).toHaveBeenCalledWith(required(5_000));
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'insufficient_credits',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith(
+      'exec-1',
+      `Stopped: ${capMessage} Partial response:\n\npartial answer`
+    );
+  });
+
+  it('does not read the spend cap when the balance already stops the run', async () => {
+    const deps = makeDeps();
+    const checkSpendCap = vi.fn();
+
+    await expect(
+      stopUnfundedIteration(args({ readBalance: vi.fn().mockResolvedValue(0), checkSpendCap }), deps)
+    ).resolves.toBe(true);
+    expect(checkSpendCap).not.toHaveBeenCalled();
+  });
+
   it('stops with the plain message when the run produced no partial answer', async () => {
     const deps = makeDeps();
     const gateArgs = args({ readBalance: vi.fn().mockResolvedValue(0) });
@@ -106,6 +147,96 @@ describe('stopUnfundedIteration', () => {
     await expect(stopUnfundedIteration(gateArgs, deps)).resolves.toBe(true);
 
     expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Stopped: out of credits.');
+  });
+});
+
+describe('stopBlockedAccountIteration', () => {
+  const denial = 'Your account is on hold pending a payment review. Please contact support.';
+  const gateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run whose account was blocked since it was admitted, before the next iteration', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopBlockedAccountIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'account_blocked',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an active account run, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopBlockedAccountIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('stopSpendFrozenIteration', () => {
+  const denial = 'Spending is paused for this account. Contact support.';
+  const gateArgs = (readFreezeDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readFreezeDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run frozen since it was admitted, terminally and with the spend_frozen reason', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'spend_frozen',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an unfrozen run continue, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopSpendFrozenIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed freeze read to the caller instead of stopping the run itself', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => {
+          throw new Error('connection reset');
+        }),
+        deps
+      )
+    ).rejects.toThrow('connection reset');
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 });
 
@@ -177,6 +308,32 @@ describe('processExecution iteration-gate wiring', () => {
     expect(loopSource).toMatch(/if \(stopped\) return;/);
   });
 
+  it('re-reads the account state before every iteration, ahead of the credit gate', () => {
+    const accountGate = loopSource.indexOf('const blocked = await stopBlockedAccountIteration(');
+    expect(accountGate).toBeGreaterThanOrEqual(0);
+    expect(accountGate).toBeLessThan(loopSource.indexOf('const gateThisIteration = shouldGateIteration({'));
+    expect(loopSource).toMatch(
+      /readAccessDenial: latchedAccountDenial\(\s*\(\) => inProcessAccountDenial,\s*\(\) => readUserAccessDenial\(\(user as IUserDocument\)\.id\)\s*\),/
+    );
+    expect(loopSource).toMatch(/if \(blocked\) return;/);
+  });
+
+  it('refuses a frozen run at start, ahead of the credit pre-flight, with the spend_frozen reason', () => {
+    const start = source.indexOf('const spendFreezeDenial = await readSpendFreezeDenial();');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(start).toBeLessThan(source.indexOf('// Pre-flight credit check.'));
+    expect(source.slice(start, start + 450)).toMatch(
+      /markFailed\(executionId, \{ message: spendFreezeDenial \}\);\s+await sendWs\('failed', \{ executionId, reason: SPEND_FROZEN_STOP_REASON \}\);\s+return;/
+    );
+  });
+
+  it('re-reads the spend freeze before every iteration, ahead of the account and credit gates', () => {
+    const freezeGate = loopSource.indexOf('const frozen = await stopSpendFrozenIteration(');
+    expect(freezeGate).toBeGreaterThanOrEqual(0);
+    expect(freezeGate).toBeLessThan(loopSource.indexOf('const blocked = await stopBlockedAccountIteration('));
+    expect(loopSource).toMatch(/if \(frozen\) return;/);
+  });
+
   it('grows the next estimate from the iteration that just ran', () => {
     expect(loopSource).toContain(
       'lastInputTokens = lastRequestInputTokens(iterationResult.checkpoint.turnUsage) || lastInputTokens;'
@@ -200,6 +357,26 @@ describe('processExecution iteration-gate wiring', () => {
     expect(reasonCall![1]).toContain('modelAccessOk: modelAccess.ok,');
     expect(reasonCall![1]).toContain('hasModel: Boolean(modelInfo),');
     expect(reasonCall![1]).toContain('isRunnable: modelRunnable,');
+  });
+});
+
+describe('processExecution billing wiring', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('charges iterations at the requested model only on a substituted run', () => {
+    const call = source.match(/await billIteration\(\{([\s\S]*?)\n {6}\}\);/);
+    expect(call).not.toBeNull();
+    expect(call![1]).toContain('modelInfo: resolvedModelInfo,');
+    expect(call![1]).toContain('chargedModelInfo: shadowModelInfo ? modelInfo : undefined,');
+  });
+});
+
+describe('processExecution thinking wiring', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('gates thinking on the model the run actually uses, not the requested one', () => {
+    expect(source).toContain('runReasoningShortfall(execution, runModelInfo, isNewExecution)');
+    expect(source).toContain('...buildReActAgentRuntimeConfig(execution, runModelInfo),');
   });
 });
 
@@ -241,5 +418,98 @@ describe('aggregation model configuration failures', () => {
         modelAccessOk: false,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('createSubagentAccountCheck', () => {
+  const makeCheck = (readAccessDenial: () => Promise<string | null>) => {
+    const onDenied = vi.fn();
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const read = vi.fn(readAccessDenial);
+    return { check: createSubagentAccountCheck({ readAccessDenial: read, onDenied, logger }), read, onDenied, logger };
+  };
+
+  it('reads once per child and iteration and never denies an active account', async () => {
+    const { check, read, onDenied } = makeCheck(async () => null);
+    await check('child-a', 0);
+    await check('child-a', 0);
+    await check('child-b', 0);
+    await check('child-a', 1);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(onDenied).not.toHaveBeenCalled();
+  });
+
+  it('reports the refusal once, then stops reading', async () => {
+    const { check, read, onDenied } = makeCheck(async () => 'Your account is suspended.');
+    await check('child-a', 0);
+    await check('child-a', 1);
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith('Your account is suspended.');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed with a stated reason when the account read throws', async () => {
+    const { check, onDenied, logger } = makeCheck(async () => {
+      throw new Error('connection reset');
+    });
+    await check('child-a', 0);
+    expect(onDenied).toHaveBeenCalledWith(ACCOUNT_CHECK_FAILED_MESSAGE);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('account check failed'),
+      expect.objectContaining({ error: 'connection reset' })
+    );
+  });
+});
+
+describe('latchedAccountDenial', () => {
+  const gateDeps = () => ({
+    markFailed: vi.fn(async () => undefined),
+    sendWs: vi.fn(async () => undefined),
+    persistRunAsQuest: vi.fn(async () => undefined),
+    logger: { warn: vi.fn() },
+  });
+  const accountGateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: () => ({ steps: [], partialAnswer: '' }),
+  });
+
+  it('fails the parent run with a latched in-process refusal even when a fresh read is clear', async () => {
+    const read = vi.fn(async () => null);
+    let latched: string | null = null;
+    const check = createSubagentAccountCheck({
+      readAccessDenial: async () => {
+        throw new Error('connection reset');
+      },
+      onDenied: reason => {
+        latched = reason;
+      },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    await check('child-a', 0);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => latched, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: ACCOUNT_CHECK_FAILED_MESSAGE });
+  });
+
+  it('falls back to a fresh read while nothing is latched', async () => {
+    const read = vi.fn(async () => null);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => null, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 });

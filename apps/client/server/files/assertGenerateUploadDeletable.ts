@@ -1,6 +1,6 @@
 import { fabFileRepository } from '@bike4mind/database';
 import { isOwnedGenerateUpload } from '@bike4mind/server-utils/files/generateUploadMarker';
-import { throwFilesWriteRequired } from '@server/files/fileScopes';
+import { throwFilesWriteRequired } from '@bike4mind/server-utils/files/fileScopes';
 import type { Request } from 'express';
 
 /**

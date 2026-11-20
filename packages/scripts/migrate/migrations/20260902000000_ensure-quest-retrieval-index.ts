@@ -10,8 +10,8 @@ import { type MigrationFile } from './index';
  * largest collection in the database.
  *
  * Migration rather than autoIndex, for the same reason as
- * 20260826000000_ensure-quest-status-updatedat-index: prod runs DocumentDB, where an index build
- * takes a foreground collection lock. Left to autoIndex, this one would build on whichever
+ * 20260826000000_ensure-quest-status-updatedat-index: autoIndex builds are fire-and-forget (a
+ * failure is silent). Left to autoIndex, this one would build on whichever
  * Lambda's cold boot touches quests first after deploy - a user's poll, not a migration window.
  * That sibling migration would build this index too (createIndexes builds every declared index),
  * but it has already been applied and selectPending filters on the applied-id set, so it will

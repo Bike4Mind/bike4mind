@@ -1,0 +1,184 @@
+import {
+  abuseAssessmentStoredItemSchema,
+  completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
+  accountCampaignGroupSchema,
+  accountCampaignMemberSchema,
+  shadowDetectionItemSchema,
+  shadowDetectionVerdictEntrySchema,
+  type AbuseAssessmentRunResponse,
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
+  type ShadowDetectionBulkVerdictRequest,
+  type ShadowDetectionList,
+  type ShadowDetectionListQuery,
+  type ShadowDetectionVerdictRequest,
+} from '@bike4mind/common';
+import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
+import { AI_ADVISORY_QUERY_KEY } from './aiAdvisory';
+import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
+import { z } from 'zod';
+
+const ENDPOINT = '/api/admin/shadow-detections';
+export const SHADOW_DETECTIONS_QUERY_KEY = ['admin-shadow-detections'];
+
+const campaignGroupRowSchema = accountCampaignGroupSchema.extend({
+  window: z.object({ from: z.string(), to: z.string() }),
+  firstObservedAt: z.string(),
+  lastObservedAt: z.string(),
+  members: z.array(accountCampaignMemberSchema.extend({ signedUpAt: z.string() })),
+});
+export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
+
+/** A detection as it arrives over JSON: the dates are ISO strings. */
+export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
+  detectedAt: z.string(),
+  completionSynchrony: completionSynchronyEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string(), scannedAt: z.string() })
+    .optional(),
+  completionSequence: completionSequenceEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string() })
+    .optional(),
+  group: campaignGroupRowSchema.nullable(),
+  verdicts: z.array(shadowDetectionVerdictEntrySchema.extend({ reviewedAt: z.string() })),
+});
+export type ShadowDetectionRow = z.infer<typeof shadowDetectionRowSchema>;
+
+export type ShadowDetectionListResponse = Omit<ShadowDetectionList, 'data'> & { data: ShadowDetectionRow[] };
+
+export function useShadowDetections(query: ShadowDetectionListQuery) {
+  return useQuery({
+    queryKey: [...SHADOW_DETECTIONS_QUERY_KEY, query.detector ?? null, query.verdict ?? null],
+    queryFn: async () => (await api.get<ShadowDetectionListResponse>(ENDPOINT, { params: query })).data,
+  });
+}
+
+/**
+ * `conflict` means another admin graded the detection first (its revision moved); `item` is the
+ * detection as it is now, so the admin can re-decide against it, and `message` is the server's
+ * explanation when it sent one.
+ */
+export type ShadowDetectionVerdictResult =
+  | { status: 'recorded'; item: ShadowDetectionRow }
+  | { status: 'conflict'; item: ShadowDetectionRow; message: string | null };
+
+const conflictBodySchema = z.object({ error: z.string().optional(), item: shadowDetectionRowSchema });
+
+export function useShadowDetectionVerdict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      request: Omit<ShadowDetectionVerdictRequest, 'reason'> & { reason: string }
+    ): Promise<ShadowDetectionVerdictResult> => {
+      try {
+        const response = await api.post<ShadowDetectionRow>(`${ENDPOINT}/verdict`, request);
+        return { status: 'recorded', item: response.data };
+      } catch (error) {
+        if (!isAxiosError(error) || error.response?.status !== 409) throw error;
+        const body = conflictBodySchema.safeParse(error.response.data);
+        if (!body.success) throw error;
+        return { status: 'conflict', item: body.data.item, message: body.data.error?.trim() || null };
+      }
+    },
+    // A conflict also means the list is stale. A graded detection also drops out of the AI advisory.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
+  });
+}
+
+/**
+ * The merged server responses. Records changed since they were selected come back in `conflicts`,
+ * ungraded; `failureMessage` is set when a batch request itself failed and its ids are in `failed`.
+ */
+export type ShadowDetectionBulkVerdictResult = {
+  graded: ShadowDetectionRow[];
+  conflicts: ShadowDetectionRow[];
+  missing: string[];
+  failed: string[];
+  failureMessage?: string;
+};
+
+/**
+ * One verdict and reason for several detections. Selections larger than the server's per-request
+ * limit go out in sequential batches and their results are merged.
+ */
+export function useShadowDetectionBulkVerdict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
+    ): Promise<ShadowDetectionBulkVerdictResult> => {
+      const merged: ShadowDetectionBulkVerdictResult = { graded: [], conflicts: [], missing: [], failed: [] };
+      for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
+        const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
+        try {
+          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, {
+            ...request,
+            items,
+          });
+          merged.graded.push(...data.graded);
+          merged.conflicts.push(...data.conflicts);
+          merged.missing.push(...data.missing);
+          merged.failed.push(...data.failed);
+        } catch (error) {
+          return {
+            ...merged,
+            failed: [...merged.failed, ...request.items.slice(start).map(item => item.id)],
+            failureMessage: getErrorMessage(error),
+          };
+        }
+      }
+      return merged;
+    },
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
+  });
+}
+
+const ASSESSMENTS_ENDPOINT = `${ENDPOINT}/assessments`;
+const ASSESSMENTS_QUERY_KEY = ['admin-shadow-detection-assessments'];
+
+/** An assessment as it arrives over JSON: the date is an ISO string. */
+export const abuseAssessmentRowSchema = abuseAssessmentStoredItemSchema.extend({ assessedAt: z.string() });
+export type AbuseAssessmentRow = z.infer<typeof abuseAssessmentRowSchema>;
+
+export type AbuseAssessmentRunResult =
+  | { status: 'assessed'; cached: boolean; item: AbuseAssessmentRow }
+  | Extract<AbuseAssessmentRunResponse, { status: 'skipped' }>;
+
+/** Advisory assessments of one detection, newest first. Only fetched while `enabled`. */
+export function useAbuseAssessments(detectionId: string, { enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: [...ASSESSMENTS_QUERY_KEY, detectionId],
+    queryFn: async () =>
+      (await api.get<{ data: AbuseAssessmentRow[] }>(ASSESSMENTS_ENDPOINT, { params: { detectionId } })).data.data,
+    enabled,
+  });
+}
+
+export function useRequestAbuseAssessment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (detectionId: string): Promise<AbuseAssessmentRunResult> =>
+      (await api.post<AbuseAssessmentRunResult>(ASSESSMENTS_ENDPOINT, { detectionId })).data,
+    onSuccess: (_result, detectionId) =>
+      queryClient.invalidateQueries({ queryKey: [...ASSESSMENTS_QUERY_KEY, detectionId] }),
+  });
+}
+
+/** The labelled verdict eval for the last `days` (server/security/verdictEval). */
+export function useVerdictEval(days: VerdictEvalWindowDays) {
+  return useQuery({
+    queryKey: [...SHADOW_DETECTIONS_QUERY_KEY, 'verdict-eval', days],
+    queryFn: async () =>
+      verdictEvalReportSchema.parse((await api.get(`${ENDPOINT}/verdict-eval`, { params: { days } })).data),
+  });
+}

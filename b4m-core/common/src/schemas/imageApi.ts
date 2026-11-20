@@ -23,8 +23,9 @@ export type ImageQuest = z.infer<typeof ImageQuestSchema>;
 export const GenerateImageResponseSchema = z.object({
   quest: ImageQuestSchema,
   // Only the id is modelled: the body carries the client-redacted session document
-  // (redactSessionForClient), which is not part of this endpoint's contract.
-  session: z.object({ id: z.string() }),
+  // (redactSessionForClient), which is not part of this endpoint's contract. Loose so the
+  // contract response boundary (defineNextRoute.ts) passes the rest through, not strips it.
+  session: z.looseObject({ id: z.string() }),
   originalPrompt: z.string(),
   enhancedPrompt: z.string(),
   promptWasEnhanced: z.boolean(),

@@ -23,6 +23,15 @@ const IMAGE: ChatAttachment = {
 
 const TEXT: ChatAttachment = { ...IMAGE, id: 'a2', kind: 'text', name: 'server.log', mediaType: 'text/plain' };
 
+const PDF: ChatAttachment = {
+  ...IMAGE,
+  id: 'a3',
+  kind: 'pdf',
+  name: 'report.pdf',
+  mediaType: 'application/pdf',
+  pages: 3,
+};
+
 /**
  * readAttachment is what the tile awaits for its bytes. Static rendering never runs the effect,
  * so the stub only has to exist; the markup under test is the pre-bytes tile either way.
@@ -37,6 +46,16 @@ describe('AttachmentRow', () => {
     const html = markup([TEXT]);
     expect(html).toContain('server.log');
     expect(html).not.toContain('data-testid="attachment-view-btn"');
+  });
+
+  it('shows a PDF as a document tile with its page count, never as an image or viewer', () => {
+    const html = renderToStaticMarkup(<AttachmentRow sessionId="s1" attachments={[PDF]} onRemove={() => {}} />);
+    expect(html).toContain('report.pdf');
+    expect(html).toContain('data-testid="attachment-pdf-icon"');
+    expect(html).toContain('3 pages');
+    expect(html).toContain('data-testid="attachment-remove-btn"');
+    expect(html).not.toContain('data-testid="attachment-view-btn"');
+    expect(html).not.toContain('data-testid="attachment-thumbnail"');
   });
 
   it('does not mount the viewer until the tile is clicked', () => {

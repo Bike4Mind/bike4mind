@@ -27,7 +27,7 @@ export function createDatabaseSearcher(options: DatabaseSearcherOptions): Search
     name: 'Internal Database',
     search: async (query: string): Promise<SearchResult[]> => {
       try {
-        console.log(`Database Searcher query: ${query}`);
+        console.log(`Database Searcher query length: ${query.length}`);
         const questsPromise = questsRepository.find({
           'promptMeta.session.userId': userId,
           prompt: { $regex: escapeRegex(query), $options: 'i' },

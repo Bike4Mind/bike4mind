@@ -20,7 +20,7 @@ import {
   ANSWER_DIAGNOSIS_TITLE,
   stripSearchResultCardFences,
 } from '@bike4mind/common';
-import { elidedReplyWarning } from '@client/app/utils/artifactParser';
+import { elidedReplyWarning } from '@bike4mind/server-utils/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, MenuList, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
@@ -678,6 +678,7 @@ const MessageContent: React.FC<ContentProps> = memo(
       void publishAndShareReply({
         publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
         resolvePublished: () => findPublishedByReply(replyId),
+        policySource: { sessionId },
         ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown,

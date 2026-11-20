@@ -1,5 +1,5 @@
 import axios, { isAxiosError } from 'axios';
-import { Logger } from '@bike4mind/observability';
+import { Logger, redactLogText } from '@bike4mind/observability';
 import { getNotificationDeduplicator } from './notificationDeduplicator';
 import type { CloudWatchLogsEvent, CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import * as util from 'node:util';
@@ -51,7 +51,12 @@ export const notifyEventLogsToSlack = async ({
    */
   const logEvents: CloudWatchLogsLogEvent[] = logData.logEvents;
 
-  for (const logEvent of logEvents) {
+  for (const rawLogEvent of logEvents) {
+    // Lines from raw `console.*` never went through the Logger's redaction; scrub before Slack sees them.
+    const logEvent: CloudWatchLogsLogEvent =
+      typeof rawLogEvent.message === 'string'
+        ? { ...rawLogEvent, message: redactLogText(rawLogEvent.message) }
+        : rawLogEvent;
     try {
       let message: string;
       let severity: string;
@@ -96,23 +101,29 @@ export const notifyEventLogsToSlack = async ({
   }
 };
 
+/** A Block Kit payload for an incoming webhook; `text` is the notification fallback. */
+export interface SlackWebhookPayload {
+  text: string;
+  blocks?: unknown[];
+  attachments?: { color?: string; blocks?: unknown[] }[];
+}
+
 /** Never throws; resolves true only when Slack accepted the message, so a caller can retry. */
-export async function postMessageToSlack(slackWebhookUrl: string, message: string): Promise<boolean> {
+export async function postMessageToSlack(
+  slackWebhookUrl: string,
+  message: string | SlackWebhookPayload
+): Promise<boolean> {
   try {
     if (!slackWebhookUrl) {
       Logger.error('postMessageToSlack: Error posting message to Slack: slackWebhookUrl is not set');
       return false;
     }
 
-    await axios.post(
-      slackWebhookUrl,
-      { text: message },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        // ms; a stalled webhook must fail as false rather than hold a cron run until its Lambda timeout.
-        timeout: 10_000,
-      }
-    );
+    await axios.post(slackWebhookUrl, typeof message === 'string' ? { text: message } : message, {
+      headers: { 'Content-Type': 'application/json' },
+      // ms; a stalled webhook must fail as false rather than hold a cron run until its Lambda timeout.
+      timeout: 10_000,
+    });
     return true;
   } catch (error) {
     Logger.error('Error posting message to Slack:', error);

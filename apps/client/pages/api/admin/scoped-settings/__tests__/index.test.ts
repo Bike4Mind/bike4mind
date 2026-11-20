@@ -6,7 +6,11 @@ import { ApiKeyScope } from '@bike4mind/common';
 // are the actual ones. Mock only the infra + service + middleware seams.
 const find = vi.fn();
 const writeScopedOverride = vi.fn();
+const assertScopedOverrideWritable = vi.fn();
 const clearScopedOverride = vi.fn();
+const claimScopedSettingChange = vi.fn();
+const claimRelease = vi.fn();
+const txRetries = { count: 0 };
 const findOverrides = vi.fn();
 const recordAdminActionFromRequest = vi.fn();
 const order: string[] = [];
@@ -19,14 +23,18 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 // Passthrough: the audit write must run inside this callback so a throw from it propagates to the caller.
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { name: 'adminSettingsRepository' },
+  cacheRepository: { name: 'cacheRepository' },
   withTransaction: async (fn: () => Promise<unknown>) => {
     order.push('tx:start');
-    const result = await fn();
+    let result = await fn();
+    // Mirrors the driver's retry of the callback on a transient commit failure.
+    for (let i = 0; i < txRetries.count; i++) result = await fn();
     order.push('tx:end');
     return result;
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => {
     order.push('audit');
     return recordAdminActionFromRequest(...args);
@@ -35,8 +43,18 @@ vi.mock('@server/utils/adminAudit', () => ({
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   scopedSettingsService: {
-    writeScopedOverride: (...args: unknown[]) => writeScopedOverride(...args),
-    clearScopedOverride: (...args: unknown[]) => clearScopedOverride(...args),
+    claimScopedSettingChange: (...args: unknown[]) => claimScopedSettingChange(...args),
+    assertScopedOverrideWritable: (...args: unknown[]) => assertScopedOverrideWritable(...args),
+    writeScopedOverride: async (...args: unknown[]) => {
+      const result = await writeScopedOverride(...args);
+      await (args[4] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
+      return result;
+    },
+    clearScopedOverride: async (...args: unknown[]) => {
+      const result = await clearScopedOverride(...args);
+      await (args[3] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
+      return result;
+    },
   },
 }));
 vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
@@ -48,6 +66,12 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 // before that declaration (the route is imported before the test body executes).
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
+  const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+  chain.__middlewares = middlewares;
+  chain.use = (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+    middlewares.push(middleware);
+    return chain;
+  };
   for (const method of ['get', 'put', 'delete']) {
     chain[method] = (routeHandler: unknown) => {
       chain[`__${method}`] = routeHandler;
@@ -67,6 +91,9 @@ import handler from '../index';
 type RouteHandler = (req: unknown, res: unknown) => Promise<unknown>;
 
 const routes = handler as unknown as Record<string, RouteHandler>;
+const middlewares = (
+  handler as unknown as { __middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> }
+).__middlewares;
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -77,7 +104,10 @@ const invoke = async (
 ) => {
   const json = vi.fn((x: unknown) => x);
   const { isAdmin = true, ...rest } = req;
-  await routes[`__${method}`]({ user: { isAdmin }, logger, ...rest }, { json });
+  const request = { user: { isAdmin }, logger, method: method.toUpperCase(), ...rest };
+  const response = { json };
+  for (const middleware of middlewares) middleware(request, response, () => undefined);
+  await routes[`__${method}`](request, response);
   return json.mock.calls[0]?.[0];
 };
 
@@ -86,6 +116,9 @@ const expectStatus = (method: 'get' | 'put' | 'delete', req: Parameters<typeof i
 
 beforeEach(() => {
   order.length = 0;
+  claimScopedSettingChange.mockReset().mockResolvedValue(null);
+  assertScopedOverrideWritable.mockReset();
+  claimRelease.mockReset().mockResolvedValue(undefined);
   findOverrides.mockResolvedValue([]);
   recordAdminActionFromRequest.mockResolvedValue(null);
 });
@@ -116,7 +149,10 @@ describe('admin/scoped-settings authorization', () => {
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
     // Pins the whole config object, not just requiredScopes - a sibling `auth: false` would skip
     // baseApi's entire api-key chain and disable this gate while leaving requiredScopes untouched.
-    expect((handler as unknown as { __config?: unknown }).__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect((handler as unknown as { __config?: unknown }).__config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['GET', 'PUT', 'DELETE'],
+    });
   });
 });
 
@@ -216,6 +252,20 @@ describe('admin/scoped-settings service rejection translation', () => {
     await expect(invoke('put', { body })).rejects.toThrow(message);
   });
 
+  it('answers the validation 400 without taking the cooldown claim for an invalid value', async () => {
+    const message = "[scopedSettings] value for 'DefaultChunkSize' failed validation: 0";
+    assertScopedOverrideWritable.mockImplementation(() => {
+      throw new Error(message);
+    });
+    const body = { settingName: 'DefaultChunkSize', scopeLevel: 'organization', scopeId: 'org-1', value: 0 };
+
+    await expectStatus('put', { body }, 400);
+    await expect(invoke('put', { body })).rejects.toThrow(message);
+
+    expect(claimScopedSettingChange).not.toHaveBeenCalled();
+    expect(writeScopedOverride).not.toHaveBeenCalled();
+  });
+
   it('leaves a failure that is not a write-service rejection as a server error', async () => {
     const driverFailure = Object.assign(new Error('connection timed out'), { name: 'MongoServerError' });
     writeScopedOverride.mockRejectedValue(driverFailure);
@@ -242,8 +292,16 @@ describe('admin/scoped-settings writes', () => {
       'PauseLakeConvergence',
       { scopeLevel: 'lake', scopeId: 'lake-1', ownerType: undefined },
       settingValue,
-      { scopedSettings: expect.anything() },
-      { logger }
+      {
+        scopedSettings: expect.anything(),
+        // The cooldown dependencies must reach the writer, or a cooldown key's write throws.
+        changeCooldown: {
+          adminSettings: { name: 'adminSettingsRepository' },
+          cache: { name: 'cacheRepository' },
+          scopedSettings: expect.anything(),
+        },
+      },
+      { logger, claim: null, afterWrite: expect.any(Function) }
     );
     expect(response).toMatchObject({
       settingName: 'PauseLakeConvergence',
@@ -251,6 +309,38 @@ describe('admin/scoped-settings writes', () => {
       scopeId: 'lake-1',
       settingValue,
     });
+  });
+
+  it('takes the cooldown claim once, outside the transaction, even when the callback is retried', async () => {
+    const claim = { release: claimRelease };
+    claimScopedSettingChange.mockImplementation(async () => {
+      order.push('claim');
+      return claim;
+    });
+    writeScopedOverride.mockResolvedValue(undefined);
+    txRetries.count = 1;
+    order.length = 0;
+
+    try {
+      await invoke('put', { body: { ...lakePause, value: true } });
+    } finally {
+      txRetries.count = 0;
+    }
+
+    expect(claimScopedSettingChange).toHaveBeenCalledTimes(1);
+    expect(order.indexOf('claim')).toBeLessThan(order.indexOf('tx:start'));
+    expect(writeScopedOverride).toHaveBeenCalledTimes(2);
+    expect(writeScopedOverride.mock.calls[1][4]).toMatchObject({ claim });
+    expect(claimRelease).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when the transaction fails', async () => {
+    claimScopedSettingChange.mockResolvedValue({ release: claimRelease });
+    writeScopedOverride.mockRejectedValue(new Error('commit failed'));
+
+    await expect(invoke('put', { body: { ...lakePause, value: true } })).rejects.toThrow('commit failed');
+
+    expect(claimRelease).toHaveBeenCalledTimes(1);
   });
 
   it('carries ownerType through on an owner-rung write', async () => {
@@ -285,8 +375,16 @@ describe('admin/scoped-settings writes', () => {
     expect(clearScopedOverride).toHaveBeenCalledWith(
       'PauseLakeConvergence',
       { scopeLevel: 'lake', scopeId: 'lake-1' },
-      { scopedSettings: expect.anything() },
-      { logger }
+      {
+        scopedSettings: expect.anything(),
+        // The cooldown dependencies must reach the writer, or a cooldown key's write throws.
+        changeCooldown: {
+          adminSettings: { name: 'adminSettingsRepository' },
+          cache: { name: 'cacheRepository' },
+          scopedSettings: expect.anything(),
+        },
+      },
+      { logger, claim: null, afterWrite: expect.any(Function) }
     );
     expect(response).toEqual({ cleared: true });
   });

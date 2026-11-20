@@ -1,14 +1,22 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  assertProxyPort,
+  createSandboxRuntime,
   detectPlatform,
   expandPath,
+  getContainerSocketPaths,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   resolveSandboxPath,
 } from './SandboxRuntimeAdapter.js';
 import os from 'os';
 import path from 'path';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
 
 describe('SandboxRuntimeAdapter', () => {
   const fixtureDirectories: string[] = [];
@@ -61,6 +69,29 @@ describe('SandboxRuntimeAdapter', () => {
     );
   });
 
+  it('protects worktree metadata that has no common directory file', () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-worktree-'));
+    fixtureDirectories.push(fixture);
+    const cwd = path.join(fixture, 'checkout');
+    const metadata = path.join(fixture, 'metadata');
+    mkdirSync(cwd);
+    mkdirSync(metadata);
+    writeFileSync(path.join(cwd, '.git'), `gitdir: ${metadata}\n`);
+    expect(getProtectedWorkspacePaths(cwd)).toEqual(expect.arrayContaining([path.join(cwd, '.git'), metadata]));
+  });
+
+  it('keeps a fully unresolvable path as-is once it reaches the root', async () => {
+    const fs = await vi.importActual<typeof import('fs')>('fs');
+    vi.mocked(realpathSync).mockImplementation((() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }) as unknown as typeof realpathSync);
+    try {
+      expect(resolveSandboxPath('/unresolvable/child')).toBe('/unresolvable/child');
+    } finally {
+      vi.mocked(realpathSync).mockImplementation(fs.realpathSync as typeof realpathSync);
+    }
+  });
+
   it('resolves absent sensitive paths through the nearest symlinked ancestor', () => {
     const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-path-'));
     fixtureDirectories.push(fixture);
@@ -84,6 +115,70 @@ describe('SandboxRuntimeAdapter', () => {
     expect(getProtectedWorkspacePaths(cwd)).toEqual(
       expect.arrayContaining([path.join(cwd, '.git'), resolveSandboxPath(target)])
     );
+  });
+
+  describe('getContainerSocketPaths', () => {
+    const vars = ['XDG_RUNTIME_DIR', 'DOCKER_HOST', 'CONTAINER_HOST', 'COLIMA_HOME', 'LIMA_HOME', 'XDG_CONFIG_HOME'];
+    const saved = Object.fromEntries(vars.map(name => [name, process.env[name]]));
+    const withEnv = (values: Record<string, string>) => {
+      for (const name of vars) delete process.env[name];
+      Object.assign(process.env, values);
+      return getContainerSocketPaths();
+    };
+    afterEach(() => {
+      for (const name of vars) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+    });
+
+    it('covers the Docker Desktop config and data directories', () => {
+      const home = os.homedir();
+      expect(withEnv({})).toEqual(
+        expect.arrayContaining([
+          { path: path.join(home, '.docker'), directory: true },
+          { path: path.join(home, 'Library/Containers/com.docker.docker/Data'), directory: true },
+        ])
+      );
+    });
+
+    it('adds unix sockets from DOCKER_HOST and CONTAINER_HOST', () => {
+      expect(withEnv({ DOCKER_HOST: 'unix:///srv/docker.sock', CONTAINER_HOST: 'unix:///srv/podman.sock' })).toEqual(
+        expect.arrayContaining([
+          { path: '/srv/docker.sock', directory: false },
+          { path: '/srv/podman.sock', directory: false },
+        ])
+      );
+    });
+
+    it('ignores non-unix and relative host values', () => {
+      const paths = withEnv({ DOCKER_HOST: 'tcp://127.0.0.1:2375', CONTAINER_HOST: 'unix://relative.sock' }).map(
+        entry => entry.path
+      );
+      expect(paths.some(p => p.includes('2375') || p.endsWith('relative.sock'))).toBe(false);
+    });
+
+    it.each([
+      ['COLIMA_HOME', '/srv/colima'],
+      ['LIMA_HOME', '/srv/lima'],
+    ])('adds %s as a directory', (name, value) => {
+      expect(withEnv({ [name]: value })).toContainEqual({ path: value, directory: true });
+    });
+
+    it('adds the colima config directory under XDG_CONFIG_HOME, defaulting to ~/.config', () => {
+      expect(withEnv({ XDG_CONFIG_HOME: '/srv/config' })).toContainEqual({
+        path: '/srv/config/colima',
+        directory: true,
+      });
+      expect(withEnv({})).toContainEqual({ path: path.join(os.homedir(), '.config', 'colima'), directory: true });
+    });
+
+    it('ignores relative directory variables', () => {
+      const paths = withEnv({ XDG_RUNTIME_DIR: 'run', COLIMA_HOME: 'colima', LIMA_HOME: 'lima' }).map(e => e.path);
+      expect(paths).not.toContain('colima');
+      expect(paths).not.toContain('lima');
+      expect(paths.some(p => p.startsWith('run'))).toBe(false);
+    });
   });
 
   describe('detectPlatform', () => {
@@ -144,8 +239,86 @@ describe('SandboxRuntimeAdapter', () => {
       expect(isBinaryAvailable('bash')).toBe(true);
     });
 
+    it('returns false when PATH is unset', () => {
+      const originalPath = process.env.PATH;
+      delete process.env.PATH;
+      try {
+        expect(isBinaryAvailable('bash')).toBe(false);
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    });
+
     it('returns false for a nonexistent binary', () => {
       expect(isBinaryAvailable('nonexistent-binary-that-should-not-exist-12345')).toBe(false);
+    });
+  });
+  describe('protected path lookup errors', () => {
+    const isRoot = process.getuid?.() === 0;
+
+    it.skipIf(isRoot)('rethrows a .git lookup failure other than a missing entry', () => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-locked-'));
+      fixtureDirectories.push(fixture);
+      const cwd = path.join(fixture, 'locked');
+      mkdirSync(cwd);
+      chmodSync(cwd, 0o000);
+      try {
+        expect(() => getProtectedWorkspacePaths(cwd)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+      } finally {
+        chmodSync(cwd, 0o700);
+      }
+    });
+
+    it.skipIf(isRoot)('rethrows an unreadable .git file', () => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'sandbox-gitfile-'));
+      fixtureDirectories.push(fixture);
+      writeFileSync(path.join(fixture, '.git'), 'gitdir: elsewhere\n', { mode: 0o000 });
+      expect(() => getProtectedWorkspacePaths(fixture)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    });
+  });
+
+  describe('assertProxyPort', () => {
+    it.each([1, 8080, 65535])('accepts port %s', port => {
+      expect(() => assertProxyPort(port)).not.toThrow();
+    });
+
+    it.each([0, -1, 65536, 1.5, Number.NaN])('rejects port %s', port => {
+      expect(() => assertProxyPort(port)).toThrow(`Invalid sandbox proxy port: ${port}`);
+    });
+  });
+
+  describe('createSandboxRuntime', () => {
+    const originalPath = process.env.PATH;
+    afterEach(() => {
+      process.env.PATH = originalPath;
+      vi.restoreAllMocks();
+    });
+
+    const withBinary = (binary: string | null) => {
+      const binDir = mkdtempSync(path.join(os.tmpdir(), 'sandbox-bin-'));
+      fixtureDirectories.push(binDir);
+      if (binary) writeFileSync(path.join(binDir, binary), '', { mode: 0o755 });
+      process.env.PATH = binDir;
+    };
+
+    it('returns null on an unsupported platform', async () => {
+      vi.spyOn(os, 'platform').mockReturnValue('win32');
+      expect(await createSandboxRuntime()).toBeNull();
+    });
+
+    it.each([
+      ['darwin', 'sandbox-exec', 'seatbelt'],
+      ['linux', 'bwrap', 'bubblewrap'],
+    ] as const)('returns the %s runtime when %s is installed', async (platform, binary, name) => {
+      vi.spyOn(os, 'platform').mockReturnValue(platform);
+      withBinary(binary);
+      expect((await createSandboxRuntime())?.name).toBe(name);
+    });
+
+    it.each(['darwin', 'linux'] as const)('returns null on %s when the runtime binary is missing', async platform => {
+      vi.spyOn(os, 'platform').mockReturnValue(platform);
+      withBinary(null);
+      expect(await createSandboxRuntime()).toBeNull();
     });
   });
 });

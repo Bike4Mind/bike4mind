@@ -1,6 +1,6 @@
 import { resolveSupportedMimeType } from '@bike4mind/utils';
 import { BARE_UPLOAD_MAX_BYTES, BARE_UPLOAD_MIME_TYPE } from '@bike4mind/server-utils/files/generateUploadMarker';
-import { throwFilesWriteRequired } from '@server/files/fileScopes';
+import { throwFilesWriteRequired } from '@bike4mind/server-utils/files/fileScopes';
 
 /**
  * The only body fields an `ai:generate` key without `files:write` may send to

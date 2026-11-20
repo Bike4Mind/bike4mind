@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/rules-of-hooks */
-import { test as base, expect, type Browser, type Page } from '@playwright/test';
+import { test as base, expect, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
@@ -19,7 +19,10 @@ import { TavernPage } from './pages/TavernPage';
 import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamsPage } from './pages/TeamsPage';
+import { StudioPage } from './pages/StudioPage';
 import { getTestUsers } from './helpers/test-users';
+import { installWafBypass } from './helpers/waf-bypass';
+import { bypassTurnstile } from './helpers/turnstile';
 
 type VerifyAnswersOptions = {
   logic?: 'and' | 'or';
@@ -46,6 +49,7 @@ type TestFixtures = {
   dataLakePage: DataLakePage;
   skillsPage: SkillsPage;
   teamsPage: TeamsPage;
+  studioPage: StudioPage;
   loginAsAdmin: () => Promise<void>;
   loginAsUser: (user: SpecAuth) => Promise<void>;
   /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
@@ -76,6 +80,16 @@ function specAuthForProject(projectName: string): SpecAuth | null {
   }
 }
 
+/** Every seeded user id known at fixture time (core + spec users); empty before core setup runs. */
+function knownUserIds(): string[] {
+  try {
+    const { admin, manager, specUsers } = getTestUsers();
+    return [admin, manager, ...Object.values(specUsers)].filter(Boolean).map(u => u.userId);
+  } catch {
+    return [];
+  }
+}
+
 /** Fixture-page setup: modals stubbed, cookie consent pre-decided, in-app gotos authenticated as
  *  `getAuth()` through /auth/success. */
 async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promise<void> {
@@ -84,6 +98,8 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
   await page.route('**/api/modals**', route =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
   );
+
+  await bypassTurnstile(page);
 
   // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
   // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
@@ -96,6 +112,25 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
       // Opaque origins (about:blank) have no localStorage.
     }
   });
+
+  // The gears discovery modal opens ~5s after load for any user with an unused gear (every fresh
+  // e2e user), landing mid-test behind a click-blocking backdrop. Pre-dismiss it per known user.
+  // Key and shape must stay in sync with storageKey/DiscoveryState in lib/gears/discovery.ts.
+  // Users minted mid-test aren't known here; BasePage.dismissModals() covers them.
+  const authUserId = getAuth()?.userId;
+  const userIds = [...new Set([...knownUserIds(), ...(authUserId ? [authUserId] : [])])];
+  await page.addInitScript(ids => {
+    try {
+      for (const id of ids) {
+        const key = `gears_discovery_${id}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, JSON.stringify({ lastShownAt: 0, dismissed: true, rotation: 0 }));
+        }
+      }
+    } catch {
+      // Opaque origins (about:blank) have no localStorage.
+    }
+  }, userIds);
 
   // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
   // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
@@ -116,10 +151,12 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
 export async function openPageAs(
   browser: Browser,
   baseURL: string | undefined,
-  auth: SpecAuth
+  auth: SpecAuth,
+  contextOptions: BrowserContextOptions = {}
 ): Promise<{ page: Page; close: () => Promise<void> }> {
-  const context = await browser.newContext({ baseURL });
+  const context = await browser.newContext({ ...contextOptions, baseURL });
   const page = await context.newPage();
+  await installWafBypass(page);
   await prepareAppPage(page, () => auth);
   return { page, close: () => context.close() };
 }
@@ -135,6 +172,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   page: async ({ page, authState }, use) => {
+    await installWafBypass(page);
     await prepareAppPage(page, () => authState.current);
     await use(page);
   },
@@ -206,6 +244,10 @@ export const test = base.extend<TestFixtures>({
 
   teamsPage: async ({ page }, use) => {
     await use(new TeamsPage(page));
+  },
+
+  studioPage: async ({ page }, use) => {
+    await use(new StudioPage(page));
   },
 
   loginAsAdmin: async ({ page, authState }, use) => {

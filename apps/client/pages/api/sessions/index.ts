@@ -8,15 +8,22 @@ import {
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import qs from 'qs';
 import { Request } from 'express';
 import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
-import { logEvent } from '@server/utils/analyticsLog';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
-const handler = baseApi()
+// Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
+// The door admits legacy keys until the legacy window ends, since GET was open to every key before.
+// DELETE never grandfathers: it already required notebooks:write before the door existed.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   /**
    * Get all sessions
    */
@@ -60,11 +67,9 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler(async (req, res) => {
-      // Gated per verb, not at the door: GET above is the notebook list that notebooks:read and
-      // unscoped keys rely on, so a route-level requiredScopes would newly deny them.
       assertApiKeyScope(
         req,
-        [ApiKeyScope.WRITE_NOTEBOOKS],
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;
@@ -80,6 +85,7 @@ const handler = baseApi()
       const sessionIds = (await SessionModel.find(ownedFilter).select('_id').lean()).map(s => String(s._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds }, { logger: req.logger });
       const deleteResult = await SessionModel.deleteMany(ownedFilter);
+      await purgeDeletedNotebookMedia(sessionIds, { logger: req.logger });
 
       await logEvent({
         userId,

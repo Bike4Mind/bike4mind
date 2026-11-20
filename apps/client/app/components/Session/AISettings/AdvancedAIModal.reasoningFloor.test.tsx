@@ -86,6 +86,7 @@ const modelInfoRows = vi.hoisted(() => [
     can_think: undefined as boolean | undefined,
     backend: undefined as string | undefined,
     dispatchProfile: undefined as { maxTokensParam: string; toolTransport: string } | undefined,
+    thinkingAlwaysOn: undefined as true | undefined,
   },
 ]);
 
@@ -132,6 +133,7 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
       can_think: undefined,
       backend: undefined,
       dispatchProfile: undefined,
+      thinkingAlwaysOn: undefined,
     });
   });
 
@@ -177,6 +179,14 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     renderDetails(8192, { enabled: true, budget_tokens: 16_000 });
 
     expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
+  });
+
+  // Such a model is sent no thinking field (thinkingForSend), so a stored toggle raises nothing.
+  it('warns on an always-thinking Anthropic model even with the stored toggle on', () => {
+    Object.assign(modelInfoRows[0], { can_think: true, backend: 'anthropic', thinkingAlwaysOn: true });
+    renderDetails(8192, { enabled: true, budget_tokens: 16_000 });
+
+    expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toBeInTheDocument();
   });
 
   it('still warns with thinking on where the adapter sends the value as set', () => {

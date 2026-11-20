@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { AGENT_QUEST_MANIFEST } from '@bike4mind/common';
+import { setAllowOrigin } from '@server/utils/allowOrigin';
 
 /**
  * GET /api/agent-quest/manifest - the machine-readable invitation to The Open Door.
@@ -23,14 +24,14 @@ import { AGENT_QUEST_MANIFEST } from '@bike4mind/common';
 // is byte-identical and there is nothing to rebuild per request.
 const MANIFEST_JSON = JSON.stringify(AGENT_QUEST_MANIFEST);
 
-function setCorsHeaders(res: NextApiResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function setCorsHeaders(req: NextApiRequest, res: NextApiResponse): void {
+  setAllowOrigin(req, res, '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(req, res);
 
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Max-Age', '600');

@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
   createFabFileByUrl: vi.fn(),
   logEvent: vi.fn(),
   signUrl: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -18,7 +19,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
@@ -93,12 +96,28 @@ describe('POST /api/files/createFabFileURL', () => {
     });
   });
 
+  it('spends one unit of the allowance for the import', async () => {
+    await run(makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('imports nothing when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFileByUrl).not.toHaveBeenCalled();
+  });
+
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });
 
-it('returns a browser URL without modifying the privately cached imported row', async () => {
+afterEach(() => vi.unstubAllEnvs());
+
+it('returns the stable content URL without modifying the imported row', async () => {
   const saved = {
     ...PERSISTED,
     moderationStatus: 'clean',
@@ -107,11 +126,10 @@ it('returns a browser URL without modifying the privately cached imported row', 
     fileUrlExpireAt: new Date(Date.now() + 3600000),
   };
   h.createFabFileByUrl.mockResolvedValue(saved);
-  h.signUrl.mockResolvedValue('https://public.test/import');
   const { res, json } = makeRes();
   await run(res);
-  expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/import');
+  expect(json.mock.calls[0][0].fileUrl).toMatch(/\/api\/files\/[^/]+\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/);
   expect(saved.fileUrl).toBe('http://private.test/import');
-  expect(h.signUrl).toHaveBeenCalledWith('owned/import.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  expect(h.signUrl).not.toHaveBeenCalled();
   expect(h.logEvent).toHaveBeenCalled();
 });

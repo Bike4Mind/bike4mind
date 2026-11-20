@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 import {
   createUserApiKey,
@@ -516,6 +516,29 @@ describe('createUserApiKey - per-user cap pools', () => {
     );
   });
 
+  it.each(['paid', 'unpaid'] as const)('stores payerStanding %s on an exchange key', async payerStanding => {
+    const repo = makeRepo();
+    const result = await createExchangeUserApiKey(
+      'user-1',
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding } },
+      adapters(repo)
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ payerStanding }) }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
+    expect(result.metadata).toMatchObject({ payerStanding });
+  });
+
+  it('rejects an unknown payerStanding at the zod boundary', async () => {
+    const error = await mintError(
+      { ...exchangeParams, metadata: { oauthClientId: 'client-a', payerStanding: 'bogus' } } as never,
+      makeRepo()
+    );
+    expect(error).not.toBeNull();
+  });
+
   it('routes a dashboard mint through the standard pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', dashboardParams, adapters(repo));
@@ -998,5 +1021,145 @@ describe('createUserApiKey - contributed scopes', () => {
         callerScopes: [ApiKeyScope.READ_NOTEBOOKS],
       })
     ).rejects.toThrow(/calling key does not have/);
+  });
+});
+
+describe('API-key creation metric', () => {
+  it.each(['missing', 'email_unverified'] as const)('does not count a trust-rejected mint (%s)', async rejection => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const repo = makeRepo();
+    await expect(
+      createUserApiKey('user-1', baseParams, {
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+        ...(rejection === 'email_unverified'
+          ? { trust: { status: 'untrusted', reason: 'email_unverified' } as const }
+          : {}),
+      })
+    ).rejects.toThrow(rejection === 'missing' ? /requires a trust assessment/ : /Verify your email/);
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin'] as const)(
+    'emits exactly one data-minimal event after a successful %s mint',
+    async createdFrom => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const repo = makeRepo();
+      await createUserApiKey(
+        'sys-1',
+        { ...baseParams, metadata: { createdFrom } },
+        {
+          db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+          systemUserId: 'sys-1',
+        }
+      );
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(info.mock.calls[0][0]))).toEqual({ severity: 'info', message: 'user-api-key-created' });
+    }
+  );
+
+  it('counts exchange mints too', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const repo = makeRepo();
+    await createExchangeUserApiKey(
+      'sys-1',
+      {
+        ...baseParams,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: { oauthClientId: 'client' },
+      },
+      {
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+        systemUserId: 'sys-1',
+      }
+    );
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['at_cap', 'write_failed'] as const)('does not count a rejected mint (%s)', async failure => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const createIfUnderCap =
+      failure === 'at_cap' ? vi.fn().mockResolvedValue('at_cap') : vi.fn().mockRejectedValue(new Error('write failed'));
+    const repo = makeRepo({ createIfUnderCap });
+    await expect(
+      createUserApiKey('user-1', baseParams, {
+        trust: TRUSTED,
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+      })
+    ).rejects.toThrow(failure === 'at_cap' ? /Maximum 10 active API keys/ : /write failed/);
+    expect(createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(info).not.toHaveBeenCalled();
+  });
+});
+
+describe('createUserApiKey - org-owned keys', () => {
+  const orgOwnedParams = {
+    name: 'org-key',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    metadata: { createdFrom: 'dashboard' as const },
+    orgOwned: { createdByUserId: 'creator-1' },
+  };
+
+  it('persists the creating member on an org-billed key', async () => {
+    const repo = makeRepo();
+    const result = await createUserApiKey(
+      'sa-1',
+      { ...orgOwnedParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    );
+
+    expect(repo.createIfUnderCap.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ userId: 'sa-1', orgOwned: { createdByUserId: 'creator-1' }, organizationId: 'org-1' })
+    );
+    expect(result.orgOwned).toEqual({ createdByUserId: 'creator-1' });
+  });
+
+  it('names the per-organization cap when an org-owned mint is at the cap', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await createUserApiKey(
+      'sa-1',
+      { ...orgOwnedParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    ).catch((e: unknown) => e as BadRequestError);
+
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as BadRequestError).message).toBe(
+      `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per organization`
+    );
+    expect((error as BadRequestError).additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+  });
+
+  it('keeps the per-user cap wording for a personal key billed to an org', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await createUserApiKey(
+      'user-1',
+      {
+        name: 'personal',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        metadata: { createdFrom: 'dashboard' as const },
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+      },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    ).catch((e: unknown) => e as BadRequestError);
+
+    expect((error as BadRequestError).message).toBe(
+      `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`
+    );
+  });
+
+  it('refuses an org-owned key that does not bill its organization', async () => {
+    await expect(
+      createUserApiKey('sa-1', orgOwnedParams, {
+        trust: TRUSTED,
+        db: { userApiKeys: makeRepo() as unknown as IUserApiKeyRepository },
+      })
+    ).rejects.toThrow(BadRequestError);
   });
 });

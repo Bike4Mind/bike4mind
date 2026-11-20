@@ -111,24 +111,49 @@ export const downloadFile = async (url: string): Promise<string> => {
   }
 };
 
+/**
+ * Read one entry of a zip into a UTF-8 string. Rejects when the file is not a readable zip,
+ * when the entry cannot be read, or when the archive ends without the entry, so a bad upload
+ * fails its import job instead of leaving it processing.
+ */
 export const extractFileFromZip = (zipFile: string, filename: string): Promise<string> => {
-  return new Promise(resolve =>
-    yauzl.open(zipFile, { lazyEntries: true }, (err, zip) => {
-      if (err) throw err;
-      zip.readEntry();
-      zip.on('entry', entry => {
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipFile, { lazyEntries: true }, (openErr, zip) => {
+      if (openErr || !zip) {
+        reject(openErr ?? new Error(`Unable to open archive: ${zipFile}`));
+        return;
+      }
+      let found = false;
+      const fail = (err: Error) => {
+        zip.close();
+        reject(err);
+      };
+      zip.on('error', fail);
+      zip.on('end', () => {
+        if (!found) fail(new Error(`${filename} not found in archive`));
+      });
+      zip.on('entry', (entry: yauzl.Entry) => {
         if (entry.fileName !== filename) {
           zip.readEntry();
           return;
         }
-        // Read the conversations.json file into a string, call resolve() when done
-        zip.openReadStream(entry, (err, readStream) => {
-          if (err) throw err;
-          let data = '';
-          readStream.on('data', (chunk: string) => (data += chunk));
-          readStream.on('end', () => resolve(data));
+        found = true;
+        zip.openReadStream(entry, (streamErr, readStream) => {
+          if (streamErr || !readStream) {
+            fail(streamErr ?? new Error(`Unable to read ${filename} from archive`));
+            return;
+          }
+          // Collect Buffers and decode once so a multi-byte character split across chunks survives.
+          const chunks: Buffer[] = [];
+          readStream.on('data', (chunk: Buffer) => chunks.push(chunk));
+          readStream.on('error', fail);
+          readStream.on('end', () => {
+            zip.close();
+            resolve(Buffer.concat(chunks).toString('utf8'));
+          });
         });
       });
-    })
-  );
+      zip.readEntry();
+    });
+  });
 };

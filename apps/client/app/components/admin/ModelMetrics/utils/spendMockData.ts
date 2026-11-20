@@ -79,6 +79,9 @@ export const spendMockData: SpendData = {
       requests: 38210,
       creditsUsed: 128442,
       costPerRequest: 0.0336,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_02',
@@ -87,6 +90,9 @@ export const spendMockData: SpendData = {
       requests: 27640,
       creditsUsed: 90215,
       costPerRequest: 0.0326,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_03',
@@ -95,6 +101,9 @@ export const spendMockData: SpendData = {
       requests: 21050,
       creditsUsed: 67188,
       costPerRequest: 0.0319,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_04',
@@ -103,6 +112,9 @@ export const spendMockData: SpendData = {
       requests: 16720,
       creditsUsed: 54433,
       costPerRequest: 0.0326,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_05',
@@ -111,6 +123,9 @@ export const spendMockData: SpendData = {
       requests: 12480,
       creditsUsed: 39870,
       costPerRequest: 0.0319,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_06',
@@ -119,6 +134,9 @@ export const spendMockData: SpendData = {
       requests: 8140,
       creditsUsed: 26409,
       costPerRequest: 0.0324,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
     {
       accountId: 'acct_07',
@@ -127,6 +145,9 @@ export const spendMockData: SpendData = {
       requests: 4700,
       creditsUsed: 15300,
       costPerRequest: 0.0326,
+      errorRate: 0.02,
+      p95LatencyMs: 3000,
+      flags: [],
     },
   ],
   byModel: [

@@ -8,7 +8,12 @@
  * existing `@mention -> chat_completion` behavior.
  */
 
-import { OrchestrationDefaultsSchema, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
+import {
+  OrchestrationDefaultsSchema,
+  type ConfidenceGateMode,
+  type IAgent,
+  type OrchestrationDefaults,
+} from '@bike4mind/common';
 
 export function hasOrchestrationFields(agent: IAgent): boolean {
   if (agent.maxIterations) {
@@ -18,7 +23,10 @@ export function hasOrchestrationFields(agent: IAgent): boolean {
   if (agent.allowedTools && agent.allowedTools.length > 0) return true;
   if (agent.deniedTools && agent.deniedTools.length > 0) return true;
   if (agent.defaultThoroughness) return true;
-  return false;
+  // Explicit zero, off and false still configure an orchestration profile.
+  return [agent.confidenceGateThreshold, agent.confidenceGateMode, agent.confidenceGateSelfReport].some(
+    value => value !== undefined && value !== null
+  );
 }
 
 /**
@@ -62,6 +70,12 @@ export interface SyntheticOrchestrationProfile {
   fallbackModels: string[];
   /** Whether `coordinate_task` (DAG decomposition) is enabled. */
   dagEnabled: boolean;
+  /** Per-profile confidence-gate threshold. */
+  confidenceGateThreshold: number;
+  /** Which gate sites are active. */
+  confidenceGateMode: ConfidenceGateMode;
+  /** Whether the executor consumes confidence scores reported by the agent. */
+  confidenceGateSelfReport: boolean;
   /** Discriminator vs `IAgent`. */
   isSynthetic: true;
 }
@@ -103,6 +117,9 @@ export function buildDefaultOrchestrationProfile(
     defaultThoroughness: defaults.defaultThoroughness,
     fallbackModels: defaults.fallbackModels,
     dagEnabled: defaults.dagEnabled,
+    confidenceGateThreshold: defaults.confidenceGateThreshold,
+    confidenceGateMode: defaults.confidenceGateMode,
+    confidenceGateSelfReport: defaults.confidenceGateSelfReport,
     isSynthetic: true,
   };
 }

@@ -31,7 +31,6 @@ MESSAGES = {
 }
 
 
-# Mirrors the canonical PLACEHOLDER_VALUE_PATTERNS in scripts/secrets-scan-summarize-and-ingest.mjs.
 PLACEHOLDER_VALUES = {
     'selfhost', 'minioadmin', 'not-configured', 'not_configured', 'changeme',
     'your-secret-here', 'your_secret_here', 'your-api-key', 'your_api_key',
@@ -244,7 +243,7 @@ def main(argv=None):
         print(f'FAIL {failure}: {MESSAGES[failure]}')
     if failures:
         return 1
-    print('preflight checks passed; live TLS/mail/auth/restore not proven')
+    print('preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)')
     return 0
 
 

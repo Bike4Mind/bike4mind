@@ -102,7 +102,9 @@
     "no_subscription": "Abonelik Yok",
     "x_members": "{{count}} üye",
     "x_credits": "{{count}} kredi",
-    "owner": "Sahip"
+    "roles": {
+      "owner": "Sahip"
+    }
   },
   "session": {
     "typeYourMessage": "Mesajınızı buraya girin",

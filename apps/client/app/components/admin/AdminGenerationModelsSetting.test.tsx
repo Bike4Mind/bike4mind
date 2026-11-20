@@ -160,6 +160,19 @@ describe('AdminGenerationModelsSetting', () => {
     expect(mutate.mock.calls[0][0]).toEqual({ key: 'musicGeneration', value: { enabledModels: { [id]: true } } });
   });
 
+  it('shows a retired video model as off and locked, even under an override that enables it', () => {
+    const retired = VIDEO_MODEL_IDS.find(id => VIDEO_MODEL_CATALOG[id].retired);
+    expect(retired).toBeDefined();
+    const id = retired!;
+    renderSetting({ videoGeneration: { enabledModels: { [id]: true } } });
+    const input = screen
+      .getByTestId(`admin-generation-models-video-${id}-switch`)
+      .querySelector('input') as HTMLInputElement;
+    expect(input.checked).toBe(false);
+    expect(input.disabled).toBe(true);
+    expect(screen.getByTestId(`admin-generation-models-video-${id}-retired-chip`)).toBeTruthy();
+  });
+
   it.each(['video', 'music'] as const)('locks only the %s section while its save is in flight', pending => {
     pendingSection = pending;
     renderSetting({});

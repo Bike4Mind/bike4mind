@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, readFileSync, statSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import mongoose from 'mongoose';
@@ -28,6 +28,16 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   await User.collection.deleteMany({});
   await Organization.collection.deleteMany({});
+});
+
+const reportDirs: string[] = [];
+function reportDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'stale-pointers-'));
+  reportDirs.push(dir);
+  return dir;
+}
+afterAll(() => {
+  for (const dir of reportDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 const silent = () => undefined;
@@ -107,7 +117,7 @@ describe('clearStaleOrganizationPointers', () => {
   it('dry run reports the stale pointers by reason and writes nothing', async () => {
     const s = await seed();
 
-    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const reportPath = join(reportDir(), 'report.json');
 
     // Pin the umask so the mode assertion tests the explicit 0600 rather than passing on a 077 host,
     // where a write with no mode would land on the same bits.
@@ -131,7 +141,7 @@ describe('clearStaleOrganizationPointers', () => {
 
   it('apply nulls and records the reported ids when nothing changes mid-run', async () => {
     await seed();
-    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const reportPath = join(reportDir(), 'report.json');
 
     const result = await clearStaleOrganizationPointers({ apply: true, reportPath, log: silent });
 
@@ -183,7 +193,7 @@ describe('clearStaleOrganizationPointers', () => {
 
   it('logs the actual nulled count when a pointer moves between the re-grade and the write', async () => {
     const s = await seed();
-    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const reportPath = join(reportDir(), 'report.json');
     const findMemberUserIds = organizationRepository.findMemberUserIds.bind(organizationRepository);
     let liveOrgCalls = 0;
     vi.spyOn(organizationRepository, 'findMemberUserIds').mockImplementation(async organizationId => {
@@ -208,7 +218,7 @@ describe('clearStaleOrganizationPointers', () => {
 
   it('apply neither nulls nor reports a user who becomes stale between the report and the write', async () => {
     const s = await seed();
-    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const reportPath = join(reportDir(), 'report.json');
     const findMemberUserIds = organizationRepository.findMemberUserIds.bind(organizationRepository);
     let liveOrgCalls = 0;
     vi.spyOn(organizationRepository, 'findMemberUserIds').mockImplementation(async organizationId => {

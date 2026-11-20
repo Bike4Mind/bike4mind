@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinned counter</title>
+<style>html,body{margin:0;padding:0}*{box-sizing:border-box}#root{min-height:100vh}.b4m-artifact-error{color:#b91c1c;background:#fee2e2;padding:12px;border-radius:4px;border-left:4px solid #b91c1c;font-family:monospace;font-size:12px;white-space:pre-wrap}</style>
+<script src="https://app.bike4mind.com/static/lib/react@18.x.js"></script>
+<script src="https://app.bike4mind.com/static/lib/react-dom@18.x.js"></script>
+<script src="https://app.bike4mind.com/static/lib/prop-types@15.x.js"></script>
+</head><body>
+<div id="root"></div>
+<script>
+(function(){
+  var root=document.getElementById('root');
+  function showError(msg){root.innerHTML='';var b=document.createElement('div');b.className='b4m-artifact-error';b.textContent='Error: '+String(msg);root.appendChild(b);}
+  try{
+    var React=window.React,ReactDOM=window.ReactDOM;
+    var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useMemo=React.useMemo,useCallback=React.useCallback,useReducer=React.useReducer,useContext=React.useContext,createContext=React.createContext;
+    
+    var moduleMap={'react':React};
+    var require=function(m){if(Object.prototype.hasOwnProperty.call(moduleMap,m))return moduleMap[m];throw new Error('Module "'+m+'" is not available');};
+    // react is a runtime global;
+function Counter() {
+  const [count, setCount] = useState(0);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "p-4"
+  }, /*#__PURE__*/React.createElement("span", null, count), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setCount(c => c + 1)
+  }, "+"));
+}
+const __DEFAULT_EXPORT__ = Counter;
+    var __c=(typeof __DEFAULT_EXPORT__!=='undefined')?__DEFAULT_EXPORT__:null;
+    if(!__c){throw new Error('No default-exported component found');}
+    ReactDOM.createRoot(root).render(React.createElement(__c));
+  }catch(e){showError((e&&e.message)||e);}
+})();
+</script>
+</body></html>

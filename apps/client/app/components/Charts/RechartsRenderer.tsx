@@ -3,7 +3,7 @@ import { Box, Typography, Alert } from '@mui/joy';
 import RechartsChart from './RechartsChart';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { tryParseChartJSON } from '@client/app/utils/chartJsonParser';
+import { tryParseChartJSON } from '@bike4mind/server-utils/app/utils/chartJsonParser';
 
 interface RechartsRendererProps {
   config: any;

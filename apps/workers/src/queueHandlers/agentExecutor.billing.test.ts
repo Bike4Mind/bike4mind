@@ -23,6 +23,7 @@ import {
   uncoveredIterationCredits,
   buildInProcessBalanceCheck,
   readPayerBalance,
+  type ToolUsageTotals,
 } from './agentExecutor.billing';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from '@bike4mind/llm-adapters';
@@ -610,7 +611,14 @@ describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
     addToolUsage(pending, { costUsd: 2, inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 1 });
 
     const snapshot = takeToolUsage(pending);
-    expect(snapshot).toEqual({ costUsd: 3, inputTokens: 30, outputTokens: 7, cacheReadTokens: 3, cacheWriteTokens: 5 });
+    expect(snapshot).toEqual({
+      costUsd: 3,
+      chargedCostUsd: 3,
+      inputTokens: 30,
+      outputTokens: 7,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 5,
+    });
     // Reset so a repeat take can't double-count the same spend.
     expect(takeToolUsage(pending)).toEqual({
       costUsd: 0,
@@ -619,6 +627,50 @@ describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
+  });
+
+  it('accumulates chargedCostUsd, falling back to costUsd for reports without one', () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 1,
+      chargedCostUsd: 3,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    addToolUsage(pending, { costUsd: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+
+    expect(pending.costUsd).toBe(3);
+    expect(pending.chargedCostUsd).toBe(5);
+  });
+
+  it('resets chargedCostUsd on take so the next iteration does not re-bill it', () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 1,
+      chargedCostUsd: 3,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+
+    expect(takeToolUsage(pending).chargedCostUsd).toBe(3);
+    const second = takeToolUsage(pending);
+    expect(second.chargedCostUsd ?? second.costUsd).toBe(0);
   });
 });
 
@@ -636,40 +688,20 @@ describe('foldGeneratedMediaUsd', () => {
     cacheWriteTokens: 0,
   });
 
-  it('folds audio_generation speech cost into pending on finish (matches the estimator)', () => {
+  it.each(['start', 'finish'] as const)('does NOT fold audio_generation on %s - its generation job bills it', phase => {
     const pending = zeroPending();
-    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 4096, paths: ['a.mp3'] };
-    const expected = estimateGeneratedMediaUsd('audio_generation', data, []);
+    const estimateUsd = vi.fn().mockReturnValue(0.04);
 
     foldGeneratedMediaUsd({
-      phase: 'finish',
+      phase,
       toolName: 'audio_generation',
-      data,
+      data: { kind: 'speech' },
       models: [],
       pending,
-      estimateUsd: estimateGeneratedMediaUsd,
+      estimateUsd,
     });
 
-    expect(expected).toBeGreaterThan(0);
-    expect(pending.costUsd).toBe(expected);
-    // Media cost folds in as USD only; token counts stay untouched.
-    expect(pending.inputTokens).toBe(0);
-    expect(pending.outputTokens).toBe(0);
-  });
-
-  it('does NOT fold audio_generation on start - audio settles at finish', () => {
-    const pending = zeroPending();
-    const data = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3, paths: ['a.mp3'] };
-
-    foldGeneratedMediaUsd({
-      phase: 'start',
-      toolName: 'audio_generation',
-      data,
-      models: [],
-      pending,
-      estimateUsd: estimateGeneratedMediaUsd,
-    });
-
+    expect(estimateUsd).not.toHaveBeenCalled();
     expect(pending.costUsd).toBe(0);
   });
 
@@ -723,12 +755,12 @@ describe('foldGeneratedMediaUsd', () => {
 
   it('skips the fold when the estimate is <= 0', () => {
     const pending = zeroPending();
-    // Speech payload missing `characters` prices at 0.
-    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', paths: ['a.mp3'] };
+    // An image payload without a model prices at 0.
+    const data = { n: 1, paths: ['img.png'] };
 
     foldGeneratedMediaUsd({
       phase: 'finish',
-      toolName: 'audio_generation',
+      toolName: 'image_generation',
       data,
       models: [],
       pending,
@@ -749,7 +781,7 @@ describe('foldGeneratedMediaUsd', () => {
     expect(() =>
       foldGeneratedMediaUsd({
         phase: 'finish',
-        toolName: 'audio_generation',
+        toolName: 'image_generation',
         data: {},
         models: [],
         pending,
@@ -1456,5 +1488,123 @@ describe('billIteration (UsageEvent price stamp)', () => {
     } as ModelInfo);
     expect(event).toMatchObject({ status: 'error', costUsd: 0 });
     expect(event).not.toHaveProperty('priceSource');
+  });
+});
+
+describe('billIteration (charged model)', () => {
+  const run = (chargedModelInfo?: ModelInfo, toolUsage: Partial<ToolUsageTotals> = {}) => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+    const promise = billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100),
+      counters,
+      modelInfo: makeModelInfo(1000, 1),
+      chargedModelInfo,
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: {
+        costUsd: 5,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        ...toolUsage,
+      },
+      effects,
+    });
+    return { counters, spies, promise };
+  };
+
+  it('prices credits on the charged model while cost stays on the run model', async () => {
+    const { counters, spies, promise } = run(makeModelInfo(1000, 10));
+    await promise;
+
+    // credits: charged 100 * 10 + tool 5; cost: run 100 + tool 5.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1005 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 105, creditsCharged: 1005 })
+    );
+    expect(counters.cumulativeCost).toBe(100);
+  });
+
+  it('prices tool credits on the tool charged USD when a charged model is set', async () => {
+    const { spies, promise } = run(makeModelInfo(1000, 10), { chargedCostUsd: 50 });
+    await promise;
+
+    // credits: charged 100 * 10 + tool charged 50; cost: run 100 + tool 5.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1050 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 105, creditsCharged: 1050 })
+    );
+  });
+
+  it('prices tool credits on costUsd when the tool report carries no charged USD', async () => {
+    const { spies, promise } = run(makeModelInfo(1000, 10));
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1005 }));
+  });
+
+  it('ignores the tool charged USD without a charged model', async () => {
+    const { spies, promise } = run(undefined, { chargedCostUsd: 50 });
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 105 }));
+  });
+
+  it('without a charged model credits follow the run model', async () => {
+    const { spies, promise } = run(undefined);
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 105 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 105, creditsCharged: 105 }));
+  });
+
+  it('chains tool usage, media and billIteration into charged-price credits', async () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 5,
+      chargedCostUsd: 50,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'image_generation',
+      data: {},
+      models: [],
+      pending,
+      estimateUsd: () => 7,
+    });
+    const toolUsage = takeToolUsage(pending);
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100),
+      counters,
+      modelInfo: makeModelInfo(1000, 1),
+      chargedModelInfo: makeModelInfo(1000, 10),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage,
+      effects,
+    });
+
+    // credits: turns 100 * 10 + tool charged 50 + media 7; cost: run 100 + tool 5 + media 7.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1057 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 112, creditsCharged: 1057 })
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { isOriginPermitted } from '@bike4mind/common';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 /**
  * Whether a browser Origin is our own serving host, i.e. the embed widget page
@@ -54,8 +54,8 @@ export function isEmbedOriginAllowed(
 }
 
 /**
- * Absent Origin = non-browser caller, the credential decides. Opaque `null` passes only on keys
- * with no allow-list (a browser cannot omit Origin, so `null` is not a server-to-server signal).
+ * Absent Origin = non-browser caller, the credential decides. Opaque `null` never passes: a browser
+ * cannot omit Origin, so `null` is not a server-to-server signal, and it can match no allow-list.
  */
 export function resolveEmbedOriginDecision(
   rawOrigin: string | undefined,
@@ -63,6 +63,6 @@ export function resolveEmbedOriginDecision(
   requestHost: string | undefined
 ): boolean {
   if (!rawOrigin) return true;
-  if (rawOrigin === 'null') return !allowedOrigins?.length;
+  if (rawOrigin === 'null') return false;
   return isEmbedOriginAllowed(rawOrigin, allowedOrigins, requestHost);
 }

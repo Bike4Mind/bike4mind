@@ -32,7 +32,7 @@ const GearStampSchema = new Schema(
 
 GearStampSchema.index({ userId: 1, key: 1 }, { unique: true });
 
-export const GearStamp =
+export const GearStamp: Model<IGearStampDocument> =
   (mongoose.models.GearStamp as mongoose.Model<IGearStampDocument>) ||
   model<IGearStampDocument>('GearStamp', GearStampSchema);
 

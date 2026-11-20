@@ -5,8 +5,10 @@
  * Reuses existing tool implementations from the LLM services.
  */
 
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
-import type { IMessageDataToClient } from '@bike4mind/common';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
+import { ACCOUNT_TRUST_REQUIRED_ERROR_CODE, type IMessageDataToClient } from '@bike4mind/common';
 
 interface ToolExecutionResult {
   success: boolean;
@@ -89,11 +91,29 @@ export async function executeVoiceTool(
     return { success: true, result };
   } catch (error) {
     const elapsed = Date.now() - startTime;
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = getToolErrorMessage(error);
     debugLog(`[TOOL] ${toolName} FAILED after ${elapsed}ms: ${errorMessage}`);
     console.error(`[Voice Tool] ${toolName} error (${elapsed}ms):`, errorMessage);
     return { success: false, error: errorMessage };
   }
+}
+
+function getToolErrorMessage(error: unknown): string {
+  // web_search and web_fetch are billed per call; the model relays this to the user as speech.
+  const outOfCredits = getInsufficientCreditsMessage(error);
+  if (outOfCredits) {
+    return `That tool was not run because the account is out of credits. Tell the user to add credits, then try again. ${outOfCredits}`;
+  }
+  if (isAxiosError(error)) {
+    const data: unknown = error.response?.data;
+    if (data && typeof data === 'object') {
+      const { errorCode, error: serverMessage } = data as { errorCode?: unknown; error?: unknown };
+      if (errorCode === ACCOUNT_TRUST_REQUIRED_ERROR_CODE && typeof serverMessage === 'string') {
+        return serverMessage;
+      }
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -109,9 +129,10 @@ async function executeWebFetch(url: string): Promise<string> {
  * Execute web search via server API
  */
 async function executeWebSearch(query: string, num_results: number = 3): Promise<string> {
+  const count = Number.isFinite(num_results) ? Math.min(10, Math.max(1, Math.round(num_results))) : 3;
   const { data } = await api.post('/api/tools/web-search', {
     query,
-    num_results,
+    num_results: count,
   });
 
   return data.result || 'No search results found.';

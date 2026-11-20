@@ -1,6 +1,7 @@
 import {
   IFabFileRepository,
   IMessage,
+  IResearchTask,
   IResearchDataRepository,
   IResearchTaskJobs,
   IResearchTaskRepository,
@@ -10,8 +11,9 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { isAiAccessRefusal } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
-import axios from 'axios';
+import type mongoose from 'mongoose';
 import { z } from 'zod';
 import plimit from 'p-limit';
 import pLimit from 'p-limit';
@@ -24,7 +26,7 @@ type IResearchTaskProcessDiscoveredLinks = z.infer<typeof researchTaskProcessDis
 
 interface IResearchTaskProcessDiscoveredLinksAdapters {
   db: {
-    withTransaction: (fn: (session: any) => Promise<void>) => Promise<void>;
+    withTransaction: (fn: (session: mongoose.ClientSession) => Promise<void>) => Promise<void>;
     researchTasks: IResearchTaskRepository;
     fabFiles: IFabFileRepository;
     researchDatas: IResearchDataRepository;
@@ -35,10 +37,11 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
     warn: (message: string) => void;
   };
   llm: ICompletionBackend;
+  storage: { download: (path: string) => Promise<Buffer> };
   jobs: {
     researchTasks: IResearchTaskJobs & {
       sendToClient: (
-        researchTask: any,
+        researchTask: IResearchTask,
         update: { status: string; currentStep: string; progress: number }
       ) => Promise<void>;
     };
@@ -54,13 +57,17 @@ const CONCURRENCY_LIMIT = 3;
 const LINK_EXTRACTION_MAX_TOKENS = 16_384;
 
 // No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
+/** A refusal about the task owner (no credits, or no AI access), not the links; it fails every batch alike. */
+const isOwnerRefusal = (error: unknown): boolean =>
+  getQuestErrorCode(error) === 'insufficient_credits' || isAiAccessRefusal(error);
+
 export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
 
 export const processDiscoveredLinks = async (
   parameters: IResearchTaskProcessDiscoveredLinks,
   adapters: IResearchTaskProcessDiscoveredLinksAdapters
 ) => {
-  const { db, logger, llm, jobs } = adapters;
+  const { db, logger, llm, jobs, storage } = adapters;
   const { id } = secureParameters(parameters, researchTaskProcessDiscoveredLinksSchema);
 
   const researchTask = await db.researchTasks.findById(id);
@@ -111,18 +118,17 @@ export const processDiscoveredLinks = async (
 
     if (!fabFile)
       throw new NotFoundError(`Research Task Process Discovered Links - Fab File ${researchData.fabFileId} not found`);
-    if (!fabFile.fileUrl)
+    if (!fabFile.filePath)
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file url`
+        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file path`
       );
 
     let content: string;
     try {
-      const response = await axios.get(fabFile.fileUrl);
-      content = response.data;
+      content = (await storage.download(fabFile.filePath)).toString('utf8');
     } catch (error) {
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id} at ${fabFile.fileUrl}`
+        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id}`
       );
     }
     const { prompt } = researchTask;
@@ -292,9 +298,9 @@ export const processDiscoveredLinks = async (
 
               break;
             } catch (e) {
-              // A credit refusal is about the owner, not the links. Preserve them for a later run
+              // A credit or AI-access refusal is about the owner, not the links. Preserve them for a later run
               // and let the queue handler fail the task rather than retrying each unpaid batch.
-              if (getQuestErrorCode(e) === 'insufficient_credits') {
+              if (isOwnerRefusal(e)) {
                 creditRefusal = e;
                 throw e;
               }
@@ -339,7 +345,7 @@ export const processDiscoveredLinks = async (
     );
 
     for (const result of batchResults) {
-      if (result.status === 'rejected' && getQuestErrorCode(result.reason) === 'insufficient_credits') {
+      if (result.status === 'rejected' && isOwnerRefusal(result.reason)) {
         throw result.reason;
       }
     }
@@ -375,7 +381,7 @@ export const processDiscoveredLinks = async (
     await queueRunner.close();
     // Keep completed, paid batches when another batch is refused, so retrying the task does not
     // pay for those batches again. The queue handler owns the task's credit-refusal failure state.
-    if (getQuestErrorCode(e) === 'insufficient_credits') {
+    if (isOwnerRefusal(e)) {
       await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
       throw e;
     }

@@ -15,6 +15,7 @@ import {
   BRANDING_SETTINGS_QUERY_KEY,
 } from '@client/app/hooks/data/queryKeys';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
+import { useSettingsDraft } from './SettingsDraftProvider';
 
 export async function compressAdminLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -78,7 +79,21 @@ const AdminLogoUpload: React.FC = () => {
     return `${cdnUrl}/admin-logos/${filename}`;
   };
 
-  const useBothLogos = localUseBothLogos;
+  const logoDraft = useSettingsDraft('logo-mode', serverUseBothLogos ?? false, {
+    name: 'Logo mode',
+    save: async useBothLogos => {
+      await updateSettingsMutation.mutateAsync({
+        key: 'logoSettings',
+        value: {
+          customLogoUrl: serverLogoSettings?.customLogoUrl || '',
+          customDarkLogoUrl: serverLogoSettings?.customDarkLogoUrl || '',
+          useBothLogos,
+        },
+      });
+      if (useBothLogos && currentDarkLogoUrl) await handleRemoveLogo(true, true);
+    },
+  });
+  const useBothLogos = logoDraft.staged ? logoDraft.value : localUseBothLogos;
   const currentLogoUrl = buildLogoUrl(localLogoUrl);
   const currentDarkLogoUrl = buildLogoUrl(localDarkLogoUrl);
 
@@ -246,7 +261,7 @@ const AdminLogoUpload: React.FC = () => {
     }
   };
 
-  const handleRemoveLogo = async (isDarkMode: boolean = false) => {
+  const handleRemoveLogo = async (isDarkMode: boolean = false, propagateFailure = false) => {
     setIsUploading(true);
     setUploadError(null);
 
@@ -294,6 +309,7 @@ const AdminLogoUpload: React.FC = () => {
       } else {
         setLocalLogoUrl(currentUrl);
       }
+      if (propagateFailure) throw error;
     } finally {
       setIsUploading(false);
     }
@@ -301,6 +317,10 @@ const AdminLogoUpload: React.FC = () => {
 
   const handleToggleUseBothLogos = async () => {
     const newValue = !useBothLogos;
+    if (logoDraft.staged) {
+      logoDraft.setValue(newValue);
+      return;
+    }
 
     // Immediately update local state for instant UI feedback
     setLocalUseBothLogos(newValue);
@@ -356,7 +376,8 @@ const AdminLogoUpload: React.FC = () => {
           <Checkbox
             checked={useBothLogos}
             onChange={handleToggleUseBothLogos}
-            disabled={isUploading}
+            disabled={isUploading || logoDraft.pending}
+            data-testid="admin-logo-mode-checkbox"
             label="Use same logo for light and dark modes"
           />
           <Typography level="body-sm" sx={{ mt: 0.5, color: 'text.secondary' }}>
@@ -415,6 +436,7 @@ const AdminLogoUpload: React.FC = () => {
                 tabIndex={-1}
                 startDecorator={<CloudUploadOutlinedIcon />}
                 loading={isUploading}
+                disabled={logoDraft.pending || logoDraft.dirty}
                 variant="outlined"
                 sx={{ width: { xs: '100%', sm: 'auto' } }}
               >
@@ -432,6 +454,7 @@ const AdminLogoUpload: React.FC = () => {
                   variant="soft"
                   color="danger"
                   loading={isUploading}
+                  disabled={logoDraft.pending || logoDraft.dirty}
                   onClick={() => handleRemoveLogo(false)}
                   sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
@@ -488,6 +511,7 @@ const AdminLogoUpload: React.FC = () => {
                   tabIndex={-1}
                   startDecorator={<CloudUploadOutlinedIcon />}
                   loading={isUploading}
+                  disabled={logoDraft.pending || logoDraft.dirty}
                   variant="outlined"
                   sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
@@ -505,6 +529,7 @@ const AdminLogoUpload: React.FC = () => {
                     variant="soft"
                     color="danger"
                     loading={isUploading}
+                    disabled={logoDraft.pending || logoDraft.dirty}
                     onClick={() => handleRemoveLogo(true)}
                     sx={{ width: { xs: '100%', sm: 'auto' } }}
                   >

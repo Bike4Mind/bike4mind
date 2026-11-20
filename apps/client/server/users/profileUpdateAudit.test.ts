@@ -13,7 +13,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
 }));
 
@@ -35,6 +35,9 @@ describe('profileFieldsSent', () => {
       currentCredits: 5,
       creditDelta: 1,
       creditReason: 'c',
+      isBanned: true,
+      isModerated: true,
+      statusChangeReason: 's',
       name: 'Ada',
       email: 'a@example.com',
     };

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Focus: the chunk-failure path must persist a per-file error and account the file as
 // failed in its batch (so a bad file is visible instead of silently stuck at
 // chunkCount:0), then re-throw so SQS retries then routes to the DLQ.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
   // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
@@ -150,8 +150,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
   completedBatchStatus: (...a: unknown[]) => h.completedBatchStatus(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
@@ -169,8 +169,13 @@ vi.mock('@bike4mind/common', async () => {
     // (#2766) turns entirely on this predicate rejecting a model id that has left the supported
     // enum, and a stubbed-true version would make every one of those tests assert against itself.
     isSupportedEmbeddingModel: actual.isSupportedEmbeddingModel,
+    // Real: the unsupported-format verdict is made entirely of these two.
+    isSupportedFabFileMimeType: actual.isSupportedFabFileMimeType,
+    isMediaOnlyMimeType: actual.isMediaOnlyMimeType,
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
     ChunkClaimLostError,
+    // Real: the mid-run-deletion branch must recognise the class prepare actually throws.
+    NotFoundError: actual.NotFoundError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
     // the real bug would hide behind.
@@ -185,6 +190,9 @@ vi.mock('@bike4mind/common', async () => {
     CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
     provenancePayloadShape: actual.provenancePayloadShape,
     shouldHaltConvergence: actual.shouldHaltConvergence,
+    // Real: the password-protected verdict must recognise the exception shape pdf.js throws.
+    isPasswordProtectedPdfError: actual.isPasswordProtectedPdfError,
+    PASSWORD_PROTECTED_PDF_MESSAGE: actual.PASSWORD_PROTECTED_PDF_MESSAGE,
   };
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
@@ -200,8 +208,9 @@ vi.mock('sst', () => ({
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { PASSWORD_PROTECTED_PDF_MESSAGE } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
-import { ChunkClaimLostError } from '@bike4mind/common';
+import { ChunkClaimLostError, NotFoundError } from '@bike4mind/common';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { fabFileId: 'ff1', userId: 'u1' };
@@ -349,6 +358,56 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
     expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - password-protected PDF', () => {
+  // The shape pdf.js (through unpdf) throws: an Error named PasswordException carrying a
+  // PasswordResponses code (1 = NEED_PASSWORD).
+  const passwordException = () => Object.assign(new Error('No password given'), { name: 'PasswordException', code: 1 });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
+    h.completedBatchStatus.mockReturnValue(undefined);
+    // A non-final delivery: an ordinary failure here would defer and rethrow.
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    h.chunkFabfile.mockRejectedValue(passwordException());
+  });
+
+  it('fails the file on the first delivery with the user-facing message, warns, and does not throw', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', PASSWORD_PROTECTED_PDF_MESSAGE);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', PASSWORD_PROTECTED_PDF_MESSAGE);
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ chunkStatus: 'failed', failedMessage: PASSWORD_PROTECTED_PDF_MESSAGE })
+    );
+    const logger = mockLogger as unknown as { warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('password-protected'));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
+  });
+
+  it('still defers and rethrows an unrelated chunking error', async () => {
+    h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });
 
@@ -800,6 +859,61 @@ describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - file deleted mid-run', () => {
+  // The owner deletes the file after the pre-flight read but before prepare re-reads it, so prepare
+  // throws a not-found. No retry can bring the file back: acknowledge, warn once, account nothing.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    h.findAccessibleById.mockResolvedValueOnce({ id: 'ff1', batchId: 'batch-1' }).mockResolvedValue(null);
+    h.chunkFabfile.mockRejectedValue(new NotFoundError('FabFile not found'));
+  });
+
+  it('acknowledges the message without deferring, accounting a failure or dispatching work', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('warns once and still releases the claim', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('removed while it was being chunked'));
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
+  });
+
+  it('treats a same-named not-found from another module realm the same way', async () => {
+    h.chunkFabfile.mockRejectedValue(Object.assign(new Error('FabFile not found'), { name: 'NotFoundError' }));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ordinary failure path when the file is still there', async () => {
+    h.findAccessibleById.mockReset().mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('FabFile not found');
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('removed while it was being chunked'));
+  });
+
+  it('keeps the ordinary failure path when the confirmation read fails', async () => {
+    h.findAccessibleById
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'ff1', batchId: 'batch-1' })
+      .mockRejectedValue(new Error('connection reset'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('FabFile not found');
+  });
+
+  it('does not re-read for an error that is not a not-found', async () => {
+    h.chunkFabfile.mockRejectedValue(new Error('Invalid PDF structure'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('Invalid PDF structure');
+    expect(h.findAccessibleById).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1703,5 +1817,72 @@ describe('fabFileChunk handler - pre-flight failures are accounted', () => {
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith(expect.objectContaining({ _id: 'ff1' }), {
       $set: { isChunking: false },
     });
+  });
+});
+
+describe('fabFileChunk handler - unsupported file format', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.chunkFabfile.mockResolvedValue([]);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({ failedFiles: 1, processingFailedFiles: 1, totalFiles: 1 });
+    h.completedBatchStatus.mockReturnValue(undefined);
+  });
+
+  // A legacy binary Office file chunks to nothing on every attempt, so a retry cannot help: it is
+  // failed on the first delivery, with a reason the user can act on, and the message is consumed.
+  it('fails a file with no reader on the first delivery and tells the user why', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', mimeType: 'application/x-cfb' });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('not supported'));
+    expect(h.updateFileStatus).toHaveBeenCalledWith(
+      'batch-1',
+      'ff1',
+      'failed',
+      expect.stringContaining('not supported')
+    );
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ fabFileId: 'ff1', chunkStatus: 'failed' })
+    );
+    // Not also counted as a completed file.
+    expect(h.claimFileStatus).not.toHaveBeenCalledWith('batch-1', 'ff1', expect.anything(), 'complete');
+    expect(h.incrementCounter).not.toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  // The zero-chunk stamp makes a redelivery skip the file, so it must not land before the failure
+  // does: a transient error while recording the failure would otherwise leave the file "complete".
+  it('leaves the file unstamped for redelivery when recording the failure throws', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', mimeType: 'application/x-cfb' });
+    h.markFailedIfNotAlready.mockRejectedValueOnce(new Error('mongo blip'));
+    const stamp = [{ _id: 'ff1' }, { $set: { noExtractableTextAt: expect.any(Date) } }];
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('mongo blip');
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(...stamp);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledTimes(2);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(...stamp);
+  });
+
+  it.each([
+    ['a supported type', 'application/pdf'],
+    ['a text type chunked as plain text', 'text/x-python'],
+    ['a file with no recorded type', undefined],
+  ])('still completes %s that chunks to zero', async (_label, mimeType) => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', mimeType });
+    h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, totalFiles: 1 });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
 });

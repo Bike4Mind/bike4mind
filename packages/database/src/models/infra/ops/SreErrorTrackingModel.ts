@@ -251,6 +251,8 @@ SreErrorTrackingSchema.index(
 );
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
+// Cross-repo status counts, e.g. the admin sidebar's count of failed pipelines.
+SreErrorTrackingSchema.index({ status: 1 });
 
 export const IN_FLIGHT_STATUSES = new Set<ISreErrorTracking['status']>([
   'detected',
@@ -354,6 +356,13 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   constructor(private sreErrorTrackingModel: mongoose.Model<ISreErrorTracking>) {
     super(sreErrorTrackingModel);
     this.model = sreErrorTrackingModel;
+  }
+
+  /** Pipelines that failed and wait for an admin to retry or dismiss them, across repos; `limit` stops counting there. */
+  async countFailed(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ status: { $in: ['failed', 'dispatch_failed'] } }, { limit: options.limit })
+      .exec();
   }
 
   /**
@@ -916,7 +925,7 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 }
 
-const SreErrorTrackingModel =
+export const SreErrorTrackingModel =
   (mongoose.models['SreErrorTracking'] as unknown as mongoose.Model<ISreErrorTracking>) ||
   mongoose.model<ISreErrorTracking>('SreErrorTracking', SreErrorTrackingSchema);
 

@@ -5,6 +5,7 @@ import {
   isGenerationJobOfKind,
   type GenerationJobCreateInput,
   type GenerationJobKind,
+  type ApiKeyBillingOwnerType,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
@@ -13,6 +14,9 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, type CreditHold, type CreditHoldAdapters } from '../creditService/creditHold';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
+import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
 import type { GenerationJobEngine } from './engine';
 
 /**
@@ -84,17 +88,39 @@ export async function findIdempotentReplay<K extends GenerationJobKind>(
   return existing ? replayOrReject(existing, kind, request) : null;
 }
 
-/** Holds `requiredCredits` when credits are enforced; null when they are not. Insufficient credits is a value. */
+const insufficientCredits = (message: string): InsufficientCredits => ({
+  ok: false,
+  status: 402,
+  code: 'insufficient_credits',
+  message,
+});
+
+/**
+ * Holds `requiredCredits` when credits are enforced; null when they are not. Insufficient credits is a value.
+ * A frozen subject is refused even when credits are not enforced, and throws the 403 `spend_frozen` error
+ * rather than returning a value: it is not a 402 the caller can recover from by buying credits.
+ */
 export async function holdJobCredits(
   params: {
     enforceCredits: boolean;
     user: { id: string; organizationId: string | null };
     requiredCredits: number;
     featureLabel: string;
+    apiKeyId?: string | null;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
   },
   deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
 ): Promise<{ ok: true; hold: CreditHold | null } | InsufficientCredits> {
-  if (!params.enforceCredits) return { ok: true, hold: null };
+  if (!params.enforceCredits) {
+    // holdCredits checks the freeze itself, so only the credits-off path needs it here.
+    const subject = spendFreezeSubjectForHold({
+      userId: params.user.id,
+      organizationId: params.user.organizationId,
+      apiKeyId: params.apiKeyId,
+    });
+    await assertSpendNotFrozen(subject, { db: { spendFreezes: deps.credits.spendFreezes } });
+    return { ok: true, hold: null };
+  }
   try {
     const hold = await holdCredits(
       {
@@ -103,16 +129,46 @@ export async function holdJobCredits(
         requiredCredits: params.requiredCredits,
         featureLabel: params.featureLabel,
         logger: deps.logger,
+        apiKeyId: params.apiKeyId,
+        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
       },
       deps.credits
     );
     return { ok: true, hold };
   } catch (error) {
     if (getQuestErrorCode(error) === 'insufficient_credits' && error instanceof Error) {
-      return { ok: false, status: 402, code: 'insufficient_credits', message: error.message };
+      return insufficientCredits(error.message);
     }
     throw error;
   }
+}
+
+/**
+ * Checks a multi-job batch's total against the new-account spend cap before its per-job holds. Refuses with
+ * holdJobCredits' shape.
+ */
+export async function checkBatchSpendCap(
+  params: {
+    enforceCredits: boolean;
+    user: { id: string; organizationId: string | null };
+    totalCredits: number;
+  },
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
+): Promise<InsufficientCredits | null> {
+  if (!params.enforceCredits || params.totalCredits <= 0) return null;
+  const user = await deps.credits.users.findById(params.user.id);
+  // holdCredits refuses a missing user on the first hold; nothing to cap here.
+  if (!user) return null;
+  const message = await checkNewAccountSpendCap(
+    {
+      user,
+      requestedCredits: params.totalCredits,
+      billedToOrganization: resolveJobOwner(params.user).ownerType === CreditHolderType.Organization,
+      logger: deps.logger,
+    },
+    deps.credits.newAccountSpendCap
+  );
+  return message ? insufficientCredits(message) : null;
 }
 
 /**

@@ -106,6 +106,7 @@ export default function ActivatePage() {
                 fontSize: 80,
                 color: 'success.500',
                 mb: 3,
+                alignSelf: 'center',
               }}
             />
             <Typography level="h2" sx={{ mb: 2, fontWeight: 600 }}>

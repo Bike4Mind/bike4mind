@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { supportsToolChanges, supportsToolSearch } from './claudeToolCapabilities';
-import { ModelBackend, supportsForcedToolChoice } from './models';
+import { supportsForcedToolChoice, supportsToolChanges, supportsToolSearch } from './claudeToolCapabilities';
+import { ModelBackend } from './models';
 import { tokenEstimateMultiplier } from './utils/tokenEstimateMultiplier';
 
 // [id, tool search, tool changes, token multiplier, forced tool choice]. Tool flags use the backend the id's
@@ -40,7 +40,7 @@ describe('Claude id consumers', () => {
       supportsToolSearch({ id, backend }),
       supportsToolChanges({ id, backend }),
       tokenEstimateMultiplier(id),
-      supportsForcedToolChoice(id),
+      supportsForcedToolChoice({ id, backend }),
     ]).toEqual([toolSearch, toolChanges, multiplier, forcedToolChoice]);
   });
 });

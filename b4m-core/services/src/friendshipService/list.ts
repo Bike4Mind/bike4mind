@@ -31,10 +31,22 @@ export async function listFriends(
 
   const friends = await db.users.findByIds(friendUserIds as string[]);
 
-  return friendships.map((friendship, index) => ({
-    id: friendship.id,
-    user: friends[index],
-  }));
+  return pairWithUsers(friendships, friendUserIds, friends);
+}
+
+// findByIds does not preserve input order, so pair by id and drop rows whose user no longer exists.
+function pairWithUsers(
+  friendships: Array<{ id: string }>,
+  counterpartIds: unknown[],
+  users: IUserDocument[]
+): Array<{ id: string; user: IUserDocument }> {
+  const usersById = new Map(users.map(user => [String(user.id), user]));
+  const rows: Array<{ id: string; user: IUserDocument }> = [];
+  friendships.forEach((friendship, index) => {
+    const user = usersById.get(String(counterpartIds[index]));
+    if (user) rows.push({ id: friendship.id, user });
+  });
+  return rows;
 }
 
 const listPendingFriendRequestsSchema = z.object({
@@ -55,8 +67,5 @@ export async function listPendingFriendRequests(
   const requesterIds = filteredPendingRequests.map(friendship => friendship.requester);
   const requesters = await db.users.findByIds(requesterIds as string[]);
 
-  return filteredPendingRequests.map((friendship, index) => ({
-    id: friendship.id,
-    user: requesters[index],
-  }));
+  return pairWithUsers(filteredPendingRequests, requesterIds, requesters);
 }

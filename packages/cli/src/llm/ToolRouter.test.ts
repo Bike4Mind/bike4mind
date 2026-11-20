@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const serverExecute = vi.hoisted(() => vi.fn());
 vi.mock('./ServerToolExecutor', () => ({
@@ -9,7 +9,7 @@ vi.mock('./ServerToolExecutor', () => ({
   },
 }));
 
-import { executeTool } from './ToolRouter';
+import { executeTool, setWebSocketToolExecutor } from './ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 
 // Local tools never touch the ApiClient, so a bare stub is sufficient here.
@@ -52,4 +52,39 @@ describe('executeTool routing', () => {
   it('rejects a non-server tool with no implementation', async () => {
     await expect(executeTool('mcp__demo__ping', {}, apiClient)).rejects.toThrow('Unknown tool: mcp__demo__ping');
   });
+});
+
+describe('executeTool over the WebSocket executor', () => {
+  afterEach(() => setWebSocketToolExecutor(null));
+  const useWebSocket = (result: { success: boolean; content?: unknown; error?: string; errorCode?: string }) =>
+    setWebSocketToolExecutor({ execute: vi.fn(async () => result) } as never);
+
+  it('returns the content of a successful call', async () => {
+    useWebSocket({ success: true, content: 'results' });
+    expect(await executeTool('web_search', { query: 'q' }, apiClient)).toBe('results');
+  });
+
+  it('keeps the plain error form for an ordinary failure', async () => {
+    useWebSocket({ success: false, error: 'provider down' });
+    expect(await executeTool('web_search', { query: 'q' }, apiClient)).toBe(
+      'Error executing web_search: provider down'
+    );
+  });
+
+  it.each(['web_search', 'web_fetch'])(
+    'tells the model %s did not run when the account is out of credits',
+    async tool => {
+      useWebSocket({
+        success: false,
+        error: 'You do not have enough credits for web search.',
+        errorCode: 'insufficient_credits',
+      });
+
+      const result = await executeTool(tool, { query: 'q', url: 'https://example.com' }, apiClient);
+
+      expect(result).toContain(`Error executing ${tool}: the account is out of credits, so the tool did not run.`);
+      expect(result).toContain('add credits');
+      expect(result).toContain('You do not have enough credits for web search.');
+    }
+  );
 });

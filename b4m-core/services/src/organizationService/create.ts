@@ -1,4 +1,10 @@
-import { IOrganizationDocument, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+  ConflictError,
+} from '@bike4mind/common';
 import { secureParameters, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -34,6 +40,10 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
   const owner = billingOwnerId === user.id ? user : await adapters.db.users.findById(billingOwnerId);
   if (!owner) {
     throw new NotFoundError(`Billing owner ${billingOwnerId} not found`);
+  }
+
+  if (owner.deletion?.scheduledFor) {
+    throw new ConflictError('An account scheduled for deletion cannot own a new organization.');
   }
 
   const buildOrganization: Omit<IOrganizationDocument, 'id'> = {

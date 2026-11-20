@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => null }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => null }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => null }));
 vi.mock('@bike4mind/database', () => ({
   briefcasePromptRepository: {
     findByIdForCaller: (...a: unknown[]) => mockFindByIdForCaller(...a),

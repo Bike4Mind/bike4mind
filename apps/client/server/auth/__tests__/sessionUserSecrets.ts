@@ -19,6 +19,10 @@ export function secretUserFields() {
     securityQuestions: [{ question: 'first pet', answer: SECRET_VALUE }],
     loginRecords: [{ ip: SECRET_VALUE }],
     signupMeta: { ip: SECRET_VALUE },
+    freeCreditClaimEmail: SECRET_VALUE,
+    freeQuestStartId: SECRET_VALUE,
+    grantPackageId: SECRET_VALUE,
+    signupGrantAssessment: { policyVersion: SECRET_VALUE },
     authProviders: [
       {
         id: 'goog-sub-1',
@@ -57,7 +61,21 @@ export function secretUserFields() {
     pendingEmailExpires: new Date('2026-01-02'),
     pendingNotionOAuthNonce: SECRET_VALUE,
     userNotes: SECRET_VALUE,
+    throttle: { tier: 'shadow', reason: SECRET_VALUE, source: 'admin', changedAt: new Date('2026-01-01') },
+    riskSignals: [{ type: 'signup_honeypot', at: new Date('2026-01-01'), futureField: SECRET_VALUE }],
+    signupLanding: { notebookOwnerId: SECRET_VALUE, capturedAt: new Date('2026-01-01') },
     stripeCustomerId: SECRET_VALUE,
+    personaLoginCodeHash: SECRET_VALUE,
+    personaLoginCodeExpiresAt: new Date('2026-01-01'),
+    accountFilePurge: { startedAt: new Date('2026-01-01'), leaseId: SECRET_VALUE, afterAuditId: SECRET_VALUE },
+    accountDataExportLease: { id: SECRET_VALUE, jobId: SECRET_VALUE, expiresAt: new Date('2026-01-01') },
+    providerEndUserId: SECRET_VALUE,
+    riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
+    riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },
+    riskReviewAutoApproval: { policy: 'settled_payment', decidedAt: new Date(0) },
+    riskReviewReopenedAt: new Date(0),
+    paymentRiskEventAt: new Date(0),
+    riskReviewAutoCheckedAt: new Date(0),
     notInSchema: SECRET_VALUE,
   } satisfies Record<(typeof USER_SECRET_FIELDS)[number] | 'passwordHash' | 'notInSchema', unknown>;
 }

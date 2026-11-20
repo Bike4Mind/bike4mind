@@ -1,0 +1,367 @@
+import { Types } from 'mongoose';
+import {
+  adminAuditLogRepository,
+  CREDIT_BALANCE_EVENT_TYPES,
+  CreditTransaction,
+  Session,
+  UserApiKeyAuditLog,
+  UserAuthAuditLogModel,
+} from '@bike4mind/database';
+import {
+  authMethodLabel,
+  CreditHolderType,
+  type AuditLogCursor,
+  type SessionOriginChannel,
+  type UserTimelineEntry,
+  type UserTimelineType,
+} from '@bike4mind/common';
+import {
+  apiKeyAuditRowToEntry,
+  authAuditRowToEntry,
+  buildActorDirectory,
+  createdAtCursorClauses,
+  type ActivitySubject,
+  type UserApiKeyAuditRow,
+  type UserAuthAuditRow,
+} from './userActivity';
+import { authEventSummary } from './userSignIns';
+import {
+  emailDomainOf,
+  fetchModerationEntries,
+  fetchPaymentEntries,
+  fetchSignupEntries,
+  loadSignInNetworks,
+  type TimelineAccount,
+} from './userTimelineAccount';
+import { fetchLimitEntries } from './userTimelineLimits';
+import { listSpendGroups, loadSpendLookups, spendGroupToEntry } from './userTimelineSpend';
+import { apiRequestToEntry, readApiRequests } from '@bike4mind/server-utils/utils/userApiRequests';
+
+const QUERY_MAX_TIME_MS = 15_000;
+
+/** The audited user plus the account fields the spend, signup and sign-in rows read. */
+export type TimelineSubject = ActivitySubject & { account: TimelineAccount };
+
+export type TimelineRange = { from?: Date; to?: Date };
+
+type TimelinePageOptions = { limit: number; cursor?: AuditLogCursor; range: TimelineRange; apiKeyId?: string };
+
+/** One source's slice: its newest rows after the cursor, and whether it holds more beyond them. */
+type SourcePage = { entries: UserTimelineEntry[]; hasMore: boolean };
+
+const createdAtRangeClauses = ({ from, to }: TimelineRange): Record<string, unknown>[] => [
+  ...(from ? [{ createdAt: { $gte: from } }] : []),
+  ...(to ? [{ createdAt: { $lte: to } }] : []),
+];
+
+const fetchedPage = <Row>(rows: Row[], limit: number, toEntry: (row: Row) => UserTimelineEntry): SourcePage => ({
+  entries: rows.map(toEntry),
+  hasMore: rows.length > limit,
+});
+
+// --- Sources ---
+
+const listAdminTarget = async (
+  target: { kind: 'user' | 'system'; id: string },
+  page: TimelinePageOptions
+): Promise<SourcePage> => {
+  const { entries, nextCursor } = await adminAuditLogRepository.list(
+    {
+      targetKind: target.kind,
+      targetId: target.id,
+      from: page.range.from?.toISOString(),
+      to: page.range.to?.toISOString(),
+    },
+    { limit: page.limit, cursor: page.cursor }
+  );
+  return {
+    entries: entries.map(audit => ({
+      type: 'admin',
+      id: audit.id,
+      at: audit.occurredAt,
+      summary: audit.summary,
+      audit,
+    })),
+    hasMore: nextCursor !== null,
+  };
+};
+
+/**
+ * Admin actions on the user, plus decisions on a signup hold for the user's email domain: those are
+ * audited against the domain (signup-domain-holds.ts), but they decided this account's credits too.
+ */
+const fetchAdminEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const domain = emailDomainOf(subject.account.email);
+  const pages = await Promise.all([
+    listAdminTarget({ kind: 'user', id: subject.id }, page),
+    ...(domain ? [listAdminTarget({ kind: 'system', id: `signup-domain-hold:${domain}` }, page)] : []),
+  ]);
+  if (pages.length === 1) return pages[0];
+  const merged = mergeTimelinePages(pages, page.limit);
+  return { entries: merged.entries, hasMore: merged.nextCursor !== null };
+};
+
+const fetchSignInEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const rows = await UserAuthAuditLogModel.find({
+    $and: [{ userId: subject.id }, ...createdAtRangeClauses(page.range), ...createdAtCursorClauses(page.cursor)],
+  })
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(page.limit + 1)
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<UserAuthAuditRow[]>();
+  const [directory, networks] = await Promise.all([
+    buildActorDirectory(
+      rows.map(row => row.actorUserId).filter((id): id is string => id !== undefined && id !== subject.id)
+    ),
+    loadSignInNetworks(subject.id, rows.slice(0, page.limit), subject.account.signupMeta),
+  ]);
+  return fetchedPage(rows, page.limit, row => {
+    const network = networks.get(row._id.toString());
+    const flags = [network?.newIp ? 'New IP' : undefined, network?.newCountry ? 'New country' : undefined].filter(
+      (flag): flag is string => flag !== undefined
+    );
+    return {
+      type: 'signin',
+      id: row._id.toString(),
+      at: row.createdAt,
+      summary: authEventSummary(row.event, authMethodLabel(row.strategy)),
+      detail: [row.actorIp, network?.country].filter(Boolean).join(' \u00b7 ') || undefined,
+      flags: flags.length > 0 ? flags : undefined,
+      audit: authAuditRowToEntry(row, subject, directory),
+    };
+  });
+};
+
+const API_KEY_VERBS: Readonly<Record<UserApiKeyAuditRow['action'], string>> = {
+  mint: 'Created',
+  rotate: 'Rotated',
+  revoke: 'Revoked',
+};
+
+const readName = (details: Record<string, unknown> | undefined): string | undefined =>
+  typeof details?.name === 'string' && details.name.trim() !== '' ? details.name : undefined;
+
+const fetchKeyEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const rows = await UserApiKeyAuditLog.find({
+    $and: [{ actorUserId: subject.id }, ...createdAtRangeClauses(page.range), ...createdAtCursorClauses(page.cursor)],
+  })
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(page.limit + 1)
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<UserApiKeyAuditRow[]>();
+  return fetchedPage(rows, page.limit, row => ({
+    type: 'key',
+    id: row._id.toString(),
+    at: row.createdAt,
+    summary: `${API_KEY_VERBS[row.action]} API key ${readName(row.details) ?? row.keyId}`,
+    detail: row.actorIp,
+    audit: apiKeyAuditRowToEntry(row, subject),
+  }));
+};
+
+type CreditRow = {
+  _id: Types.ObjectId;
+  type: (typeof CREDIT_BALANCE_EVENT_TYPES)[number];
+  credits: number;
+  description?: string;
+  status?: string;
+  stripeDisputeId?: string;
+  stripeRefundId?: string;
+  createdAt: Date;
+};
+
+const CREDIT_SUMMARIES: Readonly<Record<CreditRow['type'], string>> = {
+  purchase: 'Bought credits',
+  subscription: 'Subscription credits renewed',
+  generic_add: 'Credits added',
+  generic_deduct: 'Credits removed',
+  transfer_credit: 'Transferred credits',
+  received_credit: 'Received credits',
+};
+
+const creditSummary = (row: CreditRow): string => {
+  if (row.stripeDisputeId) return 'Dispute: credits removed';
+  if (row.stripeRefundId) return 'Refund: credits removed';
+  if (row.type === 'purchase' && row.status === 'failed') return 'Purchase failed';
+  return CREDIT_SUMMARIES[row.type];
+};
+
+const formatSignedCredits = (credits: number): string =>
+  `${credits > 0 ? '+' : credits < 0 ? '-' : ''}${Math.abs(credits).toLocaleString('en-US')} credits`;
+
+/**
+ * Balance moves other than usage. Admin adjustments are left to the admin source, which carries the
+ * actor and reason; listing them here too would show each one twice.
+ */
+export const creditEventsFilter = (userId: string, page: Pick<TimelinePageOptions, 'cursor' | 'range'>) => ({
+  $and: [
+    // Must repeat the partial filter of credit_tx_owner_balance_events for the planner to use it.
+    { ownerId: userId, ownerType: CreditHolderType.User, type: { $in: [...CREDIT_BALANCE_EVENT_TYPES] } },
+    { reason: { $ne: 'admin_adjustment' } },
+    ...createdAtRangeClauses(page.range),
+    ...createdAtCursorClauses(page.cursor),
+  ],
+});
+
+const fetchCreditEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const rows = await CreditTransaction.find(creditEventsFilter(subject.id, page))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(page.limit + 1)
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<CreditRow[]>();
+  return fetchedPage(rows, page.limit, row => ({
+    type: 'credit',
+    id: row._id.toString(),
+    at: row.createdAt,
+    summary: `${creditSummary(row)}: ${formatSignedCredits(row.credits)}`,
+    detail: [row.description, row.status && row.status !== 'completed' ? `Payment ${row.status}` : undefined]
+      .filter(Boolean)
+      .join(' \u00b7 '),
+    credits: row.credits,
+    transactionType: row.type,
+    alert: !!row.stripeDisputeId || row.status === 'failed' || undefined,
+  }));
+};
+
+/**
+ * Notebooks page on `_id` (the `{ deletedAt, userId, _id }` index), so their time is the ObjectId's
+ * own second-precision timestamp. These clauses express "(at, id) < cursor" and the date range in
+ * that _id order, which matches the merged (at, id) order exactly.
+ */
+export const notebookIdClauses = (cursor: AuditLogCursor | undefined, range: TimelineRange) => {
+  const clauses: Record<string, unknown>[] = [];
+  const idAtSecond = (seconds: number) => Types.ObjectId.createFromTime(seconds);
+  if (range.from) clauses.push({ _id: { $gte: idAtSecond(Math.ceil(range.from.getTime() / 1000)) } });
+  if (range.to) clauses.push({ _id: { $lt: idAtSecond(Math.floor(range.to.getTime() / 1000) + 1) } });
+  if (cursor) {
+    const ms = cursor.occurredAt.getTime();
+    const earlier = { _id: { $lt: idAtSecond(Math.ceil(ms / 1000)) } };
+    // Only a cursor on a whole second can tie with a notebook's time; then the id breaks the tie. The
+    // cursor id may come from another source and sit in a later second, so cap the tie at this second.
+    let tied: Record<string, unknown> | undefined;
+    if (ms % 1000 === 0) {
+      const secondEnd = idAtSecond(ms / 1000 + 1);
+      const cursorId = new Types.ObjectId(cursor.id);
+      tied = {
+        _id: {
+          $gte: idAtSecond(ms / 1000),
+          $lt: cursorId.toHexString() < secondEnd.toHexString() ? cursorId : secondEnd,
+        },
+      };
+    }
+    clauses.push(tied ? { $or: [earlier, tied] } : earlier);
+  }
+  return clauses;
+};
+
+type NotebookRow = { _id: Types.ObjectId; origin?: { channel?: SessionOriginChannel } };
+
+const CHANNEL_LABELS: Readonly<Record<SessionOriginChannel, string>> = {
+  web: 'Web app',
+  api: 'API',
+  slack: 'Slack',
+  cli: 'CLI',
+  desktop: 'Desktop app',
+  agent: 'Agent',
+};
+
+// Notebook titles are generated from the user's first message, so the feed never shows them: an admin
+// gets the notebook id, never content.
+const notebookSummary = (row: NotebookRow): string =>
+  row.origin?.channel === 'agent' ? 'Started an agent run' : 'Started a notebook';
+
+const fetchUsageEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const rows = await Session.find({ $and: [{ userId: subject.id }, ...notebookIdClauses(page.cursor, page.range)] })
+    .select('_id origin')
+    .sort({ _id: -1 })
+    .limit(page.limit + 1)
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<NotebookRow[]>();
+  return fetchedPage(rows, page.limit, row => ({
+    type: 'usage',
+    id: row._id.toString(),
+    at: row._id.getTimestamp(),
+    summary: notebookSummary(row),
+    detail: [
+      `Notebook ${row._id.toString()}`,
+      row.origin?.channel ? `via ${CHANNEL_LABELS[row.origin.channel]}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' \u00b7 '),
+    notebookId: row._id.toString(),
+  }));
+};
+
+const fetchSpendEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const { groups, hasMore } = await listSpendGroups({
+    ownerId: subject.id,
+    currentBalance: subject.account.currentCredits,
+    ...page,
+  });
+  const shown = groups.slice(0, page.limit);
+  const lookups = await loadSpendLookups(shown);
+  return { entries: shown.map(group => spendGroupToEntry(group, lookups)), hasMore };
+};
+
+const SOURCES: Readonly<
+  Record<UserTimelineType, (subject: TimelineSubject, page: TimelinePageOptions) => Promise<SourcePage>>
+> = {
+  signup: (subject, page) => fetchSignupEntries(subject.id, subject.account, page),
+  signin: fetchSignInEntries,
+  key: fetchKeyEntries,
+  api_request: async (subject, page) => {
+    const rows = await readApiRequests(subject.id, page);
+    return fetchedPage(rows, page.limit, apiRequestToEntry);
+  },
+  usage: fetchUsageEntries,
+  spend: fetchSpendEntries,
+  limit: (subject, page) => fetchLimitEntries(subject.id, page.limit, page),
+  credit: fetchCreditEntries,
+  payment: (subject, page) => fetchPaymentEntries(subject.id, page.limit, page),
+  admin: fetchAdminEntries,
+  moderation: (subject, page) => fetchModerationEntries(subject.id, page.limit, page),
+};
+
+// --- Merge ---
+
+export const compareTimelineNewestFirst = (a: UserTimelineEntry, b: UserTimelineEntry): number => {
+  const byTime = b.at.getTime() - a.at.getTime();
+  if (byTime !== 0) return byTime;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? 1 : -1;
+};
+
+/**
+ * Merges source pages into one. Each source returned its newest rows after the same cursor, so the
+ * first `limit` merged rows are globally correct and the last of them is the next cursor.
+ */
+export const mergeTimelinePages = (
+  pages: SourcePage[],
+  limit: number
+): { entries: UserTimelineEntry[]; nextCursor: AuditLogCursor | null } => {
+  const merged = pages.flatMap(page => page.entries).sort(compareTimelineNewestFirst);
+  const entries = merged.slice(0, limit);
+  const hasMore = merged.length > limit || pages.some(page => page.hasMore);
+  const last = entries[entries.length - 1];
+  return { entries, nextCursor: hasMore && last ? { occurredAt: last.at, id: last.id } : null };
+};
+
+/**
+ * One page of a user's unified timeline. Every source is queried with the same keyset bound and at
+ * most limit + 1 rows, so a page costs one bounded indexed read per selected source.
+ * A failing source fails the page: a timeline that silently dropped one would read as "nothing happened".
+ */
+export const listUserTimeline = async (
+  subject: TimelineSubject,
+  options: {
+    types: readonly UserTimelineType[];
+    limit: number;
+    cursor?: AuditLogCursor;
+    range: TimelineRange;
+    apiKeyId?: string;
+  }
+) => {
+  const { types, ...page } = options;
+  const pages = await Promise.all(types.map(type => SOURCES[type](subject, page)));
+  return mergeTimelinePages(pages, page.limit);
+};

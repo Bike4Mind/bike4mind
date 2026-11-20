@@ -1,3 +1,16 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: vi.fn(() => 'openai'),
+  resolveEmbeddingCredentials: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
+
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 1000,
+    embed: async (inputs: readonly string[]) => ({ vectors: await Promise.all(inputs.map(text => h.getVector(text))) }),
+  }),
+}));
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -40,7 +53,7 @@ import {
  * Consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -49,7 +62,7 @@ const h = vi.hoisted(() => ({
   getEmbedding: vi.fn(),
 }));
 
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getVector: h.getVector }));
 // fabFilesService is real (via importOriginal): stampChunkEmbeddingModel must actually commit
 // vectorized:true against the real repls set for this test's post-attempt-2 assertions to mean
 // anything - only the LLM-calling services below are mocked.
@@ -63,16 +76,6 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { getModelInfo: () => ({ contextWindow: 1000 }) };
-    }
-  },
-  getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
-  // Echoes the requested model back: these suites are about retry/recovery bookkeeping, not
-  // about the keyless fallback, so the handler must stamp exactly what the payload asked for.
-  resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   // The embedding-space guard (#2791) runs on every vectorize message, so both its export and
@@ -89,7 +92,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // "embeddingModel discriminator stamp" describe block in fabFileVectorize.test.ts.
   getAtlasIndexForModel: vi.fn(() => null),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // Resolves to {} so every spend lever reads as absent -> coded defaults -> the spend gate
 // grants, keeping these tests about retry gating rather than cost governance.
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(async () => ({})) }));

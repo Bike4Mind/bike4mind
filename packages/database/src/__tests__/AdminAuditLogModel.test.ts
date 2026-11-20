@@ -254,6 +254,29 @@ describe('AdminAuditLogModel', () => {
       expect(summary.deniedAttempts).toBe(1);
     });
 
+    it('includes completed self-service deletions in the deletion view and summary only', async () => {
+      await seed([
+        { action: 'user.deleted', category: 'account' },
+        { action: 'organization.deleted', category: 'org' },
+        { action: 'user.deletion.completed', category: 'account', context: { source: 'worker' } },
+        { action: 'user.deletion.denied', category: 'account' },
+        { action: 'other.completed', category: 'account' },
+        { action: 'user.undeleted_flag', category: 'account' },
+      ]);
+
+      expect(await listActions({ verb: 'deleted' })).toEqual(
+        expect.arrayContaining(['user.deleted', 'organization.deleted', 'user.deletion.completed'])
+      );
+      expect(await listActions({ verb: 'deleted' })).toHaveLength(3);
+      expect(await listActions({ verb: 'completed' })).toEqual(
+        expect.arrayContaining(['user.deletion.completed', 'other.completed'])
+      );
+      expect(await listActions({ verb: 'denied' })).toEqual(['user.deletion.denied']);
+      const summary = await adminAuditLogRepository.summarize(new Date('2026-10-01T00:00:00Z'));
+      expect(summary.deletions).toBe(3);
+      expect(summary.deniedAttempts).toBe(1);
+    });
+
     it('summarize totals the signed credits stamp and skips denied attempts', async () => {
       const credits = (action: string, amount?: unknown) => ({
         category: 'credits' as const,

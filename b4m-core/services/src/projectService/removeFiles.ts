@@ -5,7 +5,10 @@ import {
   IProjectRepository,
   IUserRepository,
   secureParameters,
+  UserShareGrant,
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -36,10 +39,10 @@ export const removeFiles = async (
   const { projectId, fileIds } = secureParameters(params, removeProjectFilesSchema);
 
   const user = await db.users.findById(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) throw new NotFoundError('User not found');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
@@ -55,17 +58,39 @@ export const removeFiles = async (
   // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(files.map(f => canonicalId(String(f.id))));
   const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles').map(canonicalId));
-  if (fileIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
+  // The project owner may still clear an id the project holds whose row is gone (deleted, or never
+  // there): nothing else can take it out of the list. A live row the owner cannot read stays refused,
+  // because removing it here could not revoke the access the project granted on it.
+  const unresolved = fileIds.filter(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)));
+  const ownerHeld = new Set(project.userId === userId ? project.fileIds.map(canonicalId) : []);
+  const heldUnresolved = unresolved.filter(id => ownerHeld.has(canonicalId(id)));
+  const [liveIds, existingIds] =
+    heldUnresolved.length > 0
+      ? await Promise.all([
+          db.fabFiles.findExistingIdsByIds(heldUnresolved),
+          db.fabFiles.findExistingIdsIncludingDeletedByIds(heldUnresolved),
+        ])
+      : [[], []];
+  const live = new Set(liveIds.map(canonicalId));
+  if (unresolved.some(id => !ownerHeld.has(canonicalId(id)) || live.has(canonicalId(id)))) {
     throw new BadRequestError('Some files are not accessible');
   }
+  // A soft-deleted row is hidden from the reads above but keeps its project-tagged grants, which a
+  // restore would bring back; only an id with no row at all needs no revoke.
+  const softDeletedIds = existingIds.filter(id => !live.has(canonicalId(id)));
 
-  if (project.userId !== userId && files.some(f => f.userId !== userId)) {
-    throw new Error('You are not authorized to remove files from this project');
+  if (project.userId !== userId) {
+    const ownedIds = new Set(files.filter(f => f.userId === userId).map(f => canonicalId(String(f.id))));
+    if (fileIds.some(id => !ownedIds.has(canonicalId(id)))) {
+      throw new ForbiddenError('You are not authorized to remove files from this project');
+    }
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(fileIds.map(canonicalId));
+  const removedIds = project.fileIds.filter(id => removing.has(canonicalId(id)));
+  if (removedIds.length === 0) return { project, removedIds };
   project.fileIds = project.fileIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
@@ -89,12 +114,8 @@ export const removeFiles = async (
       }
     }
 
-    const nextUsers: typeof file.users = [];
-    for (const entry of file.users) {
-      if (entry.projectId !== project.id) {
-        nextUsers.push(entry);
-        continue;
-      }
+    const directGrants: UserShareGrant[] = [];
+    for (const entry of projectMemberEntries) {
       const email = granteeEmailsById.get(entry.userId);
       const directGrantPermissions = email
         ? Array.from(
@@ -110,15 +131,23 @@ export const removeFiles = async (
         // permission union pushShareable may have merged in from the project side -
         // otherwise a permission that came SOLELY from project membership (e.g. update,
         // when the direct invite only ever granted read+share) would outlive this revoke.
-        nextUsers.push({ ...entry, projectId: undefined, permissions: directGrantPermissions });
+        directGrants.push({ userId: entry.userId, permissions: directGrantPermissions });
       }
       // else: access came solely from this project - drop the entry entirely.
     }
-    file.users = nextUsers;
-    await db.fabFiles.update({ id: file.id, users: file.users });
+    await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId: project.id }, add: directGrants });
+  }
+
+  for (const id of softDeletedIds) {
+    await db.fabFiles.shareable.updateUserShares(id, {
+      remove: { projectId: project.id },
+      add: [],
+      includeDeleted: true,
+    });
   }
 
   await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });
 
-  return project;
+  // removedIds are the stored ids actually taken out, so callers can skip side effects for a no-op.
+  return { project, removedIds };
 };

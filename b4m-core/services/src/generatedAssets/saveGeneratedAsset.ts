@@ -18,6 +18,7 @@ import {
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { createFabFile, type CreateFabFileAdapters } from '../fabFileService/create';
+import { generateSignedUrl } from '../fabFileService/get';
 
 type Modality = 'audio' | 'video' | 'image';
 
@@ -26,6 +27,8 @@ const MODALITY: Record<GeneratedAssetGenerator, Modality> = {
   speech: 'audio',
   sound_effect: 'audio',
   video: 'video',
+  // A Scene is an MP4: the video with the soundtrack muxed in.
+  scene: 'video',
   image: 'image',
 };
 
@@ -45,7 +48,8 @@ const PROMPT_SNIPPET_CHARS = 40;
 
 export type SaveGeneratedAssetResult =
   | { saved: true; fileId: string; s3Key: string; fileName: string; fileUrl?: string }
-  | { saved: false; reason: GeneratedAssetSaveSkippedReason };
+  /** `cause` is the refusal itself when a write threw, so a caller that must fail can rethrow it intact. */
+  | { saved: false; reason: GeneratedAssetSaveSkippedReason; cause?: unknown };
 
 export type SaveGeneratedAssetParams = {
   userId: string;
@@ -63,11 +67,19 @@ export type SaveGeneratedAssetParams = {
   questId?: string;
   /** Generated-bucket key of the copy the producer also keeps for inline chat playback; deletes remove it too. */
   generatedCopyKey?: string;
+  /**
+   * Generated-bucket key of the chat image this file holds, so a later "save to Files" of that image can find this
+   * generation (copy-generated-image). Unlike generatedCopyKey, deleting the file leaves that object alone.
+   */
+  generatedOutputKey?: string;
+  /** Display name for the file; defaults to one built from the generator and prompt. */
+  fileName?: string;
   /** An abort rejects rather than reporting a skipped save, so a lease-bounded step fails and retries. */
   signal?: AbortSignal;
 };
 
 export type SaveGeneratedAssetDeps = {
+  retentionOrganizationId?: string;
   db: CreateFabFileAdapters['db'] & {
     fabFiles: CreateFabFileAdapters['db']['fabFiles'] & Pick<IBaseRepository<IFabFileDocument>, 'findOne'>;
   };
@@ -103,7 +115,12 @@ export async function saveGeneratedAsset(
       deletedAt: null,
       tags: { $elemMatch: { name: jobTag } },
     });
-    if (existing?.filePath) return savedResult(existing, existing.filePath);
+    if (existing?.filePath) {
+      const signed = await generateSignedUrl(existing, {
+        storage: { generateSignedUrl: (path, expiresIn) => deps.storage.generateSignedUrl(path, expiresIn, 'get') },
+      });
+      return savedResult(signed, existing.filePath);
+    }
   }
 
   const modality = MODALITY[generation.generator];
@@ -113,7 +130,7 @@ export async function saveGeneratedAsset(
     return { saved: false, reason: 'error' };
   }
 
-  const fileName = buildFileName(generation, extension);
+  const fileName = params.fileName || buildFileName(generation, extension);
   try {
     const created = await createFabFile(
       userId,
@@ -137,9 +154,11 @@ export async function saveGeneratedAsset(
         provenance: {
           sourceType: FabFileSourceType.TOOL_GENERATED,
           sourceMetadata: {
+            ...(deps.retentionOrganizationId && { retentionOrganizationId: deps.retentionOrganizationId }),
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
             ...(params.generatedCopyKey && { generatedCopyKey: params.generatedCopyKey }),
+            ...(params.generatedOutputKey && { generatedOutputKey: params.generatedOutputKey }),
             generation: storedGeneration(generation, logger),
           },
           ...(derivedFrom.length > 0 && { derivedFrom }),
@@ -162,7 +181,7 @@ export async function saveGeneratedAsset(
     } else {
       logger.info('[saveGeneratedAsset] generated asset not saved', { generator: generation.generator, reason });
     }
-    return { saved: false, reason };
+    return { saved: false, reason, cause: error };
   }
 }
 
@@ -175,7 +194,8 @@ function storedGeneration(
   return {
     ...rest,
     prompt,
-    promptTruncated: prompt.length < generation.prompt.length,
+    // A re-save of a stored generation (copy-generated-image) passes an already-cut prompt: keep its flag.
+    promptTruncated: generation.promptTruncated === true || prompt.length < generation.prompt.length,
     ...(generation.lyrics !== undefined && {
       lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
     }),

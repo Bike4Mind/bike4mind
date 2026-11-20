@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   findById: vi.fn(),
   update: vi.fn(),
+  updateUserShares: vi.fn(),
   deleteManyByFabFileId: vi.fn(),
   findAllWithKnowledgeId: vi.fn(),
   sessionUpdate: vi.fn(),
@@ -19,6 +20,11 @@ const h = vi.hoisted(() => ({
   storageDelete: vi.fn(),
   generatedStorageDelete: vi.fn(),
   recordConfigChange: vi.fn(),
+  unpublish: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: h.unpublish,
 }));
 
 // Same callable chain as index.put.test.ts: the module registers get/put/delete in sequence and
@@ -39,7 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: h.generatedStorageDelete }),
@@ -57,20 +63,25 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     activateIfDraft: h.activateIfDraft,
   },
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
-  questRepository: { findSessionIdsByImage: async () => ['s1'] },
+  questRepository: { findSessionIdsByMedia: async () => ['s1'] },
   fabFileChunkRepository: { deleteManyByFabFileId: h.deleteManyByFabFileId },
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,
     findById: h.findById,
     update: h.update,
     computeDataLakeStats: h.computeDataLakeStats,
+    shareable: { updateUserShares: h.updateUserShares },
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   adminSettingsRepository: {
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
-  sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
+  sessionRepository: {
+    findAllWithKnowledgeId: h.findAllWithKnowledgeId,
+    update: h.sessionUpdate,
+    findAllByIds: async () => [{ id: 's1' }],
+  },
   userRepository: { findById: h.userFindById },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: () => ({ session: async () => null }) },
@@ -172,6 +183,20 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
       creatorUserId: LAKE.createdByUserId,
     });
     expect(h.setStats).toHaveBeenCalledWith(LAKE.id, { fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
+  });
+
+  it("takes down the owner's pages published from the deleted file", async () => {
+    givenOwnedFile([]);
+    const { res, json } = makeRes();
+
+    await run(res);
+
+    expect(json.mock.calls[0][0]).toMatchObject({ action: 'deleted' });
+    expect(h.unpublish).toHaveBeenCalledWith(
+      OWNER,
+      { kind: 'fabfile', fabFileIds: [expect.any(String)] },
+      expect.anything()
+    );
   });
 
   it('does not recompute when the outcome is unshared', async () => {

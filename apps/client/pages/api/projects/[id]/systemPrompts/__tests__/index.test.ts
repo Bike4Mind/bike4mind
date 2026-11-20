@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent }));
 
 import '@pages/api/projects/[id]/systemPrompts';
 

@@ -7,7 +7,7 @@ import {
   stripToolArtifactMarkup,
   type StreamChannel,
 } from '@bike4mind/common';
-import type { CompletionInfo, ICompletionOptionTools } from './backend';
+import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
 
 /** The `artifactType` the named tool declared at registration, for the helpers below. */
 export function declaredArtifactType(
@@ -61,13 +61,9 @@ export function stripUnstreamedToolResult(toolName: string, result: string, deli
   );
 }
 
-// The four backends' own completion-callback types differ only in whether `info` is required
-// (Anthropic, Gemini) or optional (Bedrock) - structurally incompatible with each other in both
-// directions under this repo's strict function-type checking, so `info` is typed `any` here to
-// accept every one of them. `Cb` is inferred from whatever's actually passed in, so the returned
-// `callback` always satisfies that exact same backend's own `complete()` signature.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-type LooseCompletionCallback = (text: (string | null | undefined)[], info: any) => Promise<void>;
+// Derived from the method signature in backend.ts so it stays bivariant; `Cb` is inferred from
+// the callback passed in, so the returned `callback` fits that backend's `complete()`.
+type LooseCompletionCallback = NonNullable<NonNullable<ICompletionOptions['_internal']>['artifactGuard']>['callback'];
 
 export interface RecursiveArtifactGuard<Cb extends LooseCompletionCallback> {
   /** Pass in place of the real callback on every recursive complete() call in this chain - one

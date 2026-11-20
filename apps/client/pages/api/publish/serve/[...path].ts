@@ -1,7 +1,11 @@
+import {
+  currentPublishedIndexKey,
+  downloadPublishedIndex,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
 import type { Types } from 'mongoose';
@@ -21,6 +25,7 @@ import {
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
+  renderNotFoundPage,
   renderSandboxedBundle,
   encodeBundlePath,
   isBundlePagePath,
@@ -31,7 +36,7 @@ import {
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
-import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
+import { HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
 import {
   BUFFERED_FILE_MAX_BYTES,
   SIGNED_LINK_TTL_SECONDS,
@@ -42,11 +47,11 @@ import {
   isSafeSignedOrigin,
   isStreamedFile,
   signedResponseFor,
-} from '@server/services/publish/signedFiles';
-import { gateProofSecondsLeft, requestHasGateProof } from '@server/services/publish/publishGateToken';
+} from '@bike4mind/server-utils/services/publish/signedFiles';
+import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
@@ -58,7 +63,7 @@ import {
   isAppWrapperHost,
   isUsercontentHost,
   VIEWER_SANDBOX,
-} from '@server/services/publish/viewerSecurity';
+} from '@bike4mind/server-utils/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
   pickSharedByName,
@@ -102,7 +107,7 @@ import {
   parseArtifactsWithFallback,
   type ParsedArtifact,
   type ArtifactParseResult,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
@@ -261,6 +266,11 @@ const ASSET_CSP = [
   withAppHost("frame-ancestors 'self'"),
 ].join('; ');
 
+// Images that miss a gated render's inline budget fall back to a signed storage URL. Without a
+// browser signing origin that fallback is gone and they are dropped instead, which still beats
+// losing the stylesheet.
+const isSignableImage = (path: string) => !!inlineTypeFor(path)?.startsWith('image/');
+
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
@@ -281,6 +291,29 @@ const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
 // Referrer-Policy header, so meta and header always agree.
 const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 
+// The not-found answer for a link that resolves to nothing. A browser navigation gets a
+// readable page instead of a bare JSON body; every other caller keeps the JSON. Unknown,
+// revoked and lapsed share tokens all land here, so both forms must stay identical across
+// those cases (no enumeration signal).
+function sendLinkNotFound(req: Request, res: Response) {
+  res.setHeader('Vary', 'Accept');
+  // Neither form may be stored by an edge cache that does not key on Accept: a cached JSON
+  // 404 would otherwise be handed to the next browser navigation of the same link.
+  res.setHeader('Cache-Control', 'no-store');
+  if (!String(req.headers.accept ?? '').includes('text/html')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  return res.status(404).send(renderNotFoundPage());
+}
+
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Cache keys may omit Host; denials must not be reused on another artifact's origin either.
   if (isUsercontentHost(req.headers.host) || req.query.__uc === '1') {
@@ -298,7 +331,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   const resolved = parsePublishPath(segments);
   if (!resolved) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
 
   // No-sign-in share link (`/a/<shareToken>`). Possession of the token IS the read
@@ -358,7 +391,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
     // Shared filter, not a hand-rolled one: findByShareToken cannot be used here (it needs a
-    // lean read), but the rollout tolerance and revocation semantics must not diverge from it.
+    // lean read), but its index use and revocation semantics must not diverge from it.
     artifact = await PublishedArtifact.findOne({
       deletedAt: null,
       ...shareTokenFilter(resolved.shareToken),
@@ -380,7 +413,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
   if (
     isIsolated &&
@@ -393,11 +426,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // purgeUserPublishedArtifacts; also supplies the "Shared by" name for the viewer page.
   const owner = await loadLiveOwner(artifact.ownerId);
   if (!owner) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
 
   const storage = getPublishedArtifactsStorage();
-  const signFile = makeFileSigner(storage, artifact.storageKeyPrefix, req);
+  const signFile = makeFileSigner(storage, artifact, req);
 
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
@@ -798,7 +831,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       }
     }
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
+      const buf = await (assetPath === 'index.html'
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(`${artifact.storageKeyPrefix}${assetPath}`));
       // The edge adapter text-converts any body whose type it does not list as binary.
       res.setHeader('Content-Type', bufferedContentType(fileEntry.mimeType));
       // Publishers control MIME metadata; every asset navigation must download, even with an unknown type.
@@ -845,11 +880,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     !!requestedVersion && requestedVersion !== currentSha && versionsList.some(v => v.sha256Index === requestedVersion);
   const indexKey = isKnownOlderVersion
     ? `${artifact.storageKeyPrefix}versions/${requestedVersion}.html`
-    : `${artifact.storageKeyPrefix}${pagePath}`;
+    : pagePath === 'index.html'
+      ? currentPublishedIndexKey(artifact)
+      : `${artifact.storageKeyPrefix}${pagePath}`;
 
   let indexHtml: string;
   try {
-    indexHtml = (await storage.download(indexKey)).toString('utf-8');
+    indexHtml = (
+      await (pagePath === 'index.html' && !isKnownOlderVersion
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(indexKey))
+    ).toString('utf-8');
   } catch {
     return res.status(isKnownOlderVersion ? 404 : 500).json({
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
@@ -960,9 +1001,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       // inlined as on the buffered path, while it fits.
       manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !signed.has(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+      // index.html ships inside a double-quoted srcdoc attribute: `&` and `"` grow (see renderBundleWrapper)
+      reservedBytes: Buffer.byteLength(indexHtml.replace(/&/g, '&amp;').replace(/"/g, '&quot;')),
+      hasFallback: isSignableImage,
     });
     inlineAssets = collected.assets;
-    for (const path of collected.oversized.filter(p => inlineTypeFor(p)?.startsWith('image/'))) {
+    for (const path of collected.oversized.filter(isSignableImage)) {
       const url = await signFile(path, false, mediaTtl);
       if (url) signed.set(path, url);
     }
@@ -1553,6 +1597,7 @@ interface PublishedArtifactLean {
   discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   manifest: Array<{ path: string; mimeType: string; size?: number }>;
   renderedBody?: string;
   /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
@@ -1561,7 +1606,7 @@ interface PublishedArtifactLean {
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   /** Legacy single share link; still the source of truth during the rollout. */
   shareToken?: string | null;
-  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  /** The stored share links (live plus retained revoked ones). Only the entry that served THIS request is counted. */
   shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
@@ -2171,7 +2216,7 @@ type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) =>
  */
 function makeFileSigner(
   storage: ReturnType<typeof getPublishedArtifactsStorage>,
-  storageKeyPrefix: string,
+  page: { storageKeyPrefix: string; indexObjectPath?: string | null },
   req: Request
 ): FileSigner {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
@@ -2190,7 +2235,8 @@ function makeFileSigner(
     const allowed = await originOnce();
     if (!allowed) return null;
     try {
-      const url = await storage.getSignedUrl(`${storageKeyPrefix}${path}`, 'get', {
+      const key = path === 'index.html' ? currentPublishedIndexKey(page) : `${page.storageKeyPrefix}${path}`;
+      const url = await storage.getSignedUrl(key, 'get', {
         audience: 'browser',
         expiresIn: ttlSeconds,
         ...signedResponseFor(path, wantsDownload),

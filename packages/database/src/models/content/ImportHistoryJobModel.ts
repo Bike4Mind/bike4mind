@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { IMPORT_FAILED_STEP } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { softDeletePlugin } from '../../utils/mongo';
 
@@ -75,7 +76,8 @@ const ImportHistoryJobSchema = new mongoose.Schema(
 
     // Error handling
     errorMessage: { type: String },
-    errorStack: { type: String },
+    // Server-only diagnostics: excluded from find results unless a query selects +errorStack.
+    errorStack: { type: String, select: false },
     failedAt: { type: Date },
 
     // Timing
@@ -245,6 +247,7 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
       {
         $set: {
           status: 'failed',
+          currentStep: IMPORT_FAILED_STEP,
           errorMessage: error.message,
           errorStack: error.stack,
           failedAt: new Date(),

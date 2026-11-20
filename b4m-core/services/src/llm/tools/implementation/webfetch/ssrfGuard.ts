@@ -1,5 +1,7 @@
 import { isPrivateIP } from '@bike4mind/fab-pipeline';
+import { Logger } from '@bike4mind/observability';
 import { lookup } from 'node:dns/promises';
+import { RefusedFetchTargetError, UnsafeScrapeTargetError } from './errors';
 
 /**
  * SSRF guard for direct server-side fetches this service makes against user/model-supplied origins.
@@ -83,4 +85,16 @@ export async function resolveAndVetUrl(url: URL): Promise<VettedFetchTarget> {
 export async function unsafeFetchUrlReason(url: URL): Promise<string | null> {
   const result = await resolveAndVetUrl(url);
   return result.safe ? null : result.reason;
+}
+
+/**
+ * Build the error for a refused target and log the specific reason at warn. The thrown message is
+ * the same for every reason: "resolves to a private address" vs "dns resolution failed" would turn
+ * the caller-visible error into an oracle for which internal hostnames exist. The detail stays in
+ * the server log only.
+ */
+export function refuseFetch(url: string, vetted: Extract<VettedFetchTarget, { safe: false }>): RefusedFetchTargetError {
+  Logger.globalInstance.warn(`Refusing to fetch ${url}: ${vetted.reason}`);
+  const message = `Refusing to fetch ${url}: the target is not allowed or could not be resolved`;
+  return vetted.retryable ? new RefusedFetchTargetError(message) : new UnsafeScrapeTargetError(message);
 }

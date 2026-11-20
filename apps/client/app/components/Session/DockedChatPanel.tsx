@@ -5,15 +5,19 @@ import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls, { chatHeaderToolButtonSx } from './ChatPanelControls';
+import type { GetCopyMarkdown } from './useCopySessionMarkdown';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 interface DockedChatPanelProps {
   children: React.ReactNode;
   headerActions?: React.ReactNode;
   /** Overrides the default "AI Chat" header label (e.g. /opti swaps in the Data Lakes toggle). */
   title?: React.ReactNode;
+  /** Markdown for the copy button; omit to copy the main chat's current session. */
+  getCopyMarkdown?: GetCopyMarkdown;
 }
 
-const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
+const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title, getCopyMarkdown }) => {
   const layout = useSessionLayout(s => s.layout);
 
   // "Hide chat": dismiss the panel down to the bottom-right "AI Chat" launcher (the
@@ -31,6 +35,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
   return (
     <Box
       data-testid="docked-chat-panel"
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      {...adminSurfaceExcludeProps}
       sx={{
         display: 'flex',
         flexDirection: 'column',
@@ -53,7 +59,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           // three top bars line up across the app chrome.
           height: '56px',
           padding: '0 16px',
-          backgroundColor: theme.palette.background.level1,
+          // The sidenav's own ground, so the header bars read as one with it.
+          backgroundColor: theme.palette.background.surface2,
           borderBottom: '1px solid',
           borderColor: theme.palette.divider,
           userSelect: 'none',
@@ -79,6 +86,7 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
             testIdPrefix="docked-chat"
             activeLayout={layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined}
             showFloat
+            getCopyMarkdown={getCopyMarkdown}
           />
           {headerActions}
           <Tooltip title="Hide chat" disableInteractive>

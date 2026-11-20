@@ -1,11 +1,11 @@
 import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
 import { ApiKeyScope, identityProviderResponseSchema, type AuditChange } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const AUDITED_IDP_FIELDS = ['name', 'emailDomain', 'type', 'isActive'] as const;
 const AUDITED_SAML_FIELDS = ['entryPoint', 'issuer', 'callbackUrl', 'identifierFormat'] as const;
@@ -27,13 +27,12 @@ function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIde
   return changes;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -60,10 +59,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -134,10 +129,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {

@@ -40,6 +40,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
   useGetDataLakes: () => ({ data: [] }),
   useGetDataLakesWithRetrievability: () => ({ data: [] }),
+  useRefreshLakePickerReads: () => () => {},
   useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

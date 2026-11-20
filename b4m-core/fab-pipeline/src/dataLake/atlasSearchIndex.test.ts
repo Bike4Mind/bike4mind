@@ -18,9 +18,52 @@ import {
   getAtlasIndexStatus,
   resetAtlasIndexStatusCache,
   modelsWithDimensions,
+  atlasVectorIndexModels,
 } from './atlasSearchIndex';
 
 describe('atlasSearchIndex', () => {
+  it('keeps the persisted lake model set, index order, widths and names unchanged', () => {
+    const expected = [
+      ['text-embedding-3-small', 1536],
+      ['text-embedding-3-large', 3072],
+      ['text-embedding-ada-002', 1536],
+      ['voyage-3-large', 1024],
+      ['voyage-3', 1024],
+      ['voyage-3-lite', 512],
+      ['voyage-code-3', 1024],
+      ['voyage-finance-3', 1024],
+      ['voyage-law-3', 1024],
+      ['amazon.titan-embed-text-v2:0', 1024],
+      ['qwen3-embedding:0.6b', 1024],
+      ['qwen3-embedding:4b', 2560],
+      ['qwen3-embedding:8b', 4096],
+      ['nomic-embed-text', 768],
+      ['mxbai-embed-large', 1024],
+      ['bge-m3', 1024],
+      ['snowflake-arctic-embed', 1024],
+    ] as const;
+    expect(atlasVectorIndexModels()).toEqual(expected.map(([model]) => model).sort());
+    expect(
+      allAtlasVectorIndexDefinitions().map(definition => ({
+        name: definition.name,
+        vector: definition.definition.fields.find(field => field.type === 'vector'),
+      }))
+    ).toEqual(
+      expected.map(([model, dimensions]) => ({
+        name: `datalake_vs_${model.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dimensions}`,
+        vector: { type: 'vector', path: 'vector', numDimensions: dimensions, similarity: 'cosine' },
+      }))
+    );
+  });
+
+  it.each(['gemini-embedding-001', 'cohere.embed-v4:0', 'constructor', '__proto__'])(
+    'keeps %s outside lake vector indexes',
+    model => {
+      expect(getEmbeddingDimensions(model)).toBeNull();
+      expect(getAtlasIndexForModel(model)).toBeNull();
+    }
+  );
+
   beforeEach(() => {
     resetAtlasIndexStatusCache();
     supportsAtlasVectorSearchMock.mockReturnValue(true);

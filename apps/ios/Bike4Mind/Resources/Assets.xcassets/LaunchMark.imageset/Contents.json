@@ -1,0 +1,8 @@
+{
+  "images" : [
+    { "filename" : "LaunchMark@1x.png", "idiom" : "universal", "scale" : "1x" },
+    { "filename" : "LaunchMark@2x.png", "idiom" : "universal", "scale" : "2x" },
+    { "filename" : "LaunchMark@3x.png", "idiom" : "universal", "scale" : "3x" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}

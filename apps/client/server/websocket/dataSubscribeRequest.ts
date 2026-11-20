@@ -1,5 +1,6 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -22,16 +23,20 @@ import {
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
-import { Subscription } from '@server/models/Subscription';
-import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
-import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
-import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
+import {
+  adminSettingsSubscriptionScope,
+  inviteSubscriptionScope,
+  questMasterPlanSubscriptionScope,
+} from '@server/websocket/subscriptionScopes';
+import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
+import { verifyWsSubscriberToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import pickBy from 'lodash/pickBy';
 import pLimit from 'p-limit';
-import ability from '../auth/ability';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 import { findWithheldFilterPaths, resolveFieldLimits } from './dataSubscribeFieldLimits';
@@ -103,9 +108,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     query,
     fields,
     fetchInitialData,
+    initialDataAfterSubscribe,
   } = parsedRequest;
 
-  const user = await verifyWsAccessToken(accessToken);
+  const user = await verifyWsSubscriberToken(accessToken);
 
   // A subscriber must hang off a live Connection row of the same user: a revoke marks the row ended
   // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing
@@ -119,6 +125,30 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   const userAbility = ability(user);
+
+  const requestedOrgId =
+    collectionName === Organization.collection.collectionName && Object.keys(query).length === 1
+      ? query._id
+      : undefined;
+  if (
+    initialDataAfterSubscribe &&
+    (collectionName !== Organization.collection.collectionName ||
+      typeof requestedOrgId !== 'string' ||
+      !mongoose.isValidObjectId(requestedOrgId) ||
+      !fetchInitialData ||
+      Object.keys(fields ?? {}).length > 0)
+  ) {
+    const error = new BadRequestError(
+      'Initial data after subscription requires a single organization query, initial data and empty fields'
+    );
+    await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+    throw error;
+  }
+  const subscribedOrg =
+    typeof requestedOrgId === 'string' && mongoose.isValidObjectId(requestedOrgId)
+      ? await Organization.findById(requestedOrgId)
+      : null;
+  const isPrivilegedOrgSubscriber = !!subscribedOrg && isOrgOwnerOrCurrentAdmin(user, subscribedOrg);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
   // mostly it uses the accessibleBy function from the casl/mongoose package.  There
@@ -160,7 +190,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       [User.collection.collectionName]: { _id: user._id },
       [SessionModel.collection.collectionName]: accessibleBy(userAbility).ofType(SessionModel),
       [FabFile.collection.collectionName]: accessibleBy(userAbility).ofType(FabFile),
-      [AdminSettings.collection.collectionName]: accessibleBy(userAbility).ofType(AdminSettings),
+      [AdminSettings.collection.collectionName]: adminSettingsSubscriptionScope(
+        accessibleBy(userAbility).ofType(AdminSettings)
+      ),
       [Inbox.collection.collectionName]: { receiverId: user._id },
       [ApiKey.collection.collectionName]: accessibleBy(userAbility).ofType(ApiKey),
       [Organization.collection.collectionName]: accessibleBy(userAbility).ofType(Organization),
@@ -185,10 +217,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // relays, not just the one-time fetchInitialData query above.
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
+    sessionCollectionName: SessionModel.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
     inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
     isPlatformAdmin: !!user.isAdmin,
+    isPrivilegedOrgSubscriber,
   });
   const withheldFilterPaths = findWithheldFilterPaths(query, fieldLimits);
   if (withheldFilterPaths.length) {
@@ -248,6 +282,48 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const normalizedQuery = findPromise.getQuery();
   const subscriber = { endpoint, connectionId, clientId: clientSubscriberId };
 
+  const assertConnectionStillRegistered = async () => {
+    // A revoke can end the connection while this subscribe is in flight, after its own pull ran but
+    // before this write landed. Re-read the row: if it is gone, back the entry out like the no-row
+    // check above does. Both steps are best-effort so the close still runs and the caller always
+    // gets the UnauthorizedError; the disconnect handler and the stale-subscriber pass sweep any leftover.
+    if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
+      await realtimeConnectionRepository
+        .removeConnectionSubscribers(connectionId)
+        .catch((error: unknown) =>
+          logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
+        );
+      await closeConnection(connectionId, endpoint).catch(error =>
+        logger.warn(`[dataSubscribeRequest] Failed to close ended connection ${connectionId}`, error)
+      );
+      throw new UnauthorizedError('Connection is not registered to this user');
+    }
+  };
+
+  const registerSubscriber = async () => {
+    // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
+    // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
+    // old subscription is never mutated in place with the new exclusion; a client that reconnects
+    // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
+    // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
+    // The gap is bounded by the connection's own lifetime, not by the deploy: API Gateway WebSocket
+    // connections are forcibly closed after 10 minutes idle or 2 hours total, so every pre-deploy
+    // subscriber reconnects (and re-hashes) well within a couple of hours regardless.
+    const uniqueQuerySelector = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(collectionName))
+      .update(JSON.stringify(normalizedQuery))
+      .update(JSON.stringify(scopedFields))
+      .digest('base64');
+
+    await realtimeConnectionRepository.upsertSubscriber(
+      { queryId: uniqueQuerySelector, collectionName, query: normalizedQuery, fields: scopedFields },
+      subscriber
+    );
+
+    await assertConnectionStillRegistered();
+  };
+
   if (fetchInitialData) {
     let results;
     try {
@@ -255,6 +331,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     } catch (error) {
       await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
       throw error;
+    }
+    if (initialDataAfterSubscribe) {
+      // A close during FIND must not create a new registration or deliver a snapshot.
+      await assertConnectionStillRegistered();
+      await registerSubscriber();
     }
     const limit = pLimit(50);
     const sendingOutcomes = await Promise.allSettled(
@@ -286,41 +367,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     });
   }
 
-  // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
-  // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
-  // old subscription is never mutated in place with the new exclusion; a client that reconnects
-  // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
-  // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
-  // The gap is bounded by the connection's own lifetime, not by the deploy: API Gateway WebSocket
-  // connections are forcibly closed after 10 minutes idle or 2 hours total, so every pre-deploy
-  // subscriber reconnects (and re-hashes) well within a couple of hours regardless.
-  const uniqueQuerySelector = crypto
-    .createHash('sha256')
-    .update(JSON.stringify(collectionName))
-    .update(JSON.stringify(normalizedQuery))
-    .update(JSON.stringify(scopedFields))
-    .digest('base64');
-
-  await realtimeConnectionRepository.upsertSubscriber(
-    { queryId: uniqueQuerySelector, collectionName, query: normalizedQuery, fields: scopedFields },
-    subscriber
-  );
-
-  // A revoke can end the connection while this subscribe is in flight, after its own pull ran but
-  // before this write landed. Re-read the row: if it is gone, back the entry out like the no-row
-  // check above does. Both steps are best-effort so the close still runs and the caller always
-  // gets the UnauthorizedError; the disconnect handler and the stale-subscriber pass sweep any leftover.
-  if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
-    await realtimeConnectionRepository
-      .removeConnectionSubscribers(connectionId)
-      .catch((error: unknown) =>
-        logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
-      );
-    await closeConnection(connectionId, endpoint).catch(error =>
-      logger.warn(`[dataSubscribeRequest] Failed to close ended connection ${connectionId}`, error)
-    );
-    throw new UnauthorizedError('Connection is not registered to this user');
-  }
+  if (initialDataAfterSubscribe) await assertConnectionStillRegistered();
+  else await registerSubscriber();
 
   return { statusCode: 200 };
 });

@@ -47,6 +47,7 @@ describe('chunkFabfile', () => {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
         getExtractedText: vi.fn().mockReturnValue('chunk one'),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -145,6 +146,7 @@ describe('chunkFabfile', () => {
         ]),
         getExtractedText: vi.fn().mockReturnValue('chunk one four\u{1F600}'),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -245,6 +247,7 @@ describe('chunkFabfile', () => {
         ]),
         getExtractedText: vi.fn().mockReturnValue('the quick brown fox jumps'),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -266,6 +269,7 @@ describe('chunkFabfile', () => {
         chunkFile: vi.fn().mockResolvedValue([]),
         getExtractedText: vi.fn().mockReturnValue(undefined),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -297,6 +301,7 @@ describe('chunkFabfile', () => {
         chunkFile: vi.fn().mockResolvedValue([]),
         getExtractedText: vi.fn().mockReturnValue(undefined),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -374,6 +379,44 @@ describe('chunkFabfile', () => {
 
   // #3048. The pair is written on every pass, so these cover both directions of that: a found
   // vintage lands, and a vanished one clears - except where this pass was never able to see it.
+  describe('extraction refusal', () => {
+    const withRefusal = (refusal: unknown) => {
+      (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+        return {
+          chunkFile: vi.fn().mockResolvedValue([]),
+          getExtractedText: vi.fn().mockReturnValue(undefined),
+          getDocumentDate: vi.fn().mockReturnValue(undefined),
+          getExtractionRefusal: vi.fn().mockReturnValue(refusal),
+          freeEncoder: vi.fn(),
+        };
+      });
+    };
+
+    const persisted = () =>
+      mockAdapter.db.fabFiles.update.mock.calls[0][0] as { extractionRefusalReason?: string | null; chunked?: boolean };
+
+    const run = () =>
+      chunkFabfile(mockUser, { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' }, mockAdapter as never);
+
+    it.each([
+      [{ reason: 'decompressedSizeExceeded', format: 'DOCX', limitBytes: 1 }, 'decompressedSizeExceeded'],
+      [{ reason: 'unopenableContainer', format: 'XLSX', detail: 'bad zip' }, 'unopenableContainer'],
+    ])('records the reason the chunker refused the file (%o)', async (refusal, expected) => {
+      withRefusal(refusal);
+      await run();
+      expect(persisted()).toMatchObject({ chunked: false, extractionRefusalReason: expected });
+    });
+
+    it('writes null when the chunker read the file, clearing a refusal from an earlier pass', async () => {
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        extractionRefusalReason: 'decompressedSizeExceeded',
+      });
+      await run();
+      expect(persisted().extractionRefusalReason).toBeNull();
+    });
+  });
+
   describe('documentDate capture', () => {
     const withChunkerDate = (documentDate: { date: Date; source: DocumentDateSource } | undefined) => {
       (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
@@ -381,6 +424,7 @@ describe('chunkFabfile', () => {
           chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
           getExtractedText: vi.fn().mockReturnValue('chunk one'),
           getDocumentDate: vi.fn().mockReturnValue(documentDate),
+          getExtractionRefusal: vi.fn().mockReturnValue(undefined),
           freeEncoder: vi.fn(),
         };
       });
@@ -590,6 +634,7 @@ describe('prepareFabFileChunks / commitFabFileChunks (#1681)', () => {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
         getExtractedText: vi.fn().mockReturnValue('chunk one'),
         getDocumentDate: vi.fn().mockReturnValue(undefined),
+        getExtractionRefusal: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });

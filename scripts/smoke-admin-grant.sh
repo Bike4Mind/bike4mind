@@ -79,7 +79,7 @@ pass "top-up added 25000 credits"
 
 # ── 4. Adjust seats ─────────────────────────────────────────────────────────
 SEATS=$(curl_admin -X PATCH "${BASE_URL}/api/admin/organizations/${ORG_ID}/seats" \
-  -d '{"seats":5}')
+  -d '{"seats":5,"reason":"smoke seat change"}')
 NEW_SEATS=$(jq -r '.seats' <<<"$SEATS")
 [[ "$NEW_SEATS" == "5" ]] || fail "PATCH /seats returned unexpected seats" "$SEATS"
 pass "seats updated to 5"
@@ -89,7 +89,7 @@ if [[ "$SKIP_CONVERT" == "1" ]]; then
   info "SKIP_CONVERT=1 → skipping convert-to-paid"
 else
   CONVERT=$(curl_admin -X POST "${BASE_URL}/api/admin/organizations/${ORG_ID}/convert-to-paid" \
-    -d "{\"callbackUrl\":\"${BASE_URL}/admin?tab=organizations\"}")
+    -d "{\"callbackUrl\":\"${BASE_URL}/admin?tab=organizations\",\"reason\":\"smoke conversion\"}")
   CHECKOUT_URL=$(jq -r '.checkoutUrl' <<<"$CONVERT")
   [[ "$CHECKOUT_URL" == https://checkout.stripe.com/* ]] \
     || fail "convert-to-paid did not return a Stripe checkout URL" "$CONVERT"

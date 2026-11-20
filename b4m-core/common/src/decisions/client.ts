@@ -76,6 +76,7 @@ export type DecideParams<Qs extends readonly DecisionQuestionDefinition[]> = {
   model: DecisionModelId | (string & {});
   input: DecisionInput;
   questions: Qs;
+  /** @deprecated Ignored by the server: the provider always receives a hash of the calling user id. */
   safety_identifier?: string;
 };
 

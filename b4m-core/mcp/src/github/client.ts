@@ -8,6 +8,7 @@
 import { Octokit } from '@octokit/rest';
 import { parseRateLimitHeaders, isNearLimit, buildRateLimitLogEntry } from '@bike4mind/common';
 import { githubToken } from './config.js';
+import { stderrLog } from '../shared/stderrLog.js';
 
 // Initialize Octokit client with explicit type annotation for portability
 export const octokit: InstanceType<typeof Octokit> = new Octokit({
@@ -22,12 +23,14 @@ octokit.hook.after('request', (response, options) => {
   const rateLimitInfo = parseRateLimitHeaders(headers);
   if (rateLimitInfo.remaining !== null) {
     const logEntry = buildRateLimitLogEntry('github', String(options.url ?? ''), rateLimitInfo);
-    console.error(JSON.stringify(logEntry));
+    stderrLog('info', 'github', 'rate_limit', { ...logEntry });
   }
   if (isNearLimit(rateLimitInfo)) {
-    console.error(
-      `[GitHub] Rate limit warning: ${rateLimitInfo.usagePercent}% used (${rateLimitInfo.remaining}/${rateLimitInfo.limit} remaining)`
-    );
+    stderrLog('warn', 'github', 'Rate limit warning', {
+      usagePercent: rateLimitInfo.usagePercent,
+      remaining: rateLimitInfo.remaining,
+      limit: rateLimitInfo.limit,
+    });
   }
 });
 
@@ -39,7 +42,7 @@ octokit.hook.error('request', (error, options) => {
   if (status === 403 || status === 429) {
     const rateLimitInfo = parseRateLimitHeaders(responseHeaders ?? {});
     const logEntry = buildRateLimitLogEntry('github', String(options.url ?? ''), rateLimitInfo, true);
-    console.error(JSON.stringify(logEntry));
+    stderrLog('warn', 'github', 'rate_limit', { ...logEntry });
   }
   throw error;
 });

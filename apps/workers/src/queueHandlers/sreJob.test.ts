@@ -14,7 +14,7 @@ vi.mock('./sreRevision', () => ({
 }));
 
 // Passthrough so `dispatch` is the raw (event, ctx, logger) handler.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

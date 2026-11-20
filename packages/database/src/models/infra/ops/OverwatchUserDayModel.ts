@@ -6,6 +6,9 @@ const ModelName = 'OverwatchUserDay';
 /** Name of the partial `{ productId, date }` index over rows marked `lane: 'synthetic'`. */
 export const OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX = 'productId_1_date_1_lane_synthetic';
 
+/** Name of the partial `{ productId, date }` index over rows marked `internal: true`. */
+export const OVERWATCH_USER_DAY_INTERNAL_INDEX = 'productId_1_date_1_internal_true';
+
 /**
  * One document per unique (productId, date, userId) combination.
  * DAU = countDocuments({ productId, date }).
@@ -25,6 +28,12 @@ export interface IOverwatchUserDayDoc {
    * the lane existed and every user no event marked - never a verified real user.
    */
   lane?: OverwatchLane;
+  /**
+   * true when any of the user's events that day carried `metadata.internal: true` (an internal
+   * account, see server-utils analytics/lane.ts). Sticky and never false, like `lane`; absent means
+   * unmarked. A row marked both is synthetic: that lane wins.
+   */
+  internal?: boolean;
   createdAt: Date;
 }
 
@@ -38,6 +47,7 @@ const OverwatchUserDaySchema = new Schema<IOverwatchUserDayDoc>(
     userType: { type: String },
     // No default: an old row must keep reading as unmarked, and nothing writes a value on its behalf.
     lane: { type: String, enum: OVERWATCH_LANE_VALUES },
+    internal: { type: Boolean },
   },
   { timestamps: true }
 );
@@ -52,6 +62,13 @@ OverwatchUserDaySchema.index({ productId: 1, date: 1, userId: 1 }, { unique: tru
 OverwatchUserDaySchema.index(
   { productId: 1, date: 1 },
   { name: OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX, partialFilterExpression: { lane: 'synthetic' } }
+);
+// The same for internal-account reads, `{ productId (or $in), date (range or $in), internal: true }`.
+// A read of either mark can use both partial indexes only when each `$or` branch names its own mark
+// with the product and the dates. Pre-built by migration 20260921239900.
+OverwatchUserDaySchema.index(
+  { productId: 1, date: 1 },
+  { name: OVERWATCH_USER_DAY_INTERNAL_INDEX, partialFilterExpression: { internal: true } }
 );
 // TTL: retain user-day records for 180 days
 OverwatchUserDaySchema.index({ createdAt: 1 }, { expireAfterSeconds: 15552000 });

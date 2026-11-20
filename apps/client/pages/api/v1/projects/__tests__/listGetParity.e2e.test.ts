@@ -38,10 +38,10 @@ vi.mock('@server/middlewares/baseApi', () => {
     baseApi: () => ({ use: () => undefined, get: compose, post: compose, patch: compose, delete: compose }),
   };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 
 let mongoServer: MongoMemoryServer;
 // any: the contract routers' param types carry prelude-only fields node-mocks-http lacks.

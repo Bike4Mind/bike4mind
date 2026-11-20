@@ -305,17 +305,29 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.users',
     section: 'admin',
     label: 'User Management',
-    description: 'View and manage user accounts, roles, and permissions',
+    description:
+      'View and manage user accounts, roles, and permissions; the profile Billing tab shows payments, subscription standing and credit funding; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
     navigationType: 'tab',
     target: '0', // AdminTab.Users
-    keywords: ['users', 'accounts', 'roles', 'permissions', 'manage users'],
+    keywords: [
+      'users',
+      'accounts',
+      'roles',
+      'permissions',
+      'manage users',
+      'ai advisories',
+      'flagged accounts',
+      'billing',
+      'payments',
+    ],
     requiresAdmin: true,
   },
   {
     id: 'admin.credit_analytics',
     section: 'admin',
     label: 'Credit Analytics',
-    description: 'View credit usage, add credits to users, billing analytics',
+    description:
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
     keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
@@ -335,20 +347,32 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.system_health',
     section: 'admin',
     label: 'System Health',
-    description: 'Monitor system health, uptime, and performance metrics',
+    description:
+      'Check configuration and connectivity: test email, database and OAuth providers, probe integrations, override circuit breakers',
     navigationType: 'tab',
     target: '29', // AdminTab.SystemHealth
-    keywords: ['health', 'uptime', 'monitoring', 'performance', 'status'],
+    keywords: ['health', 'monitoring', 'status'],
     requiresAdmin: true,
   },
   {
     id: 'admin.llm_dashboard',
     section: 'admin',
-    label: 'LLM Dashboard',
-    description: 'LLM model usage, costs, and performance monitoring',
+    label: 'Models',
+    description: 'Models users can pick: status, access, rank, prices and discovery',
     navigationType: 'tab',
-    target: '24', // AdminTab.LLMDashboard
-    keywords: ['llm', 'model', 'ai', 'costs', 'tokens', 'dashboard'],
+    target: '24', // AdminTab.Models
+    keywords: [
+      'llm',
+      'models',
+      'model access',
+      'model pricing',
+      'prices',
+      'rank',
+      'ai',
+      'dashboard',
+      'enable model',
+      'entitlements',
+    ],
     requiresAdmin: true,
   },
   {
@@ -365,10 +389,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.organizations',
     section: 'admin',
     label: 'Organizations',
-    description: 'Manage organizations, teams, and multi-tenant settings',
+    description:
+      'List, create and edit organizations: members, top up credits, adjust seats, sync from Stripe, grant a free org, convert a granted org to paid or revoke the grant',
     navigationType: 'tab',
     target: '14', // AdminTab.Organizations
-    keywords: ['organizations', 'teams', 'tenants', 'companies'],
+    keywords: ['organizations', 'teams', 'tenants', 'companies', 'billing', 'payments'],
     requiresAdmin: true,
   },
   {
@@ -384,21 +409,32 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.subscribers',
     section: 'admin',
-    label: 'Subscribers',
-    description: 'Manage subscriber waitlist and access approvals',
+    label: 'Waitlist',
+    description: 'Manage the waitlist and send invites to people waiting for access',
     navigationType: 'tab',
-    target: '12', // AdminTab.Subscribers
+    target: '12', // AdminTab.Waitlist
     keywords: ['subscribers', 'waitlist', 'approvals', 'signups'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.revenue',
+    section: 'admin',
+    label: 'Revenue',
+    description: 'MRR, ARR, paying customers, new and churned MRR, MRR by plan and at-risk subscriptions over time',
+    navigationType: 'tab',
+    target: '72', // AdminTab.Revenue
+    keywords: ['revenue', 'mrr', 'arr', 'churn', 'recurring revenue', 'paying customers', 'at risk'],
     requiresAdmin: true,
   },
   {
     id: 'admin.subscriptions',
     section: 'admin',
     label: 'Subscriptions',
-    description: 'Manage subscription plans, tiers, and billing',
+    description:
+      'Look up customer subscriptions (past due, mismatched, canceling, comped, churned); cancel, resume, sync from Stripe, edit credits per cycle, extend or end comps',
     navigationType: 'tab',
     target: '13', // AdminTab.Subscriptions
-    keywords: ['subscriptions', 'plans', 'tiers', 'billing', 'pricing'],
+    keywords: ['subscriptions', 'billing', 'past due', 'comped', 'sync from stripe'],
     requiresAdmin: true,
   },
   {
@@ -415,27 +451,30 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.agent_ops',
     section: 'admin',
     label: 'Agent Operations',
-    description: 'Monitor and manage AI agent operations and tasks',
+    description:
+      'Manage the meta-prompt that generates agent system prompts: versions, activation, generation model and rate limit',
     navigationType: 'tab',
     target: '23', // AdminTab.AgentOps
-    keywords: ['agents', 'operations', 'tasks', 'agent ops'],
+    keywords: ['agents', 'agent ops', 'meta-prompt', 'agent prompt generation'],
     requiresAdmin: true,
   },
   {
     id: 'admin.security_dashboard',
     section: 'admin',
     label: 'Security Dashboard',
-    description: 'Security monitoring, threat detection, and audit logs',
+    description:
+      'Security views: Incident (queues, alarms, payments), Firewall (traffic and blocked requests) and Scans (scheduled security scan results)',
     navigationType: 'tab',
     target: '26', // AdminTab.SecurityDashboard
-    keywords: ['security', 'threats', 'audit', 'logs', 'vulnerabilities'],
+    keywords: ['security', 'threats', 'firewall', 'waf', 'security scans'],
     requiresAdmin: true,
   },
   {
     id: 'admin.system_prompts',
     section: 'admin',
     label: 'System Prompts',
-    description: 'Edit and manage system prompts for AI models',
+    description:
+      'Edit system prompts as versioned overrides of the code defaults (history, revert), see usage, and manage Global Knowledge Files sent with every chat',
     navigationType: 'tab',
     target: '21', // AdminTab.SystemPrompts
     keywords: ['prompts', 'system prompts', 'instructions', 'AI prompts'],
@@ -454,21 +493,22 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.whats_new',
     section: 'admin',
-    label: 'What&apos;s New',
-    description: 'Manage What&apos;s New release notes and changelogs',
+    label: "What's New",
+    description: "Manage the What's New modals and the weekly highlights Slack post",
     navigationType: 'tab',
     target: '32', // AdminTab.WhatsNewModals
-    keywords: ['whats new', 'release notes', 'changelog', 'updates'],
+    keywords: ['whats new', 'updates', 'announcement modal', 'weekly highlights'],
     requiresAdmin: true,
   },
   {
     id: 'admin.rapid_reply',
     section: 'admin',
     label: 'Rapid Reply',
-    description: 'Configure rapid reply templates and shortcuts',
+    description:
+      'Configure Rapid Reply, a fast model that answers while the main model works: model mappings, fallback, thresholds, metrics and a test run',
     navigationType: 'tab',
     target: '25', // AdminTab.RapidReply
-    keywords: ['rapid reply', 'templates', 'shortcuts', 'quick responses'],
+    keywords: ['rapid reply', 'quick responses', 'fast model', 'model mapping'],
     requiresAdmin: true,
   },
   {
@@ -479,26 +519,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '30', // AdminTab.SlackWorkspaces
     keywords: ['slack', 'workspaces', 'integrations', 'messaging'],
-    requiresAdmin: true,
-  },
-  {
-    id: 'admin.secrets_rotation',
-    section: 'admin',
-    label: 'Secrets Rotation',
-    description: 'Manage API key rotation and secret lifecycle',
-    navigationType: 'tab',
-    target: '16', // AdminTab.SecretsRotation
-    keywords: ['secrets', 'rotation', 'API keys', 'credentials'],
-    requiresAdmin: true,
-  },
-  {
-    id: 'admin.bulk_import',
-    section: 'admin',
-    label: 'Bulk Import',
-    description: 'Bulk import users and data from CSV or other formats',
-    navigationType: 'tab',
-    target: '17', // AdminTab.BulkImport
-    keywords: ['bulk', 'import', 'CSV', 'migration', 'data import'],
     requiresAdmin: true,
   },
   {
@@ -515,7 +535,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.files',
     section: 'admin',
     label: 'Files',
-    description: 'Manage uploaded files across all users, storage analytics',
+    description: 'Manage app-level file uploads and their tags, including the Gated tag',
     navigationType: 'tab',
     target: '8', // AdminTab.Files
     keywords: ['files', 'uploads', 'storage', 'documents', 'file management'],
@@ -595,10 +615,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.team',
     section: 'admin',
     label: 'Team',
-    description: 'Manage team members, roles, and team settings',
+    description: 'Internal team contact directory',
     navigationType: 'tab',
     target: '28', // AdminTab.Team
-    keywords: ['team', 'members', 'roles', 'team management', 'staff'],
+    keywords: ['team', 'staff', 'contacts', 'directory'],
     requiresAdmin: true,
   },
   {
@@ -625,10 +645,509 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.liveops_triage',
     section: 'admin',
     label: 'LiveOps Triage',
-    description: 'Real-time error triage, production issue monitoring, and incident response',
+    description:
+      'Triage configs that turn Slack error alerts into GitHub or Jira issues: dry run, run now, run history',
     navigationType: 'tab',
     target: '35', // AdminTab.LiveOpsTriage
     keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dashboard',
+    section: 'admin',
+    label: 'Dashboard',
+    description:
+      'Admin landing overview: signups, active users, client mix, links to the other dashboards, and the AI advisory strip (shown while flags await review) with flagged accounts, shared IPs and domains',
+    navigationType: 'tab',
+    target: '67', // AdminTab.Dashboard
+    keywords: ['dashboard', 'overview', 'home', 'summary', 'signups', 'kpis', 'ai advisories', 'flagged accounts'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.help_analytics',
+    section: 'admin',
+    label: 'Help usage',
+    description: 'What users ask the in-app help assistant, which help articles they read, and unanswered questions',
+    navigationType: 'tab',
+    target: '39', // AdminTab.HelpAnalytics
+    keywords: ['help', 'help usage', 'help analytics', 'support questions', 'docs usage', 'unanswered'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.partner_signups',
+    section: 'admin',
+    label: 'Partner signups',
+    description: 'Rules that auto-add verified signups from a partner email domain to an organization, with backfill',
+    navigationType: 'tab',
+    target: '55', // AdminTab.PartnerSignupRules
+    keywords: ['partner', 'partner signups', 'email domain', 'auto-join', 'domain rules', 'organization signup'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.signup_domain_holds',
+    section: 'admin',
+    label: 'Signup domain holds',
+    description:
+      'Review email domains whose free signup credits are held as suspicious; confirm or release them, with the AI advisory verdict on each hold',
+    navigationType: 'tab',
+    target: '68', // AdminTab.SignupDomainHolds
+    keywords: [
+      'domain holds',
+      'suspicious signups',
+      'disposable email',
+      'signup abuse',
+      'held credits',
+      'fraud',
+      'ai advisory',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.moderation_incidents',
+    section: 'admin',
+    label: 'Moderation review',
+    description: 'Review image moderation incidents that are waiting for a verdict',
+    navigationType: 'tab',
+    target: '74', // AdminTab.ModerationIncidents
+    keywords: ['moderation', 'image moderation', 'incident review', 'flagged images', 'false positive'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.signup_risk_review',
+    section: 'admin',
+    label: 'Risk review',
+    description: 'Review new accounts whose signup risk score reached the review threshold; approve or suspend them',
+    navigationType: 'tab',
+    target: '69', // AdminTab.SignupRiskReview
+    keywords: [
+      'risk review',
+      'risk score',
+      'flagged signups',
+      'suspicious accounts',
+      'signup abuse',
+      'approve account',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.shadow_detections',
+    section: 'admin',
+    label: 'Detections',
+    description:
+      'Grade what abuse detectors would have done, without acting, to measure their precision; each detection shows its AI advisory assessment',
+    navigationType: 'tab',
+    target: '73', // AdminTab.ShadowDetections
+    keywords: [
+      'detections',
+      'shadow detections',
+      'detector precision',
+      'false positives',
+      'abuse detection',
+      'ai advisory assessment',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.stripe_disputes',
+    section: 'admin',
+    label: 'Disputes',
+    description:
+      'Resolve Stripe disputes on organization or unmatched payments and undo an automatic account containment',
+    navigationType: 'tab',
+    target: '75', // AdminTab.StripeDisputes
+    keywords: ['disputes', 'chargebacks', 'stripe', 'lost dispute', 'contain'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.held_signup_grants',
+    section: 'admin',
+    label: 'Held signup grants',
+    description: 'Release free signup credits held by the daily budget, in bulk, with revoke',
+    navigationType: 'tab',
+    target: '70', // AdminTab.HeldSignupGrants
+    keywords: ['held grants', 'signup budget', 'free credits', 'release credits', 'bulk release'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.migrate_users',
+    section: 'admin',
+    label: 'Migration',
+    description:
+      'Bulk-migrate users into the platform and optionally send welcome emails (only when user migration is enabled)',
+    navigationType: 'tab',
+    target: '6', // AdminTab.Migrate
+    keywords: ['migrate', 'migration', 'import users', 'move users', 'welcome email'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.growth_pricing',
+    section: 'admin',
+    label: 'Pricing',
+    description:
+      'Growth and monetization knobs: credit pricing, free-credit grants, referral credits and related pricing settings',
+    navigationType: 'tab',
+    target: '64', // AdminTab.GrowthPricing
+    keywords: ['pricing', 'prices', 'credit price', 'free credits', 'referral credits', 'monetization', 'growth'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.preference_arena',
+    section: 'admin',
+    label: 'Preference arena',
+    description:
+      'Import answer pairs for the rate-two-answers arena, toggle them, and review vote quality and model win rates',
+    navigationType: 'tab',
+    target: '71', // AdminTab.PreferenceArena
+    keywords: ['preference arena', 'arena', 'rate answers', 'pairwise votes', 'gold questions', 'model win rate'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.email_marketing',
+    section: 'admin',
+    label: 'Email marketing',
+    description: 'Build marketing email templates and send email campaigns to users',
+    navigationType: 'tab',
+    target: '36', // AdminTab.EmailMarketing
+    keywords: ['email marketing', 'campaigns', 'newsletter', 'email templates', 'marketing email'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.secops_triage',
+    section: 'admin',
+    label: 'Security scan issue filing',
+    description:
+      'Security page, Scans view: GitHub issue filing status, recent filing runs and its settings (dry run, repository, Slack)',
+    navigationType: 'tab',
+    target: '51', // AdminTab.SecOpsTriage, retired: opens the Security page's Scans view
+    keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.audit_log',
+    section: 'admin',
+    label: 'Audit log',
+    description:
+      'Review recorded admin and system changes with their actors and reasons; filter, export CSV, and sign off critical actions in the Needs review queue',
+    navigationType: 'tab',
+    target: '66', // AdminTab.AuditLog
+    keywords: ['audit log', 'audit trail', 'who changed', 'change history', 'activity log', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.access_review',
+    section: 'admin',
+    label: 'Access review',
+    description:
+      'Quarterly review of who holds admin access: confirm or revoke each admin, flag dormant and no-MFA accounts, export the signed-off review as CSV',
+    navigationType: 'tab',
+    target: '81', // AdminTab.AccessReview
+    keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.spend_explorer',
+    section: 'admin',
+    label: 'Spend explorer',
+    description:
+      'AI provider cost per day or hour with spikes against the rolling median, split by provider, model, feature or account type, and the accounts that drove any day',
+    navigationType: 'tab',
+    target: '82', // AdminTab.SpendExplorer
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.approvals',
+    section: 'admin',
+    label: 'Approvals',
+    description: 'Approve or reject sensitive admin actions another admin submitted for a second approval',
+    navigationType: 'tab',
+    target: '76', // AdminTab.Approvals
+    keywords: ['approvals', 'approve', 'two-person', 'pending admin actions', 'second admin'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.tutorials',
+    section: 'admin',
+    label: 'Tutorials',
+    description: 'Switch guided tutorials on or off, edit their words, and see the tutorials each package contributes',
+    navigationType: 'tab',
+    target: '77', // AdminTab.Tutorials
+    keywords: ['tutorials', 'guided tutorials', 'walkthrough', 'onboarding', 'coach', 'tutorial modules'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.oauth_clients',
+    section: 'admin',
+    label: 'OAuth clients',
+    description: 'Register OAuth client apps, edit their redirect URIs and rotate client secrets',
+    navigationType: 'tab',
+    target: '63', // AdminTab.OAuthClients
+    keywords: ['oauth', 'oauth clients', 'client id', 'client secret', 'redirect uri', 'third-party apps'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_key_scopes',
+    section: 'admin',
+    label: 'API key scopes',
+    description: 'Preflight which API keys would lose access before requiring a new scope on an endpoint',
+    navigationType: 'tab',
+    target: '61', // AdminTab.ApiKeyScopePreflight
+    keywords: ['api key scopes', 'scopes', 'api keys', 'preflight', 'permissions', 'scope migration'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.legacy_api_keys',
+    section: 'admin',
+    label: 'Legacy API keys',
+    description: 'See which recently used API keys still rely on legacy access, and their owners',
+    navigationType: 'tab',
+    target: '79', // AdminTab.LegacyApiKeys
+    keywords: ['legacy api keys', 'legacy keys', 'api keys', 'grandfathered', 'scoped key', 'key owners'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.published_pages',
+    section: 'admin',
+    label: 'Published pages',
+    description: 'Moderate publicly published pages: review reported ones, take a page down or restore it',
+    navigationType: 'tab',
+    target: '54', // AdminTab.PublishedPages
+    keywords: ['published pages', 'public pages', 'moderation', 'takedown', 'reported content', 'abuse'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.gears',
+    section: 'admin',
+    label: 'Gears',
+    description:
+      'Override the Gears progression system live: toggle gears, change credit rewards, reword cards and CTAs',
+    navigationType: 'tab',
+    target: '56', // AdminTab.ManageGears
+    keywords: ['gears', 'progression', 'rewards', 'gamification', 'achievements', 'onboarding rewards'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.model_lifecycle',
+    section: 'admin',
+    label: 'Model lifecycle',
+    description: 'Models > Discovery: discovery runs, lifecycle suggestions and stale model references',
+    navigationType: 'tab',
+    // AdminTab.ModelLifecycle, whose slug aliases to the Models tab's Discovery section.
+    target: '58',
+    keywords: [
+      'model lifecycle',
+      'deprecation',
+      'deprecated models',
+      'model retirement',
+      'successor model',
+      'end of life',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.retrieval',
+    section: 'admin',
+    label: 'Retrieval',
+    description:
+      'How often the model chooses to call knowledge-retrieval tools when they are offered rather than forced',
+    navigationType: 'tab',
+    target: '60', // AdminTab.RetrievalRate
+    keywords: ['retrieval', 'retrieval rate', 'rag', 'knowledge tools', 'search usage'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.context_inspector',
+    section: 'admin',
+    label: 'Context inspector',
+    description: 'Inspect per-request LLM context telemetry: prompt size, context health and anomalies',
+    navigationType: 'tab',
+    target: '40', // AdminTab.ContextInspector
+    keywords: ['context', 'context window', 'prompt size', 'telemetry', 'tokens', 'context health'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.stuck_executions',
+    section: 'admin',
+    label: 'Stuck executions',
+    description: 'Find agent executions that stopped progressing and release their concurrency slots',
+    navigationType: 'tab',
+    target: '53', // AdminTab.AgentExecutions
+    keywords: ['stuck agents', 'agent executions', 'hung', 'stalled', 'concurrency slots', 'release'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.embed_keys',
+    section: 'admin',
+    label: 'Embed keys',
+    description:
+      'Create, configure and rotate embed keys and their allowed origins for embedding Bike4Mind on other sites',
+    navigationType: 'tab',
+    target: '57', // AdminTab.EmbedKeys
+    keywords: ['embed', 'embed keys', 'widget', 'allowed origins', 'iframe', 'embedding'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.voice',
+    section: 'admin',
+    label: 'Voice',
+    description: 'Configure voice assistant agents and the default voice for users without a personal selection',
+    navigationType: 'tab',
+    target: '52', // AdminTab.VoiceSettings
+    keywords: ['voice', 'voice agent', 'speech', 'elevenlabs', 'voice assistant'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.sre_agent',
+    section: 'admin',
+    label: 'SRE agent',
+    description:
+      'Configure and monitor the SRE agent pipeline that triages production errors: controls, models and patterns',
+    navigationType: 'tab',
+    target: '44', // AdminTab.SreAgent
+    keywords: ['sre', 'sre agent', 'error triage', 'auto-fix', 'production errors', 'incident'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.integrations',
+    section: 'admin',
+    label: 'Integrations',
+    description: 'Health and uptime of third-party integrations (GitHub, Jira, Confluence, Slack and others)',
+    navigationType: 'tab',
+    target: '43', // AdminTab.IntegrationHealth
+    keywords: ['integrations', 'integration health', 'connectors', 'uptime', 'third-party', 'outage'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dead_letters',
+    section: 'admin',
+    label: 'Dead letters',
+    description: 'Inspect dead-letter queues and replay failed background messages',
+    navigationType: 'tab',
+    target: '42', // AdminTab.DlqReplay
+    keywords: ['dlq', 'dead letters', 'dead-letter queue', 'failed messages', 'replay', 'retry'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.ai_operations',
+    section: 'admin',
+    label: 'AI operations',
+    description: 'Admin AI spend, agreement, budget caps, kill switches and autonomy readiness',
+    navigationType: 'tab',
+    target: '78',
+    keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.roles',
+    section: 'admin',
+    label: 'Roles',
+    description:
+      'Create admin roles from templates, edit the permissions each role grants, and delete roles nobody holds',
+    navigationType: 'tab',
+    target: '80', // AdminTab.Roles
+    keywords: ['roles', 'admin roles', 'permissions', 'role templates', 'delegated admin', 'access', 'support role'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.rate_limits',
+    section: 'admin',
+    label: 'Rate limits',
+    description:
+      'Monitor rate-limit usage and throttling against third-party integration APIs (GitHub, Jira, Confluence, Slack); per-plan API request limits are in Admin Settings',
+    navigationType: 'tab',
+    target: '41', // AdminTab.RateLimits
+    keywords: ['rate limit', 'rate limits', 'throttle', 'throttling', 'quota', 'requests per minute', '429'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.github',
+    section: 'admin',
+    label: 'GitHub',
+    description:
+      'Configure the system GitHub connection (GitHub App or service-account token) and the repository allow-list',
+    navigationType: 'tab',
+    target: '38', // AdminTab.GitHubConnection
+    keywords: ['github', 'github app', 'repositories', 'repo whitelist', 'personal access token', 'source control'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.webhook_logs',
+    section: 'admin',
+    label: 'Webhook logs',
+    description: 'Browse incoming webhook deliveries with their status, payload and processing outcome',
+    navigationType: 'tab',
+    target: '37', // AdminTab.WebhookAuditLogs
+    keywords: ['webhooks', 'webhook logs', 'deliveries', 'payload', 'webhook failures'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.integration_demand',
+    section: 'admin',
+    label: 'Integration demand',
+    description: 'Which integrations users have requested from the Integrations page roadmap, and who asked',
+    navigationType: 'tab',
+    target: '65', // AdminTab.IntegrationDemand
+    keywords: ['integration requests', 'roadmap', 'demand', 'requested integrations', 'feature requests'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.pr_digest',
+    section: 'admin',
+    label: 'PR digest',
+    description: 'Configure and generate the pull-request digest report, then review and send it',
+    navigationType: 'tab',
+    target: '59', // AdminTab.PrReport
+    keywords: ['pr digest', 'pull requests', 'pr report', 'changelog digest', 'weekly digest'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.release_notes',
+    section: 'admin',
+    label: 'Release notes',
+    description: 'Write, edit and publish product release notes',
+    navigationType: 'tab',
+    target: '62', // AdminTab.ReleaseNotes
+    keywords: ['release notes', 'changelog', 'what changed', 'product updates', 'releases'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_reference',
+    section: 'admin',
+    label: 'API reference',
+    description: 'Browse the public REST API reference: endpoints, parameters and schemas',
+    navigationType: 'tab',
+    target: '45', // AdminTab.ApiReference
+    keywords: ['api', 'api reference', 'endpoints', 'openapi', 'rest api', 'api docs'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_cookbook',
+    section: 'admin',
+    label: 'API cookbook',
+    description: 'Practical recipes and code patterns for working with the API',
+    navigationType: 'tab',
+    target: '49', // AdminTab.ApiCookbook
+    keywords: ['api cookbook', 'recipes', 'examples', 'code samples', 'api guide'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.architecture',
+    section: 'admin',
+    label: 'Architecture',
+    description: 'System architecture diagrams of the platform and its data flows',
+    navigationType: 'tab',
+    target: '47', // AdminTab.ArchitectureDiagrams
+    keywords: ['architecture', 'diagrams', 'system design', 'data flow', 'infrastructure'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dependencies',
+    section: 'admin',
+    label: 'Dependencies',
+    description: "Overview of the platform's software and service dependencies",
+    navigationType: 'tab',
+    target: '48', // AdminTab.Dependencies
+    keywords: ['dependencies', 'packages', 'libraries', 'third-party services', 'versions'],
     requiresAdmin: true,
   },
 
@@ -789,13 +1308,31 @@ export function getViewSummaryForLLM(options?: { section?: ViewSection; isAdmin?
   ].join('\n');
 }
 
+// Whole-word match, so a short keyword like "ai" is not hidden by "email" or "domain".
+const containsWholeWords = (text: string, phrase: string): boolean => {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\W)${escaped}(\\W|$)`, 'i').test(text);
+};
+
+// Keywords already spelled out in the label or description add tokens without adding meaning.
+const extraKeywordsOf = (view: NavigableView): string[] => {
+  const shown = `${view.label} ${view.description}`;
+  return view.keywords.filter(keyword => !containsWholeWords(shown, keyword));
+};
+
+const adminViewLine = (view: NavigableView): string => {
+  const extra = extraKeywordsOf(view);
+  const keywords = extra.length > 0 ? ` (also: ${extra.join(', ')})` : '';
+  return `- ${view.id}: ${view.label} \u2014 ${view.description}${keywords}`;
+};
+
 /**
  * The admin-only views, as an appendix to the non-admin `getViewSummaryForLLM()` text. Kept
  * separate so the base summary is byte-identical for every user and can sit in the
  * deployment-wide cached prompt prefix; this appendix rides in the per-caller tail instead.
  */
 export function getAdminViewSummaryForLLM(): string {
-  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(v => `- ${v.id}: ${v.label} \u2014 ${v.description}`);
+  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(adminViewLine);
   return [
     '# Admin views for navigate_view',
     '',

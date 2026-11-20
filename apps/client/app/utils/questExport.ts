@@ -1,5 +1,10 @@
-import { IQuestMasterPlanDocument, SubQuestStatus } from '@bike4mind/common';
+import {
+  IQuestMasterPlanDocument,
+  SubQuestStatus,
+  questPlanToMarkdown as sharedQuestPlanToMarkdown,
+} from '@bike4mind/common';
 import Papa from 'papaparse';
+import { CSV_FORMULA_PREFIX } from './csv';
 import * as XLSX from 'xlsx';
 import {
   Document,
@@ -33,56 +38,10 @@ export function getExportFilename(goal: string): string {
 }
 
 export function questPlanToMarkdown(plan: IQuestMasterPlanDocument): string {
-  const dateStr = new Date().toISOString().split('T')[0];
-  const totalSubQuests = plan.quests.reduce((sum, q) => sum + q.subQuests.length, 0);
-  const completedSubQuests = plan.quests.reduce(
-    (sum, q) => sum + q.subQuests.filter(sq => sq.status === 'completed').length,
-    0
-  );
-
-  let md = `# ${plan.goal}\n\n`;
-  md += `> Exported from QuestMaster on ${dateStr}\n`;
-  md += `> Status: ${plan.state || 'active'} | Progress: ${completedSubQuests}/${totalSubQuests} tasks`;
-  if (plan.metrics?.completionRate !== undefined) {
-    md += ` (${plan.metrics.completionRate}%)`;
-  }
-  md += `\n\n`;
-
-  if (plan.tags && plan.tags.length > 0) {
-    md += `> Tags: ${plan.tags.join(', ')}\n\n`;
-  }
-
-  md += `---\n\n`;
-
-  md += `## Table of Contents\n\n`;
-  plan.quests.forEach((quest, i) => {
-    md += `${i + 1}. **${quest.title}** (${quest.complexity})\n`;
-    quest.subQuests.forEach((sq, j) => {
-      md += `   ${i + 1}.${j + 1}. ${sq.title}${getSubQuestStatusIcon(sq.status)}\n`;
-    });
+  return sharedQuestPlanToMarkdown(plan, {
+    exportedOn: new Date().toISOString().split('T')[0],
+    formatTimestamp: value => value.toLocaleString(),
   });
-  md += `\n---\n\n`;
-
-  plan.quests.forEach((quest, i) => {
-    const completedInQuest = quest.subQuests.filter(sq => sq.status === 'completed').length;
-    md += `## Quest ${i + 1}: ${quest.title}\n\n`;
-    md += `**Complexity:** ${quest.complexity} | **Progress:** ${completedInQuest}/${quest.subQuests.length}\n\n`;
-    md += `${quest.description}\n\n`;
-
-    quest.subQuests.forEach((sq, j) => {
-      const icon = getSubQuestStatusIcon(sq.status);
-      md += `### ${i + 1}.${j + 1}. ${sq.title}${icon}\n\n`;
-      md += `- **Status:** ${getSubQuestStatusLabel(sq.status)}\n`;
-      if (sq.startedAt) {
-        md += `- **Started:** ${new Date(sq.startedAt).toLocaleString()}\n`;
-      }
-      md += `\n`;
-    });
-
-    md += `---\n\n`;
-  });
-
-  return md;
 }
 
 export function questPlanToJSON(plan: IQuestMasterPlanDocument): string {
@@ -141,7 +100,7 @@ export function questPlanToCSV(plan: IQuestMasterPlanDocument): string {
     }))
   );
 
-  return Papa.unparse(rows);
+  return Papa.unparse(rows, { escapeFormulae: CSV_FORMULA_PREFIX });
 }
 
 // PDF layout constants (A4, mm units)

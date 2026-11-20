@@ -1,11 +1,11 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository } from '@bike4mind/database/auth';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { SpiderEvents } from '@server/utils/eventBus';
+import { SpiderEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
-import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
+import { assertSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'embeddings';
 
@@ -74,13 +74,8 @@ const isSpendingSpiderOperation = (operation: SpiderOperation): operation is Spe
  * - dryRun: boolean (default: false) - If true, only simulates the job without making changes
  * - operations: string[] (default: all) - Specific operations to run
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
-    // Only admins can trigger Spider
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     try {
       const userId = req.user.id;
       const query = req.query as Record<string, string | string[] | undefined>;
@@ -132,6 +127,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         operations: requestedOperations,
         dryRun,
       });
+
+      if (!dryRun) {
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.spider_job.started',
+          target: { kind: 'system', id: 'spider-job', displayName: 'Spider notebook grooming job' },
+          summary: `started notebook grooming job for ${totalNotebooks} notebooks`,
+          details: { spiderJobId, totalNotebooks, operations: requestedOperations },
+        });
+      }
 
       return res.json({
         success: true,

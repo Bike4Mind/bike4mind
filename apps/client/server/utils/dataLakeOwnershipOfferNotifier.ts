@@ -1,7 +1,7 @@
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import mailer from './mailer';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 
 export interface LakeOwnershipOfferEmailEvent {
   kind: dataLakeService.OwnershipOfferEmailKind;
@@ -19,7 +19,7 @@ export interface LakeOwnershipOfferEmailEvent {
 
 interface NotifierPorts {
   logger?: Logger;
-  mailer?: { sendEmail: (to: string, data: unknown) => Promise<unknown> };
+  mailer?: { sendEmail: (to: string, data: { subject: string; html: string }) => Promise<unknown> };
   users?: { findById: (id: string) => Promise<{ email?: string | null } | null> };
   lakes?: { findById: (id: string) => Promise<{ name: string } | null> };
 }
@@ -28,8 +28,8 @@ interface NotifierPorts {
  * Send one ownership-offer email. BEST-EFFORT, like every mail side-effect in this app: it is called
  * AFTER the operation has committed, so a mail failure must never surface as a failed operation.
  *
- * `MailService.sendEmail` already swallows delivery errors and returns false. This adds the two cases
- * it cannot see - the recipient has no address, and the lake looked up for its display name is gone -
+ * The mailer already swallows its own errors and returns false. This adds the two cases it cannot
+ * see - the recipient has no address, and the lake looked up for its display name is gone -
  * and logs both rather than dropping them silently, since the only other symptom is an email that
  * never arrived.
  *
@@ -38,7 +38,7 @@ interface NotifierPorts {
  */
 export const sendLakeOwnershipOfferEmail = async (
   event: LakeOwnershipOfferEmailEvent,
-  { logger, mailer: mail = mailer, users = userRepository, lakes = dataLakeRepository }: NotifierPorts = {}
+  { logger, mailer: mail = queuedMailer, users = userRepository, lakes = dataLakeRepository }: NotifierPorts = {}
 ): Promise<void> => {
   try {
     const [user, lake] = await Promise.all([users.findById(event.toUserId), lakes.findById(event.dataLakeId)]);

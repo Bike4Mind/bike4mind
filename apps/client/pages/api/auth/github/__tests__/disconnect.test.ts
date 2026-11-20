@@ -29,7 +29,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 // Mock token decryption - return the plaintext token.
 const mockDecryptEnvVariables = vi.fn();
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptEnvVariables: (...args: any[]) => mockDecryptEnvVariables(...args),
 }));
 

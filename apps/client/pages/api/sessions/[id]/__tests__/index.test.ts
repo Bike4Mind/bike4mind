@@ -31,6 +31,8 @@ const {
   mockWithTransaction,
   mockCreateLakeAccess,
   mockResolveWorkspaceSettings,
+  mockUnpublish,
+  mockPurgeMedia,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -42,6 +44,15 @@ const {
   mockWithTransaction: vi.fn(),
   mockCreateLakeAccess: vi.fn(),
   mockResolveWorkspaceSettings: vi.fn(async () => ({ enabledTools: ['tool_w'] })),
+  mockUnpublish: vi.fn(),
+  mockPurgeMedia: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
+  purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
+}));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -53,15 +64,18 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 
 // Avoids constructing a real S3Storage (which reads an SST-bound bucket resource
 // unavailable in a test process) - only PUT's adapters touch this.
@@ -99,11 +113,11 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'example-workspace': {
       ownedFields: ['enabledTools', 'temperature'],
@@ -455,6 +469,66 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         expect.objectContaining({ type: SessionEvents.DELETE_SESSION, metadata: { sessionId: 'sess-1' } }),
         expect.anything()
       );
+    });
+
+    it("takes down the owner's pages published from the deleted notebook", async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUnpublish).toHaveBeenCalledWith(
+        'user-1',
+        { kind: 'reply', sessionIds: ['sess-1'] },
+        expect.anything()
+      );
+    });
+
+    it('still returns 200 with the new last-notebook id when the unpublish fails', async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      mockUnpublish.mockRejectedValue(new Error('publish db down'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ newLastNotebookId: 'other-session' });
+      expect(mockLogEvent).toHaveBeenCalled();
+    });
+
+    it("purges the deleted notebook's generated media after the delete commits", async () => {
+      let committed = false;
+      mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => {
+        const result = await fn(undefined);
+        committed = true;
+        return result;
+      });
+      mockPurgeMedia.mockImplementation(async () => {
+        expect(committed).toBe(true);
+      });
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockPurgeMedia).toHaveBeenCalledTimes(1);
+      expect(mockPurgeMedia).toHaveBeenCalledWith(['sess-1'], expect.anything());
+    });
+
+    it('purges no media when the delete is refused or conflicts', async () => {
+      mockDeleteSession.mockRejectedValueOnce(new NotFoundError('Session not found'));
+      const first = fire({ method: 'DELETE' });
+      await handler(first.req, first.res);
+      expect(first.res._getStatusCode()).toBe(404);
+      mockDeleteSession.mockRejectedValueOnce(new ConcurrencyConflictError('FabFile'));
+      const second = fire({ method: 'DELETE' });
+      await handler(second.req, second.res);
+      expect(second.res._getStatusCode()).toBe(409);
+      expect(mockPurgeMedia).not.toHaveBeenCalled();
+    });
+
+    it('unpublishes nothing when the delete is refused', async () => {
+      mockDeleteSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockUnpublish).not.toHaveBeenCalled();
     });
 
     it('returns a null newLastNotebookId when no session remains', async () => {

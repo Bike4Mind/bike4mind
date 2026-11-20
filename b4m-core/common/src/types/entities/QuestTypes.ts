@@ -19,6 +19,11 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     sessionId: string,
     options: { limit: number; page: number; sort?: 'asc' | 'desc' }
   ) => Promise<{ data: IChatHistoryItemDocument[]; hasMore: boolean }>;
+  // Keyset twin of findPageBySessionId: oldest first, strictly after the `after` position, at most `limit` rows.
+  findPageAfterBySessionId: (
+    sessionId: string,
+    options: { limit: number; after?: { timestamp: Date; id: string } }
+  ) => Promise<IChatHistoryItemDocument[]>;
   findAllBySessionIdAndLessThanOrEqualToTimestamp(
     sessionId: string,
     timestamp: Date
@@ -51,6 +56,8 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
+  // Same, matching `images` or `videos`: whether a generated key still has an owner before deletion.
+  findSessionIdsByMedia: (key: string) => Promise<string[]>;
   // Every organization a user's quests were recorded under, soft-deleted ones included. A DSAR
   // export or deletion has to reach rows the user can no longer see.
   findOrganizationIdsForUser: (userId: string) => Promise<string[]>;

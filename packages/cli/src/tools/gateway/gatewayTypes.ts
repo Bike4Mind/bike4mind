@@ -74,4 +74,6 @@ export type WrapToolDeps = {
   interactionModeOverride?: InteractionMode;
   /** Snapshots a file before an approved write so /undo can restore it. */
   checkpointStore?: CheckpointStore | null;
+  /** True once the session these tools were built for has ended; a call still in flight then never runs. */
+  isCancelled?: () => boolean;
 };

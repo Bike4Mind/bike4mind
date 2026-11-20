@@ -9,6 +9,7 @@ import type {
   ChatApprovalAnswer,
   ChatDiff,
   ChatMoveToBackgroundResult,
+  ChatToolApproval,
   ChatToolCall,
   ChatToolNotice,
   ChatToolStatus,
@@ -16,6 +17,7 @@ import type {
 import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest } from '@shared/mcp';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
+import { own } from '@shared/ownKeys';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
@@ -30,7 +32,9 @@ import { VideoJobsForCall } from './VideoJobCard';
 import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
 import {
   diffTotals,
+  displayStatus,
   groupToolCalls,
+  isModelRequestRefusal,
   summarizeInput,
   toolDuration,
   toolRowLabel,
@@ -49,6 +53,7 @@ const HOST_QUESTION: Record<string, string> = {
   session_send: 'Send this to that conversation? It runs there on its own and costs credits.',
   session_archive: 'Archive this conversation?',
   session_delete: 'Delete this conversation for good?',
+  loop: 'Start this loop? Each run is a turn that costs credits.',
 };
 
 /** Read-only tools that still stop at the gate; "Run this command?" would misname them. */
@@ -189,12 +194,50 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       {call.approvalAlways
         ? `"Allow in this chat" covers ${call.approvalAlways} for the rest of this conversation.`
         : '"Allow in this chat" applies for the rest of this conversation.'}
+      {call.approvalProjectRules && call.approvalProjectRules.length > 0 && call.approvalProject && (
+        <span data-testid="chat-tool-approval-project-rules">
+          {` "Allow in this project" saves ${call.approvalProjectRules.join(', ')} for every session in ${folderName(call.approvalProject)}.`}
+        </span>
+      )}
       {call.approvalRules && call.approvalRules.length > 0 && (
         <span data-testid="chat-tool-approval-rules">
           {` "Always allow" saves ${call.approvalRules.map(ruleScope).join(', ')} to Settings > Permissions, so no session asks again.`}
         </span>
       )}
     </Typography>
+  );
+}
+
+function folderName(directory: string): string {
+  return directory.split(/[\\/]/).filter(Boolean).at(-1) ?? directory;
+}
+
+/** The parts of a chain that still need a decision; the others are already allowed. */
+function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalParts']> }) {
+  return (
+    <Box sx={{ mt: 0.75 }} data-testid="chat-tool-approval-parts">
+      <Typography level="body-xs" fontWeight="lg">
+        {parts.length === 1 ? 'Only this part needs a decision:' : 'Only these parts need a decision:'}
+      </Typography>
+      <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+        {parts.map((part, index) => (
+          <Box key={index} data-testid="chat-tool-approval-part">
+            <Typography
+              level="body-xs"
+              fontFamily="monospace"
+              sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
+              {part.text}
+            </Typography>
+            {part.reason && (
+              <Typography level="body-xs" textColor="text.tertiary">
+                {part.reason}
+              </Typography>
+            )}
+          </Box>
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
@@ -220,6 +263,7 @@ function ApprovalPrompt({
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
+  const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
 
   return (
@@ -235,8 +279,8 @@ function ApprovalPrompt({
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
-          : (HOST_QUESTION[call.name] ??
-            READ_QUESTION[call.name] ??
+          : (own(HOST_QUESTION, call.name) ??
+            own(READ_QUESTION, call.name) ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
               : call.name === 'bash_background'
@@ -272,6 +316,7 @@ function ApprovalPrompt({
           </Typography>
         </Box>
       )}
+      {!diff && call.approvalParts && call.approvalParts.length > 0 && <ApprovalParts parts={call.approvalParts} />}
 
       {choice ? (
         <ApprovalChoiceButtons
@@ -299,7 +344,7 @@ function ApprovalPrompt({
                     ? 'Generate it'
                     : 'Allow once'}
             </Button>
-            {!irreversible && (
+            {!noAlways && (
               <Button
                 size="sm"
                 variant="soft"
@@ -310,7 +355,19 @@ function ApprovalPrompt({
                 Allow in this chat
               </Button>
             )}
-            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+            {!noAlways && call.approvalProjectRules && call.approvalProjectRules.length > 0 && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                title={call.approvalProjectRules.join('\n')}
+                onClick={() => onRespond(approvalId, { decision: 'always', project: true })}
+                data-testid="chat-tool-approve-project"
+              >
+                Allow in this project
+              </Button>
+            )}
+            {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
                 variant="soft"
@@ -338,7 +395,7 @@ function ApprovalPrompt({
                     : "Don't run"}
             </Button>
           </Stack>
-          {!irreversible && <AlwaysScopeLine call={call} />}
+          {!noAlways && <AlwaysScopeLine call={call} />}
         </>
       )}
     </Sheet>
@@ -388,6 +445,10 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
         </Typography>
       )}
 
+      {INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+        <MediaAttachments media={call.media ?? []} nameHint="image" variant="thumbnail" />
+      )}
+
       {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
           only the first of those is one. See ChatToolCall.diff. */}
       {diffs.length > 0 && (
@@ -412,7 +473,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
             mt: 0.5,
             ...thinScrollbarSx,
           }}
-          textColor={call.error ? 'danger.400' : 'text.tertiary'}
+          textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
           data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
         >
           {call.error ?? call.preview ?? call.progress ?? 'Running...'}
@@ -482,7 +543,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
           listStyle: 'none',
           px: 1,
           py: 0.5,
-          color: ROW_TONE[call.status],
+          color: ROW_TONE[displayStatus(call)],
           '&::-webkit-details-marker': { display: 'none' },
           '&:hover': { opacity: 0.85 },
         }}
@@ -623,10 +684,12 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
-          <MediaAttachments
-            media={call.media ?? []}
-            nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
-          />
+          {!INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+            <MediaAttachments
+              media={call.media ?? []}
+              nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
+            />
+          )}
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
@@ -635,18 +698,20 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 /**
- * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
- * seven commands "Approve for me" ran reads as one line, not seven of the same.
+ * Why the group's calls did not run, one muted line per distinct reason. A group of seven
+ * commands a reply stop closed reads as one line, not seven of the same.
  */
 function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
-  const decisions = calls.flatMap(call =>
-    call.approval && call.status !== 'awaiting-approval' ? [call.approval] : []
-  );
-  const lines = [...new Map(decisions.map(approval => [describeApproval(approval), approval])).entries()];
-  if (lines.length === 0) return null;
+  const lines = new Map<string, ChatToolApproval>();
+  for (const call of calls) {
+    if (!call.approval || call.status === 'awaiting-approval') continue;
+    const text = describeApproval(call.approval);
+    if (text !== null) lines.set(text, call.approval);
+  }
+  if (lines.size === 0) return null;
   return (
     <>
-      {lines.map(([text, approval]) => (
+      {[...lines].map(([text, approval]) => (
         <Typography
           key={text}
           level="body-xs"
@@ -664,6 +729,11 @@ function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
 const SCREENSHOT_TOOL_NAMES: ReadonlySet<string> = new Set(['browser_screenshot', 'screen_capture']);
+/**
+ * A file the agent read is part of the call's detail, like its text result, so it shows in the
+ * row's body when the row is opened rather than under the row the way a capture does.
+ */
+const INLINE_MEDIA_TOOL_NAMES: ReadonlySet<string> = new Set(['file_read']);
 
 export function ToolCallList({
   calls,

@@ -589,7 +589,7 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
 
   if (configsLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
         <CircularProgress />
       </Box>
     );
@@ -597,14 +597,14 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
 
   if (configsError) {
     return (
-      <Alert color="danger" variant="outlined" sx={{ m: 2 }}>
+      <Alert color="danger" variant="outlined">
         Failed to load configurations. Please try again.
       </Alert>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: 2, gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
         <Box

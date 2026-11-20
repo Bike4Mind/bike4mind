@@ -6,7 +6,10 @@ import {
   sessionRepository,
 } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { resolveRetrievalLakeScope, type RetrievalLakeScope } from './resolveRetrievalLakeScope';
+import {
+  resolveRetrievalLakeScope,
+  type RetrievalLakeScope,
+} from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 
 /**
  * The scope GET /api/data-lakes labels `retrievable` against: the caller's chat retrieval scope

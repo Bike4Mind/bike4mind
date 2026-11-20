@@ -1,7 +1,7 @@
 {
-  "name": "@bike4mind/services",
+  "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
-  "version": "21.0.0",
+  "version": "29.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -38,6 +38,16 @@
       "require": {
         "types": "./dist/dataLakeService/lakeGateWideningRule.d.cts",
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
+      }
+    },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
       }
     },
     "./evals/lakeRag": {
@@ -110,6 +120,16 @@
         "default": "./dist/videoJobs/index.cjs"
       }
     },
+    "./imageJobs": {
+      "import": {
+        "types": "./dist/imageJobs/index.d.mts",
+        "default": "./dist/imageJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageJobs/index.d.cts",
+        "default": "./dist/imageJobs/index.cjs"
+      }
+    },
     "./musicJobs": {
       "import": {
         "types": "./dist/musicJobs/index.d.mts",
@@ -118,6 +138,36 @@
       "require": {
         "types": "./dist/musicJobs/index.d.cts",
         "default": "./dist/musicJobs/index.cjs"
+      }
+    },
+    "./sceneJobs": {
+      "import": {
+        "types": "./dist/sceneJobs/index.d.mts",
+        "default": "./dist/sceneJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/sceneJobs/index.d.cts",
+        "default": "./dist/sceneJobs/index.cjs"
+      }
+    },
+    "./audioJobs": {
+      "import": {
+        "types": "./dist/audioJobs/index.d.mts",
+        "default": "./dist/audioJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioJobs/index.d.cts",
+        "default": "./dist/audioJobs/index.cjs"
+      }
+    },
+    "./renderJobs": {
+      "import": {
+        "types": "./dist/renderJobs/index.d.mts",
+        "default": "./dist/renderJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/renderJobs/index.d.cts",
+        "default": "./dist/renderJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {
@@ -178,6 +228,16 @@
       "require": {
         "types": "./dist/llm/toolFinishObserver.d.cts",
         "default": "./dist/llm/toolFinishObserver.cjs"
+      }
+    },
+    "./organizationService/orgEventObserver": {
+      "import": {
+        "types": "./dist/organizationService/orgEventObserver.d.mts",
+        "default": "./dist/organizationService/orgEventObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/orgEventObserver.d.cts",
+        "default": "./dist/organizationService/orgEventObserver.cjs"
       }
     },
     "./llm/ChatCompletionInvoke": {
@@ -278,6 +338,26 @@
       "require": {
         "types": "./dist/llm/modelAdmission.d.cts",
         "default": "./dist/llm/modelAdmission.cjs"
+      }
+    },
+    "./llm/shadowTier": {
+      "import": {
+        "types": "./dist/llm/shadowTier.d.mts",
+        "default": "./dist/llm/shadowTier.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/shadowTier.d.cts",
+        "default": "./dist/llm/shadowTier.cjs"
+      }
+    },
+    "./llm/orgToolPolicy": {
+      "import": {
+        "types": "./dist/llm/orgToolPolicy.d.mts",
+        "default": "./dist/llm/orgToolPolicy.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/orgToolPolicy.d.cts",
+        "default": "./dist/llm/orgToolPolicy.cjs"
       }
     },
     "./llm/refineText": {
@@ -429,6 +509,16 @@
         "types": "./dist/utils/crypto.d.cts",
         "default": "./dist/utils/crypto.cjs"
       }
+    },
+    "./llm/embeddingProviders": {
+      "import": {
+        "types": "./dist/llm/embeddingProviders.d.mts",
+        "default": "./dist/llm/embeddingProviders.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/embeddingProviders.d.cts",
+        "default": "./dist/llm/embeddingProviders.cjs"
+      }
     }
   },
   "files": [
@@ -475,14 +565,14 @@
     "chess.js": "^1.4.0",
     "dayjs": "^1.11.23",
     "diff": "^9.0.0",
-    "disposable-email-domains": "^1.0.62",
+    "disposable-domains": "^2.0.7",
     "file-type": "^22.1.0",
-    "glob": "^13.0.6",
+    "glob": "^14.0.2",
     "lodash": "^4.18.1",
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "openai": "^6.46.0",
     "p-limit": "^7.3.2",
     "sharp": "^0.35.4",
@@ -495,19 +585,18 @@
     "zod-validation-error": "^5.0.0"
   },
   "devDependencies": {
-    "@types/disposable-email-domains": "^1.0.6",
     "@types/lodash": "^4.17.24",
     "@types/mailparser": "^3.9.0",
     "@types/mime-types": "^3.0.1",
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
-    "@vitest/coverage-v8": "^4.1.11",
-    "@vitest/ui": "^4.1.11",
-    "mailparser": "^3.9.38",
+    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/ui": "^4.1.12",
+    "mailparser": "^3.12.4",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

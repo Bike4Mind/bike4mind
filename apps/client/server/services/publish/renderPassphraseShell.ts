@@ -104,14 +104,19 @@ export function renderPassphraseShell(): string {
   }
   var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
 
-  // One-shot: a proof cookie that does not stick (blocked, or dropped between the 204 and the
-  // reload) would otherwise re-serve this shell, mint again and reload again, bounded only by the
-  // 60/min rate limit. The sentinel turns that cycle into exactly one attempt, degrading to the
-  // form - the correct destination when the cookie mechanism is not working.
-  var SENTINEL = 'b4m-pp-tried-' + location.pathname;
-  var alreadyTried = false;
-  try { alreadyTried = sessionStorage.getItem(SENTINEL) === '1'; } catch (e) {}
-  if (alreadyTried) { revealForm(); return; }
+  // Loop breaker: the sentinel is written only on a 204 and consumed here, so only a load within
+  // SENTINEL_FRESH_MS of that reload means "the cookie did not stick". sessionStorage survives
+  // refreshes, so a stale sentinel must not disable the bypass. Tradeoff: if every reload cycle
+  // takes longer than the window, the mint/reload repeats, bounded only by the 60/min rate limit.
+  var SENTINEL = 'b4m-pp-minted-' + location.pathname;
+  var SENTINEL_FRESH_MS = 15000;
+  var mintedAt = 0;
+  try {
+    mintedAt = parseInt(sessionStorage.getItem(SENTINEL) || '', 10) || 0;
+    sessionStorage.removeItem(SENTINEL);
+  } catch (e) {}
+  var age = Date.now() - mintedAt;
+  if (mintedAt && age >= 0 && age < SENTINEL_FRESH_MS) { revealForm(); return; }
 
   b4mExchangeSession(function (token) {
     if (!token) { revealForm(); return; }
@@ -121,7 +126,6 @@ export function renderPassphraseShell(): string {
     // and the artifact comes back through the ordinary serve path, with the ordinary wrapper
     // and CSP. Rendering in place would mean rebuilding the sandboxed-iframe pipeline inside a
     // page whose CSP is deliberately tight because it holds a credential input.
-    try { sessionStorage.setItem(SENTINEL, '1'); } catch (e) {}
     fetch('/api/publish/gate/owner', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
@@ -139,6 +143,7 @@ export function renderPassphraseShell(): string {
           settled = true;
           clearTimeout(revealTimer);
           if (hint) hint.textContent = 'Opening your artifact...';
+          try { sessionStorage.setItem(SENTINEL, String(Date.now())); } catch (e) {}
           location.reload();
           return;
         }

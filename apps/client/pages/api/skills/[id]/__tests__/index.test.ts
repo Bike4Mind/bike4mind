@@ -33,6 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockRateLimit(...a) },
 }));
 
+const mockWithdrawSkillListings = vi.fn();
+vi.mock('@bike4mind/server-utils/skillMarket/market', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  withdrawSkillListings: (...a: unknown[]) => mockWithdrawSkillListings(...a),
+}));
+
 // The Skill Market scan runs for real (rules, tiering); only the LLM classifier is stubbed.
 const mockClassify = vi.fn();
 const mockLogInfo = vi.fn();
@@ -118,11 +124,60 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(res._getJSONData()).toMatchObject({ argumentHint: '' });
   });
 
+  it('clears the Claude Code tools when sent an empty list', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ claudeCodeAllowedTools: ['Bash'] }));
+    const { req, res } = makeReqRes('PUT', OWNER, { claudeCodeAllowedTools: [] });
+    await handler(req, res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', claudeCodeAllowedTools: [] }, { new: true });
+  });
+
+  it('updates and clears the Claude Code model', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ claudeCodeModel: 'opus' }));
+    const set = makeReqRes('PUT', OWNER, { claudeCodeModel: ' haiku ' });
+    await handler(set.req, set.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', claudeCodeModel: 'haiku' }, { new: true });
+    const clear = makeReqRes('PUT', OWNER, { claudeCodeModel: '' });
+    await handler(clear.req, clear.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith({ id: 'skill-1', claudeCodeModel: '' }, { new: true });
+  });
+
+  it('rejects an unusable Claude Code model', async () => {
+    const { req, res } = makeReqRes('PUT', OWNER, { claudeCodeModel: 'a b' });
+    await expect(handler(req, res)).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('rejects Claude Code tools that are not a string list', async () => {
+    const { req, res } = makeReqRes('PUT', OWNER, { claudeCodeAllowedTools: 'Bash' });
+    await expect(handler(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockUpdateIfNonGlobal).not.toHaveBeenCalled();
+  });
+
   it('leaves an omitted argument hint out of a partial update', async () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
     await handler(req, res);
     expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
+  });
+
+  it('replaces supporting files sorted, clears them on null, and rejects a bad path', async () => {
+    const files = [
+      { path: 'scripts/run.py', content: 'print(1)' },
+      { path: 'references/notes.md', content: '' },
+    ];
+    const set = makeReqRes('PUT', OWNER, { files });
+    await handler(set.req, set.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith(
+      { id: 'skill-1', files: [files[1], files[0]] },
+      { new: true }
+    );
+
+    const clear = makeReqRes('PUT', OWNER, { files: null });
+    await handler(clear.req, clear.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith({ id: 'skill-1', files: [] }, { new: true });
+
+    const bad = makeReqRes('PUT', OWNER, { files: [{ path: '../evil.sh', content: 'x' }] });
+    await expect(handler(bad.req, bad.res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledTimes(2);
   });
 
   it('allows a share-recipient with update permission to edit', async () => {
@@ -423,6 +478,7 @@ describe('/api/skills/[id] DELETE — delete permission', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(skillDoc());
     mockDelete.mockResolvedValue(undefined);
+    mockWithdrawSkillListings.mockResolvedValue(0);
   });
 
   it('allows the owner to delete', async () => {
@@ -430,6 +486,33 @@ describe('/api/skills/[id] DELETE — delete permission', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(204);
     expect(mockDelete).toHaveBeenCalledWith('skill-1');
+  });
+
+  it('withdraws the skill listings after deleting, with or without one', async () => {
+    mockWithdrawSkillListings.mockResolvedValueOnce(1);
+    const { req, res } = makeReqRes('DELETE', OWNER);
+    await handler(req, res);
+    expect(mockWithdrawSkillListings).toHaveBeenCalledWith('skill-1');
+    expect(res._getStatusCode()).toBe(204);
+
+    const none = makeReqRes('DELETE', OWNER);
+    await handler(none.req, none.res);
+    expect(none.res._getStatusCode()).toBe(204);
+  });
+
+  it('still returns 204 and logs when the withdraw throws after the delete committed', async () => {
+    mockWithdrawSkillListings.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = makeReqRes('DELETE', OWNER);
+    await handler(req, res);
+    expect(mockDelete).toHaveBeenCalledWith('skill-1');
+    expect(res._getStatusCode()).toBe(204);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalled();
+  });
+
+  it('does not withdraw listings when the delete is refused', async () => {
+    const { req, res } = makeReqRes('DELETE', SHARED_UPDATE);
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockWithdrawSkillListings).not.toHaveBeenCalled();
   });
 
   it('allows a share-recipient with delete permission', async () => {

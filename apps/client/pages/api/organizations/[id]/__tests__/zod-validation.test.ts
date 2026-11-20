@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: vi.fn() }));
 
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
@@ -54,6 +55,10 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   partnerSignupRuleRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   userRepository: {},
   withTransaction: async (fn: any) => {
     credit.events.push('tx:start');
@@ -67,13 +72,13 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   toSafeOrganization: (org: any) => org,
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: credit.parseAdminActionReason,
   recordAdminActionFromRequest: credit.recordAdminActionFromRequest,
 }));
-vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
-vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 
 import '@pages/api/organizations/[id]/index';
 
@@ -86,7 +91,10 @@ function makeReq(body: unknown, queryId = 'org-123', isAdmin = false) {
 }
 
 describe('PUT /api/organizations/[id] -- Zod validation', () => {
-  beforeEach(() => update.mockClear());
+  beforeEach(() => {
+    update.mockClear();
+    credit.findById.mockClear();
+  });
 
   it('accepts a real client payload (name + description)', async () => {
     const { req, res } = makeReq({ name: 'Acme Corp', description: 'We build things' });

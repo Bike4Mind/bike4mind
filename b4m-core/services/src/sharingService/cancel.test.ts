@@ -35,11 +35,31 @@ describe('sharingService - cancelInvite authority', () => {
     recipients: { pending: [], accepted: [], refused: [] },
   });
 
+  // In-memory stand-in for InviteRepository.cancelPendingRecipient, which the DB tests pin.
+  const cancelPendingRecipient = (invite: any, email: string) => {
+    const pending = invite.recipients.pending.filter((p: string) => p.toLowerCase() !== email.toLowerCase());
+    return {
+      ...invite,
+      recipients: { ...invite.recipients, pending },
+      remaining: Math.max(0, Math.min(invite.remaining - 1, pending.length)),
+    };
+  };
+  const listInvites = (invites: any[]) => {
+    db.invites.findAllByDocumentId = vi.fn(async () => invites);
+    db.invites.cancelPendingRecipient = vi.fn(async (id: string, email: string) =>
+      cancelPendingRecipient(
+        invites.find(invite => invite.id === id),
+        email
+      )
+    );
+  };
+
   beforeEach(() => {
     db = {
       invites: {
         findAllByDocumentId: vi.fn(async () => [anInvite()]),
         update: vi.fn(),
+        cancelPendingRecipient: vi.fn(),
       },
       users: { findById: vi.fn() },
       sessions: { findByIdAndUserId: vi.fn(async () => null) },
@@ -68,7 +88,7 @@ describe('sharingService - cancelInvite authority', () => {
   describe('cancelling one recipient by userId', () => {
     beforeEach(() => {
       db.projects.shareable.findShareAccessById = vi.fn(async () => ({ id: DOC_ID, name: 'Confidential Project' }));
-      db.invites.findAllByDocumentId = vi.fn(async () => [anInvite(), aLinkInvite()]);
+      listInvites([anInvite(), aLinkInvite()]);
     });
 
     const cancelByUserId = (userId: string) =>
@@ -89,13 +109,14 @@ describe('sharingService - cancelInvite authority', () => {
 
       await expect(cancelByUserId('nobody')).rejects.toBeInstanceOf(NotFoundError);
       expect(db.invites.update).not.toHaveBeenCalled();
+      expect(db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
     });
   });
 
   it('cancelling one email only touches the invite it was actually pending on', async () => {
     const project = { id: DOC_ID, name: 'Confidential Project' };
     db.projects.shareable.findShareAccessById = vi.fn(async () => project);
-    db.invites.findAllByDocumentId = vi.fn(async () => [anInvite(), aLinkInvite()]);
+    listInvites([anInvite(), aLinkInvite()]);
 
     const result = await cancel(InviteType.Project, asUser(), 'victim@example.com');
 
@@ -111,18 +132,14 @@ describe('sharingService - cancelInvite authority', () => {
 
     // The link invite wasn't touched, so it must not be written - avoids churning its
     // updatedAt (and a redundant write) on every unrelated cancel for the document.
-    expect(db.invites.update).toHaveBeenCalledTimes(1);
-    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
-      id: 'invite-1',
-      recipients: { pending: [], accepted: [], refused: [] },
-      remaining: 0,
-    });
+    expect(db.invites.cancelPendingRecipient.mock.calls).toStrictEqual([['invite-1', 'victim@example.com']]);
+    expect(db.invites.update).not.toHaveBeenCalled();
   });
 
   it('leaves the other recipients their slots when several are named', async () => {
     const project = { id: DOC_ID, name: 'Confidential Project' };
     db.projects.shareable.findShareAccessById = vi.fn(async () => project);
-    db.invites.findAllByDocumentId = vi.fn(async () => [
+    listInvites([
       {
         id: 'invite-3',
         documentId: DOC_ID,
@@ -137,12 +154,7 @@ describe('sharingService - cancelInvite authority', () => {
     // The clamp is a ceiling, not a reset: two named recipients still hold a slot each.
     expect(result[0].remaining).toBe(2);
     expect(result[0].recipients.pending).toEqual(['a@example.com', 'c@example.com']);
-    expect(db.invites.update).toHaveBeenCalledTimes(1);
-    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
-      id: 'invite-3',
-      recipients: { pending: ['a@example.com', 'c@example.com'], accepted: [], refused: [] },
-      remaining: 2,
-    });
+    expect(db.invites.cancelPendingRecipient.mock.calls).toStrictEqual([['invite-3', 'b@example.com']]);
   });
 
   it('does not leave a cancelled named invite redeemable as a share link', async () => {
@@ -153,7 +165,7 @@ describe('sharingService - cancelInvite authority', () => {
     // `remaining` is the only thing standing between those two facts.
     const fabFile = { id: DOC_ID, name: 'Confidential File' };
     db.fabFiles.findByIdAndUserId = vi.fn(async () => fabFile);
-    db.invites.findAllByDocumentId = vi.fn(async () => [
+    listInvites([
       {
         id: 'invite-4',
         type: InviteType.FabFile,
@@ -176,6 +188,7 @@ describe('sharingService - cancelInvite authority', () => {
     await expect(cancel(InviteType.Project)).rejects.toThrow(NotFoundError);
 
     expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
     // The invite list is never even read, so the document name and pending recipients are not
     // returned to a caller who cannot see the project.
     expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
@@ -187,6 +200,7 @@ describe('sharingService - cancelInvite authority', () => {
 
     expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
     expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
   });
 
   it('denies every pre-existing arm when its lookup finds nothing', async () => {
@@ -196,6 +210,7 @@ describe('sharingService - cancelInvite authority', () => {
     await expect(cancel(InviteType.Group)).rejects.toThrow(NotFoundError);
 
     expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
   });
 
   /**

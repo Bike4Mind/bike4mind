@@ -47,6 +47,10 @@ describe('resolveImageArgs', () => {
     expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_1 }, {}).model).toBe(ImageModels.GPT_IMAGE_2);
   });
 
+  it('remaps any other legacy image id through the shared legacy map', () => {
+    expect(resolveImageArgs({ model: 'dall-e-3' }, {}).model).toBe(ImageModels.GPT_IMAGE_2);
+  });
+
   it('defaults to the current GPT-image model when no config is supplied', () => {
     expect(resolveImageArgs(undefined, {}).model).toBe(ImageModels.GPT_IMAGE_2);
   });

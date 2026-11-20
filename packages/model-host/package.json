@@ -1,0 +1,42 @@
+{
+  "name": "@bike4mind/model-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "b4m-host: reports a model server's hardware and Ollama settings to Bike4Mind over a local socket",
+  "license": "BUSL-1.1",
+  "author": "Bike4Mind",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bike4Mind/bike4mind.git",
+    "directory": "packages/model-host"
+  },
+  "type": "module",
+  "bin": {
+    "b4m-host": "./dist/b4m-host.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
+    "tsdown": "^0.22.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
+    "zod": "^4.6.6"
+  }
+}

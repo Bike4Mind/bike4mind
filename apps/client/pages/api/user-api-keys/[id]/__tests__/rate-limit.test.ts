@@ -52,7 +52,7 @@ const updateApiKeyRateLimit = vi.hoisted(() =>
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLimit } }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 import '@pages/api/user-api-keys/[id]/rate-limit';
 
@@ -129,5 +129,15 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit - analytics is best effort', 
     await mockRefs.patchHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+});
+
+describe('PATCH /api/user-api-keys/[id]/rate-limit - org service account', () => {
+  it('refuses a service-account caller without changing the limit', async () => {
+    vi.clearAllMocks();
+    const { req, res } = patch('key-1', { requestsPerMinute: 600 });
+    Object.assign(req, { user: { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(updateApiKeyRateLimit).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,28 @@
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AttachmentStore } from './AttachmentStore';
 import { TEXT_BYTE_CAP } from './attachments';
+
+const intakeBarrier = vi.hoisted(() => ({
+  path: null as string | null,
+  wait: null as Promise<void> | null,
+  entered: null as (() => void) | null,
+}));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (args[0] === intakeBarrier.path) {
+        intakeBarrier.entered?.();
+        await intakeBarrier.wait;
+      }
+      return actual.readFile(...args);
+    },
+  };
+});
 
 const SESSION = 'session-one';
 const logger = { debug: () => undefined, warn: () => undefined };
@@ -13,6 +32,9 @@ let scratch: string;
 let store: AttachmentStore;
 
 beforeEach(async () => {
+  intakeBarrier.path = null;
+  intakeBarrier.wait = null;
+  intakeBarrier.entered = null;
   const root = await mkdtemp(join(tmpdir(), 'b4m-attachments-'));
   base = join(root, 'attachments');
   scratch = join(root, 'files');
@@ -27,6 +49,24 @@ afterEach(async () => {
 });
 
 describe('AttachmentStore.add', () => {
+  it('copies staged draft bytes to the materialized session without consuming a retry', async () => {
+    const draftId = 'draft-one';
+    const [attachment] = (
+      await store.add(draftId, [{ source: 'bytes', name: 'notes.txt', data: new TextEncoder().encode('draft notes') }])
+    ).attachments;
+    await store.copyDraft(draftId, SESSION, [attachment.id]);
+    expect((await store.read(SESSION, attachment.id))?.toString()).toBe('draft notes');
+    expect((await store.read(draftId, attachment.id))?.toString()).toBe('draft notes');
+    await store.disposeDraft(draftId);
+    expect(await store.read(draftId, attachment.id)).toBeNull();
+    expect((await store.read(SESSION, attachment.id))?.toString()).toBe('draft notes');
+  });
+
+  it('refuses transfers from persisted sessions or invalid attachment ids', async () => {
+    await expect(store.copyDraft('persisted', SESSION, [])).rejects.toThrow('Invalid draft');
+    await expect(store.copyDraft('draft-one', SESSION, ['../escape'])).rejects.toThrow('invalid attachment id');
+  });
+
   it('stores a text file from disk and describes it', async () => {
     const path = join(scratch, 'notes.txt');
     await writeFile(path, 'hello\nworld\n', 'utf8');
@@ -189,5 +229,55 @@ describe('AttachmentStore image handling', () => {
     expect(attachment.byteSize).toBe(64);
     expect(attachment.sourceBytes).toBe(8 * 1024 * 1024);
     expect((await readFile(join(base, SESSION, attachment.id))).length).toBe(64);
+  });
+});
+
+describe('discarded draft intake', () => {
+  it('refuses a picker result arriving after disposal without recreating its directory', async () => {
+    const id = 'draft-late-picker';
+    const file = join(scratch, 'private.txt');
+    await writeFile(file, 'private draft bytes');
+    await store.disposeDraft(id);
+    await expect(store.add(id, [{ source: 'path', path: file }])).rejects.toThrow('discarded');
+    await expect(stat(join(base, id))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('settles an active file read before disposal completes and removes its files', async () => {
+    const id = 'draft-active-intake';
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const path = join(scratch, 'private.png');
+    await writeFile(path, Buffer.alloc(8 * 1024 * 1024, 0x41));
+    intakeBarrier.path = path;
+    intakeBarrier.wait = barrier;
+    intakeBarrier.entered = entered;
+    const shrinking = new AttachmentStore(base, logger, () => ({
+      bytes: Buffer.from('private image'),
+      mediaType: 'image/jpeg',
+    }));
+    const writing = shrinking.add(id, [{ source: 'path', path }]);
+    const rejected = expect(writing).rejects.toThrow('discarded');
+    await started;
+    const disposing = shrinking.disposeDraft(id);
+    release();
+    await rejected;
+    await disposing;
+    await expect(stat(join(base, id))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(shrinking.add(id, [])).rejects.toThrow('discarded');
+  });
+
+  it('leaves ordinary persisted-session deletion reusable', async () => {
+    await store.deleteSession(SESSION);
+    const added = await store.add(SESSION, [
+      { source: 'bytes', name: 'notes.txt', data: new TextEncoder().encode('persisted') },
+    ]);
+    expect(added.attachments).toHaveLength(1);
+    expect(await store.read(SESSION, added.attachments[0].id)).toEqual(Buffer.from('persisted'));
   });
 });

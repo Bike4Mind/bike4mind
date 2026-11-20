@@ -15,7 +15,7 @@
  * `pnpm turbo:core:build` must be current.
  *
  * Runs in the integration lane only - `CLIENT_TEST_LANE=integration` (apps/client/package.json's
- * `test:integration`, the `client-integration` CI job). Without it vitest EXCLUDES `*.e2e.test.ts`
+ * `test:integration`, run by a CI leg's integration lane). Without it vitest EXCLUDES `*.e2e.test.ts`
  * and reports 0 tests with exit 0, which reads as a pass.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
@@ -30,13 +30,13 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const h = vi.hoisted(() => ({ sendToQueue: vi.fn(async () => undefined) }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   MARK_PAUSED_MAX_ATTEMPTS: 3,
   MARK_PAUSED_RETRY_DELAY_MS: 0,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
 }));

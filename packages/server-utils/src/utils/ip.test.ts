@@ -273,6 +273,20 @@ describe('truncateIp', () => {
       // fe80::1 expands to fe80:0:0:0:0:0:0:1, truncated to /48
       expect(truncateIp('fe80::1')).toBe('fe80:0:0:0:0:0:0:0');
     });
+
+    it('truncates the IPv4 inside an IPv4-mapped address instead of zeroing it', () => {
+      expect(truncateIp('::ffff:203.0.113.42')).toBe('::ffff:203.0.113.0');
+      expect(truncateIp('::FFFF:203.0.113.0')).toBe('::FFFF:203.0.113.0');
+    });
+
+    it.each([
+      ['expanded mapped', '0:0:0:0:0:ffff:203.0.113.42', '0:0:0:0:0:ffff:203.0.113.0'],
+      ['translated', '::ffff:0:203.0.113.42', '::ffff:0:203.0.113.0'],
+      ['expanded translated', '0:0:0:0:ffff:0:203.0.113.42', '0:0:0:0:ffff:0:203.0.113.0'],
+    ])('truncates the IPv4 inside a %s address, idempotently', (_label, input, expected) => {
+      expect(truncateIp(input)).toBe(expected);
+      expect(truncateIp(expected)).toBe(expected);
+    });
   });
 
   describe('edge cases', () => {

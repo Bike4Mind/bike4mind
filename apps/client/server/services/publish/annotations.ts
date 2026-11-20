@@ -73,7 +73,6 @@ export function toAnnotationDto(a: AnnotationLean): AnnotationDto {
     id: String(a._id),
     publicId: a.publicId,
     kind: a.kind,
-    authorId: a.authorId,
     authorDisplayName: a.authorDisplayName,
     body: a.body,
     anchor: a.anchor,

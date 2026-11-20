@@ -64,4 +64,10 @@ export const TIMEOUTS = {
    * not just the streaming phase.
    */
   IMAGE_GENERATION: 360_000,
+  /** Audio generation is a synchronous provider call plus a save to Files; allow for a cold provider. */
+  AUDIO_GENERATION: 90_000,
+  /** Wait for MediaPlayer to set `src`; mirrors its 30 s moderation wait plus headroom. */
+  AUDIO_SRC: 45_000,
+  /** Browser-side wait for audio metadata before reporting a duration. */
+  AUDIO_METADATA: 5_000,
 } as const;

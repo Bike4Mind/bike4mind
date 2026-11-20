@@ -2,8 +2,17 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
-import { ApiKeyScope } from '@bike4mind/common';
-import { createModal, listModals, updateModal, deleteModal } from '@client/server/tools/modalOperations';
+import { ApiKeyScope, HTTPError } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import {
+  collectModalChanges,
+  createModal,
+  listModals,
+  updateModal,
+  deleteModal,
+} from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 
 const logger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 
@@ -23,9 +32,9 @@ const requestSchema = z.object({
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
-    // Silently fail for non-admin users
+    // Silently fail for callers without modal management access (admins and settings:manage delegates)
     if (!req.ability?.can('manage', 'Modal')) {
-      logger.info('Modal tool access denied for non-admin user - returning silent failure');
+      logger.info('Modal tool access denied (no modal management permission) - returning silent failure');
       return res.json({
         success: false,
         message: 'This feature is not available',
@@ -34,40 +43,47 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     const { query, context } = requestSchema.parse(req.body);
-    logger.info(`Modal tool API called with query: "${query}"`);
+    logger.info('Modal tool API called', { queryLength: query.length });
 
     try {
       // Parse the natural language query to determine intent and parameters
-      const toolParams = await parseNaturalLanguageQuery(query, context);
-      logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
+      const toolParams = await parseNaturalLanguageQuery(
+        query,
+        context,
+        createRequestCompletionMeter(req, 'admin modal tool', { systemModel: true })
+      );
+      logger.info(`Parsed tool params - Action: ${toolParams.action}`, { modalId: toolParams.modalId });
 
       // Execute the appropriate action based on parsed parameters
-      let result;
-      switch (toolParams.action) {
-        case 'create':
-          logger.info('Executing CREATE action');
-          result = await createModal(toolParams);
-          break;
-        case 'list':
-          logger.info('Executing LIST action with filter:', toolParams.filter);
-          result = await listModals(toolParams.filter);
-          break;
-        case 'update':
-          logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
-          result = await updateModal(toolParams.modalId, toolParams);
-          break;
-        case 'delete':
-          logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
-          result = await deleteModal(toolParams.modalId);
-          break;
-        default:
-          logger.error(`Unknown action: ${toolParams.action}`);
-          result = { success: false, error: 'Unknown action' };
-      }
+      const { result, changes } = await collectModalChanges(
+        async () => {
+          switch (toolParams.action) {
+            case 'create':
+              logger.info('Executing CREATE action');
+              return await createModal(toolParams);
+            case 'list':
+              logger.info('Executing LIST action', { filterKeys: Object.keys(toolParams.filter ?? {}) });
+              return await listModals(toolParams.filter);
+            case 'update':
+              logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
+              return await updateModal(toolParams.modalId, toolParams);
+            case 'delete':
+              logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
+              return await deleteModal(toolParams.modalId);
+            default:
+              logger.error(`Unknown action: ${toolParams.action}`);
+              return { success: false, error: 'Unknown action' };
+          }
+        },
+        partial => recordModalChanges(req, partial, 'modal-tool')
+      );
+      await recordModalChanges(req, changes, 'modal-tool');
 
-      logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);
+      logger.info(`Modal tool result - Success: ${result.success}`);
       return res.json(result);
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of becoming a 500.
+      if (error instanceof HTTPError) throw error;
       logger.error('Modal tool error:', error);
       return res.status(500).json({
         success: false,
@@ -80,16 +96,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 /**
  * Use LLM to intelligently parse natural language query into tool parameters
  */
-export async function parseNaturalLanguageQueryDirect(query: string, context?: any) {
-  return parseNaturalLanguageQuery(query, context);
+export async function parseNaturalLanguageQueryDirect(query: string, context: any, meter: CompletionMeter) {
+  return parseNaturalLanguageQuery(query, context, meter);
 }
 
-async function parseNaturalLanguageQuery(query: string, context?: any) {
+async function parseNaturalLanguageQuery(query: string, context: any, meter: CompletionMeter) {
   try {
     // Dynamically import OperationsModelService only when needed (server-side only)
-    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     // Get the operations model for LLM processing
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
+    const operations = await OperationsModelService.getOperationsModel();
+    const { modelId } = operations;
+    const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
 
     logger.info(`Using LLM model ${modelId} for intent recognition`);
 
@@ -224,7 +242,6 @@ What is the user's intent?`;
       const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         logger.warn('No JSON found in LLM response');
-        logger.warn(`Raw response first 300 chars: ${llmResponse.substring(0, 300)}`);
         throw new Error('No JSON found in LLM response');
       }
 
@@ -282,16 +299,13 @@ What is the user's intent?`;
       // Fix incomplete key-value pairs at the end (e.g., "removeTags": null,)
       jsonString = jsonString.replace(/,\s*$/, '');
 
-      logger.info(`Cleaned JSON (first 500 chars): ${jsonString.substring(0, 500)}`);
       logger.info(`Cleaned JSON length: ${jsonString.length} characters`);
 
       // Log if JSON still contains ellipsis after cleaning
       if (jsonString.includes('...')) {
         logger.error('WARNING: JSON still contains ellipsis after cleaning!');
         const ellipsisPos = jsonString.indexOf('...');
-        logger.error(
-          `Ellipsis found at position ${ellipsisPos}: ${jsonString.substring(Math.max(0, ellipsisPos - 20), ellipsisPos + 20)}`
-        );
+        logger.error(`Ellipsis found at position ${ellipsisPos}`);
       }
 
       const intent = JSON.parse(jsonString);
@@ -320,14 +334,17 @@ What is the user's intent?`;
           const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
           if (imageAttachment?.url) {
             params.imageUrl = imageAttachment.url;
-            logger.info(`Using attached image URL: ${params.imageUrl}`);
+            logger.info('Using attached image URL');
           }
         }
 
         // Add logging to debug what we're getting
-        logger.info(
-          `LLM CREATE params - title: "${params.title}", description: "${params.description}", message: "${params.message}", imageUrl: "${params.imageUrl || 'none'}"`
-        );
+        logger.info('LLM CREATE params', {
+          titleLength: params.title?.length ?? 0,
+          descriptionLength: params.description?.length ?? 0,
+          messageLength: params.message?.length ?? 0,
+          hasImageUrl: Boolean(params.imageUrl),
+        });
       } else if (intent.action === 'list') {
         params.filter = intent.parameters?.filter || {};
 
@@ -406,6 +423,8 @@ What is the user's intent?`;
       return fallbackParsing(query, context);
     }
   } catch (error) {
+    // A credit or admission refusal must reach the admin, not degrade silently to pattern matching.
+    if (error instanceof HTTPError) throw error;
     logger.error('Error in LLM intent recognition:', error);
     // Fallback to simple pattern matching
     return fallbackParsing(query, context);
@@ -418,7 +437,7 @@ What is the user's intent?`;
 function fallbackParsing(query: string, context?: any) {
   const lower = query.toLowerCase();
 
-  logger.info(`Fallback parsing for query: "${query}"`);
+  logger.info('Fallback parsing for query', { queryLength: query.length });
 
   // Check if this is a question (starts with interrogative or contains question patterns)
   const questionWords = ['what', 'which', 'where', 'when', 'who', 'how', 'are', 'is', 'do', 'does', 'can'];
@@ -704,7 +723,7 @@ function fallbackParsing(query: string, context?: any) {
     const match = query.match(pattern);
     if (match && match[1]) {
       title = match[1].trim();
-      logger.info(`Extracted title from pattern: "${title}"`);
+      logger.info('Extracted title from pattern', { titleLength: title.length });
       break;
     }
   }
@@ -725,7 +744,7 @@ function fallbackParsing(query: string, context?: any) {
       description = match[1].trim();
       if (!message) message = description;
       if (!title) title = description; // Use description as title if no title found
-      logger.info(`Extracted description from pattern: "${description}"`);
+      logger.info('Extracted description from pattern', { descriptionLength: description.length });
       break;
     }
   }
@@ -764,11 +783,11 @@ function fallbackParsing(query: string, context?: any) {
     const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
     if (imageAttachment?.url) {
       result.imageUrl = imageAttachment.url;
-      logger.info(`Using attached image URL in fallback: ${result.imageUrl}`);
+      logger.info('Using attached image URL in fallback');
     }
   }
 
-  logger.info('Fallback parsing result for CREATE:', result);
+  logger.info('Fallback parsing result for CREATE', { action: result.action, hasImageUrl: Boolean(result.imageUrl) });
   return result;
 }
 

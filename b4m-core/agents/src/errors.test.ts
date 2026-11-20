@@ -16,6 +16,16 @@ describe('isContextLimitError', () => {
     ).toBe(true);
   });
 
+  it('matches the local model server conversation-full message', () => {
+    expect(
+      isContextLimitError(
+        new Error(
+          "This conversation no longer fits qwen-small's 4096-token context window on gpu-box with room for a reply. Start a new conversation, or use a model with a larger context."
+        )
+      )
+    ).toBe(true);
+  });
+
   it('matches the OpenAI context_length_exceeded code', () => {
     expect(isContextLimitError(new Error('context_length_exceeded'))).toBe(true);
   });

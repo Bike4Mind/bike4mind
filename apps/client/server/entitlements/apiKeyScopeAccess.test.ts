@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingByName: vi.fn(async () => h.hearth) }));
-vi.mock('./index', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getRequestEntitlements: h.getRequestEntitlements.mockImplementation(async () => h.entitlements),
   getUserEntitlements: h.getUserEntitlements.mockImplementation(async () => h.entitlements),
 }));

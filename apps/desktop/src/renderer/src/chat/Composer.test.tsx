@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
+import { ContextRing } from './ContextRing';
 import type { ComposerUsage } from './statusLine';
 import type { AttachmentDraft } from './useAttachments';
 
@@ -21,6 +22,7 @@ const draft: AttachmentDraft = {
   add: async () => {},
   pick: async () => {},
   attachImage: async () => {},
+  attachFilePath: async () => {},
   remove: () => {},
   clear: () => {},
 };
@@ -68,21 +70,30 @@ function hasRing(props: Partial<Parameters<typeof Composer>[0]> = {}): boolean {
 }
 
 describe('the composer indicator', () => {
+  /** A balance down to 20% of the allowance: low enough that the credits ring stands up. */
+  const low = { ...usage, credits: 10_000, monthlyAllowance: 50_000 };
+
   /**
-   * The whole status line is one ring now. The dot moved to the account strip and the words
-   * went with it, so nothing here is drawn as text - which is exactly why the figure has to
-   * survive as the ring's accessible name rather than disappearing with the label.
+   * The row's standing indicator is the context ring, whose tooltip carries the balance. The
+   * credits ring only joins it once the allowance runs low, so a healthy, rolled-over or
+   * unstated balance draws nothing here.
    */
-  it('draws the ring and nothing else, keeping the figure as its name', () => {
-    expect(statusMarkup()).not.toContain('composer-status-text');
-    expect(statusMarkup()).not.toContain('turn-dot');
-    expect(ringLabel()).toBe('Credits 50% of monthly plan allowance');
-    expect(ringValue()).toBe(50);
+  it('draws no credits ring while the allowance is healthy', () => {
+    expect(hasRing()).toBe(false);
+    expect(hasRing({ usage: { ...usage, credits: 75_000, monthlyAllowance: 50_000 } })).toBe(false);
+    expect(hasRing({ usage: { ...usage, credits: 31_667, monthlyAllowance: null } })).toBe(false);
+  });
+
+  it('draws the ring and nothing else once the allowance runs low, keeping the figure as its name', () => {
+    expect(statusMarkup({ usage: low })).not.toContain('composer-status-text');
+    expect(statusMarkup({ usage: low })).not.toContain('turn-dot');
+    expect(ringLabel({ usage: low })).toBe('Credits 20% of monthly plan allowance');
+    expect(ringValue({ usage: low })).toBe(20);
   });
 
   it('keeps the ring up through a turn in flight', () => {
-    expect(hasRing({ streaming: true })).toBe(true);
-    expect(ringLabel({ streaming: true })).toBe('Credits 50% of monthly plan allowance');
+    expect(hasRing({ usage: low, streaming: true })).toBe(true);
+    expect(ringLabel({ usage: low, streaming: true })).toBe('Credits 20% of monthly plan allowance');
   });
 
   it('floors a tiny positive balance share so it remains visible', () => {
@@ -91,23 +102,12 @@ describe('the composer indicator', () => {
     expect(ringLabel({ usage: tiny })).toBe('Credits &lt;1% of monthly plan allowance');
   });
 
-  it('draws an empty ring when no finite monthly allowance is stated', () => {
-    const unstated = { ...usage, credits: 31_667, monthlyAllowance: null };
-    expect(ringValue({ usage: unstated })).toBe(0);
-    expect(ringLabel({ usage: unstated })).toBe('Credits personal balance; no monthly plan allowance');
-  });
-
-  it('clamps rollover above the allowance to a full arc while stating the real percentage', () => {
-    const rollover = { ...usage, credits: 75_000, monthlyAllowance: 50_000 };
-    expect(ringValue({ usage: rollover })).toBe(100);
-    expect(ringLabel({ usage: rollover })).toBe('Credits 150% of monthly plan allowance');
-  });
-
   // Nothing to measure and nothing to say: the sidebar dot speaks for these, so a ring here
   // would be a glyph standing for nothing.
   it('draws no ring where there is no conversation to measure', () => {
-    expect(hasRing({ disabled: true })).toBe(false);
-    expect(hasRing({ notReady: 'No folder' })).toBe(false);
+    const low = { ...usage, credits: 10_000, monthlyAllowance: 50_000 };
+    expect(hasRing({ usage: low, disabled: true })).toBe(false);
+    expect(hasRing({ usage: low, notReady: 'No folder' })).toBe(false);
   });
 });
 
@@ -138,24 +138,39 @@ afterEach(() => {
   host = null;
 });
 
+function tree(props: Partial<Parameters<typeof Composer>[0]> = {}) {
+  return (
+    <CssVarsProvider>
+      <Composer
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        attachments={draft}
+        onSend={() => {}}
+        onStop={() => {}}
+        {...props}
+      />
+    </CssVarsProvider>
+  );
+}
+
 function mount(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root?.render(
-      <CssVarsProvider>
-        <Composer
-          sessionId="s1"
-          disabled={false}
-          streaming={false}
-          attachments={draft}
-          onSend={() => {}}
-          onStop={() => {}}
-          {...props}
-        />
-      </CssVarsProvider>
-    );
+    root?.render(tree(props));
+  });
+}
+
+/**
+ * Render again into the same root, which is what switching conversations does: the shell keys
+ * the thread beside this on the session id, but hands this one a new `sessionId` prop and
+ * leaves it mounted.
+ */
+function rerender(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
+  act(() => {
+    root?.render(tree(props));
   });
 }
 
@@ -191,19 +206,39 @@ function highlighted(): string | null {
 }
 
 describe('the composer command menu', () => {
+  it('fills /loop from the keyboard and dispatches its nested skill unchanged', () => {
+    const run = vi.fn();
+    const send = vi.fn();
+    mount({ onRunCommand: run, onSend: send });
+    type('/loo');
+    press('Enter');
+    expect(input().value).toBe('/loop ');
+    expect(run).not.toHaveBeenCalled();
+    type('/loop 5m /review src/index.ts');
+    press('Enter');
+    expect(run).toHaveBeenCalledWith('loop', '5m /review src/index.ts');
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('opens on a slash in an empty composer and lists every command', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'code' });
     expect(rows()).toHaveLength(0);
 
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual([
+      'clear',
+      'compact',
+      'pr',
+      'add-dir',
+      'loop',
+    ]);
     expect(rows()[3].textContent).toContain('[path]');
   });
 
   it('leaves the Code-only commands out of a Chat conversation', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'chat' });
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir', 'loop']);
   });
 
   it('filters as the name is typed', () => {
@@ -327,6 +362,50 @@ describe('skills mid-sentence', () => {
     mount({ skills, onRunCommand: () => {} });
     type('/clear');
     expect(marks()).toEqual(['clear']);
+  });
+});
+
+describe('the draft and the conversation it belongs to', () => {
+  it('does not carry what was typed into the conversation switched to', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('');
+  });
+
+  it('gives each draft back on returning to the conversation it was typed in', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    type('something else entirely');
+
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('something else entirely');
+  });
+
+  // Sending is what ends a draft, so coming back must not resurrect the message just sent.
+  it('keeps nothing for a conversation whose draft was sent', () => {
+    const send = vi.fn();
+    mount({ sessionId: 's1', onSend: send });
+    type('ship it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('ship it');
+
+    rerender({ sessionId: 's2' });
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('');
+  });
+
+  it('leaves no command menu open from the conversation left behind', () => {
+    mount({ sessionId: 's1', onRunCommand: () => {} });
+    type('/comp');
+    expect(rows()).toHaveLength(1);
+
+    rerender({ sessionId: 's2', onRunCommand: () => {} });
+    expect(rows()).toHaveLength(0);
   });
 });
 
@@ -495,9 +574,205 @@ describe('the attach shortcut', () => {
     remove.mockRestore();
   });
 
+  it('blocks sending with a reason and runs the fix button', () => {
+    const onSend = vi.fn();
+    const onClick = vi.fn();
+    mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.getAttribute('role')).toBe('alert');
+    act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('shows a blocking notice in place of the reason text and still blocks sending', () => {
+    mount({
+      blockedReason: 'Ollama is not running.',
+      blockedNotice: <span data-testid="composer-test-notice">notice</span>,
+    });
+    const banner = host?.querySelector('[data-testid="composer-blocked-reason"]');
+    expect(banner?.querySelector('[data-testid="composer-test-notice"]')).not.toBeNull();
+    expect(banner?.textContent).not.toContain('Ollama is not running.');
+    expect(banner?.getAttribute('role')).toBe('group');
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('advertises the chord on the attach button', () => {
     mount();
     const button = host?.querySelector('[data-testid="composer-attach-btn"]');
     expect(button?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+  });
+});
+
+describe('the context ring slot', () => {
+  const contextStatus = (
+    <ContextRing
+      tokens={34_000}
+      limit={262_000}
+      modelId="claude-opus-5-5"
+      promptCache={undefined}
+      streaming={false}
+      hasReply
+    />
+  );
+
+  it('draws the context ring left of the credits ring', () => {
+    const markup = statusMarkup({ contextStatus, usage: { ...usage, credits: 10_000 } });
+    const context = markup.indexOf('data-testid="composer-context-ring"');
+    expect(context).toBeGreaterThan(-1);
+    expect(context).toBeLessThan(markup.indexOf('data-testid="composer-status"'));
+  });
+
+  it('hides it with the credits ring while disabled or not ready', () => {
+    expect(statusMarkup({ contextStatus, disabled: true })).not.toContain('composer-context-ring');
+    expect(statusMarkup({ contextStatus, notReady: 'No folder' })).not.toContain('composer-context-ring');
+  });
+});
+
+describe('session mentions', () => {
+  const ID_DOCS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ID_API = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const session = (id: string, title: string, extra: Record<string, unknown> = {}) =>
+    ({ id, title, mode: 'chat', messageCount: 1, updatedAt: '2026-10-01T00:00:00.000Z', ...extra }) as never;
+  const mentionSessions = [
+    session(ID_DOCS, 'Docs pass', { project: { directory: '/w/docs-site', name: 'docs-site', branch: 'main' } }),
+    session(ID_API, 'API rework'),
+    session('s1', 'Current'),
+    session('gone', 'Archived one', { archived: true }),
+  ];
+  const options = () => Array.from(host?.querySelectorAll('[data-testid="composer-mention-option"]') ?? []);
+
+  it('opens on an at sign, without the open or archived sessions, naming the project folder', () => {
+    mount({ mentionSessions });
+    type('hello @');
+    expect(options().map(option => option.textContent)).toEqual(['Docs passdocs-site', 'API reworkNo project']);
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).not.toBeNull();
+  });
+
+  it('filters by the text after the at sign and stays closed when nothing matches', () => {
+    mount({ mentionSessions });
+    type('@api');
+    expect(options()).toHaveLength(1);
+    type('@zzz');
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).toBeNull();
+  });
+
+  it('is off for a host that passes no sessions', () => {
+    mount();
+    type('@');
+    expect(options()).toHaveLength(0);
+  });
+
+  it('walks with the arrows, inserts the title on Enter, and sends the markup', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('ask @');
+    press('ArrowDown');
+    press('Enter');
+    expect(input().value).toBe('ask @API rework ');
+
+    type('ask @API rework about it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith(`ask @[API rework](session:${ID_API}) about it`);
+  });
+
+  it('drops a chosen mention whose label was deleted before sending', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('@');
+    press('Enter');
+    expect(input().value).toBe('@Docs pass ');
+
+    type('plain text');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('plain text');
+  });
+
+  it('closes on Escape and highlights a chosen title', () => {
+    mount({ mentionSessions });
+    type('@do');
+    press('Escape');
+    expect(options()).toHaveLength(0);
+
+    type('@');
+    press('Enter');
+    expect(Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.textContent)).toEqual([
+      '@Docs pass',
+    ]);
+  });
+});
+
+describe('the "+" menu', () => {
+  const plus = () => host?.querySelector<HTMLButtonElement>('[data-testid="composer-plus-btn"]') ?? null;
+  const item = (testid: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+  const isDisabled = (element: HTMLElement | null) => element?.getAttribute('aria-disabled') === 'true';
+
+  function open(): void {
+    act(() => plus()?.click());
+  }
+
+  it('stays the plain attach button where no folder can be added', () => {
+    mount({ addFolder: null });
+    expect(plus()).toBeNull();
+    expect(host?.querySelector('[data-testid="composer-attach-btn"]')).not.toBeNull();
+  });
+
+  it('offers Attach a file and Add folder, each running its own action', () => {
+    const pick = vi.fn(async () => {});
+    const onClick = vi.fn();
+    mount({ attachments: { ...draft, pick }, addFolder: { onClick } });
+    expect(host?.querySelector('[data-testid="composer-attach-btn"]')).toBeNull();
+
+    open();
+    expect(item('composer-attach-item')?.textContent).toContain('Attach a file');
+    expect(item('composer-attach-item')?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+    expect(item('composer-add-folder-item')?.textContent).toBe('Add folder...');
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(pick).not.toHaveBeenCalled();
+
+    open();
+    act(() => item('composer-attach-item')?.click());
+    expect(pick).toHaveBeenCalledOnce();
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('still offers Add folder with no conversation to attach to', () => {
+    const onClick = vi.fn();
+    mount({ sessionId: null, disabled: true, addFolder: { onClick } });
+    expect(plus()?.disabled).toBe(false);
+
+    open();
+    expect(isDisabled(item('composer-attach-item'))).toBe(true);
+    expect(isDisabled(item('composer-add-folder-item'))).toBe(false);
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('is disabled when neither entry can act', () => {
+    mount({ disabled: true, addFolder: { onClick: () => {}, disabled: true } });
+    expect(plus()?.disabled).toBe(true);
+  });
+
+  it('keeps "+" and Attach a file available while Add folder is disabled', () => {
+    const pick = vi.fn(async () => {});
+    mount({ attachments: { ...draft, pick }, addFolder: { onClick: () => {}, disabled: true } });
+    expect(plus()?.disabled).toBe(false);
+
+    open();
+    expect(isDisabled(item('composer-attach-item'))).toBe(false);
+    act(() => item('composer-attach-item')?.click());
+    expect(pick).toHaveBeenCalledOnce();
+  });
+
+  it('does not run Add folder while it is disabled', () => {
+    const onClick = vi.fn();
+    mount({ addFolder: { onClick, disabled: true } });
+
+    open();
+    expect(isDisabled(item('composer-add-folder-item'))).toBe(true);
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

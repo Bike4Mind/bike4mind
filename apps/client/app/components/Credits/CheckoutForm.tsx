@@ -22,6 +22,10 @@ interface ICheckoutFormProps {
 // so a requires_action confirm without an error is pending, not failed.
 const PENDING_ACTION_MESSAGE = 'Your payment needs one more step. Follow the instructions from your payment provider.';
 
+const AUTHENTICATION_FAILED_MESSAGE =
+  'We could not verify your card with your bank, so you have not been charged. Try again, or use a different card.';
+const AUTHENTICATION_FAILURE_CODE = 'payment_intent_authentication_failure';
+
 function toOutcome(status: string | undefined): CreditPurchaseConfirmOutcome {
   return status === 'succeeded' || status === 'processing' || status === 'requires_action' ? status : 'unknown';
 }
@@ -71,7 +75,10 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onPayme
           setMessage(PENDING_ACTION_MESSAGE);
           break;
         case 'requires_payment_method':
-          setMessage('');
+          // A 3-D Secure challenge failed on the bank's redirect page lands back here in this state.
+          setMessage(
+            paymentIntent.last_payment_error?.code === AUTHENTICATION_FAILURE_CODE ? AUTHENTICATION_FAILED_MESSAGE : ''
+          );
           break;
         default:
           setMessage('Something went wrong.');
@@ -106,7 +113,9 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onPayme
           errorCode: error.code,
           declineCode: error.decline_code,
         });
-        if (error.type === 'card_error' || error.type === 'validation_error') {
+        if (error.code === AUTHENTICATION_FAILURE_CODE) {
+          setMessage(AUTHENTICATION_FAILED_MESSAGE);
+        } else if (error.type === 'card_error' || error.type === 'validation_error') {
           setMessage(error.message ?? null);
         } else {
           setMessage('An unexpected error occurred.');
@@ -127,6 +136,9 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onPayme
           notifyPending();
           setMessage(PENDING_ACTION_MESSAGE);
           setIsSettled(true);
+        } else if (paymentIntent?.status === 'requires_payment_method') {
+          // A failed or cancelled 3-D Secure challenge returns the intent here without an error.
+          setMessage(AUTHENTICATION_FAILED_MESSAGE);
         } else {
           setMessage('Something went wrong.');
         }
@@ -152,7 +164,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onPayme
       </Button>
       {/* Show any error or success messages */}
       {message && (
-        <div id="payment-message" className="checkout-payment-message">
+        <div id="payment-message" className="checkout-payment-message" data-testid="checkout-payment-message">
           {message}
         </div>
       )}

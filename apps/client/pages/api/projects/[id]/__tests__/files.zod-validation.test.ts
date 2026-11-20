@@ -31,7 +31,9 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 const addFiles = vi.hoisted(() => vi.fn(async () => ({ id: 'p1', name: 'n', description: 'd' })));
-const removeFiles = vi.hoisted(() => vi.fn(async () => ({ id: 'p1', name: 'n', description: 'd' })));
+const removeFiles = vi.hoisted(() =>
+  vi.fn(async () => ({ project: { id: 'p1', name: 'n', description: 'd' }, removedIds: [] as string[] }))
+);
 vi.mock('@bike4mind/services', () => ({
   projectService: { addFiles, removeFiles },
 }));
@@ -42,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   inviteRepository: {},
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 
 import '@pages/api/projects/[id]/files';

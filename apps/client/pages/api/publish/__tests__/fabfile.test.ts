@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 // fabfile.ts wires an Express-style handler at module load and imports server-only deps; stub them
 // so we can drive the handler (default export) in isolation. @bike4mind/common is NOT mocked - the
@@ -21,12 +25,13 @@ mocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: mo
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));
 vi.mock('@bike4mind/database', () => ({
   FabFile: { findById: () => ({ select: () => ({ lean: mocks.fileLean }) }) },
+  fabFileRepository: { findById: () => mocks.fileLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       mocks.publishedFindOne(filter);
@@ -41,7 +46,7 @@ vi.mock('@server/services/publish', () => ({
 }));
 // The real settlePublication runs; its own collaborators are stubbed here.
 vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: mocks.checkPublishQuota }));
-vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: mocks.invalidatePublishCdn,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));

@@ -1,14 +1,45 @@
 import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { ImageModels } from '@bike4mind/common';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
+
+/**
+ * xAI reports a moderation refusal as a plain 400 ("Generated image rejected by content moderation."),
+ * with no error code to match on.
+ */
+function buildXAIModerationBlockedError(error: unknown): ImageModerationBlockedError | null {
+  if (!(error instanceof OpenAI.APIError) || error.status !== 400 || !/moderation/i.test(error.message)) {
+    return null;
+  }
+  const requestId = (error as { requestID?: string }).requestID || 'unknown';
+  return new ImageModerationBlockedError(
+    'Your image request was rejected by xAI content moderation. Please try rephrasing your prompt or switch to a different image model.',
+    requestId,
+    'xai'
+  );
+}
+
+/** OpenAI SDK client settings for the xAI endpoint; unset fields keep the SDK defaults. */
+export type XaiClientOptions = { maxRetries?: number; timeout?: number };
 
 export class XAIImageService extends AIImageService {
+  constructor(
+    apiKey: string,
+    logger: Logger,
+    imageProcessorLambdaName?: string,
+    private readonly clientOptions: XaiClientOptions = {}
+  ) {
+    super(apiKey, logger, imageProcessorLambdaName);
+  }
+
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
     // XAI uses the same OpenAI SDK but with different base URL and endpoint
     const xai = new OpenAI({
       apiKey: this.apiKey,
       baseURL: 'https://api.x.ai/v1',
+      ...this.clientOptions,
     });
 
     Logger.log('Generating image with XAI/Grok... with these params: ', options);
@@ -19,9 +50,9 @@ export class XAIImageService extends AIImageService {
       // XAI does not support size, quality, or other OpenAI-specific parameters
       const response = await xai.images.generate({
         prompt,
-        model: ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+        model: options.model ?? ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
         n: options.n || 1,
-        user: options.user,
+        user: toProviderEndUserId(options.user),
       });
 
       if (!response.data || response.data.length === 0) {
@@ -38,10 +69,16 @@ export class XAIImageService extends AIImageService {
       Logger.log(`XAI generated ${imageUrls.length} image(s) successfully`);
       return imageUrls;
     } catch (error) {
+      const moderationError = buildXAIModerationBlockedError(error);
+      if (moderationError) {
+        throw moderationError;
+      }
+
       Logger.error('XAI image generation failed:', error);
 
+      // `cause` keeps the SDK error (and its HTTP status) for callers that classify the failure.
       if (error instanceof Error) {
-        throw new Error(`XAI image generation failed: ${error.message}`);
+        throw new Error(`XAI image generation failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('XAI image generation failed with unknown error');

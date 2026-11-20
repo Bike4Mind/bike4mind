@@ -1,4 +1,5 @@
 import { videoRequestInputs, type VideoGenerationRequest, type ValidatedVideoRequest } from './request';
+import { videoFailureReason, type VideoFailureDetail } from './reasons';
 import { VIDEO_INPUT_ROLES, type DurationCapability, type VideoInputRole, type VideoModelCapabilities } from './types';
 
 export const VIDEO_VALIDATION_ERROR_CODES = [
@@ -10,15 +11,26 @@ export const VIDEO_VALIDATION_ERROR_CODES = [
   'unexpected_input_image',
   'unsupported_input_role',
   'unsupported_audio_option',
+  'unsupported_keyframes',
+  'invalid_keyframes',
+  'unsupported_draft',
 ] as const;
 export type VideoValidationErrorCode = (typeof VIDEO_VALIDATION_ERROR_CODES)[number];
 
+// `message` is the diagnostic for logs and API errors; `reason` is the short user-facing "why not" built from `detail`.
 export type VideoValidationResult =
-  { ok: true; request: ValidatedVideoRequest } | { ok: false; code: VideoValidationErrorCode; message: string };
+  | { ok: true; request: ValidatedVideoRequest }
+  | { ok: false; code: VideoValidationErrorCode; message: string; reason: string; detail: VideoFailureDetail };
 
-const fail = (code: VideoValidationErrorCode, message: string): VideoValidationResult => ({ ok: false, code, message });
+const fail = (detail: VideoFailureDetail, message: string): VideoValidationResult => ({
+  ok: false,
+  code: detail.code,
+  message,
+  reason: videoFailureReason(detail),
+  detail,
+});
 
-const isDurationAllowed = (seconds: number, duration: DurationCapability): boolean => {
+export const isVideoDurationAllowed = (seconds: number, duration: DurationCapability): boolean => {
   if (duration.kind === 'discrete') return duration.values.includes(seconds);
   if (seconds < duration.min || seconds > duration.max) return false;
   // Float-safe step check: 3.5 on a step-1 range is rejected, 4 is accepted.
@@ -39,22 +51,61 @@ const describeAcceptedRoles = (caps: VideoModelCapabilities): string => {
 };
 
 const checkInputs = (request: VideoGenerationRequest, caps: VideoModelCapabilities): VideoValidationResult | null => {
+  const model = caps.displayName;
   const hasLegacyFile = Boolean(request.inputImageFileId);
   const hasLegacyGenerated = Boolean(request.inputGeneratedImageKey);
+  const keyframes = caps.keyframes;
+  if (request.keyframes && keyframes) {
+    if (request.inputs || hasLegacyFile || hasLegacyGenerated) {
+      return fail(
+        { model, code: 'invalid_keyframes' },
+        'keyframes cannot be combined with inputs or legacy image fields'
+      );
+    }
+    if (request.mode !== 'image_to_video' || request.keyframes.length > keyframes.max) {
+      return fail(
+        { model, code: 'invalid_keyframes' },
+        `keyframes requires image_to_video and 1-${keyframes.max} frames`
+      );
+    }
+    for (const [index, frame] of request.keyframes.entries()) {
+      if (
+        !Number.isFinite(frame.timeSeconds) ||
+        frame.timeSeconds < 0 ||
+        frame.timeSeconds > request.durationSeconds ||
+        (index === 0 ? frame.timeSeconds !== 0 : frame.timeSeconds <= request.keyframes[index - 1].timeSeconds)
+      ) {
+        return fail(
+          { model, code: 'invalid_keyframes' },
+          `keyframes.${index}.time_seconds must start at 0, increase strictly, and not exceed duration_seconds`
+        );
+      }
+    }
+    return null;
+  }
   if (hasLegacyFile && hasLegacyGenerated) {
-    return fail('unexpected_input_image', 'set exactly one of inputImageFileId and inputGeneratedImageKey');
+    return fail(
+      { model, code: 'unexpected_input_image', cause: 'conflicting_image_fields' },
+      'set exactly one of inputImageFileId and inputGeneratedImageKey'
+    );
   }
   if (request.inputs && (hasLegacyFile || hasLegacyGenerated)) {
-    return fail('unexpected_input_image', 'set inputs or the legacy inputImageFileId/inputGeneratedImageKey, not both');
+    return fail(
+      { model, code: 'unexpected_input_image', cause: 'conflicting_image_fields' },
+      'set inputs or the legacy inputImageFileId/inputGeneratedImageKey, not both'
+    );
   }
   const inputs = videoRequestInputs(request);
   const hasFirstFrame = inputs.some(input => input.role === 'first_frame');
   if (request.mode === 'image_to_video' && !hasFirstFrame) {
-    return fail('missing_input_image', 'image_to_video requires a first_frame input');
+    return fail({ model, code: 'missing_input_image' }, 'image_to_video requires a first_frame input');
   }
   const frame = inputs.find(input => FRAME_ROLES.has(input.role));
   if (request.mode === 'text_to_video' && frame) {
-    return fail('unexpected_input_image', `a ${frame.role} input is only valid for image_to_video`);
+    return fail(
+      { model, code: 'unexpected_input_image', cause: 'frame_without_image_mode', role: frame.role },
+      `a ${frame.role} input is only valid for image_to_video`
+    );
   }
   for (const role of VIDEO_INPUT_ROLES) {
     const count = inputs.filter(input => input.role === role).length;
@@ -62,12 +113,15 @@ const checkInputs = (request: VideoGenerationRequest, caps: VideoModelCapabiliti
     const accepted = caps.inputs[role];
     if (!accepted) {
       return fail(
-        'unsupported_input_role',
+        { model, code: 'unsupported_input_role', role, max: 0, requested: count },
         `${caps.displayName} does not accept a ${role} input (${describeAcceptedRoles(caps)})`
       );
     }
     if (count > accepted.max) {
-      return fail('unsupported_input_role', `${caps.displayName} accepts at most ${accepted.max} ${role} input(s)`);
+      return fail(
+        { model, code: 'unsupported_input_role', role, max: accepted.max, requested: count },
+        `${caps.displayName} accepts at most ${accepted.max} ${role} input(s)`
+      );
     }
   }
   return null;
@@ -78,31 +132,66 @@ export const validateAgainstCapabilities = (
   request: VideoGenerationRequest,
   caps: VideoModelCapabilities
 ): VideoValidationResult => {
-  if (!caps.modes.includes(request.mode)) {
-    return fail('unsupported_mode', `${caps.displayName} does not support ${request.mode}`);
+  if (request.keyframes && !caps.keyframes) {
+    return fail(
+      { model: caps.displayName, code: 'unsupported_keyframes' },
+      `${caps.displayName} does not support keyframes`
+    );
+  }
+  if (request.draft && (!caps.draft || !caps.draft.resolutions.includes(request.resolution))) {
+    return fail(
+      { model: caps.displayName, code: 'unsupported_draft' },
+      `${caps.displayName} draft is ${caps.draft ? `only supported at ${caps.draft.resolutions.join(', ')}` : 'not supported'}`
+    );
+  }
+  const keyframeMode =
+    request.mode === 'image_to_video' && request.keyframes !== undefined && caps.keyframes !== undefined;
+  if (!caps.modes.includes(request.mode) && !keyframeMode) {
+    return fail(
+      { model: caps.displayName, code: 'unsupported_mode', mode: request.mode },
+      `${caps.displayName} does not support ${request.mode}`
+    );
   }
   const inputsFailure = checkInputs(request, caps);
   if (inputsFailure) return inputsFailure;
-  if (!isDurationAllowed(request.durationSeconds, caps.duration)) {
+  if (!isVideoDurationAllowed(request.durationSeconds, caps.duration)) {
     return fail(
-      'unsupported_duration',
+      {
+        model: caps.displayName,
+        code: 'unsupported_duration',
+        requested: request.durationSeconds,
+        allowed: caps.duration,
+      },
       `duration ${request.durationSeconds}s is not supported by ${caps.displayName} (${describeDuration(caps.duration)})`
     );
   }
   if (!caps.aspectRatios.includes(request.aspectRatio)) {
     return fail(
-      'unsupported_aspect_ratio',
+      {
+        model: caps.displayName,
+        code: 'unsupported_aspect_ratio',
+        requested: request.aspectRatio,
+        allowed: caps.aspectRatios,
+      },
       `aspect ratio ${request.aspectRatio} is not supported by ${caps.displayName} (allowed: ${caps.aspectRatios.join(', ')})`
     );
   }
   if (!caps.resolutions.includes(request.resolution)) {
     return fail(
-      'unsupported_resolution',
+      {
+        model: caps.displayName,
+        code: 'unsupported_resolution',
+        requested: request.resolution,
+        allowed: caps.resolutions,
+      },
       `resolution ${request.resolution} is not supported by ${caps.displayName} (allowed: ${caps.resolutions.join(', ')})`
     );
   }
   if (request.audio !== undefined && caps.audio !== 'optional') {
-    return fail('unsupported_audio_option', `${caps.displayName} audio is '${caps.audio}' and cannot be toggled`);
+    return fail(
+      { model: caps.displayName, code: 'unsupported_audio_option', audio: caps.audio },
+      `${caps.displayName} audio is '${caps.audio}' and cannot be toggled`
+    );
   }
   return { ok: true, request: request as ValidatedVideoRequest };
 };

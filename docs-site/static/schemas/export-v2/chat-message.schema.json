@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.bike4mind.com/schemas/export-v2/chat-message.schema.json",
+  "title": "Chat message v2 record",
+  "type": "object",
+  "required": ["notebookId", "id", "timestamp", "type", "prompt", "status", "pinned"],
+  "properties": {
+    "notebookId": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string" },
+    "prompt": { "type": "string" },
+    "reply": { "type": "string" },
+    "replies": { "type": "array", "items": { "type": "string" } },
+    "images": { "type": "array", "items": { "oneOf": [{ "type": "string" }, { "type": "object", "required": ["contentPath"], "properties": { "contentPath": { "type": "string", "pattern": "^files/[^/]+$" } }, "additionalProperties": false }] } },
+    "attachedFiles": { "type": "array", "items": { "type": "string" } },
+    "status": { "enum": ["stopped", "running", "done"] },
+    "pinned": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

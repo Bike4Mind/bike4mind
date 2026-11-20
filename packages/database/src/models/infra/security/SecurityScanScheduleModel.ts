@@ -2,7 +2,8 @@ import { IMongoDocument } from '@bike4mind/common';
 import mongoose, { Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
-export type SecurityScanType = 'web' | 'code' | 'packages' | 'secrets' | 'cloud' | 'waf';
+export const SECURITY_SCAN_TYPES = ['web', 'cloud'] as const;
+export type SecurityScanType = (typeof SECURITY_SCAN_TYPES)[number];
 
 export interface ISecurityScanScheduleDocument extends IMongoDocument {
   stage: string;
@@ -33,7 +34,7 @@ const SecurityScanScheduleSchema = new mongoose.Schema<ISecurityScanScheduleDocu
     scanType: {
       type: String,
       required: true,
-      enum: ['web', 'code', 'packages', 'secrets', 'cloud', 'waf'],
+      enum: SECURITY_SCAN_TYPES,
       index: true,
     },
     enabled: {
@@ -115,6 +116,7 @@ export class SecurityScanScheduleRepository extends BaseRepository<ISecurityScan
     const docs = await this.model
       .find({
         enabled: true,
+        scanType: { $in: SECURITY_SCAN_TYPES },
         nextRunAt: { $lte: now },
       })
       .sort({ nextRunAt: 1 }) // Process oldest due scans first

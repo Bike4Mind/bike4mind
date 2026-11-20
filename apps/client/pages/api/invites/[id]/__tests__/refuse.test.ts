@@ -25,6 +25,8 @@ const refuseWholeInvite = vi.hoisted(() => vi.fn());
 const sendToClient = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({ sharingService: { refuseWholeInvite } }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   inviteRepository: {},
   fabFileRepository: {},
   sessionRepository: {},
@@ -32,8 +34,9 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   Group: {},
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
+vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus: vi.fn() }));
 
 import '@pages/api/invites/[id]/refuse';
 

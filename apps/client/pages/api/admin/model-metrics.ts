@@ -2,8 +2,7 @@ import { Quest, cacheRepository } from '@bike4mind/database';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -238,13 +237,8 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
   return metrics;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request<{}, {}, {}, ModelMetricsQuery>, res) => {
-    // Check if user has admin permissions
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     console.log('📊 Model metrics API called');
 
     try {

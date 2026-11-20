@@ -15,21 +15,42 @@ const dbMocks = vi.hoisted(() => ({
   annotationLean: vi.fn(),
   loadLiveOwner: vi.fn(),
 }));
+const limitMock = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => {
+    limitMock(options);
+    return (req: unknown, res: unknown, next: () => void) => limitMock(req, res, next);
+  },
+}));
 
-// The route chains .get(...).post(...), so .get must return the GET handler with a
-// .post that swallows the write handler and hands the GET one back - the default
-// export is then the GET handler itself.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, unknown> = {};
-    Object.assign(chain, {
-      use: () => chain,
-      get: (fn: object) => Object.assign(fn, { post: () => fn }),
-    });
+    const middleware: Array<(req: { method: string }, res: unknown, next: () => void) => void> = [];
+    const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
+    const chain = Object.assign(
+      async (req: { method: string }, res: unknown) => {
+        for (const mw of middleware) {
+          let passed = false;
+          await mw(req, res, () => {
+            passed = true;
+          });
+          if (!passed) return;
+        }
+        return handlers[req.method](req, res);
+      },
+      {
+        use: (fn: (req: { method: string }, res: unknown, next: () => void) => void) => (middleware.push(fn), chain),
+        get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => ((handlers.GET = fn), chain),
+        post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => ((handlers.POST = fn), chain),
+      }
+    );
     return chain;
   },
 }));
-vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: () => {} }));
+vi.mock('@server/middlewares/optionalAuth', () => ({
+  optionalAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('@bike4mind/common', () => ({ CreateAnnotationRequestSchema: { safeParse: vi.fn() } }));
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: () => ({ select: () => ({ lean: dbMocks.artifactLean }) }) },
   Annotation: { find: () => ({ sort: () => ({ lean: dbMocks.annotationLean }) }) },
@@ -71,9 +92,9 @@ function makeRes(): Res {
   return res;
 }
 
-const run = (): Promise<Res> => {
+const run = (method = 'GET'): Promise<Res> => {
   const res = makeRes();
-  const req = { query: { publicId: 'pub1' }, user: undefined, headers: {}, cookies: {} };
+  const req = { method, query: { publicId: 'pub1' }, user: undefined, headers: {}, cookies: {} };
   return (handler as unknown as (q: unknown, s: unknown) => Promise<void>)(req, res).then(() => res);
 };
 
@@ -82,6 +103,7 @@ const cacheControl = (res: Res) => res.headers['Cache-Control'];
 describe('GET annotations list - cache posture', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    limitMock.mockImplementation((_req, _res, next) => next());
     dbMocks.annotationLean.mockResolvedValue([]);
     dbMocks.loadLiveOwner.mockResolvedValue({ name: 'Owner' });
   });
@@ -102,6 +124,30 @@ describe('GET annotations list - cache posture', () => {
     expect(cacheControl(res)).toBe('public, max-age=5, s-maxage=5');
     // A fresh comment must never be maskable by a stale body served from cache.
     expect(cacheControl(res)).not.toContain('stale-while-revalidate');
+    expect(limitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'GET' }),
+      expect.anything(),
+      expect.any(Function)
+    );
+    expect(limitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops a limited GET before reading the artifact or annotations', async () => {
+    limitMock.mockImplementation((_req, res: Res) => res.status(429).json({ error: 'Rate limit exceeded' }));
+
+    const res = await run();
+
+    expect(res.statusCode).toBe(429);
+    expect(cacheControl(res)).toBe('private, no-store');
+    expect(dbMocks.artifactLean).not.toHaveBeenCalled();
+    expect(dbMocks.annotationLean).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the GET limiter to POST', async () => {
+    const res = await run('POST');
+
+    expect(res.statusCode).toBe(401);
+    expect(limitMock).not.toHaveBeenCalled();
   });
 
   it('never caches a gated artifact, even though its visibility is still public', async () => {

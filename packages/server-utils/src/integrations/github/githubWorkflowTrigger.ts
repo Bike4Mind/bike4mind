@@ -133,12 +133,9 @@ export function getTargetUrlForStage(stage: string): string {
  * @param scanType - The type of security scan
  * @returns Workflow file name
  */
-export function getWorkflowIdForScanType(scanType: 'web' | 'code' | 'packages' | 'secrets' | 'cloud'): string | null {
+export function getWorkflowIdForScanType(scanType: 'web' | 'cloud'): string | null {
   const workflowMap: Record<string, string> = {
     web: 'website-owasp-zap.yml',
-    code: 'code-semgrep.yml',
-    packages: 'packages-audit.yml',
-    secrets: 'secrets-scan.yml',
     // Cloud scans run directly in Lambda, not via GitHub workflow
     cloud: '',
   };

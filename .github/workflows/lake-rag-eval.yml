@@ -56,7 +56,7 @@ jobs:
   eval:
     needs: check-repository
     if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     # A healthy run against staging takes about 12 minutes (16 ingests, 33 questions x 3 arms). The
     # test's own budget (run.live.test.ts TIMEOUT_MS) is far larger, so this is the real cap.
     timeout-minutes: 60
@@ -161,7 +161,7 @@ jobs:
             exit 1
           fi
           set -o pipefail
-          pnpm --filter @bike4mind/services exec vitest run src/llm/evals/lakeRag/run.live.test.ts 2>&1 \
+          pnpm --filter @bike4mind/services-core exec vitest run src/llm/evals/lakeRag/run.live.test.ts 2>&1 \
             | tee "$RUNNER_TEMP/lakerag-output.txt"
 
       - name: Write job summary

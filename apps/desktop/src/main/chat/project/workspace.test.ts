@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PhaseTimer } from '../PhaseTimer';
 import * as projectGit from './git';
 import {
+  branchExists,
   containerDirectory,
   currentBranch,
   fetchRemoteFor,
@@ -15,7 +16,15 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, worktreeFolderName } from './workspace';
+import {
+  appWorktreeRoot,
+  releaseBranchName,
+  reserveBranchName,
+  resolveWorkspace,
+  SpareWorktrees,
+  unusedBranchName,
+  worktreeFolderName,
+} from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -310,6 +319,107 @@ describe('resolveWorkspace', () => {
     await expect(resolveWorkspace(main, { branch: 'agent/three' })).rejects.toThrow(/holding a detached HEAD/);
   });
 
+  /** Runs the real `worktree add`, then fails it the way a timeout kill does, after it made things. */
+  function failWorktreeAddAfterIt() {
+    const originalGit = projectGit.git;
+    const timeouts: (number | undefined)[] = [];
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      timeouts.push(options?.timeoutMs);
+      await originalGit(directory, args, options);
+      throw new projectGit.GitError(args, 'Updating files:  4% (616/15405)\r', options?.timeoutMs);
+    });
+    return { spy, timeouts };
+  }
+
+  it('gives worktree add its own long timeout', async () => {
+    const { spy, timeouts } = failWorktreeAddAfterIt();
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(timeouts).toEqual([projectGit.WORKTREE_ADD_TIMEOUT_MS]);
+  });
+
+  it('leaves no folder, registration or branch behind when a new worktree fails, so a retry works', async () => {
+    const path = join(root, worktreeFolderName('agent/slow'));
+    const { spy } = failWorktreeAddAfterIt();
+    let failure: unknown;
+    try {
+      failure = await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' }).catch((err: unknown) => err);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect((failure as Error).message).toBe('git worktree add timed out after 5 min.');
+    await expect(stat(path)).rejects.toThrow();
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/slow')).toBe(false);
+    expect(await branchExists(main, 'agent/slow')).toBe(false);
+
+    expect(await resolveWorkspace(main, { base: 'main', branch: 'agent/slow' })).toEqual({
+      workingDirectory: path,
+      branch: 'agent/slow',
+      outcome: 'created',
+    });
+  });
+
+  it('keeps a branch it did not create when checking it out fails', async () => {
+    await git(main, ['branch', 'feat/kept']);
+    const { spy } = failWorktreeAddAfterIt();
+    try {
+      await resolveWorkspace(main, { branch: 'feat/kept' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await branchExists(main, 'feat/kept')).toBe(true);
+    await expect(stat(join(root, worktreeFolderName('feat/kept')))).rejects.toThrow();
+  });
+
+  it('cleans up nothing when git refuses because another writer made the path first', async () => {
+    const path = join(root, worktreeFolderName('agent/race'));
+    const originalGit = projectGit.git;
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      // The other writer lands between our checks and this add.
+      await originalGit(directory, ['worktree', 'add', '--quiet', '-b', 'agent/race', path, 'main']);
+      await writeFile(join(path, 'theirs.txt'), 'theirs');
+      throw new projectGit.GitError(args, `fatal: a branch named 'agent/race' already exists`);
+    });
+    try {
+      await expect(resolveWorkspace(main, { base: 'main', branch: 'agent/race' })).rejects.toThrow(/already exists/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await readFile(join(path, 'theirs.txt'), 'utf8')).toBe('theirs');
+    expect(await branchExists(main, 'agent/race')).toBe(true);
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/race')).toBe(true);
+  });
+
+  it('removes a registration the killed add left locked, so its branch really goes', async () => {
+    const path = join(root, worktreeFolderName('agent/locked'));
+    const originalGit = projectGit.git;
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      await originalGit(directory, args, options);
+      // What git leaves while it is still initializing: a lock a plain --force does not get past.
+      await originalGit(directory, ['worktree', 'lock', '--reason', 'initializing', path]);
+      throw new projectGit.GitError(args, '', options?.timeoutMs);
+    });
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'agent/locked' }).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+
+    await expect(stat(path)).rejects.toThrow();
+    expect((await listWorktrees(main)).some(entry => entry.branch === 'agent/locked')).toBe(false);
+    expect(await branchExists(main, 'agent/locked')).toBe(false);
+  });
+
   it('reuses a worktree registered for the branch even at an unexpected path', async () => {
     const elsewhere = join(container, 'somewhere-else');
     await git(main, ['worktree', 'add', '--quiet', '-b', 'feat/elsewhere', elsewhere]);
@@ -384,17 +494,17 @@ describe('resolveWorkspace choosing what to fork from', () => {
     );
   });
 
-  it('keeps local commits the remote has not seen', async () => {
+  it('forks from upstream main without changing unpushed local main commits', async () => {
     const { repo } = await clonedRepository();
+    const upstream = (await git(repo, ['rev-parse', 'origin/main'])).trim();
     await writeFile(join(repo, 'unpushed.txt'), 'mine\n', 'utf8');
     await git(repo, ['add', '.']);
     await git(repo, ['commit', '--quiet', '-m', 'unpushed']);
 
     const resolved = await resolveWorkspace(repo, { base: 'main' });
 
-    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
-      (await git(repo, ['rev-parse', 'main'])).trim()
-    );
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+    expect((await git(repo, ['rev-parse', 'main'])).trim()).not.toBe(upstream);
   });
 
   async function commitOn(repo: string, file: string): Promise<string> {
@@ -405,6 +515,67 @@ describe('resolveWorkspace choosing what to fork from', () => {
   }
 
   const headOf = async (directory: string) => (await git(directory, ['rev-parse', 'HEAD'])).trim();
+
+  it('forks from upstream when local main has diverged, leaving local main intact', async () => {
+    const { repo, origin } = await clonedRepository();
+    const initial = await headOf(repo);
+    const upstream = await commitOn(repo, 'upstream.txt');
+    await git(repo, ['push', '--quiet', 'origin', 'main']);
+    await git(repo, ['reset', '--quiet', '--hard', initial]);
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+
+    const resolved = await resolveWorkspace(repo, { base: 'main', branch: 'agent/clean' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(upstream);
+    expect(await headOf(repo)).toBe(local);
+    expect((await git(origin, ['rev-parse', 'main'])).trim()).toBe(upstream);
+  });
+
+  it.each(['main', 'origin/main', ''])('refuses a stale %s base when upstream fetch fails', async base => {
+    const { repo } = await clonedRepository();
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+    await fetchRemoteFor(repo, 'origin/main');
+
+    await expect(resolveWorkspace(repo, { base, branch: 'agent/refused' })).rejects.toThrow(
+      /Could not update origin\/main.*pick another base branch/s
+    );
+
+    expect(await headOf(repo)).toBe(local);
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('uses local main when the repository has no origin', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['remote', 'remove', 'origin']);
+    const local = await commitOn(repo, 'local.txt');
+
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
+
+  it('does not default to local main when its tracking ref is missing and origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow(/Could not update origin\/main/);
+
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('keeps an explicit feature base usable while origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['switch', '--quiet', '-c', 'feat/local']);
+    const local = await commitOn(repo, 'feature.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    const resolved = await resolveWorkspace(repo, { base: 'feat/local', branch: 'agent/feature' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
 
   // A spawned session names its branch AND its base: the branch the user approved, cut from the
   // branch its parent is on.
@@ -639,6 +810,7 @@ describe('SpareWorktrees', () => {
     try {
       await resolveWorkspace(main, { base: 'main', branch: 'b4m/first', spares });
       await spareReady(main, container);
+      const upstream = (await git(main, ['rev-parse', 'origin/main'])).trim();
       await writeFile(join(main, 'later.txt'), 'later\n', 'utf8');
       await git(main, ['add', 'later.txt']);
       await git(main, ['commit', '--quiet', '-m', 'later']);
@@ -650,8 +822,9 @@ describe('SpareWorktrees', () => {
       expect(timer.summary()).toContain('spareSwitch=');
       expect(second.workingDirectory).toBe(join(appWorktreeRoot(container), 'b4m+second'));
       expect((await git(second.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('b4m/second');
-      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
-      expect((await stat(join(second.workingDirectory, 'later.txt'))).isFile()).toBe(true);
+      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+      expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
+      await expect(stat(join(second.workingDirectory, 'later.txt'))).rejects.toThrow();
       // Taken, then made again for the session after this one.
       await spareReady(main, container);
     } finally {
@@ -687,5 +860,100 @@ describe('SpareWorktrees', () => {
     } finally {
       await spares.dispose();
     }
+  });
+});
+
+describe('unusedBranchName', () => {
+  /** The name it answers, given back straight away. */
+  async function pick(main: string, wanted: string): Promise<string> {
+    const { branch, reservation } = await unusedBranchName(main, wanted);
+    if (reservation) releaseBranchName(reservation);
+    return branch;
+  }
+
+  it('answers the name itself when nothing holds it', async () => {
+    const { main } = await bareLayoutRepository();
+
+    expect(await pick(main, 'agent/review')).toBe('agent/review');
+  });
+
+  it('steps past a leftover branch and a branch held by a worktree', async () => {
+    const { container, main } = await bareLayoutRepository();
+    await git(main, ['branch', 'agent/review']);
+    await git(main, ['worktree', 'add', '--quiet', '-b', 'agent/review-2', join(container, 'review-2')]);
+
+    expect(await pick(main, 'agent/review')).toBe('agent/review-3');
+  });
+
+  it('gives two calls made together two names, and frees a name once it is released', async () => {
+    const { main } = await bareLayoutRepository();
+
+    const [first, second] = await Promise.all([
+      unusedBranchName(main, 'agent/twin'),
+      unusedBranchName(main, 'agent/twin'),
+    ]);
+    expect(new Set([first.branch, second.branch])).toEqual(new Set(['agent/twin', 'agent/twin-2']));
+
+    const holderOfTwin = first.branch === 'agent/twin' ? first : second;
+    releaseBranchName(holderOfTwin.reservation!);
+    expect(await pick(main, 'agent/twin')).toBe('agent/twin');
+    releaseBranchName((holderOfTwin === first ? second : first).reservation!);
+  });
+
+  it('steps past a name another spawn reserved by hand, as a card does', async () => {
+    const { main } = await bareLayoutRepository();
+    const card = reserveBranchName(main, 'agent/typed');
+
+    expect(await pick(main, 'agent/typed')).toBe('agent/typed-2');
+    releaseBranchName(card!);
+  });
+
+  it('keeps the branch git made holding the name once the reservation is given back', async () => {
+    const { main } = await bareLayoutRepository();
+    const { branch, reservation } = await unusedBranchName(main, 'agent/held');
+    await resolveWorkspace(main, { base: 'main', branch });
+    releaseBranchName(reservation!);
+
+    expect(await pick(main, 'agent/held')).toBe('agent/held-2');
+  });
+
+  it('answers the wanted name with no reservation when the directory is not a repository', async () => {
+    const plain = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
+
+    expect(await unusedBranchName(plain, 'agent/plain')).toEqual({ branch: 'agent/plain', reservation: null });
+  });
+
+  it('answers the wanted name with no reservation when every candidate is taken', async () => {
+    const { main } = await bareLayoutRepository();
+    const held = [reserveBranchName(main, 'agent/full')];
+    for (let attempt = 2; attempt <= 20; attempt++) held.push(reserveBranchName(main, `agent/full-${attempt}`));
+
+    expect(await unusedBranchName(main, 'agent/full')).toEqual({ branch: 'agent/full', reservation: null });
+    for (const reservation of held) releaseBranchName(reservation!);
+  });
+});
+
+describe('reserveBranchName', () => {
+  it('refuses a name already held, until its holder gives it back', async () => {
+    const { main } = await bareLayoutRepository();
+    const held = reserveBranchName(main, 'agent/one');
+
+    expect(held).not.toBeNull();
+    expect(reserveBranchName(main, 'agent/one')).toBeNull();
+    releaseBranchName(held!);
+    const again = reserveBranchName(main, 'agent/one');
+    expect(again).not.toBeNull();
+    releaseBranchName(again!);
+  });
+
+  it('lets only the holder release a name, so a stale reservation frees nothing', async () => {
+    const { main } = await bareLayoutRepository();
+    const first = reserveBranchName(main, 'agent/one')!;
+    releaseBranchName(first);
+    const second = reserveBranchName(main, 'agent/one')!;
+
+    releaseBranchName(first);
+    expect(reserveBranchName(main, 'agent/one')).toBeNull();
+    releaseBranchName(second);
   });
 });

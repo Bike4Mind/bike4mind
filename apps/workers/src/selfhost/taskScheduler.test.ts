@@ -19,11 +19,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: vi.fn(),
   assertOwnerCanAfford: vi.fn(),
 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/services', async () => ({
   taskSchedulerService: await import('../../../../b4m-core/services/src/taskSchedulerService/process'),
   researchTaskService: { process: mocks.research },
@@ -56,7 +56,7 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' }, researchEngineQueue: { url: 'queue://research' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: mocks.send }));
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: unknown) => Promise<void>) =>
     (event: SQSEvent, context: Context) =>
@@ -66,8 +66,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage:
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
-vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/utils/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: async () => ({ modelId: 'test-model', llm: {} }) },
 }));
 

@@ -4,8 +4,11 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
-import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
+import { notebookCurationQueue, riskEvidenceQueue, riskEvidenceQueueDLQ, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
+import { otcEmailConfigurationSet } from './otcEmailMetrics';
+import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
+import { appUrlForLambdaEnv } from './router';
 
 // Stripe events
 const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
@@ -27,6 +30,7 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements skip metrics (emitMetric in the handler + plan-lookup miss
     // in handleUserSubscriptionInvoice).
@@ -57,6 +61,7 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements reconcile metrics (emitMetric in the handler).
     permissions: [
@@ -91,7 +96,12 @@ const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
 });
 const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
 
-const emailSendSubscription = eventBus.subscribe(
+// Recipient domains the worker drops instead of handing to the transport. The E2E suites sign up
+// and invite synthetic test.com users on every non-production stage, and SES would otherwise
+// bounce those and count them against the stage's configuration set metrics.
+const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';
+
+export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
     handler: 'apps/workers/src/events/sendEmail.handler',
@@ -100,8 +110,11 @@ const emailSendSubscription = eventBus.subscribe(
     vpc: lambdaVpc,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
+      ...mailTransportEnvironment,
+      MAIL_SINK_DOMAINS: mailSinkDomains,
     },
-    permissions: [emailEventsDeadLetter.sendPermission],
+    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
     transform: emailEventsDeadLetter.functionTarget,
   },
   {
@@ -113,6 +126,68 @@ const emailSendSubscription = eventBus.subscribe(
 );
 
 emailEventsDeadLetter.allowRules([emailSendSubscription]);
+
+// Push notifications to first-party native clients (apps/workers/src/events/sendPush.ts).
+// The APNS_* credentials are sst.Secrets (infra/secrets.ts, linked through allSecrets) defaulting to
+// 'not-configured'; with any of them unset the handler consumes events as a no-op, so stages without
+// push credentials need nothing here.
+const pushEventsDLQ = new sst.aws.Queue('pushEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const pushEventsDeadLetter = createEventBusDeadLetter('pushEventsDLQ', pushEventsDLQ);
+
+export const notificationPushSubscription = eventBus.subscribe(
+  'notification-push',
+  {
+    handler: 'apps/workers/src/events/sendPush.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    // VPC for the database egress path the other Mongo-reading subscribers use; APNs is reached via NAT.
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+    },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      // One Lambda handles both and routes on the detail-type; a live activity frame shares the push DLQ.
+      detailType: ['notification.push', 'notification.liveActivity'],
+    },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+// Relays a finished Studio group to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts).
+// A user-facing notification like push, so it shares the push DLQ; a native notifier adds its own rule on the
+// same detail-type.
+export const studioJobCompletedSubscription = eventBus.subscribe(
+  'studio-job-completed',
+  {
+    handler: 'apps/workers/src/events/studioJobCompleted.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi],
+    // VPC for the database egress path (websocket connections are read from Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['studio.job.completed'] },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+pushEventsDeadLetter.allowRules([notificationPushSubscription, studioJobCompletedSubscription]);
 
 // Session events
 //
@@ -225,7 +300,36 @@ const sessionTaggingSubscription = eventBus.subscribe(
   }
 );
 
+const briefComposeSubscription = eventBus.subscribe(
+  'brief-compose',
+  {
+    handler: 'apps/workers/src/events/briefCompose.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['brief.compose'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
 sessionEnrichmentDeadLetter.allowRules([
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,
@@ -420,15 +524,39 @@ const sreFixDispatchSubscription = eventBus.subscribeQueue('SreFixDispatch', sre
 // target's policy created by subscribeQueue only covers the main queue).
 sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 
+// Account behavioral risk evidence. completion.completed is published only for turns with mementos
+// enabled (publishMementoCompletion), so this is a freshness nudge for that cohort; the hourly
+// signupRiskSweep is the baseline. The input transformer keeps the event's prompt out of the queue and
+// its DLQ. Failed deliveries go to riskEvidenceQueueDLQ, which is already alarmed in infra/dlqAlarms.ts.
+const riskEvidenceCompletionSubscription = eventBus.subscribeQueue('RiskEvidenceCompletion', riskEvidenceQueue, {
+  pattern: {
+    detailType: ['completion.completed'],
+  },
+  transform: {
+    target: targetArgs => {
+      targetArgs.deadLetterConfig = { arn: riskEvidenceQueueDLQ.arn };
+      targetArgs.inputTransformer = {
+        inputPaths: { userId: '$.detail.userId' },
+        inputTemplate: '{"kind":"completion","userId":<userId>}',
+      };
+    },
+  },
+});
+
+sst.aws.Queue.createPolicy('RiskEvidenceQueueDLQEventsPolicy', riskEvidenceQueueDLQ.arn);
+
 export {
   eventBus,
   telemetryAlertDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
   sessionEnrichmentDeadLetter,
   sreFixDispatchSubscription,
+  riskEvidenceCompletionSubscription,
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

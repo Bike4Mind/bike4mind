@@ -1,10 +1,17 @@
 import { TooManyRequestsError } from '@bike4mind/utils';
+import { loadShadowTierSettings } from '@bike4mind/services/llm/shadowTier';
+import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { RequestHandler } from 'express';
-import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKeyRateLimitCheck';
+import {
+  checkApiKeyRateLimit,
+  rateLimitRefusalInfo,
+  type RateLimitCounter,
+} from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES } from '@bike4mind/common';
-import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES, isShadowTier } from '@bike4mind/common';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 
 export interface ApiKeyRateLimitOptions {
   /**
@@ -92,7 +99,26 @@ export const apiKeyRateLimit =
             StandardUnit.Count
           );
         }
-        throw new TooManyRequestsError(result.error || 'Rate limit exceeded');
+        throw new TooManyRequestsError(result.error || 'Rate limit exceeded', rateLimitRefusalInfo(result));
+      }
+
+      // Restricted tier: a separate counter, so the key's advertised limit never reveals it. A hit
+      // looks like the owner's per-user tier limit (middlewares/rateLimit.ts), not the key's.
+      if (
+        req.user &&
+        isShadowTier({ isAdmin: persistedIsAdmin(req.user), tags: req.user.tags, throttle: req.user.throttle })
+      ) {
+        const { requestsPerMin } = await loadShadowTierSettings(adminSettingsRepository);
+        const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+          `rate-limit:${req.user.id}:shadow-api-key`,
+          requestsPerMin,
+          60_000
+        );
+        if (!success) {
+          const retryAfter = Math.max(1, Math.ceil(Math.max(0, expiresAt.getTime() - Date.now()) / 1000));
+          res.setHeader('Retry-After', retryAfter);
+          throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfter} seconds.`);
+        }
       }
 
       return next();

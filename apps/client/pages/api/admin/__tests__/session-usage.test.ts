@@ -32,8 +32,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockVerifyOrgOwner = vi.fn();
-vi.mock('@server/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
+  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 import handler from '../session-usage';
@@ -41,11 +41,12 @@ import handler from '../session-usage';
 const ORG = '6650000000000000000000aa';
 const SESSION = 'sess-1';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object }) {
+function call(options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser?: boolean; query?: object }) {
   const { req, res } = createMocks({ method: 'GET', query: options.query ?? { sessionId: SESSION } });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; adminPermissions?: string[]; id: string } }).user = {
       isAdmin: options.isAdmin ?? false,
+      adminPermissions: options.adminPermissions,
       id: 'user-1',
     };
   }
@@ -78,15 +79,26 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(mockSessionBelongsToOwner).not.toHaveBeenCalled();
     // No owner filter: admins see the full cross-org rollup.
-    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined, { includeExecuted: true });
     expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, undefined);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });
 
   it('rejects a non-admin who omits the organization', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockSessionUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it('lets a support:read delegate read the whole session cross-org, like an admin', async () => {
+    const { run } = call({
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+      query: { sessionId: SESSION, organizationId: ORG },
+    });
+    await run();
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined, { includeExecuted: true });
   });
 
   it('scopes an org owner to their org slice of the session (no cross-owner leak)', async () => {
@@ -96,7 +108,11 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockSessionBelongsToOwner).toHaveBeenCalledWith(SESSION, ORG, 'Organization');
     // Both response queries owner-scoped to the org - a mixed-owner session must
     // not surface another owner's spend to a non-admin.
-    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, { ownerId: ORG, ownerType: 'Organization' });
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(
+      SESSION,
+      { ownerId: ORG, ownerType: 'Organization' },
+      { includeExecuted: false }
+    );
     expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, ORG);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });

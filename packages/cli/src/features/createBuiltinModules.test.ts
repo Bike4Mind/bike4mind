@@ -1,7 +1,21 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { hearthSessionFromStore } from './createBuiltinModules.js';
+import { createBuiltinModules, hearthSessionFromStore } from './createBuiltinModules.js';
 import { useCliStore } from '../store/index.js';
 import type { Session } from '../storage/types.js';
+import type { ApiClient } from '../auth/ApiClient.js';
+import { createMockConfig } from '../test-utils/mocks.js';
+
+describe('createBuiltinModules', () => {
+  const config = createMockConfig({ features: { tavern: true, hearth: true } });
+
+  it('builds the cloud modules a signed-in config enables', () => {
+    expect(createBuiltinModules(config, { signedOut: false } as ApiClient)).toHaveLength(2);
+  });
+
+  it('builds none while signed out', () => {
+    expect(createBuiltinModules(config, { signedOut: true } as ApiClient)).toEqual([]);
+  });
+});
 
 const session = {
   id: 'session-1',

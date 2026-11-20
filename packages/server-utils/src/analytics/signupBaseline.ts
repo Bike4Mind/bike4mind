@@ -53,8 +53,9 @@ export const CENSUS_PRODUCT_EVENTS = [
 
 export function baselineRules(staffDomains: string | undefined, testPattern = DEFAULT_TEST_PATTERN) {
   const rules = buildExclusionRules(staffDomains, new RegExp(testPattern || DEFAULT_TEST_PATTERN, 'i'));
-  if (!rules.staffEmail) throw new Error('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS is required for a baseline report');
-  return rules;
+  const { staffEmail } = rules;
+  if (!staffEmail) throw new Error('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS is required for a baseline report');
+  return { ...rules, staffEmail };
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;

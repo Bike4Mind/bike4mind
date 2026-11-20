@@ -95,6 +95,7 @@ export function renderSidebar(
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
         onRename={() => {}}
+        onDownload={() => {}}
         userSections={EMPTY_SIDEBAR_SECTIONS}
         sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
       />

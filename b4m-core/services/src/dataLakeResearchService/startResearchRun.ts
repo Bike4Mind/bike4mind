@@ -6,10 +6,11 @@ import {
   type IDataLakeResearchRunDocument,
   type IDataLakeResearchRunRepository,
   type IOrganizationRepository,
+  type ISpendFreezeRepository,
   type IUserRepository,
   type ResearchScheduleSkipReason,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { areCreditsEnforced } from '../billing/isOperationalBillingEnabled';
 import { researchRunChange } from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
@@ -18,6 +19,8 @@ import {
   type LakeConfigAuditAdapters,
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { aiAccessDeniedMessage } from '../userService/accountState';
 import { normalizeResearchLevers } from './researchLevers';
 
 /**
@@ -35,7 +38,7 @@ export type ResearchRunStarter =
 
 type ResearchRunRefusalReason = Exclude<
   ResearchScheduleSkipReason,
-  'review_backlog' | 'lake_inactive' | 'insufficient_credits'
+  'review_backlog' | 'lake_inactive' | 'insufficient_credits' | 'spend_frozen'
 >;
 
 /**
@@ -79,6 +82,8 @@ export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
     adminSettings: NonNullable<LakeConfigAuditAdapters['db']['adminSettings']>;
     users: Pick<IUserRepository, 'findById'>;
     organizations: Pick<IOrganizationRepository, 'findById'>;
+    // REQUIRED for the same reason as the two above: the owner's spend freeze is read here.
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   now?: () => Date;
 }
@@ -114,7 +119,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * the unbilled spend this gate exists to prevent.
  */
 async function assertResearchRunAffordable(
-  lake: LakeConfigAuditLakeRef,
+  owner: Awaited<ReturnType<IUserRepository['findById']>>,
   costCeilingMicroUsd: number,
   { db }: Pick<StartResearchRunAdapters, 'db'>
 ): Promise<void> {
@@ -123,7 +128,6 @@ async function assertResearchRunAffordable(
   const settings = { adminSettings: db.adminSettings };
   if (!(await areCreditsEnforced(settings))) return;
 
-  const owner = await db.users.findById(lake.createdByUserId);
   if (!owner) {
     // No owner means nothing can be billed (runLakeResearch drops the spend the same way), so the
     // run must not start rather than spend with no balance behind it.
@@ -197,7 +201,17 @@ export async function startResearchRun(
 
   // Last of the three rails, so the two cheap common mistakes (a double-clicked Run, a burst) keep
   // their clearer messages, and before the row is written so a refusal leaves no run behind.
-  await assertResearchRunAffordable(lake, levers.costCeilingMicroUsd, { db });
+  const owner = await db.users.findById(lake.createdByUserId);
+  // The owner pays, so a blocked owner refuses the run whoever starts it, and whether or not credits are enforced.
+  if (owner && aiAccessDeniedMessage(owner)) {
+    throw new ForbiddenError("This data lake's owner account cannot run research. Please contact support.");
+  }
+  // The owner pays, so it is the owner's freeze that counts, with credits enforced or not. A lake with
+  // no owner has nobody to freeze; the balance pre-flight below refuses it when credits are enforced.
+  if (owner) {
+    await assertSpendNotFrozen({ userId: owner.id, organizationId: owner.organizationId ?? null }, { db });
+  }
+  await assertResearchRunAffordable(owner, levers.costCeilingMicroUsd, { db });
 
   const run = await db.dataLakeResearchRuns.createRun({
     dataLakeId,

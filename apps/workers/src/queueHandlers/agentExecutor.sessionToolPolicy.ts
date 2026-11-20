@@ -1,5 +1,5 @@
 import { DELEGATION_TOOLS, resolveWorkspaceDeniedTools } from '@bike4mind/common';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
 
 /**

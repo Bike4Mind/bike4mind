@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/report.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   SKILL_LISTING_REPORT_REASONS,
   SkillListing,
@@ -9,7 +9,12 @@ import {
   SkillListingReport,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/common';
-import { canSeeListing, findListing, loadMarketSettings, memberOrgIdsFor } from '@server/skillMarket/market';
+import {
+  canSeeListing,
+  findListing,
+  loadMarketSettings,
+  audienceIdsFor,
+} from '@bike4mind/server-utils/skillMarket/market';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,7 +41,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const hasImported = listing
       ? Boolean(await SkillListingImport.exists({ listingId: String(listing.id), userId }))
       : false;
-    if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token, hasImported)) {
+    if (!listing || !canSeeListing(listing, await audienceIdsFor(userId), body.token, hasImported)) {
       throw new NotFoundError('Listing not found');
     }
     if (listing.authorUserId === userId) throw new BadRequestError("You can't report your own listing");

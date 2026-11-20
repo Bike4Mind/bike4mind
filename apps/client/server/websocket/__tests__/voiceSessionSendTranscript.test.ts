@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   recordVoiceActivity: vi.fn(),
   ofType: vi.fn(),
   accessibleBy: vi.fn(),
+  findRoles: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -15,6 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { upsertVoiceTranscriptTurn: mocks.upsertVoiceTranscriptTurn },
   sessionRepository: { recordVoiceActivity: mocks.recordVoiceActivity },
   userRepository: { findById: mocks.userFindById },
+  adminRoleRepository: { findByIds: mocks.findRoles },
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
@@ -28,19 +30,23 @@ vi.mock('@casl/mongoose', () => ({
   },
 }));
 
-vi.mock('@server/auth/ability', () => ({ default: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn(() => ({})) }));
 
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
 }));
 
-import { Permission } from '@bike4mind/common';
+import { Permission, hasAdminPermission } from '@bike4mind/common';
+import ability from '@bike4mind/server-utils/auth/ability';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func } from '../voiceSessionSendTranscript';
 
 /**
@@ -73,6 +79,24 @@ describe('voiceSessionSendTranscript authorization', () => {
   });
 
   const run = () => func(event as never, {} as never, logger as never);
+
+  it("stamps the user active for their own speech, but not for the assistant's side of the call", async () => {
+    await run();
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('user-1', logger);
+
+    mockRecordUserActivity.mockClear();
+    const output = { ...event, body: JSON.stringify({ ...JSON.parse(event.body), type: 'response' }) };
+    await func(output as never, {} as never, logger as never);
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
+  });
+
+  it('does not stamp a caller who cannot write to the session', async () => {
+    mocks.sessionFindOne.mockResolvedValue(null);
+
+    await run();
+
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
+  });
 
   it('gates the write on update permission, not read accessibility', async () => {
     await run();
@@ -152,5 +176,72 @@ describe('voiceSessionSendTranscript authorization', () => {
 
     expect(await run()).toEqual({ statusCode: 200 });
     expect(mocks.upsertVoiceTranscriptTurn as Mock).not.toHaveBeenCalled();
+  });
+});
+
+describe('voiceSessionSendTranscript role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const event = {
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'voice_session_send_transcript',
+      userId: 'user-1',
+      sessionId: 'session-1',
+      transcript: 'hello there',
+      type: 'input',
+      conversationItemId: 'item-1',
+    }),
+  };
+  const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+  const run = () => func(event as never, {} as never, logger as never);
+  const abilityUser = () => vi.mocked(ability).mock.calls.at(-1)?.[0] as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.connectionFindOne.mockResolvedValue({ connectionId: 'conn-1', userId: 'user-1' });
+    mocks.ofType.mockReturnValue({ scopeMarker: 'update-scope' });
+    mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1', userId: 'user-1', voiceBilledCredits: 0 });
+    mocks.upsertVoiceTranscriptTurn.mockResolvedValue({});
+    mocks.recordVoiceActivity.mockResolvedValue(true);
+    mocks.findRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+  });
+
+  it('builds the ability from a user whose only grant comes from a role', async () => {
+    mocks.userFindById.mockResolvedValue({ id: 'user-1', adminRoleIds: [ROLE_ID] });
+
+    await run();
+
+    expect(mocks.findRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    mocks.userFindById.mockResolvedValueOnce({ id: 'user-1', adminRoleIds: [ROLE_ID] });
+    await run();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+
+    mocks.userFindById.mockResolvedValueOnce({ id: 'user-1', adminRoleIds: [] });
+    await run();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mocks.findRoles.mockResolvedValue([]);
+    mocks.userFindById.mockResolvedValue({ id: 'user-1', adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+    await run();
+
+    expect(mocks.findRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('writes nothing when the role lookup throws', async () => {
+    mocks.userFindById.mockResolvedValue({ id: 'user-1', adminRoleIds: [ROLE_ID] });
+    mocks.findRoles.mockRejectedValue(new Error('db down'));
+
+    await expect(run()).rejects.toThrow('db down');
+    expect(ability).not.toHaveBeenCalled();
+    expect(mocks.upsertVoiceTranscriptTurn).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,6 @@ describe('routeHeading', () => {
     ['/hearth', 'Hearth'],
     ['/deep-agents', 'Deep agents'],
     ['/report/abc123', 'Report'],
-    ['/quests-v5', 'Quests'],
     ['/hud', 'The Keep'],
     ['/feedback/rollup', 'Your feedback'],
     ['/organizations/abc123', 'Teams'],

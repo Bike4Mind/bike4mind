@@ -27,6 +27,7 @@ describe('editFileTool malformed fileId handling', () => {
       userId: 'u1',
       user: {},
       logger,
+      storage: { getSignedUrl: vi.fn(async () => 'https://files.example/a.txt') },
       db: { fabfiles: { findByIdAndUserId } },
       llm: { complete: vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined)) },
       statusUpdate: vi.fn(),
@@ -73,7 +74,7 @@ describe('editFileTool malformed fileId handling', () => {
     const findByIdAndUserId = vi.fn(async () => ({
       fileName: 'a.txt',
       mimeType: 'text/plain',
-      fileUrl: 'https://files.example/a.txt',
+      filePath: 'a.txt',
       moderationStatus: 'clean',
     }));
     const context = makeContext(findByIdAndUserId);

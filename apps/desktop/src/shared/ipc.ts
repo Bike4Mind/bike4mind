@@ -1,4 +1,14 @@
-import type { AccountCredits, AccountProfile } from './account';
+import type { SkinSummary } from './mods';
+import type { NewSessionDefaults } from './sessionDefaults';
+import type { StudioApi } from './studioIpc';
+import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
+import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { LoopResult, LoopState } from './loop';
+import type { RunSpend } from './runSpend';
+import type { PromptCacheTtl } from '@bike4mind/common';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
+import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
+import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -7,8 +17,24 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
-import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type {
+  ClaudeImportKind,
+  ClaudeImportResult,
+  ClaudeImportState,
+  ClaudeRemoveResult,
+  SyncHintId,
+} from './claudeImport';
+import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerLaunchAction,
+  ModelServerMutationResult,
+  ModelServerProbeInput,
+  ModelServerProbeResult,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from './modelServers';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
@@ -20,15 +46,22 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathAction,
+  ChatFilePathActionResult,
+  ChatFilePathOpenResult,
+  ChatFileView,
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
+  ChatHeldRelay,
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
+  ChatSessionExportResult,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatVideoJob,
@@ -42,16 +75,21 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   ToolAccessState,
   UpdateProjectRequest,
   UpdateProjectResult,
 } from './chat';
+import type { GenerationSettings } from './generation';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
-import type { SkillsState } from './skills';
+import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
@@ -82,9 +120,42 @@ import type {
   TerminalsChangedEvent,
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
+import type {
+  CuratedCheckResult,
+  CuratedList,
+  CuratedListSettings,
+  CuratedPullResult,
+  HfTokenResult,
+  HfTokenStatus,
+  HubDetailResult,
+  HubSearchRequest,
+  HubSearchResult,
+  InstalledModelsResult,
+  MachineView,
+  ModelPull,
+  ModelPullRequest,
+  ModelPullResult,
+  ModelRemoveResult,
+  ModelStoreLocation,
+  ModelRuntimeStatus,
+  LoadedModelState,
+} from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type {
+  ModelBuildReport,
+  ModelCaptureRequestEvent,
+  ModelExportFormat,
+  ModelStateUpdate,
+  ModelVersion,
+  ModelVersionEntry,
+  ModelVersionRecordRequest,
+  ModelVersionsUpdate,
+  ModelViewState,
+} from './model3d';
+import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -96,7 +167,17 @@ import type { LocalHistoryResult, LocalHistoryState } from './history';
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
+  studioPrepare: 'studio:prepare',
+  studioCreate: 'studio:create',
+  studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
+  studioAssetAction: 'studio:asset-action',
+  studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',
+  setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
   authSignIn: 'auth:sign-in',
   authCancelSignIn: 'auth:cancel-sign-in',
@@ -108,6 +189,10 @@ export const IPC_CHANNELS = {
   authStateChanged: 'auth:state-changed',
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
+  accountGetBilling: 'account:get-billing',
+  accountSubscribePlan: 'account:subscribe-plan',
+  accountPurchaseCredits: 'account:purchase-credits',
+  accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -116,23 +201,48 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  /** main -> renderer: a model server's slow listing finished, or late effort levels rebuilt the hosted list. */
+  chatModelsChanged: 'chat:models-changed',
   chatListSuggestionModels: 'chat:list-suggestion-models',
+  chatGetLocalContext: 'chat:get-local-context',
+  chatSetLocalContext: 'chat:set-local-context',
+  chatGetLocalContextFit: 'chat:get-local-context-fit',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
   chatSearchHistory: 'chat:search-history',
   chatClearHistory: 'chat:clear-history',
   chatHistoryState: 'chat:history-state',
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
+  chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  chatSetSessionGeneration: 'chat:set-session-generation',
+  chatGetModelSettings: 'chat:get-model-settings',
+  chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
+  chatSetModelSettings: 'chat:set-model-settings',
+  chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatGetRolePolicy: 'chat:get-role-policy',
+  chatSetRolePolicy: 'chat:set-role-policy',
+  chatTaskAction: 'chat:task-action',
+  chatListTaskDecisions: 'chat:list-task-decisions',
+  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
+  chatAnswerTaskDecision: 'chat:answer-task-decision',
+  /** main -> renderer push; the whole list of decisions workers wait on the user for. */
+  chatTaskDecisions: 'chat:task-decisions',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
+  chatExportSession: 'chat:export-session',
+  chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftDefaults: 'chat:draft-defaults',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -145,7 +255,14 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
+  chatListWorktrees: 'chat:list-worktrees',
+  chatRemoveWorktrees: 'chat:remove-worktrees',
+  chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
+  chatLoopCommand: 'chat:loop-command',
+  chatGetLoop: 'chat:get-loop',
+  chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
   /**
@@ -155,20 +272,31 @@ export const IPC_CHANNELS = {
   chatClearContext: 'chat:clear-context',
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
+  chatGetRunSpend: 'chat:get-run-spend',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
+  chatGetHeldRelays: 'chat:get-held-relays',
+  chatResolveHeldRelay: 'chat:resolve-held-relay',
   chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
+  chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatCopyDraftAttachments: 'chat:copy-draft-attachments',
+  chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
+  chatCheckFilePaths: 'chat:check-file-paths',
+  chatOpenFilePath: 'chat:open-file-path',
+  chatReadFilePath: 'chat:read-file-path',
+  chatFilePathAction: 'chat:file-path-action',
+  chatAttachFilePath: 'chat:attach-file-path',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -230,6 +358,16 @@ export const IPC_CHANNELS = {
   mcpReconnectServer: 'mcp:reconnect-server',
   /** main -> renderer push; a server changed state, which the renderer never polls for. */
   mcpServersChanged: 'mcp:servers-changed',
+  modelServersList: 'servers:list',
+  modelServersProbe: 'servers:probe',
+  modelServersAdd: 'servers:add',
+  modelServersUpdate: 'servers:update',
+  modelServersRemove: 'servers:remove',
+  modelServersCheck: 'servers:check',
+  modelServersProbedHardware: 'servers:probed-hardware',
+  modelServersLaunch: 'servers:launch',
+  /** main -> renderer push; a server was added, changed, or its health was rechecked. */
+  modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -240,6 +378,9 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  permissionsExportApprovalSummary: 'permissions:export-approval-summary',
+  capabilitiesGetState: 'capabilities:get-state',
+  capabilitiesRevoke: 'capabilities:revoke',
   /**
    * Import from Claude, Settings only. No channel takes a path: folders and export files are
    * picked through native dialogs in main, and the importer only ever reads them.
@@ -251,6 +392,9 @@ export const IPC_CHANNELS = {
   claudeImportChatExport: 'claude:import-chat-export',
   claudeImportSetWatchFolder: 'claude:set-watch-folder',
   claudeImportRemove: 'claude:remove-imported',
+  claudeImportSetWebSettings: 'claude:set-web-import',
+  claudeImportSyncWeb: 'claude:sync-web',
+  claudeImportDismissHint: 'claude:dismiss-hint',
   /** main -> renderer push of the import state. */
   claudeImportStateChanged: 'claude:import-state-changed',
   /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
@@ -264,6 +408,38 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  modelsGetStatus: 'models:get-status',
+  modelsListInstalled: 'models:list-installed',
+  modelsSearch: 'models:search',
+  modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
+  /** Check now on the list itself: skips the 6 h throttle; the result arrives as modelsCuratedChanged. */
+  modelsCheckCuratedList: 'models:check-curated-list',
+  modelsCuratedSettings: 'models:curated-settings',
+  modelsCuratedSetEnabled: 'models:curated-set-enabled',
+  /** main -> renderer push; the curated list or its check status changed. */
+  modelsCuratedChanged: 'models:curated-changed',
+  modelsListPulls: 'models:list-pulls',
+  /** Starts a download; resolves when it finishes, fails or is cancelled. */
+  modelsPull: 'models:pull',
+  modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
+  modelsDismissPull: 'models:dismiss-pull',
+  modelsRemove: 'models:remove',
+  modelsGetStoreLocation: 'models:get-store-location',
+  modelsGetLoadedState: 'models:get-loaded-state',
+  /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
+  modelsGetHfAccess: 'models:get-hf-access',
+  modelsSaveHfAccess: 'models:save-hf-access',
+  modelsClearHfAccess: 'models:clear-hf-access',
+  modelsHfAccessChanged: 'models:hf-access-changed',
+  /** main -> renderer push of every pull in flight or failed. */
+  modelsPullsChanged: 'models:pulls-changed',
+  /** main -> renderer push: a pull finished or a model was removed. */
+  modelsInstalledChanged: 'models:installed-changed',
   /**
    * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
    * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
@@ -283,6 +459,13 @@ export const IPC_CHANNELS = {
    * renderer's to enforce. See @shared/browserUrl.
    */
   browserNavigate: 'browser:navigate',
+  /**
+   * Show an HTML artifact full-size in a conversation's browser. Renderer -> main.
+   *
+   * Carries the content, never a url: main stores it and mints the `b4m-artifact:` address
+   * itself, so the url bar's refusal of the app's own schemes stays intact.
+   */
+  browserOpenArtifact: 'browser:open-artifact',
   /** Back, forward or reload from the pane's url bar. Renderer -> main. */
   browserGo: 'browser:go',
   /** Open, switch to or close a tab from the pane's tab strip. Renderer -> main. */
@@ -294,6 +477,47 @@ export const IPC_CHANNELS = {
    * a navigation is also what settles whether there is anything to go back to.
    */
   browserPageState: 'browser:page-state',
+  /**
+   * The live iOS Simulator view (macOS). Renderer -> main: read the state, list devices, attach
+   * or detach a device, and the user's own touches from the pane, which are the user acting and
+   * so never reach the tool approval gate. See @shared/simulator.
+   */
+  simulatorGetState: 'simulator:get-state',
+  simulatorListDevices: 'simulator:list-devices',
+  simulatorAttach: 'simulator:attach',
+  simulatorDetach: 'simulator:detach',
+  simulatorInput: 'simulator:input',
+  /** main -> renderer push: the view's status changed (attached, live, failed). */
+  simulatorState: 'simulator:state',
+  /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
+  simulatorFrame: 'simulator:frame',
+  /**
+   * The 3D model pane. Main owns each conversation's open file and every write (main/chat/model3d/ModelLiveViews.ts);
+   * the renderer builds in the sandboxed b4m-model: engine and reports back. See @shared/model3d.
+   */
+  modelGetState: 'model:get-state',
+  /** Renderer -> main: the user picked a file to view (open dialog in main). */
+  modelOpenDialog: 'model:open-dialog',
+  modelClose: 'model:close',
+  modelReadAsset: 'model:read-asset',
+  modelBuildReport: 'model:build-report',
+  modelWriteGlb: 'model:write-glb',
+  modelSetParam: 'model:set-param',
+  /** Renderer -> main: save an export the user asked for (save dialog in main). */
+  modelSaveExport: 'model:save-export',
+  modelSetRecording: 'model:set-recording',
+  modelCaptureResult: 'model:capture-result',
+  /** main -> renderer push: the open model changed (opened, edited on disk, closed). */
+  modelState: 'model:state',
+  /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
+  modelCaptureRequest: 'model:capture-request',
+  /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
+  modelListVersions: 'model:list-versions',
+  modelRecordVersion: 'model:record-version',
+  modelWantsVersion: 'model:wants-version',
+  modelRestoreVersion: 'model:restore-version',
+  /** main -> renderer push: a conversation kept a new version. */
+  modelVersions: 'model:versions',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -336,6 +560,9 @@ export const IPC_CHANNELS = {
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
   prSetOption: 'pr:set-option',
+  /** The Settings auto-fix attempt budget; main validates it, see @shared/autoFixSetting. */
+  prGetAutoFixAttempts: 'pr:get-auto-fix-attempts',
+  prSetAutoFixAttempts: 'pr:set-auto-fix-attempts',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
   /** The sidebar's PR icons. The read is of stored state only and never reaches GitHub. */
@@ -364,12 +591,43 @@ export const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   /** main -> renderer push; one conversation's tab list changed. */
   terminalsChanged: 'terminal:changed',
+  /** A session needs the user while the app is in the background; see @shared/attention. */
+  attentionNotify: 'attention:notify',
+  handoffOpenServerSessions: 'handoff:open-server-sessions',
+  attentionClaim: 'attention:claim',
+  attentionSetBadge: 'attention:set-badge',
+  /** main -> renderer push: the user clicked a notice. */
+  attentionOpen: 'attention:open',
+  /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
+  attentionTakePendingOpen: 'attention:take-pending-open',
+  /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
+  attentionGetNotifyScope: 'attention:get-notify-scope',
+  attentionSetNotifyScope: 'attention:set-notify-scope',
+  attentionNotifyScope: 'attention:notify-scope',
+  /** The menu-bar toggle, for Settings; see @shared/watch. */
+  watchGetPreferences: 'watch:get-preferences',
+  watchSetPreferences: 'watch:set-preferences',
+  /** main -> app windows push: a preference changed (e.g. hidden from the menu-bar item itself). */
+  watchPreferences: 'watch:preferences',
+  /** The mini Tavern window's own surface (preload/mini.ts); refused from any other window. */
+  watchGetSnapshot: 'watch:get-snapshot',
+  /** main -> mini Tavern push of the latest WatchSnapshot. */
+  watchSnapshot: 'watch:snapshot',
+  watchRespond: 'watch:respond',
+  watchFocusAgent: 'watch:focus-agent',
+  watchCloseMini: 'watch:close-mini',
+  /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
+  skinsList: 'skins:list',
+  /** main -> renderer push after the mods folder changed on disk. */
+  skinsChanged: 'skins:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export interface AppInfo {
   appVersion: string;
+  /** How an unpackaged run's `appVersion` was derived; absent for a packaged build. */
+  versionBasis?: string;
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
@@ -432,6 +690,8 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** When an agent tool last took this tab (ms since epoch); absent or 0 if it never has. */
+  agentUsedAt?: number;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
@@ -445,6 +705,15 @@ export interface BrowserFreezeFrameRequest {
 export interface BrowserNavigateRequest {
   sessionId: string;
   url: string;
+}
+
+/** An HTML artifact to show full-size in `sessionId`'s browser. */
+export interface BrowserOpenArtifactRequest {
+  sessionId: string;
+  title: string;
+  content: string;
+  /** Names the artifact, so a tab still showing it is switched to rather than opened again. */
+  artifactKey?: string;
 }
 
 /** The history controls, which take no url. */
@@ -493,8 +762,30 @@ export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessi
 export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
+/**
+ * Everything the mini Tavern window can reach, exposed as `window.b4mMini` by preload/mini.ts. Kept
+ * this narrow on purpose: the window floats over other apps all day, so it gets the watch snapshot
+ * and three actions, not the chat, auth or filesystem surface of `window.b4m`.
+ */
+export interface MiniTavernApi {
+  getSnapshot(): Promise<WatchSnapshot>;
+  onSnapshot(listener: (snapshot: WatchSnapshot) => void): () => void;
+  /** Approve once or deny a quick request; false when it was not answerable from here. */
+  respond(approvalId: string, decision: WatchDecision): Promise<boolean>;
+  /** Raise the main window on this agent, the way clicking its notification does. */
+  focusAgent(sessionId: string, rootId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
+  studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
+  skins: {
+    list(): Promise<SkinSummary[]>;
+    onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
+  setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
@@ -508,6 +799,41 @@ export interface DesktopApi {
      */
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
+  };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
+  models: {
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
+    search(request: HubSearchRequest): Promise<HubSearchResult>;
+    getDetail(repo: string, serverId?: string): Promise<HubDetailResult>;
+    listCurated(serverId?: string): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult>;
+    /** Checks for a newer curated list now. */
+    checkCuratedList(): Promise<void>;
+    getCuratedSettings(): Promise<CuratedListSettings>;
+    setCuratedEnabled(enabled: boolean): Promise<CuratedListSettings>;
+    onCuratedChanged(listener: () => void): () => void;
+    listPulls(): Promise<ModelPull[]>;
+    pull(request: ModelPullRequest): Promise<ModelPullResult>;
+    cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
+    dismissPull(key: string): Promise<void>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** The folder a pull would land in, and its free space on this computer. */
+    getStoreLocation(serverId?: string): Promise<ModelStoreLocation>;
+    /** Whether a `local:` chat model is loaded on its Ollama server now. */
+    getLoadedState(modelId: string): Promise<LoadedModelState>;
+    /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
+    getHfToken(): Promise<HfTokenStatus>;
+    /** Saves the token once Hugging Face accepts it. */
+    setHfToken(token: string): Promise<HfTokenResult>;
+    clearHfToken(): Promise<HfTokenResult>;
+    onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
+    onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;
@@ -536,6 +862,11 @@ export interface DesktopApi {
      * round-trips taken at two different instants.
      */
     getProfile(): Promise<AccountProfile>;
+    getBilling(): Promise<AccountBilling>;
+    subscribePlan(priceId: string): Promise<SubscribePlanResult>;
+    /** Resolves when the payment window closes, not as proof of payment. */
+    purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
+    sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {
     /**
@@ -560,13 +891,28 @@ export interface DesktopApi {
   chat: {
     /**
      * Models this deployment offers the agent, from the server's own catalog. `force` skips
-     * the main-process cache, which is what a "try again" affordance needs.
+     * the main-process cache, which is what a "try again" affordance needs; `'local'` re-reads
+     * device and server models but keeps the cached hosted list.
      */
-    listModels(force?: boolean): Promise<ChatModelCatalog>;
+    listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
+    /**
+     * A model server's listing finished, or a model's effort levels arrived, after the list was read; read it again
+     * without forcing.
+     */
+    onModelsChanged(listener: () => void): () => void;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
+    /** How local models size their context window; see @shared/localContextSetting. */
+    getLocalContext(): Promise<LocalContextSetting>;
+    setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
+    /** Which local models each fixed size may not fit, by the memory estimate. */
+    getLocalContextFit(): Promise<LocalContextFit>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
+    settleLocalModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null>;
     setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
     searchHistory(query: string): Promise<LocalHistoryResult[]>;
     clearHistory(): Promise<LocalHistoryState>;
@@ -574,8 +920,31 @@ export interface DesktopApi {
     onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
+    /** How long this conversation's prompt cache lives. Null when the session is gone. */
+    setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
+    setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
+    /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
+    getModelSettings(modelId: string): Promise<ModelSettings | null>;
+    /** Values the settings file holds for this model that this version keeps but does not use. Null for an id that is not one. */
+    getUnsupportedModelSettings(modelId: string): Promise<UnsupportedModelSetting[] | null>;
+    /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
+    setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
+    /**
+     * The load-time options a device-side model takes, its context sizes rated for `draftTokens` (undefined: the
+     * model's own draft count). Null for an id that is not one.
+     */
+    getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    getRolePolicy(): Promise<RolePolicy>;
+    setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
+    taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
+    /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
+    listTaskDecisions(): Promise<PendingTaskDecision[]>;
+    answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void>;
+    onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -583,9 +952,14 @@ export interface DesktopApi {
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
+    exportSession(sessionId: string): Promise<ChatSessionExportResult>;
+    /** Export this account's local conversations, their files, and project memories into a selected folder. */
+    exportLocalData(): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    defaultsForNewSession(): Promise<NewSessionDefaults>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
@@ -616,11 +990,21 @@ export interface DesktopApi {
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string): Promise<ChatSession | null>;
+    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
+    listWorktrees(directory: string): Promise<AppWorktree[]>;
+    /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
+    removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
+    /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
+    revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
+    loopCommand(sessionId: string, args: string): Promise<LoopResult>;
+    getLoop(sessionId: string): Promise<LoopState | null>;
+    onLoopChanged(listener: (event: { sessionId: string; state: LoopState | null }) => void): () => void;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
     /**
@@ -653,6 +1037,8 @@ export interface DesktopApi {
      * `model` is the Settings pick; null or omitted is automatic.
      */
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
+    /** The settled spend of the orchestration rooted at this session, for its job summary. */
+    getRunSpend(rootSessionId: string): Promise<RunSpend>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -670,6 +1056,13 @@ export interface DesktopApi {
      * message. Unlike `stopReply`, the queue is NOT handed back.
      */
     sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
+    /**
+     * Messages from other conversations waiting for this one's user to let them in. Read on
+     * open; changes arrive as the 'held-relays' stream event carrying the whole list.
+     */
+    getHeldRelays(sessionId: string): Promise<ChatHeldRelay[]>;
+    /** Let a held message in (it runs like any relay) or decline it (its sender is told). */
+    resolveHeldRelay(sessionId: string, heldId: string, deliver: boolean): Promise<void>;
     /** Subscribe to queue changes; returns the unsubscribe. */
     onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /**
@@ -679,6 +1072,11 @@ export interface DesktopApi {
      */
     startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult>;
     dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult>;
+    /**
+     * Start a child conversation of `sessionId` about a passage the user highlighted, opening with
+     * that passage and an excerpt of the parent. Runs no turn: the user asks there.
+     */
+    startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */
@@ -690,10 +1088,25 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void>;
+    discardDraftAttachments(draftId: string): Promise<void>;
     /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
     attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
+    /**
+     * For each path a reply names, its absolute path when it exists inside this session's shared
+     * folders, else null. Same order as `paths`; an over-long or malformed list answers empty.
+     */
+    checkFilePaths(sessionId: string, paths: string[]): Promise<(string | null)[]>;
+    /** Open a path a reply names in its default app, or reveal it when it would run. Never rejects. */
+    openFilePath(sessionId: string, path: string): Promise<ChatFilePathOpenResult>;
+    /** Read a path a reply names for the Files pane, under the same checks as opening it. Never rejects. */
+    readFilePath(sessionId: string, path: string): Promise<ChatFileView>;
+    /** Copy or reveal a path a reply names, under the same checks as opening it. Never rejects. */
+    filePathAction(sessionId: string, path: string, action: ChatFilePathAction): Promise<ChatFilePathActionResult>;
+    /** Add a path a reply names to this session's draft, under the same checks as opening it. */
+    attachFilePath(sessionId: string, path: string): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -779,16 +1192,20 @@ export interface DesktopApi {
     onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
-     * session: a Chat session gets the user's own, a Code session also gets its project's once
+     * session or draft: a Chat one gets the user's own, a Code one also gets its project's once
      * that project is trusted.
      */
-    listSkills(sessionId: string): Promise<SkillsState>;
+    listSkills(scope: SkillsScope): Promise<SkillsState>;
     /**
-     * Trust (or untrust) this session's project to contribute its `.claude/skills/`. Called from
-     * the picker's prompt in response to a click, and from nowhere else - see IPC_CHANNELS.
-     * Returns the state the picker should now draw.
+     * Trust (or untrust) this session's or draft's project to contribute its `.claude/skills/`.
+     * Called from the picker's prompt in response to a click, and from nowhere else - see
+     * IPC_CHANNELS. Returns the state the picker should now draw.
      */
-    setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+    setProjectSkillsTrusted(
+      scope: SkillsScope,
+      trusted: boolean,
+      expectedProjectDirectory: string
+    ): Promise<SkillsState>;
   };
   /**
    * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
@@ -835,6 +1252,51 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
+  /**
+   * The 3D model pane's bridge to main. Each conversation has its own open model, so every call
+   * names the session it is about, and every event says which session it came from.
+   */
+  model: {
+    getState(sessionId: string): Promise<ModelViewState>;
+    /** Opens a picked .glb/.stl/.model.js; resolves to the new state, or null when cancelled. */
+    openDialog(sessionId: string): Promise<ModelViewState | null>;
+    close(sessionId: string): Promise<void>;
+    readAsset(sessionId: string): Promise<Uint8Array | null>;
+    reportBuild(sessionId: string, report: ModelBuildReport): Promise<void>;
+    writeGlb(sessionId: string, request: { generation: number; bytes: Uint8Array }): Promise<string | null>;
+    /** False when the value could not be written back to the file. */
+    setParam(sessionId: string, request: { key: string; value: number }): Promise<boolean>;
+    /** Resolves to the saved path, or null when cancelled. */
+    saveExport(sessionId: string, request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
+    /**
+     * Marks a turntable recording as running or done. While one runs the window keeps full-rate timers
+     * in the background, since the clip's frame times are wall-clock times.
+     */
+    setRecording(active: boolean): Promise<void>;
+    captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
+    onState(listener: (update: ModelStateUpdate) => void): () => void;
+    onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
+    /** Oldest first, with thumbnails. */
+    listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
+    /** Keeps the good build of `generation`; null when nothing new was kept. */
+    /** Whether this window should render a thumbnail and keep `generation` (main may already have it). */
+    wantsVersion(sessionId: string, generation: number): Promise<boolean>;
+    recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
+    /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
+    restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;
+    onVersions(listener: (update: ModelVersionsUpdate) => void): () => void;
+  };
+  /** The live iOS Simulator view; `available` is false off macOS. */
+  simulator: {
+    getState(): Promise<SimulatorViewState>;
+    listDevices(): Promise<SimulatorViewDevice[]>;
+    /** Rejects with the setup problem and its fix when the device cannot be shown. */
+    attach(udid: string): Promise<SimulatorViewState>;
+    detach(): Promise<void>;
+    input(input: SimulatorPaneInput): Promise<void>;
+    onState(listener: (state: SimulatorViewState) => void): () => void;
+    onFrame(listener: (frame: SimulatorFrame) => void): () => void;
+  };
   browser: {
     /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
@@ -845,6 +1307,8 @@ export interface DesktopApi {
     freezeFrame(request: BrowserFreezeFrameRequest): Promise<string | null>;
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
+    /** Open an HTML artifact full-size; in a new tab when the active one is showing a page. */
+    openArtifact(request: BrowserOpenArtifactRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
     tab(request: BrowserTabRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */
@@ -892,6 +1356,24 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /**
+   * Model servers on other machines, "This computer" first. A credential travels renderer -> main
+   * on probe, add and update, and never back: a view names only its kind. See @shared/modelServers.
+   */
+  modelServers: {
+    list(): Promise<ModelServerView[]>;
+    probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult>;
+    add(input: ModelServerAddInput): Promise<ModelServerMutationResult>;
+    update(id: string, input: ModelServerUpdateInput): Promise<ModelServerMutationResult>;
+    remove(id: string): Promise<ModelServerMutationResult>;
+    /** Rechecks one server, or all of them when `id` is omitted. */
+    check(id?: string): Promise<ModelServerView[]>;
+    /** This computer's hardware as probed, before entered specs; null when the probe failed. */
+    probedHardware(): Promise<MachineView | null>;
+    /** Starts, stops or restarts the server Desktop runs at a server's address on this computer. */
+    launch(id: string, action: ModelServerLaunchAction): Promise<ModelServerMutationResult>;
+    onChanged(listener: (servers: ModelServerView[]) => void): () => void;
+  };
   /** User-made sidebar sections; see @shared/sidebarSections. */
   sidebar: {
     getSections(): Promise<SidebarSectionsState>;
@@ -914,6 +1396,15 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+    /**
+     * Saves a Markdown digest of the local approval log where the user picks (see approvalSummary.ts).
+     * False when the save dialog was cancelled.
+     */
+    exportApprovalSummary(): Promise<boolean>;
+  };
+  capabilities: {
+    getState(): Promise<CapabilityLedgerState>;
+    revoke(grantId: string): Promise<CapabilityLedgerState>;
   };
   claudeImport: {
     getState(): Promise<ClaudeImportState>;
@@ -929,7 +1420,11 @@ export interface DesktopApi {
     importChatExport(): Promise<ClaudeImportResult>;
     /** Opens a folder picker in main; `clear` stops watching instead. */
     setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
-    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    setWebSettings(patch: { enabled?: boolean }): Promise<ClaudeImportState>;
+    syncWeb(): Promise<ClaudeImportState>;
+    /** Hides a sidebar sync hint for the signed-in account, for good. */
+    dismissHint(id: SyncHintId): Promise<ClaudeImportState>;
+    remove(kind: ClaudeImportKind): Promise<ClaudeRemoveResult>;
     onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
     onSessionsChanged(listener: () => void): () => void;
   };
@@ -948,6 +1443,9 @@ export interface DesktopApi {
      * only; see PrBinding.
      */
     setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
+    getAutoFixAttempts(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setAutoFixAttempts(attempts: number): Promise<number>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
@@ -983,6 +1481,37 @@ export interface DesktopApi {
      * the link was opened. Nothing about a link in a reply needs to know.
      */
     openExternal(url: string): Promise<void>;
+  };
+  /** OS notices for sessions that need the user while the app is not focused. */
+  attention: {
+    openServerSessions(): Promise<void>;
+    /**
+     * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
+     * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
+     */
+    claim(sessionIds: string[]): Promise<string[]>;
+    /** Main shows it only while no app window is focused, so the caller need not check. */
+    notify(notice: AttentionNotice): Promise<void>;
+    /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */
+    setBadgeCount(count: number): Promise<void>;
+    onOpen(listener: (event: AttentionOpenEvent) => void): () => void;
+    /**
+     * The notice clicked while every window was closed, which reopened this one; null if none. Taken
+     * once: a later call returns null. Pulled rather than pushed, since the push would land before
+     * the renderer is listening.
+     */
+    takePendingOpen(): Promise<AttentionOpenEvent | null>;
+    /** Whether plain sessions alert too, or only orchestrations and their agents. */
+    getNotifyScope(): Promise<NotifyScope>;
+    /** Resolves to the scope main now holds; an invalid value leaves it unchanged. */
+    setNotifyScope(scope: NotifyScope): Promise<NotifyScope>;
+    onNotifyScope(listener: (scope: NotifyScope) => void): () => void;
+  };
+  /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
+  watch: {
+    getPreferences(): Promise<WatchPreferences>;
+    setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
+    onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

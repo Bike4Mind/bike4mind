@@ -41,6 +41,12 @@ export interface Message {
     earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
     steered?: boolean; // User input sent mid-turn and injected into that running turn (session/steering.ts)
+    peer?: {
+      messageId: string;
+      senderId: string;
+      senderName: string;
+      replyTo?: string;
+    };
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
     subagentExecution?: {
@@ -171,6 +177,7 @@ export interface AuthTokens {
  */
 export interface ApiConfig {
   customUrl?: string; // URL for self-hosted Bike4Mind instance
+  endpointChosen?: boolean; // The user has picked a backend (first-run picker or an API flag/command)
 }
 
 /**
@@ -295,6 +302,12 @@ export interface CliConfig {
    * Each model is tried in order after the primary model exhausts its retries.
    */
   fallbackModels?: string[];
+  /** Ollama endpoint for local models, saved by `b4m models --ollama-host`; the flag and B4M_OLLAMA_HOST override it. */
+  ollamaHost?: string;
+  /** The defaultModel `b4m models use` last set; headless runs treat that model as local when it is missing. */
+  localDefaultModel?: string;
+  /** What `b4m models servers login` saved, keyed by the model server's id in Desktop's list. Never printed. */
+  modelServerCredentials?: Record<string, { secret: string }>;
 }
 
 /**
@@ -307,10 +320,14 @@ export interface CliConfig {
  * ~/.bike4mind/config.json - the excluded keys are dropped at compile time
  * (and again at runtime in save()). defaultModel/preferences stay writable
  * (that is what /model and /config edit); callers pass user-changed values, not
- * the repo-merged rest. See ConfigStore.save.
+ * the repo-merged rest. See ConfigStore.save. The sign-in and backend fields
+ * (auth/authByEnv/apiConfig) change only through the sign-in and backend mutators.
  */
 export type GlobalConfigPatch = Omit<
   Partial<CliConfig>,
+  | 'auth'
+  | 'authByEnv'
+  | 'apiConfig'
   | 'mcpServers'
   | 'trustedTools'
   | 'additionalDirectories'

@@ -1,0 +1,279 @@
+import {
+  IMAGE_JOB_PROMPT_MAX_CHARS,
+  SCENE_PRESETS,
+  SCENE_SWATCHES,
+  appliedScenePreset,
+  applyScenePreset,
+  type ImageModels,
+  type OpenAIImageQuality,
+} from '@bike4mind/common';
+import {
+  withCurrentValue,
+  type CapabilityControl,
+  type CapabilityField,
+  type CapabilityOption,
+  type ChipsField,
+  type ImageField,
+  type ReferenceCutout,
+} from '@client/app/components/Studio/capabilityFields';
+import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
+import {
+  imageAspectRatioOptions,
+  imageFieldProblems,
+  imageMaskSupport,
+  imageQualityOptions,
+  imageReferenceMax,
+  imageSizeOptions,
+  type ImageIntent,
+} from './imageModelOptions';
+import { referenceCutoutProblem } from './referenceCutouts';
+
+export type ImageFormState = { prompt: string; count: number; intent: ImageIntent };
+
+export type ImageFieldActions = {
+  update: (patch: Partial<ImageFormState>) => void;
+  updateIntent: (patch: Partial<ImageIntent>) => void;
+  pickReference: () => void;
+  pickEditSource: () => void;
+  // Opens the mask painter over the edit source.
+  drawMask: () => void;
+  // Background removal per reference (useReferenceCutouts); without these the chips offer no cutout.
+  cutoutOf?: (fileId: string) => ReferenceCutout | undefined;
+  toggleCutout?: (fileId: string, on: boolean) => void;
+};
+
+// The option value for "leave it to the model"; the intent then omits the setting.
+const MODEL_DEFAULT = '';
+const USE_MODEL_DEFAULT = 'Use the model default';
+
+const QUALITY_LABELS: Record<OpenAIImageQuality, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+  auto: 'Auto',
+  standard: 'Standard',
+  hd: 'HD',
+};
+
+const COUNT_OPTIONS: readonly CapabilityOption[] = Array.from({ length: STUDIO_IMAGE_COUNT_MAX }, (_, index) => ({
+  value: String(index + 1),
+  label: String(index + 1),
+}));
+
+const withDefault = (label: string, values: readonly string[], labelOf: (value: string) => string = value => value) => [
+  { value: MODEL_DEFAULT, label },
+  ...values.map(value => ({ value, label: labelOf(value) })),
+];
+
+/**
+ * A setting's control: shown when the model offers the setting, or when the form holds a value for it that the model
+ * does not take, so the value is marked with its reason rather than hidden or dropped.
+ */
+const shown = (offered: readonly unknown[], current: string | undefined, problem: string | undefined): boolean =>
+  offered.length > 0 || (current !== undefined && problem !== undefined);
+
+const isQuality = (model: ImageModels, value: string): value is OpenAIImageQuality =>
+  imageQualityOptions(model).some(quality => quality === value);
+
+const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFieldActions): CapabilityControl[] => {
+  const problems = imageFieldProblems(model, intent);
+  const reset = (patch: Partial<ImageIntent>) => ({
+    label: USE_MODEL_DEFAULT,
+    apply: () => actions.updateIntent(patch),
+  });
+  const aspectRatios = imageAspectRatioOptions(model, intent.mode);
+  const sizes = imageSizeOptions(model);
+  const qualities = imageQualityOptions(model);
+  const referenceMax = imageReferenceMax(model, intent.mode);
+  const fields: CapabilityControl[] = [];
+
+  if (shown(aspectRatios, intent.aspectRatio, problems.aspect)) {
+    fields.push({
+      kind: 'aspect',
+      id: 'aspect',
+      label: 'Aspect ratio',
+      value: intent.aspectRatio ?? MODEL_DEFAULT,
+      options: withCurrentValue(withDefault('Auto', aspectRatios), intent.aspectRatio ?? MODEL_DEFAULT),
+      onChange: value => actions.updateIntent({ aspectRatio: value || undefined }),
+      ...(problems.aspect && { invalidReason: problems.aspect, fix: reset({ aspectRatio: undefined }) }),
+    });
+  }
+
+  if (shown(qualities, intent.quality, problems.quality)) {
+    const current = intent.quality ?? MODEL_DEFAULT;
+    fields.push({
+      kind: 'segmented',
+      id: 'quality',
+      label: 'Quality',
+      value: current,
+      options: withCurrentValue(
+        withDefault('Default', qualities, value => (isQuality(model, value) ? QUALITY_LABELS[value] : value)),
+        current,
+        intent.quality ? QUALITY_LABELS[intent.quality] : current
+      ),
+      onChange: value => actions.updateIntent({ quality: isQuality(model, value) ? value : undefined }),
+      ...(problems.quality && { invalidReason: problems.quality, fix: reset({ quality: undefined }) }),
+    });
+  }
+
+  if (shown(sizes, intent.size, problems.size)) {
+    fields.push({
+      kind: 'select',
+      id: 'size',
+      label: 'Size',
+      value: intent.size ?? MODEL_DEFAULT,
+      options: withCurrentValue(withDefault('Default', sizes), intent.size ?? MODEL_DEFAULT),
+      onChange: value => actions.updateIntent({ size: value || undefined }),
+      ...(problems.size && { invalidReason: problems.size, fix: reset({ size: undefined }) }),
+    });
+  }
+
+  if (referenceMax > 0 || intent.references.length > 0) {
+    const kept = intent.references.slice(0, referenceMax);
+    const { cutoutOf, toggleCutout } = actions;
+    const files = intent.references.map(file => {
+      const cutout = cutoutOf?.(file.fileId);
+      return cutout ? { ...file, cutout } : file;
+    });
+    const cutoutProblem = toggleCutout ? referenceCutoutProblem(files, toggleCutout) : null;
+    fields.push({
+      kind: 'references',
+      id: 'references',
+      label: 'Reference images',
+      files,
+      max: Math.max(referenceMax, intent.references.length),
+      onAdd: actions.pickReference,
+      onRemove: fileId => {
+        toggleCutout?.(fileId, false);
+        actions.updateIntent({ references: intent.references.filter(file => file.fileId !== fileId) });
+      },
+      ...(problems.references && {
+        invalidReason: problems.references,
+        fix: {
+          label: kept.length === 0 ? 'Remove them' : `Keep the first ${kept.length}`,
+          apply: () => actions.updateIntent({ references: kept }),
+        },
+      }),
+      ...(toggleCutout && { onToggleCutout: toggleCutout }),
+      ...(!problems.references && cutoutProblem),
+    });
+  }
+
+  return fields;
+};
+
+/**
+ * The scene presets as chips. The selected chip is read from the prompt itself, so editing a preset's words away
+ * clears it; picking one adds its words to the user's own. A chip whose words would not fit in the prompt is disabled.
+ */
+const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => {
+  const promptWith = (presetId: string | null) =>
+    applyScenePreset(
+      prompt,
+      SCENE_PRESETS.find(preset => preset.id === presetId)
+    );
+  const fits = (next: string) => next.length <= IMAGE_JOB_PROMPT_MAX_CHARS;
+  const selected = appliedScenePreset(prompt)?.id ?? null;
+
+  return {
+    kind: 'chips',
+    id: 'look',
+    label: 'Look',
+    value: selected,
+    options: SCENE_PRESETS.map(preset => ({
+      value: preset.id,
+      label: preset.name,
+      swatch: SCENE_SWATCHES[preset.swatch],
+      disabled: preset.id !== selected && !fits(promptWith(preset.id)),
+    })),
+    onChange: presetId => {
+      const next = promptWith(presetId);
+      if (fits(next)) actions.update({ prompt: next });
+    },
+  };
+};
+
+const MODE_OPTIONS: readonly CapabilityOption[] = [
+  { value: 'generate', label: 'Create' },
+  { value: 'edit', label: 'Edit' },
+];
+
+const editSourceField = (intent: ImageIntent, actions: ImageFieldActions): ImageField => ({
+  kind: 'image',
+  id: 'edit-source',
+  label: 'Image to edit',
+  fileName: intent.editSource?.fileName ?? null,
+  ...(intent.editSource && { previewFileId: intent.editSource.fileId }),
+  onPick: actions.pickEditSource,
+});
+
+/**
+ * The mask, offered when the model takes one or the form holds one it does not take (marked, with a fix). A required
+ * mask (FLUX Fill) reads as the model's why-not reason until one is drawn.
+ */
+const maskField = (model: ImageModels, intent: ImageIntent, actions: ImageFieldActions): ImageField[] => {
+  const support = imageMaskSupport(model);
+  const problem = imageFieldProblems(model, intent).mask;
+  if (support === 'none' && !intent.mask) return [];
+  const clear = () => actions.updateIntent({ mask: undefined });
+  return [
+    {
+      kind: 'image',
+      id: 'mask',
+      label: support === 'required' ? 'Mask' : 'Mask (optional)',
+      fileName: intent.mask?.fileName ?? null,
+      pickLabel: intent.mask ? 'Redraw mask' : 'Draw mask',
+      onPick: actions.drawMask,
+      onClear: clear,
+      disabled: !intent.editSource,
+      hint: intent.editSource
+        ? 'Paint the area to change; the rest of the image is kept.'
+        : 'Choose the image to edit first.',
+      ...(problem && {
+        invalidReason: problem,
+        ...(support === 'none' && { fix: { label: 'Remove the mask', apply: clear } }),
+      }),
+    },
+  ];
+};
+
+/** The image Create controls for the selected model, in display order. */
+export function imageCapabilityFields(
+  model: ImageModels,
+  form: ImageFormState,
+  actions: ImageFieldActions
+): CapabilityField[] {
+  const editing = form.intent.mode === 'edit';
+  return [
+    {
+      kind: 'segmented',
+      id: 'mode',
+      label: 'Mode',
+      value: form.intent.mode,
+      options: MODE_OPTIONS,
+      onChange: value => actions.updateIntent({ mode: value === 'edit' ? 'edit' : 'generate' }),
+    },
+    ...(editing ? [editSourceField(form.intent, actions)] : []),
+    {
+      kind: 'text',
+      id: 'prompt',
+      label: editing ? 'What to change' : 'Prompt',
+      value: form.prompt,
+      placeholder: editing ? 'Describe the change, e.g. "make the sky a sunset"' : 'Describe the image you want',
+      maxLength: IMAGE_JOB_PROMPT_MAX_CHARS,
+      onChange: prompt => actions.update({ prompt }),
+    },
+    ...(editing ? maskField(model, form.intent, actions) : [lookField(form.prompt, actions)]),
+    ...settingFields(model, form.intent, actions),
+    {
+      kind: 'segmented',
+      id: 'count',
+      label: 'Images',
+      value: String(form.count),
+      options: COUNT_OPTIONS,
+      onChange: value => actions.update({ count: Number(value) }),
+    },
+  ];
+}

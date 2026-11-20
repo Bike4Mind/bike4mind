@@ -11,7 +11,21 @@
  */
 
 import { z } from 'zod';
+import {
+  CONFIDENCE_GATE_MODES,
+  LOW_CONFIDENCE_COMPLETION_MODES,
+  type ConfidenceGateMode,
+  type LowConfidenceCompletionMode,
+} from '@bike4mind/common';
+
 import type { ToolbeltProfile } from './toolbelts';
+
+export {
+  CONFIDENCE_GATE_MODES,
+  LOW_CONFIDENCE_COMPLETION_MODES,
+  type ConfidenceGateMode,
+  type LowConfidenceCompletionMode,
+};
 
 /**
  * Subset of the orchestration fields the executor consumes when deciding the top-level tool
@@ -62,6 +76,25 @@ export interface ResolvedOrchestrationProfile {
    * to run unattended; maxIterations remains the runaway backstop.
    */
   confidenceGateThreshold?: number;
+  /**
+   * What the executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => the executor's global default (`annotate`).
+   */
+  lowConfidenceCompletion?: LowConfidenceCompletionMode;
+  /**
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies lowConfidenceCompletion (annotate or block), `both` enables both,
+   * and `off` enables neither.
+   * Omitted => the executor's global default (`both`).
+   */
+  confidenceGateMode?: ConfidenceGateMode;
+  /**
+   * Whether the executor consumes the agent's confidence scores. The agent still scores its
+   * tool calls; when false the executor drops those scores (and scripted overrides), so no
+   * streak is recorded and neither gate site fires, like `off`. Omitted => true.
+   */
+  confidenceGateSelfReport?: boolean;
 }
 
 export interface AgentExtensionLogger {
@@ -182,6 +215,9 @@ const orchestrationProfileSchema = z.object({
   toolsetIsExclusive: z.boolean().optional(),
   systemPrompt: z.string().optional(),
   confidenceGateThreshold: z.number().min(0).max(1).optional(),
+  lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
+  confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).optional(),
+  confidenceGateSelfReport: z.boolean().optional(),
 });
 
 function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {

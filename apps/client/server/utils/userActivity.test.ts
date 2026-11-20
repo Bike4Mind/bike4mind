@@ -24,6 +24,10 @@ const queryReturning = (rows: unknown[]) => {
   return query;
 };
 
+vi.mock('@server/utils/ledgerWriteOffs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/ledgerWriteOffs')>()),
+  loadLedgerWriteOffs: async () => ({ byTransactionId: new Map(), all: [] }),
+}));
 vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: { list: (...args: unknown[]) => mocks.adminList(...args) },
   UserAuthAuditLogModel: { find: (...args: unknown[]) => mocks.authFind(...args) },

@@ -4,9 +4,12 @@ import type {
   IDataLakeDocument,
   ILakeAccessEventDocument,
   LakeAccessSurface,
+  LakeAccessHistoryEntry,
+  LakeAccessView,
 } from '@bike4mind/common';
 import {
   aggregateAccessHistory,
+  aggregateLakeAccessHistory,
   aggregateCandidateCapPressure,
   aggregateSupersessionPressure,
   assembleLakeAccessView,
@@ -79,6 +82,42 @@ const event = (over: Partial<ILakeAccessEventDocument>): ILakeAccessEventDocumen
   }) as ILakeAccessEventDocument;
 
 describe('aggregateAccessHistory', () => {
+  it('preserves the legacy one-argument history contract without fabricating an uncomputed metric', () => {
+    const legacy: LakeAccessHistoryEntry = {
+      principalKind: 'user',
+      principalId: 'u1',
+      onBehalfOfUserId: undefined,
+      readCount: 1,
+      noResultCount: 0,
+      lastAccessedAt: NOW,
+      firstAccessedAt: NOW,
+      surfaces: ['data-lake-semantic-search'],
+    };
+    expect(aggregateAccessHistory([event({ adminBypassLakeIds: ['lake1'] })])).toStrictEqual([legacy]);
+    const legacyView: LakeAccessView = {
+      lakeId: 'lake1',
+      lakeName: 'Lake',
+      grants: [],
+      channels: [],
+      history: [legacy],
+      historyTruncated: false,
+      candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 },
+      supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
+      generatedAt: NOW,
+    };
+    const legacyAssembler: (...args: Parameters<typeof assembleLakeAccessView>) => Promise<LakeAccessView> =
+      assembleLakeAccessView;
+    expect(legacyView.history).toStrictEqual([legacy]);
+    expect(legacyAssembler).toBe(assembleLakeAccessView);
+  });
+
+  it('requires a lake scope and counts the same event differently for different lakes', () => {
+    const events = [event({ adminBypassLakeIds: ['lake1'] })];
+    expect(aggregateLakeAccessHistory(events, 'lake1')[0].adminBypassReadCount).toBe(1);
+    expect(aggregateLakeAccessHistory(events, 'lake2')[0].adminBypassReadCount).toBe(0);
+    expect(() => aggregateLakeAccessHistory(events, '')).toThrow('A lake id is required');
+  });
+
   it('collapses to one row per principal with counts, first/last, and distinct sorted surfaces', () => {
     const t0 = new Date('2026-08-10T00:00:00Z');
     const t1 = new Date('2026-08-11T00:00:00Z');
@@ -86,12 +125,15 @@ describe('aggregateAccessHistory', () => {
     // Insertion order is deliberately unsorted AND ends on the MIDDLE timestamp (t1), and the
     // surfaces are inserted in non-alphabetical order, so a dropped min/max guard or a dropped
     // surfaces .sort() changes the result rather than passing by fixture coincidence.
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'u1', createdAt: t0, surface: 'forced-retrieval' }),
-      event({ principalId: 'u1', createdAt: t2, surface: 'data-lake-semantic-search' }),
-      event({ principalId: 'u1', createdAt: t1, surface: 'chat-kb-search' }),
-      event({ principalId: 'u2', createdAt: t1, surface: 'forced-retrieval' }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalId: 'u1', createdAt: t0, surface: 'forced-retrieval' }),
+        event({ principalId: 'u1', createdAt: t2, surface: 'data-lake-semantic-search' }),
+        event({ principalId: 'u1', createdAt: t1, surface: 'chat-kb-search' }),
+        event({ principalId: 'u2', createdAt: t1, surface: 'forced-retrieval' }),
+      ],
+      'lake1'
+    );
     expect(rows).toHaveLength(2);
     const u1 = rows.find(r => r.principalId === 'u1')!;
     expect(u1.readCount).toBe(3);
@@ -101,36 +143,61 @@ describe('aggregateAccessHistory', () => {
   });
 
   it('groups by ACTING principal, not the on-behalf human, but retains the human', () => {
-    const rows = aggregateAccessHistory([
-      event({ principalKind: 'agent', principalId: 'agentX', onBehalfOfUserId: 'human1' }),
-      event({ principalKind: 'agent', principalId: 'agentX' }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalKind: 'agent', principalId: 'agentX', onBehalfOfUserId: 'human1' }),
+        event({ principalKind: 'agent', principalId: 'agentX' }),
+      ],
+      'lake1'
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0].principalKind).toBe('agent');
     expect(rows[0].onBehalfOfUserId).toBe('human1');
   });
 
   it('sorts most-recently-active first', () => {
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'old', createdAt: new Date('2026-01-01T00:00:00Z') }),
-      event({ principalId: 'new', createdAt: new Date('2026-08-01T00:00:00Z') }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalId: 'old', createdAt: new Date('2026-01-01T00:00:00Z') }),
+        event({ principalId: 'new', createdAt: new Date('2026-08-01T00:00:00Z') }),
+      ],
+      'lake1'
+    );
     expect(rows.map(r => r.principalId)).toEqual(['new', 'old']);
   });
 
+  it('counts per principal only the events marked admin-bypass for THIS lake', () => {
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalId: 'admin1', adminBypassLakeIds: ['lake1'] }),
+        event({ principalId: 'admin1', adminBypassLakeIds: ['lake1', 'lake2'] }),
+        event({ principalId: 'admin1', adminBypassLakeIds: ['lake2'] }),
+        event({ principalId: 'admin1' }),
+        event({ principalId: 'u2' }),
+      ],
+      'lake1'
+    );
+    expect(rows.find(r => r.principalId === 'admin1')!.adminBypassReadCount).toBe(2);
+    expect(rows.find(r => r.principalId === 'admin1')!.readCount).toBe(4);
+    expect(rows.find(r => r.principalId === 'u2')!.adminBypassReadCount).toBe(0);
+  });
+
   it('empty input yields no rows', () => {
-    expect(aggregateAccessHistory([])).toEqual([]);
+    expect(aggregateLakeAccessHistory([], 'lake1')).toEqual([]);
   });
 
   // The zero row (#2604): forced retrieval records a turn that searched the lake and had nothing
   // clear the similarity floor. It is a search, not a read, and the whole point of splitting the
   // counters is that it must not report content leaving the lake.
   it('counts a zero row toward noResultCount, never readCount', () => {
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'u1', surface: 'forced-retrieval' }),
-      event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
-      event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalId: 'u1', surface: 'forced-retrieval' }),
+        event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
+        event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
+      ],
+      'lake1'
+    );
     expect(rows[0].readCount).toBe(1);
     expect(rows[0].noResultCount).toBe(2);
   });
@@ -138,9 +205,10 @@ describe('aggregateAccessHistory', () => {
   // The row shape a lake owner most needs to see: someone queried this lake repeatedly and it never
   // answered. A principal whose only rows are zero rows must still appear, at readCount 0.
   it('keeps a principal whose every search came back empty, at readCount 0', () => {
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'starved', surface: 'forced-retrieval', servedNothing: true }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [event({ principalId: 'starved', surface: 'forced-retrieval', servedNothing: true })],
+      'lake1'
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ principalId: 'starved', readCount: 0, noResultCount: 1 });
   });
@@ -153,10 +221,13 @@ describe('aggregateAccessHistory', () => {
   it('lets a zero row move the activity window and the surfaces set', () => {
     const t0 = new Date('2026-08-10T00:00:00Z');
     const t1 = new Date('2026-08-12T00:00:00Z');
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'u1', surface: 'data-lake-semantic-search', createdAt: t0 }),
-      event({ principalId: 'u1', surface: 'forced-retrieval', createdAt: t1, servedNothing: true }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [
+        event({ principalId: 'u1', surface: 'data-lake-semantic-search', createdAt: t0 }),
+        event({ principalId: 'u1', surface: 'forced-retrieval', createdAt: t1, servedNothing: true }),
+      ],
+      'lake1'
+    );
     expect(rows[0].lastAccessedAt).toEqual(t1);
     expect(rows[0].firstAccessedAt).toEqual(t0);
     expect(rows[0].surfaces).toEqual(['data-lake-semantic-search', 'forced-retrieval']);
@@ -169,9 +240,10 @@ describe('aggregateAccessHistory', () => {
    * have misread. Every event in this file's fixture has that shape, which is the point.
    */
   it('does not mistake a content-less browse row for a zero row', () => {
-    const rows = aggregateAccessHistory([
-      event({ principalId: 'u1', surface: 'data-lake-public-browse', returnedChunkCount: 0, returnedFileCount: 0 }),
-    ]);
+    const rows = aggregateLakeAccessHistory(
+      [event({ principalId: 'u1', surface: 'data-lake-public-browse', returnedChunkCount: 0, returnedFileCount: 0 })],
+      'lake1'
+    );
     expect(rows[0].readCount).toBe(1);
     expect(rows[0].noResultCount).toBe(0);
   });
@@ -470,6 +542,12 @@ describe('assembleLakeAccessView', () => {
     expect(view.history[0]).toMatchObject({ principalName: 'Alice', readCount: 2 });
     expect(view.historyTruncated).toBe(true);
     expect(view.windowStartsAt).toEqual(middle);
+  });
+
+  it('counts an admin-bypass event in the assembled history entry', async () => {
+    const { adapters } = makeAdapters({ events: [event({ adminBypassLakeIds: ['lake1'] })] });
+    const view = await assembleLakeAccessView(lakeDoc(), adapters);
+    expect(view.history[0].adminBypassReadCount).toBe(1);
   });
 
   it('projects candidate-cap pressure over the same sliced window as history, from one events read', async () => {

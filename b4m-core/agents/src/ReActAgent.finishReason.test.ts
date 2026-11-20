@@ -176,3 +176,52 @@ describe('ReActAgent finishReason capture (#293)', () => {
     expect(resumed.toCheckpoint().finishReason).toBe('end_turn');
   });
 });
+
+describe('ReActAgent on a declined turn', () => {
+  // A refusal settled with no answer and no tool calls: the loop must not re-send (and re-bill) it.
+  const declinedFrames = (stopReason: string): Array<[(string | null)[], CompletionInfo?]> => [
+    [[''], { inputTokens: 10, outputTokens: 0, toolsUsed: [], stopReason }],
+  ];
+
+  it.each(['refusal', 'content_filter'])('run() ends after one call on a %s turn', async stopReason => {
+    const llm = createFramedLlm(declinedFrames(stopReason));
+    const complete = vi.spyOn(llm, 'complete');
+    const agent = new ReActAgent(createContext(llm, { maxIterations: 10 }));
+
+    const result = await agent.run('a request the classifier declines');
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][2]).toMatchObject({ settleRefusal: true });
+    expect(result.finalAnswer).toBe('The model declined this request');
+    expect(result.completionInfo.iterations).toBe(1);
+    expect(result.completionInfo.reachedMaxIterations).toBe(false);
+    expect(result.completionInfo.finishReason).toBe(stopReason);
+  });
+
+  it('runIteration() completes on a refusal turn with the decline as its final answer', async () => {
+    const llm = createFramedLlm(declinedFrames('refusal'));
+    const complete = vi.spyOn(llm, 'complete');
+    const agent = new ReActAgent(createContext(llm, { maxIterations: 10 }));
+
+    const result = await agent.runIteration('a request the classifier declines', { maxHistoryIterations: 0 });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][2]).toMatchObject({ settleRefusal: true });
+    expect(result.isComplete).toBe(true);
+    expect(result.reachedMaxIterations).toBe(false);
+    expect(result.step).toMatchObject({ type: 'final_answer', content: 'The model declined this request' });
+  });
+
+  it('keeps text streamed before the refusal as the final answer, as any no-tool turn would', async () => {
+    const llm = createFramedLlm([[['Here is the first part'], { toolsUsed: [], stopReason: 'refusal' }]]);
+    const complete = vi.spyOn(llm, 'complete');
+    const drainFeedback = vi.fn(async () => 'more please');
+    const agent = new ReActAgent(createContext(llm, { maxIterations: 10 }));
+
+    const result = await agent.run('a request the classifier declines midway', { drainFeedback });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(drainFeedback).not.toHaveBeenCalled();
+    expect(result.finalAnswer).toBe('Here is the first part');
+  });
+});

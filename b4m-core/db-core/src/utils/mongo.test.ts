@@ -9,6 +9,7 @@ import {
   mongoExportedRecordConverter,
   isTransientTransactionError,
   isConnectionLostError,
+  isMongoNetworkError,
   withTransaction,
   softDeletePlugin,
 } from './mongo';
@@ -191,6 +192,24 @@ describe('MongoDB Utility Functions', () => {
       expect(isConnectionLostError({ code: 11000, message: 'Duplicate key error' })).toBe(false);
       expect(isConnectionLostError(new ChunkClaimLostError('ff1'))).toBe(false);
       expect(isConnectionLostError(null)).toBe(false);
+    });
+  });
+
+  describe('isMongoNetworkError', () => {
+    it('matches socket-level driver errors by name', () => {
+      for (const name of ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoPoolClearedError']) {
+        expect(isMongoNetworkError(Object.assign(new Error('x'), { name }))).toBe(true);
+      }
+    });
+
+    it('does not match server selection, which has already waited its full timeout', () => {
+      expect(isMongoNetworkError(Object.assign(new Error('x'), { name: 'MongoServerSelectionError' }))).toBe(false);
+    });
+
+    it('does not match server-side or non-Mongo errors', () => {
+      expect(isMongoNetworkError(Object.assign(new Error('x'), { name: 'MongoServerError', code: 50 }))).toBe(false);
+      expect(isMongoNetworkError(new Error('boom'))).toBe(false);
+      expect(isMongoNetworkError(null)).toBe(false);
     });
   });
 

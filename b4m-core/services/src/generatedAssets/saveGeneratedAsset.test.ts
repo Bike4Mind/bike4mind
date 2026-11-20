@@ -170,6 +170,13 @@ describe('saveGeneratedAsset', () => {
     expect(generation.promptTruncated).toBe(false);
   });
 
+  it('keeps the flag of a re-saved prompt that was already cut', async () => {
+    const generation = { ...music, prompt: 'x'.repeat(CAP), promptTruncated: true };
+    await saveGeneratedAsset(params({ generation }), deps);
+
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata.generation.promptTruncated).toBe(true);
+  });
+
   it('treats a prompt of exactly the cap as kept whole', async () => {
     await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) } }), deps);
 
@@ -201,6 +208,56 @@ describe('saveGeneratedAsset', () => {
       sessionId: 's1',
       generatedCopyKey: 'abc.mp3',
       generation: { ...music, promptTruncated: false },
+    });
+  });
+
+  it('records the chat image key without the delete-cascade copy key', async () => {
+    await saveGeneratedAsset(params({ sessionId: 's1', generatedOutputKey: 'abc.png' }), deps);
+
+    const { sourceMetadata } = createFabFile.mock.calls[0][2].provenance;
+    expect(sourceMetadata.generatedOutputKey).toBe('abc.png');
+    expect(sourceMetadata).not.toHaveProperty('generatedCopyKey');
+  });
+
+  it('stamps retention ownership without overriding storage ownership', async () => {
+    await saveGeneratedAsset(params(), { ...deps, retentionOrganizationId: 'team-1' });
+    const adapters = createFabFile.mock.calls[0][2];
+    expect(adapters.provenance.sourceMetadata.retentionOrganizationId).toBe('team-1');
+    expect(adapters).not.toHaveProperty('ownerOrganizationId');
+  });
+
+  it("keeps the caller's file name over the generated one", async () => {
+    await saveGeneratedAsset(params({ fileName: 'my-song.mp3' }), deps);
+
+    expect(createFabFile.mock.calls[0][1].fileName).toBe('my-song.mp3');
+  });
+
+  // Parity (Library is Files): every generator's output lands as a TOOL_GENERATED FabFile carrying its request
+  // and lineage. Each producer's own test pins that it hands those fields over.
+  describe.each([
+    ['music', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['speech', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['sound_effect', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['video', 'video/mp4', KnowledgeType.VIDEO],
+    ['image', 'image/png', KnowledgeType.FILE],
+  ] as const)('%s', (generator, contentType, type) => {
+    it('lands in Files with the generation request and lineage', async () => {
+      const request = { model: 'm1', prompt: 'p', seed: 7 };
+      const derivedFrom = [{ fileId: 'b'.repeat(24), role: 'reference' as const }];
+
+      const result = await saveGeneratedAsset(
+        params({ contentType, generation: { generator, provider: 'p', prompt: 'p', request }, derivedFrom }),
+        deps
+      );
+
+      expect(result.saved).toBe(true);
+      const [, input, adapters] = createFabFile.mock.calls[0];
+      expect(input.type).toBe(type);
+      expect(adapters.provenance).toMatchObject({
+        sourceType: FabFileSourceType.TOOL_GENERATED,
+        sourceMetadata: { generation: { generator, request } },
+        derivedFrom,
+      });
     });
   });
 
@@ -236,6 +293,28 @@ describe('saveGeneratedAsset', () => {
     expect(result).toEqual({ saved: true, fileId: 'f0', s3Key: 'generated-video/old.mp4', fileName: 'video.mp4' });
     expect(findOne).toHaveBeenCalledWith({ userId: 'u1', deletedAt: null, tags: { $elemMatch: { name: 'job:j1' } } });
     expect(createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('signs a fresh URL on a job dedupe hit even when the row has no stored fileUrl', async () => {
+    findOne.mockResolvedValue({
+      id: 'f0',
+      fileName: 'video.mp4',
+      filePath: 'generated-video/old.mp4',
+      moderationStatus: 'clean',
+    });
+    vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.mp4');
+    const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
+
+    const result = await saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps);
+
+    expect(result).toEqual({
+      saved: true,
+      fileId: 'f0',
+      s3Key: 'generated-video/old.mp4',
+      fileName: 'video.mp4',
+      fileUrl: 'https://fresh.example.invalid/old.mp4',
+    });
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-video/old.mp4', 3600, 'get');
   });
 
   it('rejects when the job dedup lookup fails, so the store step retries instead of falling back', async () => {
@@ -288,13 +367,17 @@ describe('saveGeneratedAsset', () => {
       })
     );
 
-    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason });
+    const result = await saveGeneratedAsset(params(), deps);
+
+    expect(result).toMatchObject({ saved: false, reason });
+    // Handed back intact, so a caller that must fail rethrows the 400 with its byte counts.
+    expect(result).toHaveProperty('cause', expect.any(StorageLimitError));
   });
 
   it('maps an unrelated failure, even one that quotes the old message, to error', async () => {
     createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
 
-    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason: 'error' });
+    await expect(saveGeneratedAsset(params(), deps)).resolves.toMatchObject({ saved: false, reason: 'error' });
   });
 
   it('reports a created file without a storage path as an error', async () => {

@@ -26,6 +26,8 @@ import type {
 } from '@bike4mind/common';
 
 import { isObjectIdOrHexString } from 'mongoose';
+import { decodeMirrorCursor, encodeMirrorCursor, sealMirrorEntries } from './mirror';
+import type { MirrorPage } from './mirror';
 import { usableSessionIds } from '../utils/objectIds';
 
 /** Matches a bare "2026-01-15", as opposed to a full ISO datetime. */
@@ -256,7 +258,59 @@ export class NotebookExportService {
     }
   }
 
-  private async getSessionsToExport(userId: string, options: NotebookExportOptions) {
+  /**
+   * Builds the user's notebooks one at a time without storing anything, so a caller that writes
+   * them elsewhere (the account data export) never holds the whole set in memory. Yields nothing
+   * when the user has no notebooks, rather than throwing NO_NOTEBOOKS.
+   */
+  async *buildNotebooks(userId: string, options: NotebookExportOptions): AsyncGenerator<ExportedNotebook> {
+    const sessions = await this.getSessionsToExport(userId, options);
+    for (const session of sessions) {
+      yield await this.exportSession(session, options, userId);
+    }
+  }
+
+  /** Id and name of every notebook `buildNotebooks` would visit, without building any of them. */
+  async listNotebooks(userId: string, options: NotebookExportOptions): Promise<{ id: string; name: string }[]> {
+    const sessions = await this.getSessionsToExport(userId, options, { name: 1 });
+    return sessions.map(session => ({ id: session.id, name: session.name }));
+  }
+
+  /**
+   * One page of the mirror feed: notebooks changed after `cursorToken`, ordered by (lastUpdated, id).
+   * Fetches one extra row to learn whether more remain. The final page also lists every live id so
+   * the client can prune deletions.
+   */
+  async getMirrorPage(
+    userId: string,
+    options: NotebookExportOptions,
+    cursorToken: string | undefined,
+    limit: number
+  ): Promise<MirrorPage> {
+    const cursor = decodeMirrorCursor(cursorToken);
+    const after = new Date(cursor.at);
+    const query: ExportQuery = {
+      userId,
+      ...(cursorToken
+        ? { $or: [{ lastUpdated: { $gt: after } }, { lastUpdated: after, _id: { $gt: cursor.id } }] }
+        : {}),
+    };
+    const rows = await this.adapters.sessionRepository.find(query, {
+      sort: { lastUpdated: 1, _id: 1 },
+      limit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const notebooks: ExportedNotebook[] = [];
+    for (const session of rows.slice(0, limit)) {
+      notebooks.push(await this.exportSession(session, options, userId));
+    }
+    const { entries, next } = sealMirrorEntries(cursor, notebooks);
+    const page: MirrorPage = { entries, cursor: encodeMirrorCursor(next), hasMore };
+    if (!hasMore) page.liveIds = (await this.listNotebooks(userId, {} as NotebookExportOptions)).map(n => n.id);
+    return page;
+  }
+
+  private async getSessionsToExport(userId: string, options: NotebookExportOptions, projection?: Record<string, 1>) {
     const query: SessionQuery = { userId };
 
     // Filter by specific notebook IDs
@@ -290,7 +344,9 @@ export class NotebookExportService {
       }
     }
 
-    return await this.adapters.sessionRepository.find(query);
+    return projection
+      ? await this.adapters.sessionRepository.find(query, projection as ExportReadOptions)
+      : await this.adapters.sessionRepository.find(query);
   }
 
   private async exportSession(
@@ -444,7 +500,7 @@ export class NotebookExportService {
             fileId: file.id,
             moderationStatus: file.moderationStatus,
           });
-        } else if ((exportedFile.size || 0) <= options.maxFileSize) {
+        } else if (options.maxFileSize > 0 && (exportedFile.size || 0) <= options.maxFileSize) {
           try {
             const storagePath = file.filePath;
             if (storagePath) {
@@ -454,17 +510,15 @@ export class NotebookExportService {
               if (content !== null) {
                 exportedFile.content = content.toString('base64');
               } else {
-                exportedFile.contentUrl = file.fileUrl ?? storagePath; // Fallback to URL or path reference
+                exportedFile.contentUrl = storagePath; // Fallback to path reference
               }
-            } else {
-              exportedFile.contentUrl = file.fileUrl; // No storage path; use available URL
             }
           } catch (error) {
             this.adapters.logger.warn('Failed to export file content', { fileId: file.id, error });
-            exportedFile.contentUrl = file.fileUrl ?? file.filePath; // Fallback to reference
+            exportedFile.contentUrl = file.filePath; // Fallback to reference
           }
         } else {
-          exportedFile.contentUrl = file.fileUrl ?? file.filePath;
+          exportedFile.contentUrl = file.filePath;
         }
 
         return exportedFile;
@@ -493,14 +547,14 @@ export class NotebookExportService {
     // matter once the query above began resolving rows at all.
     //
     // The `$or` is the same predicate `ArtifactRepository.findByUserWithAccess` expresses and
-    // `artifactService/get` enforces via `canUserAccessArtifact`. It is needed HERE because
+    // `artifactService/get` enforces via `readAccess`. It is needed HERE because
     // `getSessionsToExport` scopes SESSIONS by userId and the scoping stops there:
     // `session.artifactIds` is a client-supplied `z.array(z.string())` that `updateSession` writes
     // through unvalidated, so an id arriving here is not necessarily the caller's. Reachable only
     // since this query started resolving rows - before that it threw and returned nothing.
     //
     // Two consequences that are visible rather than hidden, both deliberate: neither this clause
-    // nor `canUserAccessArtifact` honours `visibility: 'project' | 'organization'`, so an
+    // nor `readAccess` honours `visibility: 'project' | 'organization'`, so an
     // org-shared artifact drops out of an export - this makes export exactly as strict as
     // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
     // collaborative session an artifact owned by another participant now leaves the owner's
@@ -542,7 +596,7 @@ export class NotebookExportService {
     // (`artifactService/get` -> `findLatestContent`). Keying on `artifact.version` instead looks
     // stricter and is wrong: `create` and `update` write the content row, the version row and the
     // artifact row as three separate calls with no transaction (documented at
-    // apps/client/server/utils/persistAgentArtifacts.ts) and assign `version` only after the
+    // packages/server-utils/src/utils/persistAgentArtifacts.ts) and assign `version` only after the
     // content write returns, so the pointer can only ever LAG the newest row, never lead it. An
     // export keyed on it ships the older body while the user is looking at the newer one.
     //
@@ -648,6 +702,8 @@ export class NotebookExportService {
           });
           return null;
         }
+
+        if (options.imagesAsKeys) return imagePath;
 
         try {
           const imageContent = await this.adapters.fileStorageService.getFileContent(imagePath);
@@ -806,3 +862,5 @@ export class NotebookExportService {
 
 // Re-export types for external consumption
 export * from './types';
+export * from './bundle';
+export * from './mirror';

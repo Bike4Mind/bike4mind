@@ -11,11 +11,21 @@ type GeneratedFilterToggleProps = {
   compact?: boolean;
 };
 
-/** The search params with the Generated filter turned on or off; off drops the key instead of sending `false`. */
+/**
+ * The search params with the Generated filter turned on or off; off drops the key instead of sending `false`.
+ * On also drops `uploaded`, its complement, so the two never combine into an empty list.
+ */
 export const withGeneratedFilter = (
   params: ISearchFabFilesParams | undefined,
   generated: boolean
-): ISearchFabFilesParams => ({ ...params, filters: { ...(params?.filters || {}), generated: generated || undefined } });
+): ISearchFabFilesParams => ({
+  ...params,
+  filters: {
+    ...(params?.filters || {}),
+    generated: generated || undefined,
+    ...(generated && { uploaded: undefined }),
+  },
+});
 
 /**
  * Quick filter for files made by a generation tool. Sets `filters.generated`, which the server ANDs with the

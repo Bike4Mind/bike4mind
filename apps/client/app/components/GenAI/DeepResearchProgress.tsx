@@ -1,404 +1,574 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Box, Card, Chip, LinearProgress, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
-import StyledTab from '@client/app/components/common/StyledTab';
-import { profileTabListSx } from '@client/app/components/common/profileTabListSx';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Box, Card, Chip, CircularProgress, IconButton, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { tabClasses } from '@mui/joy/Tab';
+import type { SvgIconComponent } from '@mui/icons-material';
 import SearchIcon from '@mui/icons-material/Search';
-import ExtractIcon from '@mui/icons-material/FilterList';
-import AnalyzeIcon from '@mui/icons-material/Analytics';
-import ReasoningIcon from '@mui/icons-material/Psychology';
-import SynthesisIcon from '@mui/icons-material/AutoAwesome';
-import ThoughtIcon from '@mui/icons-material/Lightbulb';
-import LinkIcon from '@mui/icons-material/Link';
-import CompleteIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
-import PendingIcon from '@mui/icons-material/PendingActions';
-import WebIcon from '@mui/icons-material/Language';
-
-interface DeepResearchActivity {
-  type: 'search' | 'extract' | 'analyze' | 'reasoning' | 'synthesis' | 'thought';
-  status: 'pending' | 'complete' | 'error';
-  message: string;
-  timestamp: string;
-  depth: number;
-}
-
-interface DeepResearchSource {
-  url: string;
-  title: string;
-  description: string;
-  status: 'found' | 'analyzing' | 'complete' | 'error';
-  type?: string; // Optional for backward compatibility
-  timestamp: string;
-}
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import InsertChartOutlinedIcon from '@mui/icons-material/InsertChartOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import CheckIcon from '@mui/icons-material/Check';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import {
+  buildResearchSteps,
+  formatElapsed,
+  hostnameOf,
+  type DeepResearchActivity,
+  type DeepResearchSource,
+  type ResearchStep,
+} from './deepResearchSteps';
+import { green } from '@client/app/utils/themes/colors';
+import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 interface DeepResearchProgressProps {
   activities?: DeepResearchActivity[];
   sources?: DeepResearchSource[];
-  isActive?: boolean;
   completedSteps?: number;
   totalExpectedSteps?: number;
+  /** The research reported completion. It does so before the report is written, so the
+   *  run only counts as done once `turnDone` is set too. */
+  researchCompleted?: boolean;
+  /** The turn holding the panel has settled; with no completed research that means it stopped. */
+  turnDone?: boolean;
+  startTime?: number;
+  endTime?: number;
 }
 
-const getActivityIcon = (type: DeepResearchActivity['type']) => {
-  switch (type) {
+type PanelStatus = 'running' | 'complete' | 'stopped';
+
+const PANEL_HEIGHT = 420;
+const PANEL_MAX_WIDTH = 560;
+
+const STEP_ICON: Record<ResearchStep['kind'], SvgIconComponent> = {
+  search: SearchIcon,
+  read: DescriptionOutlinedIcon,
+  analyze: InsertChartOutlinedIcon,
+  write: EditOutlinedIcon,
+  note: InfoOutlinedIcon,
+};
+
+function stepTitle(step: ResearchStep, active: boolean): string {
+  switch (step.kind) {
     case 'search':
-      return SearchIcon;
-    case 'extract':
-      return ExtractIcon;
+      return active ? 'Searching the web' : 'Searched the web';
+    case 'read': {
+      const what = step.sourceIndex ? `source ${step.sourceIndex}` : 'a page';
+      if (step.status === 'error') return `Couldn't read ${what}`;
+      return `${active ? 'Reading' : 'Read'} ${what}`;
+    }
     case 'analyze':
-      return AnalyzeIcon;
-    case 'reasoning':
-      return ReasoningIcon;
-    case 'synthesis':
-      return SynthesisIcon;
-    case 'thought':
-      return ThoughtIcon;
-    default:
-      return SearchIcon;
+      return active ? 'Comparing findings' : 'Compared findings';
+    case 'write':
+      return active ? 'Writing the report' : 'Wrote the report';
+    case 'note':
+      return step.status === 'error' ? 'Research stopped' : 'Note';
   }
-};
+}
 
-const getStatusIcon = (status: DeepResearchActivity['status']) => {
-  switch (status) {
-    case 'complete':
-      return CompleteIcon;
-    case 'error':
-      return ErrorIcon;
-    case 'pending':
-      return PendingIcon;
-    default:
-      return PendingIcon;
-  }
-};
+function currentLabel(step: ResearchStep | undefined, sourceCount: number): string {
+  if (!step) return 'Starting';
+  if (step.kind === 'read' && step.sourceIndex) return `Reading source ${step.sourceIndex} of ${sourceCount}`;
+  return stepTitle(step, true);
+}
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'complete':
-      return 'success';
-    case 'error':
-      return 'danger';
-    case 'pending':
-      return 'warning';
-    case 'found':
-    case 'analyzing':
-      return 'primary';
-    default:
-      return 'neutral';
-  }
-};
+const Spinner = ({ size }: { size: number }) => (
+  <CircularProgress
+    aria-hidden
+    sx={{
+      '--CircularProgress-size': `${size}px`,
+      '--CircularProgress-trackThickness': '2px',
+      '--CircularProgress-progressThickness': '2px',
+      flexShrink: 0,
+    }}
+  />
+);
 
-const getSourceTypeIcon = (type: string) => {
-  switch (type) {
-    case 'database':
-    case 'internal':
-      return LinkIcon;
-    case 'web_url':
-    case 'web':
-      return WebIcon;
-    default:
-      return LinkIcon;
-  }
-};
+/** Text clamped to a few lines once it is long enough to need it, with a toggle to read all of it. */
+function ClampedText({
+  text,
+  lines,
+  more,
+  sx,
+  leading,
+}: {
+  text: string;
+  lines: number;
+  more: string;
+  sx?: React.ComponentProps<typeof Typography>['sx'];
+  /** Shares the toggle's row, on its left. */
+  leading?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const textRef = useRef<HTMLParagraphElement>(null);
+
+  // Measured rather than guessed from the length: whether the clamp cuts anything depends
+  // on the panel's width, so the toggle shows only when there is more to read.
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || open) return;
+    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, open]);
+
+  const long = clipped || open;
+  return (
+    <>
+      <Typography
+        ref={textRef}
+        sx={[
+          { overflowWrap: 'anywhere', m: 0 },
+          !open
+            ? { display: '-webkit-box', WebkitLineClamp: lines, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
+            : {},
+          ...(Array.isArray(sx) ? sx : [sx]),
+        ]}
+      >
+        {text}
+      </Typography>
+      {(long || leading) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {leading}
+          {long && (
+            <Typography
+              component="button"
+              type="button"
+              onClick={() => setOpen(o => !o)}
+              aria-expanded={open}
+              sx={{
+                ml: 'auto',
+                border: 0,
+                p: '2px 0',
+                bgcolor: 'transparent',
+                cursor: 'pointer',
+                font: 'inherit',
+                fontSize: '12px',
+                color: 'primary.plainColor',
+              }}
+            >
+              {open ? 'Show less' : more}
+            </Typography>
+          )}
+        </Box>
+      )}
+    </>
+  );
+}
+
+function StepRow({
+  step,
+  active,
+  last,
+  sources,
+}: {
+  step: ResearchStep;
+  active: boolean;
+  last: boolean;
+  sources: DeepResearchSource[];
+}) {
+  const Icon = step.status === 'error' && step.kind === 'note' ? ErrorOutlineIcon : STEP_ICON[step.kind];
+  const source = step.kind === 'read' && step.sourceIndex ? sources[step.sourceIndex - 1] : undefined;
+
+  return (
+    <Box component="li" sx={{ display: 'flex', gap: '12px' }} data-testid={`deep-research-step-${step.kind}`}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 28, flexShrink: 0 }}>
+        <Box
+          sx={{
+            width: 28,
+            height: 28,
+            borderRadius: 'sm',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: active ? 'primary.softBg' : 'neutral.softBg',
+            color: active ? 'primary.plainColor' : step.status === 'error' ? 'danger.plainColor' : 'text.secondary',
+            boxShadow: active ? theme => `0 0 0 1px ${theme.vars.palette.primary.outlinedBorder}` : 'none',
+          }}
+        >
+          <Icon sx={{ fontSize: 16, color: 'inherit' }} />
+        </Box>
+        {!last && <Box sx={{ width: 2, flex: 1, minHeight: 12, my: '4px', bgcolor: 'reading.line2' }} />}
+      </Box>
+
+      <Box sx={{ flex: 1, minWidth: 0, pt: '4px', pb: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Typography sx={{ fontSize: '13px', lineHeight: '18px', fontWeight: 600, color: 'text.primary' }}>
+            {stepTitle(step, active)}
+          </Typography>
+          {active && <Spinner size={10} />}
+          <Typography sx={{ ml: 'auto', fontFamily: 'code', fontSize: '11px', color: 'text.tertiary', flexShrink: 0 }}>
+            {formatElapsed(step.elapsedSec)}
+          </Typography>
+        </Box>
+
+        {step.kind === 'search' && (
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <ClampedText
+              text={step.query}
+              lines={2}
+              more="Full query"
+              sx={{ fontFamily: 'code', fontSize: '12px', lineHeight: '18px', color: 'reading.ink2' }}
+              leading={
+                (step.resultCount != null || step.status === 'error') && (
+                  <Chip size="sm" variant="soft" color={step.status === 'error' ? 'danger' : 'success'}>
+                    {step.status === 'error'
+                      ? 'Search failed'
+                      : `${step.resultCount} ${step.resultCount === 1 ? 'result' : 'results'}`}
+                  </Chip>
+                )
+              }
+            />
+          </Box>
+        )}
+
+        {step.kind === 'read' && (
+          <>
+            <Typography
+              sx={{ fontSize: '12px', lineHeight: '17px', color: 'text.secondary', overflowWrap: 'anywhere' }}
+            >
+              {source?.title || hostnameOf(step.url) || step.url}
+              {step.error ? ` \u00b7 ${step.error}` : ''}
+            </Typography>
+            {source?.description && (
+              <ClampedText
+                text={source.description}
+                lines={2}
+                more="Show more"
+                sx={{ fontSize: '12px', lineHeight: '17px', color: 'text.tertiary' }}
+              />
+            )}
+          </>
+        )}
+
+        {(step.kind === 'analyze' || step.kind === 'write' || step.kind === 'note') && step.detail && (
+          <ClampedText
+            text={step.detail}
+            lines={3}
+            more="Show more"
+            sx={{ fontSize: '12px', lineHeight: '17px', color: 'text.secondary' }}
+          />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function SourceCard({ source }: { source: DeepResearchSource }) {
+  const host = hostnameOf(source.url);
+  const linkable = /^https?:\/\//.test(source.url) || source.url.startsWith('/');
+  return (
+    <Box
+      component={linkable ? 'a' : 'div'}
+      {...(linkable ? { href: source.url, target: '_blank', rel: 'noopener noreferrer' } : {})}
+      data-testid="deep-research-source"
+      sx={{
+        display: 'flex',
+        p: '12px',
+        bgcolor: 'reading.surface',
+        border: '1px solid',
+        borderColor: 'reading.line',
+        borderRadius: 'md',
+        textDecoration: 'none',
+        color: 'text.primary',
+        transition: 'border-color 150ms ease',
+        ...(linkable && { '&:hover': { borderColor: 'reading.accentLine' } }),
+      }}
+    >
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0, flex: 1 }}>
+        <Typography sx={{ fontSize: '13px', lineHeight: '18px', fontWeight: 600, overflowWrap: 'anywhere' }}>
+          {source.title || host || source.url}
+        </Typography>
+        {source.description && (
+          <Typography
+            sx={{
+              fontSize: '12px',
+              lineHeight: '17px',
+              color: 'text.secondary',
+              overflowWrap: 'anywhere',
+              display: '-webkit-box',
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {source.description}
+          </Typography>
+        )}
+        <Typography sx={{ fontFamily: 'code', fontSize: '11px', color: 'text.tertiary', overflowWrap: 'anywhere' }}>
+          {host ?? 'Internal'}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
 
 const DeepResearchProgress: React.FC<DeepResearchProgressProps> = ({
   activities = [],
   sources = [],
   completedSteps = 0,
   totalExpectedSteps = 0,
+  researchCompleted = false,
+  turnDone = false,
+  startTime,
+  endTime,
 }) => {
-  const [activeTab, setActiveTab] = useState(0);
-  const activitiesEndRef = useRef<HTMLDivElement>(null);
+  const [tab, setTab] = useState<'activity' | 'sources'>('activity');
+  const [collapsed, setCollapsed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [mountedAt] = useState(() => Date.now());
+  const listRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
 
-  // Auto-scroll to bottom when new activities are added and activity tab is active
+  const status: PanelStatus = !turnDone ? 'running' : researchCompleted ? 'complete' : 'stopped';
+  const running = status === 'running';
+
+  const startMs = useMemo(() => {
+    if (startTime) return startTime;
+    const first = activities[0] && Date.parse(activities[0].timestamp);
+    return first || mountedAt;
+  }, [startTime, activities, mountedAt]);
+
+  const steps = useMemo(() => buildResearchSteps(activities, sources, startMs), [activities, sources, startMs]);
+
   useEffect(() => {
-    if (activeTab === 0 && activitiesEndRef.current) {
-      activitiesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [activities.length, activeTab]);
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
-  // Use the actual research progress if available, otherwise fall back to activity count
-  const progressPercentage = Math.min(
-    totalExpectedSteps > 0 ? Math.round((completedSteps / totalExpectedSteps) * 100) : 0,
-    100
-  );
+  // Follows new steps only while the reader is already at the bottom, so scrolling back
+  // to an earlier search is not undone by the next event.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [steps.length, tab, collapsed]);
 
   if (!activities.length && !sources.length) {
     return null;
   }
 
+  const lastTs = activities.length ? Date.parse(activities[activities.length - 1].timestamp) : startMs;
+  const elapsedSec = ((running ? now : endTime || lastTs || now) - startMs) / 1000;
+  const percent =
+    status === 'complete'
+      ? 100
+      : Math.min(totalExpectedSteps > 0 ? Math.round((completedSteps / totalExpectedSteps) * 100) : 0, 100);
+  const results = steps.reduce((n, s) => n + (s.kind === 'search' ? (s.resultCount ?? 0) : 0), 0);
+  // With nothing pending the run is between events (or writing the report after the last
+  // one), and the newest step is the one still in progress.
+  const activeStep = running
+    ? ([...steps].reverse().find(s => s.status === 'pending') ?? steps[steps.length - 1])
+    : undefined;
+  const summary = `${results} ${results === 1 ? 'result' : 'results'} \u00b7 ${sources.length} ${
+    sources.length === 1 ? 'source' : 'sources'
+  } \u00b7 ${formatElapsed(elapsedSec)}`;
+  const subtitle = running
+    ? `${currentLabel(activeStep, sources.length)} \u00b7 ${formatElapsed(elapsedSec)}`
+    : `${status === 'complete' ? 'Done' : 'Stopped'} \u00b7 ${summary}`;
+
   return (
     <Card
       variant="outlined"
+      component="section"
+      aria-label="Deep research progress"
+      data-testid="deep-research-panel"
       sx={theme => ({
-        // The artifact-card frame, so the panel a research run puts above the reply belongs
-        // to the same family as the cards it puts below. It used to fill with
-        // background.level1, a token this theme never defines, and carry a 12px radius where
-        // every other framed thing is 8px.
+        // The artifact-card frame, so the panel belongs to the same family as the cards a
+        // reply puts below it.
         backgroundColor: theme.palette.reading.cardBase,
         backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderColor: theme.palette.reading.cardLine,
-        borderRadius: '8px',
-        // No hover lift: the other cards rise because clicking them opens something. This one
-        // is a progress readout and goes nowhere.
-        // The Card's own flex gap, between the progress header and the tab strip below it.
-        gap: '32px',
-        overflow: 'visible',
+        borderRadius: 'lg',
+        p: 0,
+        gap: 0,
+        width: '100%',
+        maxWidth: PANEL_MAX_WIDTH,
+        overflow: 'hidden',
         mt: 2,
-        mb: 1,
+        mb: '32px',
       })}
     >
-      {/* One source of inset for the whole panel: the Card's own padding. The header, the
-          tab bar and both panels used to add 16px of their own on top of it. */}
-      <Box>
-        {/* Progress Bar */}
-        {totalExpectedSteps > 0 && (
-          <Box>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: '8px' }}>
-              {/* An artifact card's title type, and the percentage set as its peer rather than
-                  as small print - it is the other half of the same line, not a caption. */}
-              <Typography level="title-md" sx={{ flex: 1, color: 'text.primary' }}>
-                Deep Research Progress
-              </Typography>
-              <Typography level="title-md" sx={{ color: 'text.primary' }}>
-                {progressPercentage}%
-              </Typography>
-            </Box>
-            <LinearProgress
-              determinate
-              value={progressPercentage}
-              color="primary"
-              sx={{ height: '6px', borderRadius: '3px' }}
-            />
+      <Box sx={{ p: '16px 20px 14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {running ? (
+          <Spinner size={14} />
+        ) : (
+          <Box
+            sx={{
+              width: 18,
+              height: 18,
+              borderRadius: '50%',
+              // The composer's CountBadge green, so a finished run reads like its other done marks.
+              bgcolor: status === 'complete' ? `${green[800]}26` : 'danger.softBg',
+              color: status === 'complete' ? green[800] : 'danger.plainColor',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            {status === 'complete' ? (
+              <CheckIcon sx={{ fontSize: 12, color: 'inherit' }} />
+            ) : (
+              <ErrorOutlineIcon sx={{ fontSize: 12, color: 'inherit' }} />
+            )}
           </Box>
         )}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography
+            component="h2"
+            sx={{ fontSize: '15px', lineHeight: '20px', fontWeight: 600, color: 'text.primary' }}
+          >
+            Deep Research
+          </Typography>
+          <Typography
+            data-testid="deep-research-status"
+            sx={{
+              fontSize: '12px',
+              lineHeight: '16px',
+              color: 'text.secondary',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {subtitle}
+          </Typography>
+        </Box>
+        <Typography
+          data-testid="deep-research-percent"
+          sx={{ fontFamily: 'code', fontSize: '15px', fontWeight: 500, color: 'text.primary' }}
+        >
+          {percent}%
+        </Typography>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed(c => !c)}
+          data-testid="deep-research-collapse-btn"
+        >
+          <KeyboardArrowUpIcon
+            sx={{ fontSize: 18, transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 150ms ease' }}
+          />
+        </IconButton>
       </Box>
 
-      {/* Tabs */}
-      <Tabs
-        value={activeTab}
-        onChange={(_, newValue) => setActiveTab(newValue as number)}
-        // Joy's Tabs paints background.surface by default, which would sit on top of the
-        // card's fill and veil and undo the frame above.
-        sx={{ backgroundColor: 'transparent' }}
-      >
-        {/* The app's tab strip, as the profile page defines it. Labels go through Typography
-            because StyledTab's selected/unselected treatment is an opacity rule on it - a bare
-            string would render every tab as if it were selected. */}
-        <TabList sx={profileTabListSx}>
-          <StyledTab>
-            <Typography>Activity ({activities.length})</Typography>
-          </StyledTab>
-          <StyledTab>
-            <Typography>Sources ({sources.length})</Typography>
-          </StyledTab>
-        </TabList>
+      {!collapsed && <Box sx={{ borderTop: '1px solid', borderColor: 'reading.cardLine' }} />}
 
-        {/* Activity Tab */}
-        <TabPanel
-          value={0}
-          sx={{
-            p: 0,
-            pt: '16px',
-            maxHeight: '300px',
-            overflowY: 'auto',
-          }}
-        >
-          {activities.length > 0 ? (
-            <>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {activities.map((activity, index) => {
-                  const ActivityIcon = getActivityIcon(activity.type);
-                  const StatusIcon = getStatusIcon(activity.status);
-                  return (
-                    <Box
-                      key={`${activity.timestamp}-${index}`}
-                      // The code surface (see HighlightedCode's CODE_SURFACE_STYLE): a step is a
-                      // well inside the panel, the same way a code body is a well inside a card,
-                      // so they share the fill, the 6px corner and the 12px inset. It used to
-                      // fill with background.level2, which this theme never defines.
-                      sx={theme => ({
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
-                        py: '12px',
-                        px: '16px',
-                        borderRadius: '6px',
-                        backgroundColor: theme.palette.reading.surface,
-                      })}
-                    >
-                      {/* Sized and coloured like a cited source's icon - it was 20px of
-                        primary.500, the only saturated icon in the panel. */}
-                      <ActivityIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary', flexShrink: 0 }} />
-                      <Typography level="body-sm" sx={{ flex: 1, color: 'text.primary' }}>
-                        {activity.message}
-                      </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <StatusIcon
-                          sx={{
-                            fontSize: '14px',
-                            color:
-                              activity.status === 'complete'
-                                ? 'success.400'
-                                : activity.status === 'error'
-                                  ? 'danger.400'
-                                  : 'warning.400', // TODO: add color for pending
-                          }}
-                        />
-                      </Box>
-                    </Box>
-                  );
-                })}
+      {!collapsed && (
+        <Tabs value={tab} onChange={(_, v) => setTab(v as 'activity' | 'sources')} sx={{ bgcolor: 'transparent' }}>
+          {/* Pills sized to their label: the active one is set darker than the panel, the
+              other is bare text until hovered. */}
+          <TabList
+            disableUnderline
+            aria-label="Research details"
+            sx={{
+              m: '16px 20px 0',
+              gap: '4px',
+              justifyContent: 'flex-start',
+              bgcolor: 'transparent',
+              [`& .${tabClasses.root}`]: {
+                flex: 'none',
+                minHeight: 32,
+                px: '12px',
+                py: 0,
+                gap: '6px',
+                borderRadius: '999px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: 'text.tertiary',
+                bgcolor: 'transparent',
+                transition: 'color 150ms ease, background-color 150ms ease',
+                '&:hover': { color: 'text.secondary', bgcolor: 'neutral.plainHoverBg' },
+              },
+              [`& .${tabClasses.root}.${tabClasses.selected}`]: {
+                color: 'text.primary',
+                fontWeight: 600,
+                bgcolor: 'background.body',
+                '&:hover': { bgcolor: 'background.body' },
+              },
+            }}
+          >
+            <Tab value="activity" disableIndicator data-testid="deep-research-tab-activity">
+              Activity{' '}
+              <Box component="span" sx={{ color: 'text.tertiary', fontVariantNumeric: 'tabular-nums' }}>
+                {steps.length}
               </Box>
-              {/* The auto-scroll target. Outside the gapped column: as a flex child it was a
-                  zero-height item that still collected the column's gap, leaving dead space
-                  under the last step. */}
-              <div ref={activitiesEndRef} />
-            </>
-          ) : (
-            <Typography level="body-sm" sx={{ color: 'text.secondary', textAlign: 'center', py: 2 }}>
-              No activities yet
-            </Typography>
-          )}
-        </TabPanel>
+            </Tab>
+            <Tab value="sources" disableIndicator data-testid="deep-research-tab-sources">
+              Sources{' '}
+              <Box component="span" sx={{ color: 'text.tertiary', fontVariantNumeric: 'tabular-nums' }}>
+                {sources.length}
+              </Box>
+            </Tab>
+          </TabList>
 
-        {/* Sources Tab */}
-        <TabPanel value={1} sx={{ p: 0, pt: '16px', maxHeight: '300px', overflowY: 'auto' }}>
-          {sources.length > 0 ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {sources.map((source, index) => {
-                const SourceTypeIcon = getSourceTypeIcon(source.type || 'web_url');
-                const isDatabaseSource = source.type === 'database' || source.type === 'internal';
-                const isWebUrl = !source.type || source.type === 'web_url' || source.type === 'web';
-                const isValidHttpUrl = source.url && source.url.startsWith('http');
-                const isInternalPath = source.url && source.url.startsWith('/');
-                const isClickableUrl = isValidHttpUrl || isInternalPath;
-
-                return (
-                  <Box
-                    key={`${source.url}-${index}`}
-                    sx={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 0.5,
-                      p: 1,
-                      borderRadius: '6px',
-                      backgroundColor: 'background.level2',
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {isWebUrl && isValidHttpUrl ? (
-                        <>
-                          <Box
-                            component="img"
-                            src={`https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}&sz=16`}
-                            alt=""
-                            sx={{
-                              width: '16px',
-                              height: '16px',
-                              flexShrink: 0,
-                              borderRadius: '2px',
-                            }}
-                            onError={e => {
-                              const target = e.target as HTMLImageElement;
-                              target.style.display = 'none';
-                              const nextElement = target.nextElementSibling as HTMLElement;
-                              if (nextElement) {
-                                nextElement.style.display = 'inline-flex';
-                              }
-                            }}
-                          />
-                          <SourceTypeIcon
-                            sx={{
-                              fontSize: '16px',
-                              color: 'primary.500',
-                              flexShrink: 0,
-                              display: 'none',
-                            }}
-                          />
-                        </>
-                      ) : (
-                        <SourceTypeIcon
-                          sx={{
-                            fontSize: '16px',
-                            color: 'primary.500',
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <Typography
-                        level="body-sm"
-                        sx={{
-                          fontWeight: 'bold',
-                          flex: 1,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {source.title}
-                      </Typography>
-                      <Chip variant="soft" color={getStatusColor(source.status)} size="sm">
-                        {source.status}
-                      </Chip>
-                    </Box>
-                    <Typography
-                      level="body-xs"
-                      sx={{
-                        color: 'text.secondary',
-                        ml: 3,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {source.description}
-                    </Typography>
-                    {isClickableUrl ? (
-                      <Typography
-                        component="a"
-                        href={source.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        level="body-xs"
-                        sx={{
-                          color: 'primary.500',
-                          ml: 3,
-                          textDecoration: 'none',
-                          '&:hover': {
-                            textDecoration: 'underline',
-                          },
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {source.url}
-                      </Typography>
-                    ) : (
-                      <Typography
-                        level="body-xs"
-                        sx={{
-                          color: 'text.tertiary',
-                          ml: 3,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {isDatabaseSource ? 'Internal Database' : source.url}
-                      </Typography>
-                    )}
-                  </Box>
-                );
-              })}
+          <TabPanel value="activity" sx={{ p: 0 }}>
+            <Box
+              ref={listRef}
+              onScroll={e => {
+                const el = e.currentTarget;
+                stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+              }}
+              sx={{
+                ...scrollbarStyles,
+                maxHeight: PANEL_HEIGHT,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                p: '24px 14px 0 20px',
+              }}
+            >
+              <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+                {steps.map((step, i) => (
+                  <StepRow
+                    key={step.id}
+                    step={step}
+                    active={running && (step.status === 'pending' || step === activeStep)}
+                    last={i === steps.length - 1}
+                    sources={sources}
+                  />
+                ))}
+              </Box>
             </Box>
-          ) : (
-            <Typography level="body-sm" sx={{ color: 'text.secondary', textAlign: 'center', py: 2 }}>
-              No sources discovered yet
-            </Typography>
-          )}
-        </TabPanel>
-      </Tabs>
+          </TabPanel>
+
+          <TabPanel value="sources" sx={{ p: 0 }}>
+            <Box
+              sx={{
+                ...scrollbarStyles,
+                maxHeight: PANEL_HEIGHT,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                p: '14px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              {sources.length ? (
+                sources.map((source, i) => <SourceCard key={`${source.url}-${i}`} source={source} />)
+              ) : (
+                <Typography sx={{ fontSize: '12px', color: 'text.secondary', textAlign: 'center', py: 2 }}>
+                  No sources found yet
+                </Typography>
+              )}
+            </Box>
+          </TabPanel>
+        </Tabs>
+      )}
     </Card>
   );
 };

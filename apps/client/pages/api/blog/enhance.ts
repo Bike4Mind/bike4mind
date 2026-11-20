@@ -1,11 +1,15 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserDocument, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import { IUserDocument, UnprocessableEntityError, isTerminalCreditRefusal, type IMessage } from '@bike4mind/common';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 interface BlogEnhanceParams {
   content: string;
@@ -28,7 +32,7 @@ async function enhanceContent(
   logger: Logger
 ): Promise<BlogEnhanceResponse> {
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     const operationsModelInfo = operationsModel.modelInfo;
 
     const apiKey = await getEffectiveApiKeyByBackend(user.id, operationsModelInfo.backend);
@@ -112,43 +116,45 @@ Summary:`;
       };
     }
   } catch (error) {
-    console.error('Blog enhancement error:', error);
+    if (!isTerminalCreditRefusal(error)) console.error('Blog enhancement error:', error);
     throw error;
   }
 }
 
-const handler = baseApi().post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  try {
-    const params = req.body as BlogEnhanceParams;
+const handler = baseApi().post(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    try {
+      const params = req.body as BlogEnhanceParams;
 
-    if (!params.content || !params.content.trim()) {
-      return res.status(400).json({
+      if (!params.content || !params.content.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Content is required',
+        });
+      }
+
+      if (!params.enhancementType || !['title', 'summary'].includes(params.enhancementType)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Enhancement type must be either "title" or "summary"',
+        });
+      }
+
+      const result = await enhanceContent(req, req.user, params, req.logger);
+
+      return res.json(result);
+    } catch (error) {
+      // A credit refusal (422 out of credits, 429 free-tier daily cap) must surface with its own status instead of degrading to a generic 500; the error handler logs it at warn.
+      if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
+      console.error('Blog enhance error:', error);
+      return res.status(500).json({
         success: false,
-        message: 'Content is required',
+        message: error instanceof Error ? error.message : 'Failed to enhance blog content',
       });
     }
-
-    if (!params.enhancementType || !['title', 'summary'].includes(params.enhancementType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Enhancement type must be either "title" or "summary"',
-      });
-    }
-
-    const result = await enhanceContent(req, req.user, params, req.logger);
-
-    return res.json(result);
-  } catch (error) {
-    // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
-    if (error instanceof UnprocessableEntityError) throw error;
-    console.error('Blog enhance error:', error);
-    return res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Failed to enhance blog content',
-    });
-  }
-});
+  })
+);
 
 export const config = {
   api: {

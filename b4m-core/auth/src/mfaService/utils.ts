@@ -1,7 +1,13 @@
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { timingSafeEqual, createHash } from 'crypto';
-import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
+import {
+  IUserDocument,
+  IMFAConfig,
+  MFA_MAX_FAILED_ATTEMPTS,
+  canAccessAdmin,
+  isMfaForcedForUser,
+} from '@bike4mind/common';
 
 export interface TOTPSetupData {
   secret: string;
@@ -15,20 +21,25 @@ export interface TOTPVerificationResult {
 }
 
 /**
- * Generate TOTP setup data including secret and QR code
+ * Generate TOTP setup data including secret and QR code. Pass `existingSecret` (base32) to
+ * re-render the QR code for a secret already issued instead of minting a new one.
  */
 export async function generateTOTPSetup(
   userEmail: string,
-  appName: string = process.env.APP_NAME || ''
+  appName: string = process.env.APP_NAME || '',
+  existingSecret?: string
 ): Promise<TOTPSetupData> {
   // No brand fallback: when APP_NAME is unconfigured, label the TOTP entry with just
   // the user's email rather than emitting a stray "(email)" with a leading space.
-  const secret = speakeasy.generateSecret({ name: appName ? `${appName} (${userEmail})` : userEmail });
-  const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url!);
+  const label = appName ? `${appName} (${userEmail})` : userEmail;
+  const secret = existingSecret || speakeasy.generateSecret({ name: label }).base32;
+  const qrCodeUrl = await QRCode.toDataURL(
+    speakeasy.otpauthURL({ secret, label: encodeURIComponent(label), encoding: 'base32' })
+  );
   return {
-    secret: secret.base32,
+    secret,
     qrCodeUrl,
-    manualEntryKey: secret.base32,
+    manualEntryKey: secret,
   };
 }
 
@@ -110,20 +121,33 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
 }
 
 /**
- * Check if a user requires MFA based on enforcement settings
- * When MFA is enforced, it applies to ALL users
+ * Test personas never owe MFA enrollment: they exist to exercise the rest of the platform, and MFA
+ * has its own e2e coverage. Shared by userRequiresMFA and the server gate (isMfaEnrollmentOwed).
+ * A persona holding any admin access is not exempt, matching isPersonaAccount in the persona module.
  */
+export function isMfaEnforcementExempt(
+  user: Pick<IUserDocument, 'isPersona' | 'isAdmin' | 'adminPermissions' | 'adminRoleIds'>
+): boolean {
+  return user.isPersona === true && !user.isAdmin && !canAccessAdmin(user);
+}
+
+/** When MFA is enforced it applies to every user except the exempt ones (isMfaEnforcementExempt). */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting; // Enforcement applies to all users
+  return (enforceMFASetting || isMfaForcedForUser(user)) && !isMfaEnforcementExempt(user);
 }
 
 /**
- * Check if a user has MFA configured
+ * True when the user has at least one second factor: an authenticator app or a passkey. Both
+ * flags are NOT select:false, so this works even when the user was loaded without the secrets
+ * (e.g. OTC login). Every "is MFA on" check must go through here so the factors stay in step.
  */
 export function userHasMFAConfigured(user: IUserDocument): user is IUserDocument & { mfa: IMFAConfig } {
-  // totpEnabled is the source of truth and is NOT select:false - so this works even
-  // when the user was loaded without the (select:false) totpSecret (e.g. OTC login).
-  return !!(user.mfa && user.mfa.totpEnabled);
+  return !!(user.mfa && (user.mfa.totpEnabled || user.mfa.passkeyEnabled));
+}
+
+/** True when the user can answer with an authenticator-app code (not just a passkey or backup code). */
+export function userHasTotpConfigured(user: IUserDocument): boolean {
+  return !!user.mfa?.totpEnabled;
 }
 
 export const MAX_FAILED_ATTEMPTS = MFA_MAX_FAILED_ATTEMPTS;
@@ -165,5 +189,5 @@ export function userEligibleForMFA(user: IUserDocument): boolean {
  * When MFA is enforced, NO user can disable it
  */
 export function userCanDisableMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return !enforceMFASetting;
+  return !enforceMFASetting && !isMfaForcedForUser(user);
 }

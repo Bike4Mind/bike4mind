@@ -14,11 +14,12 @@ import {
   IAdminSettingsRepository,
   ISessionDocument,
   IChatHistoryItem,
-  getQuestErrorCode,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
+import { isAiAccessRefusal } from '../userService/accountState';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
-import { prepareFabFile, CreateFabFileAdapters } from '../fabFileService/create';
+import { prepareFabFile, stripSignedUrls, CreateFabFileAdapters } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
 import { createHash } from 'crypto';
 
@@ -323,8 +324,9 @@ export class NotebookCurationService {
       if (error instanceof BadRequestError) {
         return { success: false, error: error.message, retryable: false };
       }
-      // The owner cannot pay for the summary; a redelivery would be refused the same way.
-      if (getQuestErrorCode(error) === 'insufficient_credits') {
+      // The owner cannot pay for the summary (no credits, or the free-tier daily cap) or may not use AI;
+      // a redelivery would be refused the same way.
+      if (isTerminalCreditRefusal(error) || isAiAccessRefusal(error)) {
         return { success: false, error: (error as Error).message, retryable: false };
       }
       if (error instanceof NotebookCurationError) {
@@ -574,7 +576,7 @@ export class NotebookCurationService {
         }
       );
 
-      return prepared;
+      return stripSignedUrls(prepared).persistable;
     } catch (error) {
       this.adapters.logger.error(`Failed to create ${format} file`, {
         sessionId,

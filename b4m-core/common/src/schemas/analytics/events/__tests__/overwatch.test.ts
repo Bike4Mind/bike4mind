@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   OverwatchAnalyticsEventSchema,
   OVERWATCH_ANONYMOUS_USER_ID,
+  OVERWATCH_PAGE_VIEW_EVENT,
   OVERWATCH_UNKNOWN_SESSION_ID,
   OVERWATCH_VISIT_EVENT,
   isAnonymousOverwatchUserId,
@@ -92,6 +93,16 @@ describe('session and identity conventions', () => {
       userId: OVERWATCH_ANONYMOUS_USER_ID,
       sessionId: OVERWATCH_UNKNOWN_SESSION_ID,
       event: OVERWATCH_VISIT_EVENT,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts an anonymous page view carrying its path', () => {
+    const result = OverwatchAnalyticsEventSchema.safeParse({
+      ...validBase,
+      userId: OVERWATCH_ANONYMOUS_USER_ID,
+      event: OVERWATCH_PAGE_VIEW_EVENT,
+      metadata: { path: `/${'page-'.repeat(39)}` },
     });
     expect(result.success).toBe(true);
   });

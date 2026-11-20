@@ -86,7 +86,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           );
         }
 
-        context.logger.log('📖 Knowledge Retrieve: params', { file_id, tags, query, max_chars: charBudget });
+        context.logger.log('Knowledge Retrieve: params', {
+          file_id,
+          tags,
+          queryLength: query?.length ?? 0,
+          max_chars: charBudget,
+        });
 
         if (!file_id && !tags?.length && !query) {
           return 'Error: You must provide at least one of file_id, tags, or query.';

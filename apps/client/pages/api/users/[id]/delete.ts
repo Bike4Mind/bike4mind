@@ -1,158 +1,80 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
+import { userRepository } from '@bike4mind/database';
 import {
-  adminSettingsRepository,
-  userRepository,
-  realtimeConnectionRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { userService } from '@bike4mind/services';
-import { escapeHtml } from '@client/app/utils/htmlEscape';
-import { EmailEvents } from '@server/utils/eventBus';
-import {
-  purgeDeletedUserData,
-  readUserIntegrationGrants,
-  type UserIntegrationGrants,
-} from '@server/services/purgeDeletedUserData';
-import { toSafeUser, UnauthorizedError, type IUserDocument, type IUserRepository } from '@bike4mind/common';
+  ACCOUNT_DELETION_ORG_OWNER_CODE,
+  assertCanActOnAdminTarget,
+  canAccessAdmin,
+  ConflictError,
+  isFullAdmin,
+  toSafeUser,
+} from '@bike4mind/common';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
   parseAdminActionReason,
-  recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
-import { emitBillingEvent } from '@server/analytics/signupEvents';
-import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
-import { pseudonymizeUserId } from '@server/analytics/pseudonymize';
-import { resolveUserType } from '@server/analytics/resolveUserType';
+} from '@bike4mind/server-utils/utils/adminAudit';
+import { subscriptionCancellationResponse } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
+import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
+import { readAdminErasureState } from '@server/dataSubject/adminErasure';
+import { deleteUserAsAdmin, deletedUserTarget } from '@server/admin/deleteUserAsAdmin';
 
-const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
-  kind: 'user' as const,
-  id,
-  displayName: user?.name || user?.username || user?.email || id,
-});
-
-/**
- * The account's own churn, for Overwatch: to the host, and to the product the user came through.
- * An admin's request rather than the user's, so it is marked as no action of theirs. The
- * occurrence is the pseudonym, never the raw id, which an eventId is sent verbatim beside.
- * Never throws: it runs in a `finally`, where a throw would replace the request's own error.
- */
-async function emitAccountDeleted(account: IUserDocument | null): Promise<void> {
-  if (!account) return;
-  try {
-    const daysSinceSignup = wholeDaysBetween(account.createdAt, new Date());
-    await emitBillingEvent({
-      user: account,
-      event: 'account_deleted',
-      occurrence: pseudonymizeUserId(account.id),
-      metadata: {
-        wasSubscriber:
-          resolveUserType({ level: account.level, subscribedUntil: account.subscribedUntil }) === 'subscriber',
-        ...(daysSinceSignup !== undefined && { daysSinceSignup }),
-      },
-    });
-  } catch {
-    console.warn('[b4m-analytics] account_deleted not sent');
-  }
-}
-
-const handler = baseApi().delete(
+const handler = adminApi({ adminPermissions: { DELETE: 'users:delete' } }).delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const userId = req.query.id!;
 
-    if (!req.user.isAdmin) throw new UnauthorizedError('You are not authorized to delete users');
+    const target = await userRepository.findById(userId);
     if (isSelfOrImpersonator(req.user, userId)) {
       await denySelfAdminAction(req, {
         action: 'user.deletion.denied',
         attempted: 'user.deleted',
-        target: deletedUserTarget(userId, await userRepository.findById(userId)),
+        target: deletedUserTarget(userId, target),
       });
     }
+    assertCanActOnAdminTarget(req.user, target, 'delete');
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
-    // adminDeleteUser still sends notifications after the row is gone, and a throw there must not
-    // skip the purge: a retry would 404, so nothing would run it again.
-    let deleteCommitted = false;
-    let integrationGrants: UserIntegrationGrants | null = null;
-    // The account as it stood before the delete, for account_deleted below.
-    let deletedAccount: IUserDocument | null = null;
-    const users: IUserRepository = Object.create(userRepository, {
-      delete: {
-        value: async (id: string) => {
-          // Captured here, right before the row goes, because the purge below needs them to revoke the
-          // provider grants and they are unreadable once the delete commits.
-          integrationGrants = await readUserIntegrationGrants(id);
-          const target = await userRepository.findById(id);
-          deletedAccount = target;
-          // The delete and its audit entry commit together; cascades and notifications run after.
-          const result = await withTransaction(async () => {
-            const deleted = await userRepository.delete(id);
-            await recordAdminActionFromRequest(req, {
-              action: 'user.deleted',
-              target: deletedUserTarget(id, target),
-              summary: 'deleted the user',
-              reason,
-            });
-            return deleted;
+    const policy = await getApprovalPolicy();
+    if (policy.enabled) {
+      if (canAccessAdmin(target)) {
+        const current = await readAdminErasureState(target!.id);
+        if (current.state !== 'none') throw new ConflictError('This account already has a deletion pending.');
+        if (current.ownedOrganizations.length > 0) {
+          throw new ConflictError('Transfer or delete the organizations this user owns first.', {
+            code: ACCOUNT_DELETION_ORG_OWNER_CODE,
+            organizations: current.ownedOrganizations,
           });
-          deleteCommitted = true;
-          return result;
-        },
-      },
-    });
-
-    let deletedUser: IUserDocument;
-    try {
-      deletedUser = await userService.adminDeleteUser(
-        req.user.id,
-        { id: userId },
-        {
-          db: {
-            users,
-            adminSettings: adminSettingsRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-          notify: {
-            // postMessageToSlack reports whether it delivered; the adapter contract returns void.
-            send: async (message: string) => {
-              await postMessageToSlack(message);
-            },
-          },
-          mailer: {
-            sendDeleteUserEmail: async (sendTo: string[], user: IUserDocument, admin: IUserDocument) => {
-              await Promise.all(
-                sendTo.map(mailTo =>
-                  EmailEvents.Send.publish({
-                    to: mailTo,
-                    subject: 'User Deletion Notification',
-                    body: `
-              <p>Admin user: ${escapeHtml(admin.name ?? '')} User deleted: *${escapeHtml(user.name ?? '')}* *${escapeHtml(user.email ?? '')}*</p>
-              `,
-                  })
-                )
-              );
-            },
-          },
         }
-      );
-    } finally {
-      // Runs only once adminDeleteUser has authorized and committed the delete. Best-effort
-      // inside, so it never turns this into a 500 a retry cannot fix.
-      if (deleteCommitted) {
-        await purgeDeletedUserData(userId, {
-          deletedBy: String(req.user.id),
-          logger: req.logger,
-          integrationGrants,
-        });
-        // Here rather than after the try for the same reason as the purge: a Slack or mail
-        // failure after the commit would otherwise skip it, and the retry 404s.
-        await emitAccountDeleted(deletedAccount);
+        const pending = await requestApproval(
+          req,
+          {
+            action: 'user.delete_admin',
+            params: { userId, reason },
+            summary: `delete admin account ${deletedUserTarget(userId, target).displayName}`,
+            reason,
+            requiredPermission: 'users:delete',
+            requiresFullAdmin: true,
+          },
+          policy
+        );
+        return res.status(202).json(pending);
       }
     }
 
-    return res.json(toSafeUser(deletedUser));
+    const {
+      user: deletedUser,
+      subscriptionCancellation,
+      queued,
+    } = await deleteUserAsAdmin(req, userId, reason, undefined, {
+      // A delegate's target is re-checked too, in case it gained admin access since the check above.
+      requireNonAdmin: policy.enabled || !isFullAdmin(req.user),
+    });
+
+    return res.json({
+      ...toSafeUser(deletedUser),
+      ...subscriptionCancellationResponse(subscriptionCancellation),
+      queued,
+    });
   })
 );
 

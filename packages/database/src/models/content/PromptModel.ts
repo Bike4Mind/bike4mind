@@ -2,7 +2,7 @@ import mongoose, { Model, Schema, model } from 'mongoose';
 import { IPromptDocument, IPromptRepository } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
-export const PromptSchema = new Schema<IPromptDocument>(
+export const PromptSchema: Schema<IPromptDocument> = new Schema<IPromptDocument>(
   {
     type: { type: String, required: true },
     name: { type: String, required: true, unique: true },
@@ -22,15 +22,18 @@ export default Prompt;
 
 export class PromptRepository extends BaseRepository<IPromptDocument> implements IPromptRepository {
   async findAllByName(name: string): Promise<IPromptDocument[]> {
-    return this.model.find({ name });
+    const docs = await this.model.find({ name });
+    return docs.map(doc => doc.toJSON());
   }
 
   async findAllByType(type: string): Promise<IPromptDocument[]> {
-    return this.model.find({ type });
+    const docs = await this.model.find({ type });
+    return docs.map(doc => doc.toJSON());
   }
 
   async findAllWithTags(tags: string[]): Promise<IPromptDocument[]> {
-    return this.model.find({ tags: { $in: tags } });
+    const docs = await this.model.find({ tags: { $in: tags } });
+    return docs.map(doc => doc.toJSON());
   }
 }
 

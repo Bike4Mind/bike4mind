@@ -2,15 +2,17 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { getApiKeyLegacyStatus, LEGACY_API_KEY_WINDOW } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import {
   embedKeyOwnerHasEntitlement,
   gateEmbedBrandingWrite,
   type EmbedKeyOwnerRef,
 } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
-import { logEventSafe } from '@server/utils/analyticsLog';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -24,8 +26,12 @@ import {
   USER_API_KEY_SCOPE_VALUES,
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { requireStepUp } from '@server/auth/stepUp';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -90,9 +96,13 @@ function redactForNonMinter(json: IUserApiKey, isMinter: boolean): IUserApiKey {
   return { ...json, metadata: safeMetadata };
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
 
     // Opt-in so the documented public API keeps its active-only default; the
     // management UIs pass it to render revoked keys as `Revoked` rows.
@@ -133,8 +143,12 @@ const handler = baseApi()
       })
     );
 
+    const now = new Date();
     const payload = keys.map(key => {
-      const json = redactForNonMinter(serializeKey(key), key.userId === userId);
+      const json = {
+        ...redactForNonMinter(serializeKey(key), key.userId === userId),
+        ...getApiKeyLegacyStatus(key, now, LEGACY_API_KEY_WINDOW),
+      };
       return key.scopes.includes(ApiKeyScope.EMBED_CHAT)
         ? { ...json, ownerHasWhitelabel: ownerHasWhitelabel.get(ownerCacheKey(key)) ?? false }
         : json;
@@ -144,6 +158,7 @@ const handler = baseApi()
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
 
@@ -163,6 +178,9 @@ const handler = baseApi()
     if (unentitledScopes.length > 0) {
       throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
+    // A persona-mint key creates accounts, so it needs a fresh sign-in; an API key caller has no
+    // session to verify and is refused.
+    if (requestedScopes.includes(ApiKeyScope.PERSONAS_MINT)) await requireStepUp(req);
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.
@@ -173,6 +191,14 @@ const handler = baseApi()
         throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
       }
     }
+
+    // The admin paid-only switch, after the org check so an unauthorized caller learns nothing
+    // about an org's plan. The same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined,
+      req
+    );
 
     // Embed keys: apply the host-aware origin screen here (needs the runtime app
     // host). The service re-validates format/dedup/cap and enforces the agentId
@@ -238,6 +264,9 @@ const handler = baseApi()
         trust,
       }
     );
+    // A key minted soon after signup is one of the risk signals, so rescore now rather than wait.
+    await refreshSignupRiskScore(userId, req.logger);
+    await requestRiskEvidenceRefresh(userId, 'api_key_created', req.logger);
 
     await logEventSafe(
       {

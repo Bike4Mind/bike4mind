@@ -5,6 +5,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ISessionFavoriteItem,
+  MAX_BULK_ITEMS,
   SessionListFilters,
   SessionUpdateRequest,
 } from '@bike4mind/common';
@@ -171,11 +172,12 @@ export const generateNewSession = async (
   knowledgeIds: string[] = [],
   agentIds: string[] = [],
   projectId?: string,
-  lastUsedModel?: string
+  lastUsedModel?: string,
+  organizationId?: string
 ) => {
   const response = await api.post<ISessionDocument>(
     `/api/sessions/create`,
-    { name, knowledgeIds, agentIds, projectId, lastUsedModel },
+    { name, knowledgeIds, agentIds, projectId, lastUsedModel, organizationId },
     { timeout: SEND_REQUEST_TIMEOUT_MS }
   );
   return response.data;
@@ -189,10 +191,18 @@ export const deleteSessionFromServer = async (sessionId: string): Promise<{ newL
 export const bulkDeleteSessionsFromServer = async (
   sessionIds: string[]
 ): Promise<{ deletedCount: number; newLastNotebookId: string | null }> => {
-  const response = await api.delete<{ deletedCount: number; newLastNotebookId: string | null }>('/api/sessions/bulk', {
-    data: { sessionIds },
-  });
-  return response.data;
+  // The route accepts at most MAX_BULK_ITEMS ids per call.
+  let deletedCount = 0;
+  let newLastNotebookId: string | null = null;
+  for (let i = 0; i < sessionIds.length; i += MAX_BULK_ITEMS) {
+    const response = await api.delete<{ deletedCount: number; newLastNotebookId: string | null }>(
+      '/api/sessions/bulk',
+      { data: { sessionIds: sessionIds.slice(i, i + MAX_BULK_ITEMS) } }
+    );
+    deletedCount += response.data.deletedCount;
+    newLastNotebookId = response.data.newLastNotebookId ?? newLastNotebookId;
+  }
+  return { deletedCount, newLastNotebookId };
 };
 
 export const generateSessionSummary = async (sessionId: string) => {

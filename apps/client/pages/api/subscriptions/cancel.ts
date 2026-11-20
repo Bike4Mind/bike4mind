@@ -4,14 +4,14 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   isDelinquentSubscriptionStatus,
   resolveSubscriptionSource,
-} from '@client/lib/subscriptions/types';
-import { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 import { rethrowStripeRejection } from '@server/integrations/stripe/errors';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import Stripe from 'stripe';
 import { z } from 'zod';

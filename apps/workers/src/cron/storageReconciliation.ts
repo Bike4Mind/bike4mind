@@ -35,7 +35,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { organizationService, userService } from '@bike4mind/services';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';

@@ -21,8 +21,8 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('./checkPublishQuota', () => ({ checkPublishQuota: mocks.checkPublishQuota }));
-vi.mock('./invalidatePublishCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('./invalidatePublishCdn')>()),
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/publish/invalidatePublishCdn')>()),
   invalidatePublishCdn: mocks.invalidatePublishCdn,
 }));
 vi.mock('./restrictDuplicatePublications', () => ({

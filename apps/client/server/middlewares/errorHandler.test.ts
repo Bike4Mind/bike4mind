@@ -43,6 +43,41 @@ describe('errorHandler — request_id in the error envelope', () => {
   });
 });
 
+describe('errorHandler - logged URL', () => {
+  it('logs the path without its query string', () => {
+    const { req, res } = makeReqRes();
+    req.url = '/api/auth/google?inviteCode=REF-123';
+    errorHandler('totally unknown', req, res);
+    expect(req.logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/^POST \/api\/auth\/google /),
+      'totally unknown'
+    );
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain('REF-123');
+  });
+
+  describe('redacts a share-link token', () => {
+    const token = 'synthetic-share-token-0123456789';
+    const logged = (req: { logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } }) =>
+      JSON.stringify([req.logger.error.mock.calls, req.logger.warn.mock.calls]);
+
+    it.each([`/a/${token}`, `/api/publish/serve/a/${token}/index.html`])('from %s', url => {
+      const cases: unknown[] = [
+        new BadRequestError('bad'),
+        new ServiceUnavailableError('down'),
+        { name: 'CastError', message: 'Cast to ObjectId failed', path: '_id' },
+        'totally unknown',
+      ];
+      for (const error of cases) {
+        const { req, res } = makeReqRes();
+        req.url = url;
+        errorHandler(error, req, res);
+        expect(logged(req)).toContain('[redacted]');
+        expect(logged(req)).not.toContain(token);
+      }
+    });
+  });
+});
+
 describe('errorHandler - the body carries no keys the envelope does not document', () => {
   // The gate for CONVENTIONS.md section 1. errorHandler serves every route, so an
   // undocumented key it adds ships on the public surface with no contract declaring
@@ -325,5 +360,20 @@ describe('buildErrorBody', () => {
   it('adds the deprecated name only when given', () => {
     expect(Object.keys(buildErrorBody({ error: 'x', requestId: 'r' }))).toEqual(['error', 'request_id']);
     expect(buildErrorBody({ error: 'x', requestId: 'r', name: 'BadRequestError' }).name).toBe('BadRequestError');
+  });
+});
+
+describe('admin search error logging', () => {
+  it('omits identifier queries for rejected requests', () => {
+    const { req, res } = makeReqRes();
+    const secret = 'b4m_live_' + 'a'.repeat(32);
+    req.method = 'GET';
+    req.url = `/api/admin/search?q=${secret}`;
+    errorHandler(new BadRequestError('Use only the displayed API key prefix'), req, res);
+    expect(JSON.stringify(req.logger.warn.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify([...req.logger.warn.mock.calls, ...req.logger.error.mock.calls])).toContain(
+      '/api/admin/search'
+    );
   });
 });

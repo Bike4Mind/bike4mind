@@ -80,6 +80,37 @@ describe('resolveLakeRagAuth', () => {
     expect(cleanups[0].headers['x-e2e-cleanup-secret']).toBe('s3cret');
   });
 
+  it('sends admin and credit overrides only when passed, and mints a second user in the same cleanup scope', async () => {
+    const plain = fakeServer();
+    await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', testId: 'run42', fetch: plain.fetchImpl });
+    expect(JSON.parse(plain.calls[0].body!)).not.toHaveProperty('isAdmin');
+    expect(JSON.parse(plain.calls[0].body!)).not.toHaveProperty('initialCredits');
+
+    const { calls, fetchImpl } = fakeServer();
+    const auth = await resolveLakeRagAuth({
+      baseUrl: base,
+      e2eCleanupSecret: 's3cret',
+      testId: 'run42',
+      userOverrides: { isAdmin: true },
+      fetch: fetchImpl,
+      now: () => 1700000000000,
+    });
+    expect(JSON.parse(calls[0].body!)).toMatchObject({ isAdmin: true });
+    expect(JSON.parse(calls[0].body!)).not.toHaveProperty('initialCredits');
+
+    const target = await auth.mintUser({ initialCredits: 4321 });
+    const body = JSON.parse(calls[1].body!) as { email: string; username: string; initialCredits: number };
+    expect(body).toMatchObject({ initialCredits: 4321, email: target.email, username: target.username });
+    expect(body).not.toHaveProperty('isAdmin');
+    expect(target.email).toMatch(/-run42-[0-9]+-e2e@test\.com$/);
+    expect(target.email).not.toBe(JSON.parse(calls[0].body!).email);
+  });
+
+  it('refuses to mint a user under an API key', async () => {
+    const auth = await resolveLakeRagAuth({ baseUrl: base, apiKey: 'b4m_live_xyz' });
+    await expect(auth.mintUser()).rejects.toThrow(/E2E cleanup secret/);
+  });
+
   it('reports the lakes the cleanup deleted', async () => {
     const { fetchImpl } = fakeServer();
     const auth = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl });

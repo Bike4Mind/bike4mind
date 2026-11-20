@@ -6,10 +6,15 @@ type Route = (req: unknown, res: unknown) => unknown;
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, Route> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method: string }).method]?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method: string }).method]?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: Route) => ((routes.GET = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
         delete: (fn: Route) => ((routes.DELETE = fn), chain),
@@ -39,7 +44,7 @@ vi.mock('@client/app/utils/toolMapping', () => ({
   TOOL_MAPPING: { web_search: { description: 'Search the web for current information.', displayName: 'Web Search' } },
   TOOL_CATEGORIES: { web_search: 'Search' },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../[toolId]';
 
@@ -51,13 +56,14 @@ const BODY = {
 };
 const EXISTING = { toolId: TOOL_ID, description: 'old description', shortDescription: 'old short', enabled: false };
 
-const invoke = async (method: 'PUT' | 'DELETE', body?: object) => {
+const invoke = async (
+  method: 'GET' | 'PUT' | 'DELETE',
+  body?: object,
+  isAdmin = true,
+  adminPermissions: string[] = []
+) => {
   const { req, res } = createMocks({ method, body, query: { toolId: TOOL_ID } });
-  (req as unknown as { user: { id: string; isAdmin: boolean; name: string } }).user = {
-    id: 'admin-1',
-    isAdmin: true,
-    name: 'Admin',
-  };
+  (req as unknown as { user: object }).user = { id: 'admin-1', isAdmin, name: 'Admin', adminPermissions };
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   return { req, res };
 };
@@ -140,5 +146,32 @@ describe('DELETE /api/admin/tool-definitions/[toolId] admin audit', () => {
 
     expect(res._getStatusCode()).toBe(404);
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/tool-definitions/[toolId] non-admin', () => {
+  it('refuses a non-admin before touching the override', async () => {
+    await expect(invoke('PUT', BODY, false)).rejects.toThrow(/missing permission/i);
+    await expect(invoke('DELETE', undefined, false)).rejects.toThrow(/missing permission/i);
+    expect(h.findByToolId).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegated access to /api/admin/tool-definitions/[toolId]', () => {
+  it('lets a settings:manage-only delegate read', async () => {
+    const { res } = await invoke('GET', undefined, false, ['settings:manage']);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('lets a support:read-only delegate read', async () => {
+    const { res } = await invoke('GET', undefined, false, ['support:read']);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each(['PUT', 'DELETE'] as const)('rejects a support:read-only %s', async method => {
+    await expect(invoke(method, BODY, false, ['support:read'])).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.updateDescription).not.toHaveBeenCalled();
+    expect(h.softDelete).not.toHaveBeenCalled();
   });
 });

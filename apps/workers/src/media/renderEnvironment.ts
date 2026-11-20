@@ -109,6 +109,7 @@ export function createRenderEnvironment({
 
   const poison = (problems: string[]): RenderEnvironmentError => {
     poisonedBy ??= problems.join('; ');
+    // eslint-disable-next-line no-console -- the renderer bundle imports no workspace packages, so no Logger (see publishThumbnailRenderer.isolation.test.ts)
     console.error(`publish thumbnail render environment failed its check: ${problems.join('; ')}`);
     return new RenderEnvironmentError(`render environment is not clean: ${problems.join('; ')}`);
   };
@@ -118,6 +119,7 @@ export function createRenderEnvironment({
     const stray = strayProcesses(entries, selfPid);
     if (stray?.length === 0) return undefined;
     // The whole table, so a refusal on real Lambda can be diagnosed from the logs alone.
+    // eslint-disable-next-line no-console -- the renderer bundle imports no workspace packages, so no Logger (see publishThumbnailRenderer.isolation.test.ts)
     console.error(`publish thumbnail render process table (self ${selfPid}): ${describeTable(entries)}`);
     if (stray === undefined) return 'the process table does not list this runtime';
     return `unexpected processes ${describe(stray)}`;

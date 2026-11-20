@@ -8,6 +8,11 @@ import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
 import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
 import { useAdminActivitySummary } from './useAdminActivitySummary';
+import { NewSignupsTile } from './Signups/NewSignupsTile';
+import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
+import { MorningBriefCard } from './MorningBriefCard';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -53,13 +58,18 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
   const { data: activity, isLoading, isFetching, isError, refetch } = useAdminActivitySummary();
 
   return (
-    <Stack spacing={3} sx={{ p: { xs: 0, sm: 2 }, maxWidth: 1440, mx: 'auto' }} data-testid="admin-dashboard">
+    // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
+    <Stack spacing={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
       <Box>
         <Typography level="h1">Admin dashboard</Typography>
         <Typography level="body-md" sx={{ mt: 1 }}>
           See how Bike4Mind is being used and jump into the tools behind the numbers.
         </Typography>
       </Box>
+
+      <AiAdvisoryStrip />
+      <MorningBriefCard />
+      <CampaignWatchesPanel compact />
 
       {additionalDashboards.length > 0 && (
         <Box>
@@ -100,6 +110,17 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           </Grid>
         </Box>
       )}
+
+      <Stack spacing={1}>
+        <Typography level="h2">
+          Signups
+          <AnalyticsTermHelp
+            term="Signups"
+            description="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag: one strong signal, such as a burst of accounts on one domain, machine-regular signup cadence or bot traffic, or two weaker ones, such as signing up during a signup spike and never coming back. Suspected accounts are counted separately and can be reviewed on the Users tab."
+          />
+        </Typography>
+        <NewSignupsTile onReview={() => onNavigate(AdminTab.Users)} />
+      </Stack>
 
       <Stack spacing={1}>
         <Typography level="h2">

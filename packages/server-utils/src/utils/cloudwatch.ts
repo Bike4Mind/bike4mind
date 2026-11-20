@@ -4,6 +4,7 @@ import type {
   FeedbackDeliveryStageClass,
   FeedbackDeliverySkipReason,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * CloudWatch metric dimensions
@@ -59,7 +60,7 @@ export async function emitMetric(
     await client.send(command);
   } catch (error) {
     // Log but don't throw - metrics failures shouldn't break the application
-    console.error('Failed to emit CloudWatch metric', {
+    Logger.error('Failed to emit CloudWatch metric', {
       namespace,
       metricName,
       value,
@@ -110,7 +111,7 @@ export async function emitMetrics(
 
     await client.send(command);
   } catch (error) {
-    console.error('Failed to emit CloudWatch metrics', {
+    Logger.error('Failed to emit CloudWatch metrics', {
       namespace,
       metricsCount: metrics.length,
       error: error instanceof Error ? error.message : String(error),

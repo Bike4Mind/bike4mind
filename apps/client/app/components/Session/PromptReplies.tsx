@@ -45,12 +45,18 @@ import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
 import MermaidIcon from '@mui/icons-material/AccountTree';
 import InsertDriveFileOutlined from '@mui/icons-material/InsertDriveFileOutlined';
 import ImageDisplay from './ImageDisplay';
+import { FreeQuestLimitNotice } from './FreeQuestLimitNotice';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
 import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
-import { questGenerationJobs, type ChessArtifact, type MermaidArtifact } from '@bike4mind/common';
+import {
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+  questGenerationJobs,
+  type ChessArtifact,
+  type MermaidArtifact,
+} from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -73,7 +79,7 @@ import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
@@ -83,7 +89,11 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
@@ -110,7 +120,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
-import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
+import { isConfirmableMcpTool, isCustomConnectorAction } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -175,7 +185,8 @@ export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
-    const codeContent = String(children).replace(/\n$/, '');
+    // An empty fence has no children at all.
+    const codeContent = String(children ?? '').replace(/\n$/, '');
     const lineCount = codeContent.split('\n').length;
     const inline =
       node?.position?.start.line === node?.position?.end.line &&
@@ -621,6 +632,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
     <>
       <ReplyContainer
         completed={messageData.status === 'done'}
+        settled={messageData.status === 'done' || messageData.status === 'stopped'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
@@ -786,7 +798,7 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
 
 // The confirm route executes only allowlisted write tools, so any other pending action gets no card.
 export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
-  isConfirmableMcpTool(props.pendingAction.tool) ? (
+  isConfirmableMcpTool(props.pendingAction.tool) || isCustomConnectorAction(props.pendingAction) ? (
     <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
   ) : null;
 
@@ -902,6 +914,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     );
   }
 
+  const customConnector = pendingAction.customConnector;
   const toolDisplayName = pendingAction.tool.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
   return (
@@ -917,8 +930,19 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     >
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
+        {customConnector && ` on ${customConnector.displayName} (${customConnector.urlHost})`}
       </Typography>
-      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
+      {customConnector && (
+        <Box
+          component="pre"
+          data-testid="mcp-custom-action-args"
+          sx={{ m: 0, mb: 1.5, p: 1, maxHeight: 200, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+        >
+          {JSON.stringify(pendingAction.params, null, 2)}
+        </Box>
+      )}
+      {/* display_* params are injected by the built-in wrappers; on a custom action they are model-supplied. */}
+      {!customConnector && <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />}
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"
@@ -1228,6 +1252,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   search,
   isExpandable = false,
   completed = false,
+  settled = completed,
   errorCode,
   questMasterPlanId,
   onSendMessage,
@@ -1395,9 +1420,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
     let preprocessedContent = cleanReply;
     if (isStreamingArtifact) {
-      const artifactIndex = preprocessedContent.indexOf('<artifact');
+      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       if (artifactIndex !== -1) {
-        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
+        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trimEnd();
       }
     } else if (isTruncatedArtifact) {
       preprocessedContent = repairTruncatedArtifact(preprocessedContent);
@@ -1555,6 +1580,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     return <InsufficientCreditsNotice message={reply} />;
   }
 
+  if (errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+    return <FreeQuestLimitNotice message={reply} />;
+  }
+
   return (
     <Box
       data-testid="ai-response-root-container"
@@ -1643,6 +1672,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               sources={deepResearchState.sources}
               completedSteps={deepResearchState.completedSteps}
               totalExpectedSteps={deepResearchState.totalExpectedSteps}
+              researchCompleted={deepResearchState.completed}
+              turnDone={settled}
+              startTime={deepResearchState.startTime}
+              endTime={deepResearchState.endTime}
             />
           )}
           {agentIds && agentIds.length > 0 && <AgentAttribution agentIds={agentIds} />}
@@ -1912,9 +1945,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {(chessBoard || nonChessArtifacts.length > 0) && (
         <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
           {chessBoard}
-          {nonChessArtifacts.map((artifact, index) => (
+          {nonChessArtifacts.map(artifact => (
             <ArtifactRenderer
-              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              key={`${artifact.type}_${artifact.identifier}_${artifact.startIndex}`}
               artifact={artifact}
               // The full parse's index, chess included, which is what persistence numbers ids by.
               index={artifacts.indexOf(artifact)}

@@ -6,7 +6,7 @@ import { type MigrationFile } from './index';
  *
  * It serves findStaleDispatchedCallbacks, the questTimeoutSweep backstop that re-enqueues a
  * generation callback stuck at `dispatched` with no queue message behind it. Pre-built rather
- * than left to autoIndex for the same DocumentDB foreground-lock reason as
+ * than left to autoIndex for the same reason as
  * 20260921235900_ensure-quest-callback-pending-index.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist.

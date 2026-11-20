@@ -1,22 +1,20 @@
+import { issueSessionForRequest } from '@server/auth/issueSession';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { refuseBlockedRotatedSession, suspendedSessionRefusal } from '@server/auth/refreshAccountGate';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import {
-  LEGACY_REFRESH_COOKIE_SESSION_CUTOFF,
-  readRefreshCookieWithSource,
-  setRefreshCookie,
-} from '@bike4mind/server-utils/auth/refreshCookie';
+import { readRefreshCookie, readAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 import * as z from 'zod';
@@ -25,14 +23,6 @@ import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchem
 
 // Non-browser callers (CLI, OAuth flows) get the rotated token back in the body.
 const refreshSessionResponseSchema = selfSessionResponseSchema.extend({ refreshToken: z.string().optional() });
-
-async function assertLegacyCookieSessionEligible(token: string): Promise<void> {
-  const sid = authSessionService.parseRefreshToken(token)?.sid;
-  const session = sid ? await authSessionRepository.findBySid(sid) : null;
-  if (!session || new Date(session.createdAt).getTime() >= LEGACY_REFRESH_COOKIE_SESSION_CUTOFF.getTime()) {
-    throw new UnauthorizedError('Invalid refresh token');
-  }
-}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -45,11 +35,9 @@ const handler = baseApi({ auth: false })
   .post(async (req, res) => {
     // Accept multiple field names: "token" (legacy B4M), "refreshToken" (camelCase), "refresh_token" (OAuth standard)
     const bodyToken = req.body.token || req.body.refreshToken || req.body.refresh_token;
-    const cookie = readRefreshCookieWithSource(req);
-    const token = bodyToken || cookie?.token;
+    const token = bodyToken || readRefreshCookie(req);
 
     if (!token) throw new UnauthorizedError('Refresh token is required');
-    if (!bodyToken && cookie?.legacy) await assertLegacyCookieSessionEligible(token);
 
     // Transport selection. A browser presents the token in the HttpOnly cookie and gets the
     // rotated one back the same way - never in the JSON body, which page scripts can read.
@@ -77,32 +65,44 @@ const handler = baseApi({ auth: false })
     // New session-store path: an opaque `<sid>.<secret>` refresh token is rotated against the
     // AuthSession store (rotation + grace window + reuse detection live in the service).
     if (authSessionService.isOpaqueRefreshToken(token)) {
-      const rotated = await authSessionService.rotateSession(token, {
-        db: {
-          authSessions: authSessionRepository,
-          users: userRepository,
-          realtimeConnections: realtimeConnectionRepository,
-        },
-        signAccessToken,
-        // Involuntary session outcomes -> the forensic audit log. The service's event types are
-        // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
-        // dropped so the service can await the write on the paths that throw immediately after
-        // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
-        audit: event =>
-          logAuthAudit(req, {
-            userId: event.userId,
-            event: event.type,
-            metadata: { ...event.metadata, sid: event.sid },
-          }),
-        logger: req.logger,
-      });
+      const rotated = await authSessionService
+        .rotateSession(token, {
+          db: {
+            authSessions: authSessionRepository,
+            users: userRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
+          signAccessToken,
+          // Involuntary session outcomes -> the forensic audit log. The service's event types are
+          // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
+          // dropped so the service can await the write on the paths that throw immediately after
+          // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
+          audit: event =>
+            logAuthAudit(req, {
+              userId: event.userId,
+              event: event.type,
+              metadata: { ...event.metadata, sid: event.sid },
+            }),
+          logger: req.logger,
+        })
+        .catch(async error => {
+          if (useCookie && !bodyToken && readAdminReturnCookie(req) && error instanceof UnauthorizedError) {
+            throw new UnauthorizedError('Support session ended. Return to admin.', {
+              code: 'impersonation_return_required',
+            });
+          }
+          if (error instanceof UnauthorizedError) {
+            throw (await suspendedSessionRefusal(token).catch(() => null)) ?? error;
+          }
+          throw error;
+        });
       requireNonSystemUser(rotated.user);
       await refuseBlockedRotatedSession(rotated, req.logger);
       return sendSession(
         {
           // Redact before returning: the bootstrap refresh feeds this straight into the client's
           // currentUser, so it must carry the same self-view shape as the login endpoints.
-          user: redactUserSecretsForSelf(rotated.user),
+          user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(rotated.user)),
           accessToken: rotated.accessToken,
           impersonating: !!rotated.impersonatedBy,
         },
@@ -116,7 +116,7 @@ const handler = baseApi({ auth: false })
     // signed with the previous secret for a 24-hour grace period
     const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     let previousSecret: string | undefined;
-    // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
+    // `previousKey` is stored encrypted at rest (encryptAtRest);
     // decrypt before verifying. Legacy plaintext rows pass through unchanged.
     if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
       previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
@@ -125,6 +125,7 @@ const handler = baseApi({ auth: false })
     const decoded = authTokenGenerator.verifyRefreshToken(token, previousSecret);
 
     if (!decoded) throw new UnauthorizedError('Invalid refresh token');
+    if (decoded.impersonatedBy) throw new UnauthorizedError('Legacy support session expired. Return to admin.');
 
     const user = await User.findById(decoded.userId);
 
@@ -142,20 +143,16 @@ const handler = baseApi({ auth: false })
 
     // Migrate: mint a fresh session. impersonatedBy is re-stamped so an impersonated session that
     // refreshes keeps the marker (otherwise logout.ts's impersonation guard stops applying).
-    const migrated = await authSessionService.issueSession(
-      user.id,
-      {
-        createdVia: 'legacy-migration',
-        tokenVersion: user.tokenVersion ?? 0,
-        impersonatedBy: decoded.impersonatedBy,
-        device: buildSessionDevice(req),
-      },
-      { db: { authSessions: authSessionRepository }, signAccessToken, logger: req.logger }
-    );
+    const migrated = await issueSessionForRequest(req, user.id, {
+      createdVia: 'legacy-migration',
+      tokenVersion: user.tokenVersion ?? 0,
+      impersonatedBy: decoded.impersonatedBy,
+      device: buildSessionDevice(req),
+    });
 
     return sendSession(
       {
-        user: redactUserSecretsForSelf(user),
+        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(user)),
         accessToken: migrated.accessToken,
         impersonating: !!decoded.impersonatedBy,
       },

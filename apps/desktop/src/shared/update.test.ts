@@ -226,12 +226,22 @@ describe('isBusy / describeBusy', () => {
     expect(isBusy({ ...quiet, replying: 1 })).toBe(true);
     expect(isBusy({ ...quiet, awaitingApproval: 1 })).toBe(true);
     expect(isBusy({ ...quiet, background: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, terminals: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, modelDownloads: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, modelServers: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, terminals: 0, modelDownloads: 0, modelServers: 0 })).toBe(false);
   });
 
   it('reads as a sentence, singular and plural', () => {
     expect(describeBusy(quiet)).toBe('Nothing is running.');
     expect(describeBusy({ ...quiet, replying: 1 })).toBe('1 session is still working.');
     expect(describeBusy({ ...quiet, background: 2 })).toBe('2 background processes are running.');
+    expect(describeBusy({ ...quiet, terminals: 1 })).toBe('1 terminal session is open.');
+    expect(describeBusy({ ...quiet, terminals: 2 })).toBe('2 terminal sessions are open.');
+    expect(describeBusy({ ...quiet, modelDownloads: 1 })).toBe('1 model download is active.');
+    expect(describeBusy({ ...quiet, modelDownloads: 2 })).toBe('2 model downloads are active.');
+    expect(describeBusy({ ...quiet, modelServers: 1 })).toBe('1 model server is running.');
+    expect(describeBusy({ ...quiet, modelServers: 2 })).toBe('2 model servers are running.');
     expect(describeBusy({ replying: 2, awaitingApproval: 1, background: 3 })).toBe(
       '2 sessions are still working, 1 session is waiting for you and 3 background processes are running.'
     );
@@ -278,6 +288,15 @@ describe('isNewerRelease', () => {
     expect(isNewerRelease('0.1.13', '0.1.12-local.0123456789ab')).toBe(true);
   });
 
+  it('does not offer a source run the release it was cut from', () => {
+    // scripts/dev-version.cjs names a run after desktop-v0.203.0 "0.203.0-dev.g<sha>[.dirty]".
+    expect(isNewerRelease('0.203.0', '0.203.0-dev.gabc123def456.dirty')).toBe(false);
+    expect(isNewerRelease('0.202.0', '0.203.0-dev.gabc123def456')).toBe(false);
+    expect(isNewerRelease('0.204.0', '0.203.0-dev.gabc123def456.dirty')).toBe(true);
+    expect(isNewerRelease('0.1.0', '0.0.0-dev.unknown')).toBe(true);
+    expect(isNewerRelease('0.0.0', '0.0.0-dev.unknown')).toBe(false);
+  });
+
   it('is false when either side does not parse', () => {
     expect(isNewerRelease('garbage', '0.1.10')).toBe(false);
     expect(isNewerRelease('0.2.0', '')).toBe(false);
@@ -311,5 +330,12 @@ describe('updateNoticeVersion', () => {
   it('hides the dismissed version only, and shows a later one again', () => {
     expect(updateNoticeVersion(offered('1.1.0', { dismissedVersion: '1.1.0' }))).toBeNull();
     expect(updateNoticeVersion(offered('1.2.0', { dismissedVersion: '1.1.0' }))).toBe('1.2.0');
+  });
+
+  it('keeps showing a download the user started, and one waiting for a restart, after the offer was dismissed', () => {
+    const declined = offered('1.1.0', { dismissedVersion: '1.1.0' });
+    const downloading = reduceUpdate(declined, { type: 'download-started' });
+    expect(updateNoticeVersion(downloading)).toBe('1.1.0');
+    expect(updateNoticeVersion(reduceUpdate(downloading, { type: 'downloaded', version: '1.1.0' }))).toBe('1.1.0');
   });
 });

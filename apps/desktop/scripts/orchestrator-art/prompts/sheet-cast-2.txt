@@ -1,0 +1,11 @@
+Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.
+Row 1: a short round halfling bard with curly auburn hair and freckles, a green cap with a red feather, a mustard-yellow doublet and a small lute slung on the back.
+Row 2: a tall broad-shouldered orc alchemist with green skin, small tusks and a white topknot, a maroon apron over a cream shirt and a belt of colorful potion vials.
+Row 3: a human knight with dark brown skin and short black curly hair, silver plate armor, a red tabard with a gold crest and a round shield on the back.
+Row 4: a slim cat-folk cartographer with orange tabby fur, cat ears and a striped tail, a teal vest, a brown satchel and a rolled map under one arm.
+The same 5 poses in the same order in every row, left to right:
+Column 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.
+Column 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.
+Column 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.
+Column 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.
+Column 5 IDLE: standing neutral facing the viewer, arms at the sides.

@@ -11,7 +11,7 @@ type CancelInviteByIdParameters = z.infer<typeof cancelInviteByIdSchema>;
 
 interface CancelInviteByIdAdapters {
   db: InviteTypeAuthAdapters & {
-    invites: Pick<IInviteRepository, 'findById' | 'update'>;
+    invites: Pick<IInviteRepository, 'findById' | 'closeInvite'>;
   };
 }
 
@@ -33,11 +33,5 @@ export const cancelInviteById = async (
 
   await authorizeByInviteType(user, invite.type, invite.documentId, db, { requireManageGroups: true });
 
-  invite.remaining = 0;
-  if (invite.recipients) {
-    invite.recipients.pending = [];
-  }
-
-  await db.invites.update({ id: invite.id, remaining: invite.remaining, recipients: invite.recipients });
-  return db.invites.findById(id);
+  return db.invites.closeInvite(invite.id);
 };

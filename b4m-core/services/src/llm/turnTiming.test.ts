@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ITurnTiming } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from '@bike4mind/llm-adapters';
+import {
+  bedrockEmptyResponseMessage,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+} from '@bike4mind/llm-adapters';
 
 const send = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
@@ -52,6 +56,12 @@ describe('classifyTurnRetryReason', () => {
     );
 
     expect(classifyTurnRetryReason(truncated)).toBe('stream_truncated');
+  });
+
+  it('reads a Bedrock stall before the first token as an idle timeout, not a truncation', () => {
+    const stalled = new Error(bedrockEmptyResponseMessage('m', 'r', true));
+
+    expect(classifyTurnRetryReason(stalled)).toBe('stream_idle_timeout');
   });
 
   it('reads a stream that ended without message_stop as truncated, not stalled', () => {
@@ -164,6 +174,21 @@ describe('TurnTimingRecorder', () => {
     const timing = recorder.snapshot();
     expect(timing.retries.map(retry => retry.reason)).toEqual(['stream_idle_timeout', 'overloaded']);
     expect(timing.fallbackHops).toBe(1);
+  });
+
+  it('stores masked retries but returns and logs the original', () => {
+    const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
+    recorder.maskStoredRetries(retry => ({ ...retry, status: undefined, requestId: undefined, model: 'shown' }));
+
+    const original = recorder.recordRetry(withStatus('Overloaded', 529, { requestID: 'req_1' }), 0, 'served');
+    recorder.sink.onRetry({ error: withStatus('Overloaded', 529), delayMs: 0, model: 'served' });
+
+    expect(original).toMatchObject({ status: 529, model: 'served' });
+    for (const stored of recorder.snapshot().retries) {
+      expect(stored).toMatchObject({ reason: 'overloaded', model: 'shown' });
+      expect(stored.status).toBeUndefined();
+      expect(stored.requestId).toBeUndefined();
+    }
   });
 
   it('caps the persisted retry list', () => {

@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   organizationRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../access';
 

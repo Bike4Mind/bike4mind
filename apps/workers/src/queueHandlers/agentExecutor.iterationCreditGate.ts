@@ -1,7 +1,7 @@
 import type { AgentStep } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { SPEND_FROZEN_ERROR_CODE, type ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { uncoveredIterationCredits } from './agentExecutor.billing';
+import { nextIterationCredits, uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
 
 export function aggregationGraceReasonOf(
@@ -61,6 +61,11 @@ export interface IterationCreditGateArgs {
   lastInputTokens: number;
   /** Live balance of whoever pays for the run, re-read so a snapshot cannot go stale. */
   readBalance: () => Promise<number>;
+  /**
+   * The new-account spend cap's refusal message for an iteration of `requiredCredits`, or null
+   * (creditService.checkNewAccountSpendCap). Read only once the balance covers the iteration.
+   */
+  checkSpendCap: (requiredCredits: number) => Promise<string | null>;
   /** Only read when the gate stops the run, so a live iteration never pays for a snapshot. */
   snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
 }
@@ -73,8 +78,9 @@ export interface IterationCreditGateDeps {
 }
 
 /**
- * Stops the run when the payer's live balance cannot cover the next iteration. Returns true
- * when it stopped, so the caller can leave the loop.
+ * Stops the run when the payer's live balance cannot cover the next iteration, or when the
+ * iteration would take a new account over its spend cap. Returns true when it stopped, so the
+ * caller can leave the loop.
  */
 export async function stopUnfundedIteration(
   args: IterationCreditGateArgs,
@@ -82,21 +88,153 @@ export async function stopUnfundedIteration(
 ): Promise<boolean> {
   const balance = await args.readBalance();
   const uncoveredCredits = uncoveredIterationCredits(balance, args.modelInfo, args.lastInputTokens);
-  if (uncoveredCredits === undefined) return false;
+  if (uncoveredCredits !== undefined) {
+    deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
+      balance,
+      requiredCredits: uncoveredCredits,
+      iterationIndex: args.iterationIndex,
+    });
+    await stopOutOfCredits(args, deps);
+    return true;
+  }
 
-  deps.logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
-    balance,
-    requiredCredits: uncoveredCredits,
-    iterationIndex: args.iterationIndex,
-  });
+  const spendCapMessage = await args.checkSpendCap(nextIterationCredits(args.modelInfo, args.lastInputTokens));
+  if (spendCapMessage === null) return false;
+  await stopRun(args, deps, spendCapMessage, `Stopped: ${spendCapMessage}`);
+  return true;
+}
+
+/**
+ * Ends the run as out of credits: the per-iteration gate's stop, also used when the round output
+ * cap (agentExecutor.roundOutputCap.ts) finds the balance cannot buy even a short answer.
+ */
+export async function stopOutOfCredits(
+  args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
+  deps: IterationCreditGateDeps
+): Promise<void> {
+  await stopRun(args, deps, 'Insufficient credits to continue agent execution', 'Stopped: out of credits.');
+}
+
+async function stopRun(
+  args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
+  deps: IterationCreditGateDeps,
+  failureMessage: string,
+  stoppedMessage: string
+): Promise<void> {
   const { steps, partialAnswer } = args.snapshot();
-  await deps.markFailed(args.executionId, {
-    message: 'Insufficient credits to continue agent execution',
-  });
+  await deps.markFailed(args.executionId, { message: failureMessage });
   await deps.sendWs('failed', { executionId: args.executionId, reason: 'insufficient_credits', partialResult: steps });
   await deps.persistRunAsQuest(
     args.executionId,
-    partialAnswer ? `Stopped: out of credits. Partial response:\n\n${partialAnswer}` : 'Stopped: out of credits.'
+    partialAnswer ? `${stoppedMessage} Partial response:\n\n${partialAnswer}` : stoppedMessage
   );
+}
+
+export interface IterationAccountGateArgs {
+  executionId: string;
+  /** Why the run's user may no longer spend, re-read per iteration; null when they may. */
+  readAccessDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when its user's account was blocked (ban, dispute, suspension) or AI-restricted after the run
+ * was admitted. Independent of enforceCredits: a blocked account spends nothing either way. Returns true when
+ * it stopped.
+ */
+export async function stopBlockedAccountIteration(
+  args: IterationAccountGateArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readAccessDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[Account] Account can no longer use AI; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
   return true;
+}
+
+/** The `failed` event reason (and subagent error) for a run stopped by a spend freeze. */
+export const SPEND_FROZEN_STOP_REASON = SPEND_FROZEN_ERROR_CODE;
+
+export interface IterationSpendFreezeArgs {
+  executionId: string;
+  /** The freeze refusal for the run's user, org or API key, re-read per iteration; null when none applies. */
+  readFreezeDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when an admin froze its user, organization or API key after the run was admitted. Terminal, like
+ * an unfunded iteration: the run is not parked for resumption. Independent of enforceCredits. Returns true when
+ * it stopped.
+ */
+export async function stopSpendFrozenIteration(
+  args: IterationSpendFreezeArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readFreezeDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[SpendFreeze] Spend is frozen; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', {
+    executionId: args.executionId,
+    reason: SPEND_FROZEN_STOP_REASON,
+    partialResult: steps,
+  });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
+  return true;
+}
+
+export const ACCOUNT_CHECK_FAILED_MESSAGE = 'Stopped: the account status could not be verified. Please retry.';
+
+/**
+ * Per-iteration account re-check for subagent runs, which the parent's own gate cannot reach while the
+ * delegating tool call is in progress. Reads at most once per (child, iteration); calls `onDenied` once with
+ * the refusal, or with ACCOUNT_CHECK_FAILED_MESSAGE when the read fails (fail-closed), and stops checking.
+ * Tracker `onStep` callbacks are not awaited by the orchestrator, so the abort lands on the next provider
+ * call already in flight rather than strictly before it.
+ */
+export function createSubagentAccountCheck(deps: {
+  readAccessDenial: () => Promise<string | null>;
+  onDenied: (reason: string) => void;
+  logger: Pick<Logger, 'warn' | 'error'>;
+}): (childExecutionId: string, iteration: number) => Promise<void> {
+  const lastCheckedIteration = new Map<string, number>();
+  let denied = false;
+  return async (childExecutionId, iteration) => {
+    if (denied || lastCheckedIteration.get(childExecutionId) === iteration) return;
+    lastCheckedIteration.set(childExecutionId, iteration);
+    let reason: string | null;
+    try {
+      reason = await deps.readAccessDenial();
+    } catch (err) {
+      deps.logger.error('[Account] Subagent account check failed; stopping fail-closed', {
+        childExecutionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      reason = ACCOUNT_CHECK_FAILED_MESSAGE;
+    }
+    if (!reason || denied) return;
+    denied = true;
+    deps.logger.warn('[Account] Account can no longer use AI; stopping subagent', { childExecutionId });
+    deps.onDenied(reason);
+  };
+}
+
+/**
+ * The parent loop's account read once an in-process subagent check may have refused the run: a latched refusal
+ * (including a failed read) is final and skips the read, so the run stops instead of continuing with its tools
+ * aborted.
+ */
+export function latchedAccountDenial(
+  latched: () => string | null,
+  read: () => Promise<string | null>
+): () => Promise<string | null> {
+  return async () => latched() ?? (await read());
 }

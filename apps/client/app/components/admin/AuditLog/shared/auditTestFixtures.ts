@@ -1,4 +1,4 @@
-import type { AuditEntry } from '@bike4mind/common';
+import type { AuditEntry, AuditReview, AuditReviewQueueEntry } from '@bike4mind/common';
 
 export const makeAuditEntry = (overrides: Partial<AuditEntry> = {}): AuditEntry => ({
   id: 'entry-1',
@@ -13,3 +13,17 @@ export const makeAuditEntry = (overrides: Partial<AuditEntry> = {}): AuditEntry 
   context: { source: 'admin_ui' },
   ...overrides,
 });
+
+export const makeAuditReview = (overrides: Partial<AuditReview> = {}): AuditReview => ({
+  auditEntryId: 'entry-1',
+  reviewer: { userId: 'reviewer-1', name: 'Rita Reviewer' },
+  reviewedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+  ...overrides,
+});
+
+export const makeReviewQueueEntry = (
+  overrides: Partial<AuditEntry> & { review?: AuditReview | null } = {}
+): AuditReviewQueueEntry => {
+  const { review = null, ...entryOverrides } = overrides;
+  return { ...makeAuditEntry({ severity: 'critical', ...entryOverrides }), review };
+};

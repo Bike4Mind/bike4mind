@@ -23,6 +23,9 @@ env:
   DEFAULT_ZAP_TARGET_URL: ${{ vars.OWASP_ZAP_TARGET }}
   DEFAULT_ZAP_STAGE: dev
 
+permissions:
+  contents: read
+
 jobs:
   zap-website-scan:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}

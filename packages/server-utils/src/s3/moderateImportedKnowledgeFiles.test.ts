@@ -67,9 +67,25 @@ describe('moderateImportedKnowledgeFiles', () => {
     // recovery accounting overstates itself.
     const args = buildArgs({ persist: vi.fn(async () => false) });
     const res = await moderateImportedKnowledgeFiles(args);
-    expect(res).toEqual({ scanned: 0 });
+    expect(res).toEqual({ scanned: 0, deferred: 0 });
     expect(args.release).not.toHaveBeenCalled(); // the successor owns the row now; do not touch it
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
+  });
+
+  it('holds a deferred scan pending by releasing its claim, without persisting or counting it', async () => {
+    const moderate = vi.fn(async () => ({
+      moderationStatus: 'pending' as const,
+      deferReason: 'moderation_budget' as const,
+    })) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const meter = { reserveModerationCalls: vi.fn(), recordModerationCalls: vi.fn() };
+    const meterFor = vi.fn(() => meter);
+    const args = buildArgs({ moderate, meterFor });
+    const res = await moderateImportedKnowledgeFiles(args);
+    expect(res).toEqual({ scanned: 0, deferred: 1 });
+    expect(meterFor).toHaveBeenCalledWith('f1');
+    expect(moderate).toHaveBeenCalledWith(expect.objectContaining(meter));
+    expect(args.release).toHaveBeenCalledWith('oid', CLAIMED_AT, { countAttempt: false });
+    expect(args.persist).not.toHaveBeenCalled();
   });
 
   it('skips a file whose claim was lost (owned by another scan / already terminal)', async () => {

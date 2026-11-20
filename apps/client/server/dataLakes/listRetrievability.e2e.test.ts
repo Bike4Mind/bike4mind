@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { DataLakeAccessGrantModel, DataLakeModel, Organization, Session } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { resolveRetrievalLakeScopeForUser } from './resolveRetrievalLakeScope';
+import { resolveRetrievalLakeScopeForUser } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 import { labelLakeRetrievability } from './labelLakeRetrievability';
 import { findOwnSession, resolveLakeListRetrievalScope } from './resolveLakeListRetrievalScope';
 
@@ -61,9 +61,11 @@ beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
   MEMBER_ORG = String((await Organization.create({ name: 'member-org', userId: A }))._id);
-  // A is an appointed admin of this org but not a member: it can manage (pre-authorize) the org's
-  // lakes without retrieval reaching them.
-  ADMIN_ONLY_ORG = String((await Organization.create({ name: 'admin-org', userId: C, adminUserIds: [A] }))._id);
+  // A is a manager of this org via a users[] row with no permissions, so not a member: it can manage
+  // (pre-authorize) the org's lakes without retrieval reaching them.
+  ADMIN_ONLY_ORG = String(
+    (await Organization.create({ name: 'admin-org', userId: C, adminUserIds: [A], users: [{ userId: A }] }))._id
+  );
   rows = [
     await seedLake('own', A),
     await seedLake('org-member', C, { organizationId: MEMBER_ORG }),

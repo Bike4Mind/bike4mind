@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
@@ -18,7 +18,7 @@ const mockAuditCreate = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ UserApiKeyAuditLog: { create: mockAuditCreate } }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({ verifyEmbedApiKey: mockVerifyEmbedApiKey }));
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyEmbedApiKey: mockVerifyEmbedApiKey }));
 
 const mockResolveIdentifiedEmbedUser = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', async () => {
@@ -32,7 +32,7 @@ vi.mock('@server/embed/identifiedEmbedUser', async () => {
 });
 
 import handler from '../session';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
 
@@ -124,9 +124,16 @@ describe('POST /api/embed/session', () => {
     expect(json.error_description).toBe('Origin not allowed for this embed key');
   });
 
-  it('mints for an opaque origin when the key has no allowed origins', async () => {
+  it('denies an opaque origin when the key has no allowed origins', async () => {
     mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
-    const { status } = await mint({}, { origin: 'null' });
+    const { status, json } = await mint({}, { origin: 'null' });
+    expect(status).toBe(403);
+    expect(json.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('mints without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await mint({});
     expect(status).toBe(200);
   });
 

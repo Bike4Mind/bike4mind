@@ -185,6 +185,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     // revokeAccess also ends the removed member's data-lake access on this org's lakes. No org
     // lakes here, so that step is a no-op and the assertions below stay about membership.
     mockLakeRepositories = {
+      userApiKeys: { revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]) },
       dataLakes: {
         findByOrganizationId: vi.fn().mockResolvedValue([]),
         update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
@@ -199,7 +200,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
   });
 
   it('should allow manager to revoke access from members', async () => {
-    const result = await organizationService.revokeAccess(
+    const { organization: result } = await organizationService.revokeAccess(
       mockManager as IUserDocument,
       {
         id: mockOrganization.id!,
@@ -246,7 +247,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
   });
 
   it('should allow owner to revoke access from members', async () => {
-    const result = await organizationService.revokeAccess(
+    const { organization: result } = await organizationService.revokeAccess(
       mockBillingOwner as IUserDocument,
       {
         id: mockOrganization.id!,

@@ -4,6 +4,8 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { ChatService } from '../chat/ChatService';
 import type { SessionStore } from '../chat/SessionStore';
 import { currentBranch } from '../chat/project/git';
+import { AutoFixAttemptsPreference } from './AutoFixAttemptsPreference';
+import { registerAutoFixAttemptsIpc } from './autoFixAttemptsIpc';
 import { runGh } from './gh';
 import { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
@@ -13,6 +15,8 @@ const OPTIONS: readonly PrOption[] = ['autoFix', 'autoMerge', 'autoArchive'];
 
 export interface RegisterPullRequestsOptions {
   path: string;
+  /** Where the Settings auto-fix attempt budget is kept. */
+  autoFixAttemptsPath: string;
   /** Lazy, because the service is built after this and is only needed once a session acts. */
   chat: () => ChatService;
   store: SessionStore;
@@ -24,7 +28,9 @@ export interface RegisterPullRequestsOptions {
 export function registerPullRequests(options: RegisterPullRequestsOptions): PrMonitor {
   const { store, logger, send, chat } = options;
   const watchedSenders = new Set<number>();
+  const autoFixAttempts = new AutoFixAttemptsPreference(options.autoFixAttemptsPath);
   const monitor = new PrMonitor({
+    autoFixAttempts: () => autoFixAttempts.read(),
     store: new PrBindingStore(options.path),
     github: new PrGithub(runGh),
     logger,
@@ -32,11 +38,16 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     emitSummary: event => send(IPC_CHANNELS.prSummaryChanged, event),
     chat: {
       isCode: async sessionId => (await store.get(sessionId))?.mode === 'code',
-      project: async sessionId => {
+      project: async (sessionId, options) => {
         const session = await store.get(sessionId);
         const project = session?.mode === 'code' ? session.project : undefined;
         if (!project) return null;
-        const branch = project.workspaceBranch ?? (await currentBranch(project.workingDirectory).catch(() => null));
+        const checkedOut = () => currentBranch(project.workingDirectory).catch(() => null);
+        // The recorded branch first otherwise: before a pending worktree exists, workingDirectory
+        // is the repository folder, whose checkout is not this session's branch.
+        const branch = options?.live
+          ? ((await checkedOut()) ?? project.workspaceBranch ?? null)
+          : (project.workspaceBranch ?? (await checkedOut()));
         return { workingDirectory: project.workingDirectory, branch };
       },
       archive: async sessionId => {
@@ -84,5 +95,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
       ? monitor.setOption(sessionId, option as PrOption, enabled === true)
       : { ok: false, error: 'Unknown option.' }
   );
+  registerAutoFixAttemptsIpc(ipcMain, {
+    preference: autoFixAttempts,
+    apply: attempts => monitor.setAutoFixAttempts(attempts),
+  });
   return monitor;
 }

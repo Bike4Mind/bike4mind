@@ -38,6 +38,6 @@ UserApiKeyAuditLogSchema.index({ keyId: 1, createdAt: -1 });
 UserApiKeyAuditLogSchema.index({ actorUserId: 1, createdAt: -1, _id: -1 });
 UserApiKeyAuditLogSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const UserApiKeyAuditLog =
+export const UserApiKeyAuditLog: mongoose.Model<IUserApiKeyAuditLogDocument> =
   (mongoose.models.UserApiKeyAuditLog as mongoose.Model<IUserApiKeyAuditLogDocument>) ??
   mongoose.model<IUserApiKeyAuditLogDocument>('UserApiKeyAuditLog', UserApiKeyAuditLogSchema);

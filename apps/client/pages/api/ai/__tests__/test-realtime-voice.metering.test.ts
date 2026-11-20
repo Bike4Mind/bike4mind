@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 // @vitest-environment node
 /**
  * POST /api/ai/test-realtime-voice synthesizes with OpenAI tts-1-hd on the platform key, so it runs
@@ -6,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { computeTtsUsd, usdToCredits } from '@bike4mind/common';
+import { computeTtsUsd, isSpendFrozenError, usdToCredits } from '@bike4mind/common';
 import { holdPreflightCredits } from '@server/utils/creditPreflight';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 
@@ -20,6 +21,7 @@ const m = vi.hoisted(() => ({
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
+  activeFreeze: vi.fn(),
 }));
 
 vi.mock('@server/utils/creditPreflight', async importOriginal => {
@@ -33,7 +35,8 @@ vi.mock('@server/utils/deductTtsCredits', async importOriginal => {
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  spendFreezeRepository: { findActiveForSubject: m.activeFreeze },
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: m.recordUsage },
@@ -64,10 +67,14 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: { isCurrentOrgMember: m.isMember },
   latchUsage: () => undefined,
 }));
-vi.mock('@bike4mind/services/llm/modelAdmission', () => ({}));
+vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
+  createModelAdmission: vi.fn(() => ({ assert: async () => {}, admits: async () => true })),
+  loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
+}));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
 vi.mock('openai', () => ({
   default: class {
     audio = { speech: { create: m.create } };
@@ -100,9 +107,25 @@ beforeEach(() => {
     currentCredits: (m.balance += delta),
   }));
   m.orgIncrement.mockResolvedValue({ id: 'o1', currentCredits: 900 });
+  m.activeFreeze.mockResolvedValue(null);
 });
 
 describe('POST /api/ai/test-realtime-voice metering', () => {
+  it('refuses paid-only preview speech before the hold and provider', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockReturnValueOnce({ assert: assertAdmission, admits: async () => false });
+    await expect(call()).rejects.toBe(refusal);
+    expect(createModelAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) })
+    );
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd', { orgModelBackend: 'openai' });
+    expect(holdPreflightCredits).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
     m.balance = 0;
 
@@ -218,5 +241,36 @@ describe('POST /api/ai/test-realtime-voice metering', () => {
     expect(m.deduct).not.toHaveBeenCalled();
     expect(m.userIncrement).not.toHaveBeenCalled();
     expect(m.orgIncrement).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'refuses a paused key before the provider whether or not credits are enforced (%s)',
+    async enforced => {
+      m.enforce = enforced;
+      m.activeFreeze.mockResolvedValue({ scopeType: 'apiKey', frozenAt: new Date('2026-11-18T00:00:00Z') });
+
+      const error = await call({ apiKeyInfo: { keyId: 'k1', billingOwnerType: 'User' } }).catch((err: unknown) => err);
+
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(m.activeFreeze).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', apiKeyId: 'k1' }));
+      expect(m.create).not.toHaveBeenCalled();
+      expect(m.userIncrement).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports the model admission refusal, not the freeze, when both apply', async () => {
+    const refusal = new Error('paid plan required');
+    vi.mocked(createModelAdmission).mockReturnValueOnce({
+      assert: async () => {
+        throw refusal;
+      },
+      admits: async () => false,
+    });
+    m.activeFreeze.mockResolvedValue({ scopeType: 'apiKey', frozenAt: new Date('2026-11-18T00:00:00Z') });
+
+    const error = await call({ apiKeyInfo: { keyId: 'k1', billingOwnerType: 'User' } }).catch((err: unknown) => err);
+
+    expect(error).toBe(refusal);
+    expect(isSpendFrozenError(error)).toBe(false);
   });
 });

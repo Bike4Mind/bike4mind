@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatReplyRound, ChatToolCall } from '@shared/chat';
 import { IMPORTED_MESSAGE_PREFIX } from '@shared/claudeImport';
+import { own } from '@shared/ownKeys';
 import { capOutput, outputCapFor } from '../chat/tools/types';
 
 /**
@@ -62,12 +63,12 @@ const TOOL_MAP: Record<string, { name: string; keys?: Record<string, string> }> 
 
 export function mapToolCall(name: string, input: unknown): Pick<ChatToolCall, 'name' | 'input'> {
   const args = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
-  const mapped = TOOL_MAP[name];
+  const mapped = own(TOOL_MAP, name);
   if (!mapped) return { name, input: args };
   const keys = mapped.keys ?? {};
   return {
     name: mapped.name,
-    input: Object.fromEntries(Object.entries(args).map(([key, value]) => [keys[key] ?? key, value])),
+    input: Object.fromEntries(Object.entries(args).map(([key, value]) => [own(keys, key) ?? key, value])),
   };
 }
 

@@ -18,7 +18,7 @@ import { join } from 'node:path';
  *
  * Deliberately does NOT re-invoke generate-premium-glue.mjs itself: that script's
  * generateApiStubs wipes and rebuilds the whole premium-namespaced pages/api tree, which
- * raced with premiumToolsWiring.test.ts's directory scan of that same tree when both ran
+ * raced with premiumToolsWiring.repo.test.ts's directory scan of that same tree when both ran
  * concurrently (no ordering edge between sibling test files) - a real, if low-probability,
  * flake this file used to introduce. Reading the already-generated file avoids the race
  * entirely.

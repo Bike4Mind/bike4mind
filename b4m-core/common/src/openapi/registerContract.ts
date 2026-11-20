@@ -5,9 +5,10 @@ import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
 // Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema, UpgradeRequiredErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
 import { deprecationHeaders, deprecationNotice } from '../api-contract/deprecation';
+import { CLIENT_NAME_HEADER, CLIENT_VERSION_HEADER } from '../api-contract/clientVersion';
 
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
@@ -58,6 +59,16 @@ const DEPRECATION_HEADER_DOCS: Record<string, string> = {
 
 /** The auto-injected scope 403's body: one shared component, $ref'd by every operation. */
 const SCOPE_FORBIDDEN_RESPONSE = annotateInheritedName(ScopeForbiddenErrorSchema).openapi('ScopeForbiddenResponse');
+
+/** The auto-injected client-version 426's body: one shared component, $ref'd by every operation. */
+const UPGRADE_REQUIRED_RESPONSE = annotateInheritedName(UpgradeRequiredErrorSchema).openapi('UpgradeRequiredResponse', {
+  example: {
+    error: 'b4m-sdk-ts 2.0.0 is no longer supported. Upgrade to 2.1.0 or later.',
+    errorCode: 'upgrade_required',
+    client_name: 'b4m-sdk-ts',
+    minimum_version: '2.1.0',
+  },
+});
 
 /**
  * zod-to-openapi derives a parameter's `required`/nullable-ness from
@@ -211,7 +222,8 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   // Same reasoning for the auth failures every authenticated route can return:
-  // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
+  // apiKeyAuth 401s a missing/invalid credential, and 403s an under-scoped key or a
+  // suspended owner (`errorCode: account_suspended`), so every authenticated route gets the 403.
   // Documenting them centrally keeps generated SDKs honest without every author
   // remembering to declare them. Streaming contracts authenticate before the stream
   // opens, so they get them too. A contract may still override either.
@@ -222,9 +234,11 @@ export function registerContract(contract: EndpointContract): void {
         content: { 'application/json': { schema: ErrorResponse } },
       };
     }
-    if (contract.scopes?.length && !responses['403']) {
+    if (!responses['403']) {
       responses['403'] = {
-        description: 'The API key does not hold any of the required scopes.',
+        description: contract.scopes?.length
+          ? 'The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).'
+          : 'The account is suspended (`errorCode: account_suspended`).',
         content: { 'application/json': { schema: SCOPE_FORBIDDEN_RESPONSE } },
       };
     }
@@ -244,6 +258,18 @@ export function registerContract(contract: EndpointContract): void {
           schema: { type: 'string' },
         },
       },
+    };
+  }
+
+  // Every transport runs the client-version gate (CONVENTIONS.md section 9): nextRouteForContract's
+  // prelude, defineLambdaRoute and the completions route. A new transport must run it too or this is false.
+  if (!responses['426']) {
+    responses['426'] = {
+      description:
+        `The request declared a client build (\`${CLIENT_NAME_HEADER}\` + \`${CLIENT_VERSION_HEADER}\`) older than the ` +
+        'minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a ' +
+        'request that omits either header.',
+      content: { 'application/json': { schema: UPGRADE_REQUIRED_RESPONSE } },
     };
   }
 

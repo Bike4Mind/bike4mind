@@ -1,4 +1,10 @@
-import { GenerateImageToolCall, ImageModels, isGPTImageModel, type OpenAIImageQuality } from '@bike4mind/common';
+import {
+  GenerateImageToolCall,
+  ImageModels,
+  isGPTImageModel,
+  resolveLegacyImageModel,
+  type OpenAIImageQuality,
+} from '@bike4mind/common';
 import { isPriceableImageSize, OMITTED_QUALITY_TIER } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 /** Tool-call args that may override the client's saved image selections. Nulls are
@@ -58,10 +64,9 @@ export function resolveImageArgs(
   imageConfig: GenerateImageToolCall | undefined,
   toolArgs: ImageToolArgs
 ): ResolvedImageArgs {
-  // Auto-upgrade gpt-image-1 to gpt-image-2 (latest model) here rather than at the
-  // dispatch site, so billing and the provider call see the same model id.
-  const configuredModel = imageConfig?.model || ImageModels.GPT_IMAGE_2;
-  const model = configuredModel === ImageModels.GPT_IMAGE_1 ? ImageModels.GPT_IMAGE_2 : configuredModel;
+  // Remap a retired model (e.g. gpt-image-1) here rather than at the dispatch site, so
+  // billing and the provider call see the same model id.
+  const model = resolveLegacyImageModel(imageConfig?.model || ImageModels.GPT_IMAGE_2);
 
   const modelSuppliedSize = isPriceableImageSize(toolArgs.size) ? toolArgs.size : undefined;
 

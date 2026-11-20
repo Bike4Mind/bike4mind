@@ -3,6 +3,7 @@ import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { visibleReplyForExport } from '@bike4mind/server-utils/shared/replyUtils';
 import { requestedModelId } from '@client/app/utils/answeringModel';
 import Papa from 'papaparse';
+import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import * as XLSX from 'xlsx';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
@@ -168,7 +169,7 @@ export function sessionToCSV(session: ExportableSession): string {
     'Credits Used': msg.creditsUsed?.toString() || '',
   }));
 
-  return Papa.unparse(rows);
+  return Papa.unparse(rows, { escapeFormulae: CSV_FORMULA_PREFIX });
 }
 
 export async function sessionToExcel(session: ExportableSession, filename: string): Promise<void> {

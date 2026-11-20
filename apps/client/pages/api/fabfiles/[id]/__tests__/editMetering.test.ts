@@ -6,16 +6,29 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import {
+  ChatModels,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  ForbiddenError,
+  TooManyRequestsError,
+  insufficientCreditsError,
+} from '@bike4mind/common';
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
+}));
 
 const m = vi.hoisted(() => ({
   denied: new Set<string>(),
+  admissionFlags: [] as unknown[],
   reserve: vi.fn(),
   refund: vi.fn(),
   settle: vi.fn(),
   complete: vi.fn(),
   findById: vi.fn(),
   assertRewriteFits: vi.fn(),
+  substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
+  getLlm: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -55,30 +68,39 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { assertRewriteFits: m.assertRewriteFits },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'model-a', backend: 'anthropic' }],
-  getLlmByModel: () => ({ complete: m.complete }),
+  getAvailableModels: async () => [
+    { id: 'model-a', backend: 'anthropic' },
+    { id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK, backend: 'anthropic' },
+    { id: 'premium', backend: 'anthropic' },
+  ],
+  getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModelConfig: async () => null },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
-  createModelAdmission: async () => ({
-    admits: async (id: string) => !m.denied.has(id),
-    assert: async (id: string) => {
-      if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
-  completionRequestCeilingUsd: () => 1,
+  createModelAdmission: async (_user: unknown, _models: unknown, systemModel?: boolean) => {
+    m.admissionFlags.push(systemModel);
+    return {
+      admits: async (id: string) => !m.denied.has(id),
+      assert: async (id: string) => {
+        if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
+  completionRequestCeilingUsd: (model: { id: string }) => (model.id === 'cheap' ? 0.1 : 1),
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
+  resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   completionUsd: (
-    _model: unknown,
+    model: { id: string },
     u: { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }
   ) =>
-    (u.inputTokens ?? 0) * 0.001 +
-    (u.outputTokens ?? 0) * 0.002 +
-    (u.cacheReadInputTokens ?? 0) * 0.0001 +
-    (u.cacheCreationInputTokens ?? 0) * 0.00125,
+    ((u.inputTokens ?? 0) * 0.001 +
+      (u.outputTokens ?? 0) * 0.002 +
+      (u.cacheReadInputTokens ?? 0) * 0.0001 +
+      (u.cacheCreationInputTokens ?? 0) * 0.00125) *
+    (model.id === 'cheap' ? 0.1 : 1),
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => m.settle(charge),
 }));
 
@@ -86,11 +108,11 @@ const { default: handler } = await import('@pages/api/fabfiles/[id]/edit');
 
 const FILE_ID = '65a000000000000000000001';
 
-async function call(applyImmediately = false) {
+async function call(applyImmediately = false, model?: string) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: FILE_ID },
-    body: { instruction: 'Fix the typo', model: 'model-a', applyImmediately },
+    body: { instruction: 'Fix the typo', model: arguments.length > 1 ? model : 'model-a', applyImmediately },
   });
   Object.assign(req, { user: { id: 'u1' }, ability: { can: () => true }, logger: console });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
@@ -101,6 +123,8 @@ async function call(applyImmediately = false) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.denied.clear();
+  m.admissionFlags.length = 0;
+  m.substitute.mockResolvedValue(undefined);
   const file = {
     id: FILE_ID,
     fileName: 'a.txt',
@@ -161,12 +185,34 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    m.reserve.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it('403s a model the user is not admitted to, before reserving or calling the provider', async () => {
     m.denied.add('model-a');
 
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
     expect(m.reserve).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('admits a request-supplied model as a user choice and a platform-picked fallback as a system model', async () => {
+    await call();
+    await call(false, undefined);
+
+    expect(m.admissionFlags).toEqual([false, true]);
   });
 
   it('settles a funded call on the provider-reported usage', async () => {
@@ -178,6 +224,8 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
       model: 'model-a',
       provider: 'anthropic',
       usd: 200 * 0.001 + 10 * 0.002,
+      costUsd: 200 * 0.001 + 10 * 0.002,
+      executed: { id: 'model-a', backend: 'anthropic' },
       inputTokens: 200,
       outputTokens: 10,
     });
@@ -231,4 +279,97 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
 
     expect(m.assertRewriteFits).not.toHaveBeenCalled();
   });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const cheap = { id: 'cheap', backend: 'openai' };
+
+    it('runs the substitute, prices credits on the requested model and cost on the run model', async () => {
+      m.substitute.mockResolvedValue(cheap);
+
+      await call(false, 'premium');
+
+      expect(m.getLlm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: cheap }));
+      expect(m.complete).toHaveBeenCalledWith('cheap', expect.anything(), expect.anything(), expect.anything());
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ modelIdentityId: 'premium' });
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: 'premium',
+          provider: 'anthropic',
+          usd: expect.closeTo(0.22, 12),
+          costUsd: expect.closeTo(0.022, 12),
+          executed: cheap,
+        })
+      );
+    });
+
+    it('splits credits and cost on the reservation ceiling when no usage is reported', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.complete.mockImplementation(async (_model, _messages, _opts, cb) => cb(['hello world']));
+
+      await call(false, 'premium');
+
+      expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1, costUsd: 0.1, executed: cheap }));
+    });
+
+    it('splits credits and cost when the provider throws after reporting usage', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['partial'], { inputTokens: 100, outputTokens: 0 });
+        throw new Error('stream disconnected');
+      });
+
+      await expect(call(false, 'premium')).rejects.toThrow('stream disconnected');
+
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ model: 'premium', usd: expect.closeTo(0.1, 12), costUsd: expect.closeTo(0.01, 12) })
+      );
+    });
+
+    it('clamps max output to the substitute limit, and keeps 4000 for an unrestricted caller', async () => {
+      m.substitute.mockResolvedValue({ ...cheap, max_tokens: 1500 });
+      await call(false, 'premium');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 1500 });
+
+      m.complete.mockClear();
+      m.substitute.mockResolvedValue(undefined);
+      await call(false, 'premium');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4000 });
+    });
+
+    it('admits the requested model, not the substitute', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.denied.add('cheap');
+
+      const res = await call(false, 'premium');
+
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
+  it('runs the requested model with cost equal to credits when nothing is substituted', async () => {
+    await call(false, 'premium');
+
+    expect(m.complete).toHaveBeenCalledWith('premium', expect.anything(), expect.anything(), expect.anything());
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('modelIdentityId');
+    const charge = m.settle.mock.calls[0][0];
+    expect(charge.costUsd).toBe(charge.usd);
+    expect(charge.executed).toMatchObject({ id: 'premium' });
+  });
+});
+
+it.each([false, true])('releases a failed storage response (cancellation rejects: %s)', async cancelFails => {
+  const response = new Response('private upstream payload', { status: 403 });
+  const cancel = vi.spyOn(response.body!, 'cancel');
+  if (cancelFails) cancel.mockRejectedValue(new Error('stream cancellation failed'));
+  const read = vi.spyOn(response, 'text');
+  vi.stubGlobal('fetch', async () => response);
+
+  await expect(call()).rejects.toMatchObject({
+    statusCode: 400,
+    message: 'Failed to fetch file content from storage',
+  });
+
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  expect(m.complete).not.toHaveBeenCalled();
 });

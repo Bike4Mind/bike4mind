@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { DuplicateFabFileError, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { DuplicateFabFileError, FabFileSourceType, KnowledgeType, isStorageLimitError } from '@bike4mind/common';
+import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
  * ingest, and - the load-bearing one - that neither can be supplied through the parsed request
- * body, only by a server-side caller that has already run the lake write gate.
+ * body, only by a server-side caller that has already run the lake write gate. They also lock the
+ * fetched body against the `MaxFileSize` admin setting.
  */
 
 const fetchAndParseURL = vi.hoisted(() => vi.fn());
@@ -14,7 +15,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   fetchAndParseURL,
 }));
 
-import { createFabFileByUrl, urlFileName } from './createByUrl';
+import { createFabFileByUrl, FinalUrlRejectedError, urlFileName } from './createByUrl';
 
 const URL_UNDER_TEST = 'https://example.com/article';
 
@@ -70,6 +71,9 @@ describe('createFabFileByUrl', () => {
     // Uploaded to the path createFabFile allocated, so S3 ObjectCreated picks it up as usual.
     expect(storageUpload).toHaveBeenCalledWith(created.filePath, 'body text', { ContentType: 'text/plain' });
     expect(result.id).toBe('fab-1');
+    // The server writes these bytes, so the row stays out of the pending client-upload count.
+    expect(created).not.toHaveProperty('clientUpload');
+    expect(created).not.toHaveProperty('presignedUrl');
   });
 
   it('accepts a dotted page title and keeps it as the fileName', async () => {
@@ -397,5 +401,126 @@ describe('createFabFileByUrl nameFile', () => {
     await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), nameFile: urlFileName });
 
     expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('An Article.txt');
+  });
+});
+
+describe('createFabFileByUrl assertFinalUrl', () => {
+  const provenance = {
+    sourceType: FabFileSourceType.PROPOSAL_APPROVAL,
+    sourceMetadata: { proposalId: 'p-1' },
+  };
+
+  beforeEach(() => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'An Article',
+      textContent: 'body text',
+      mimeType: 'text/plain',
+      ext: 'txt',
+      finalUrl: 'https://docs.example.com/moved',
+    });
+  });
+
+  it('passes the post-redirect URL to the predicate and stamps what it returns', async () => {
+    const assertFinalUrl = vi.fn().mockReturnValue({ trustedDomain: 'example.com' });
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance, assertFinalUrl });
+
+    expect(assertFinalUrl).toHaveBeenCalledWith('https://docs.example.com/moved');
+    expect(fabFilesCreate.mock.calls[0][0].sourceMetadata).toEqual({ proposalId: 'p-1', trustedDomain: 'example.com' });
+  });
+
+  it('writes and uploads nothing when the predicate rejects', async () => {
+    const assertFinalUrl = vi.fn().mockImplementation(() => {
+      throw new FinalUrlRejectedError();
+    });
+
+    await expect(
+      createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance, assertFinalUrl })
+    ).rejects.toBeInstanceOf(FinalUrlRejectedError);
+
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+    expect(storageUpload).not.toHaveBeenCalled();
+  });
+
+  it('leaves provenance untouched when no predicate is given', async () => {
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance });
+
+    expect(fabFilesCreate.mock.calls[0][0].sourceMetadata).toEqual({ proposalId: 'p-1' });
+  });
+});
+
+describe('createFabFileByUrl MaxFileSize', () => {
+  const ONE_MB = 1024 * 1024;
+
+  // MaxFileSize is in MB. The default fixture's storageLimit is also in MB (~1TB), so the accept
+  // cases still pass the real quota check after the size check.
+  function limitedAdapters() {
+    const base = adapters();
+    return {
+      ...base,
+      db: {
+        ...base.db,
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '1' }]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        } as never,
+      },
+    };
+  }
+
+  // The settings cache is process-wide, so the MaxFileSize=1 this block loads must not leak.
+  beforeEach(() => invalidateSettingsCache());
+  afterEach(() => invalidateSettingsCache());
+
+  async function expectTooLarge(requestedBytes: number) {
+    const error = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters()).catch(e => e);
+    expect(isStorageLimitError(error)).toBe(true);
+    expect(error.info).toMatchObject({ errorCode: 'file_too_large', requested_bytes: requestedBytes });
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+    expect(storageUpload).not.toHaveBeenCalled();
+  }
+
+  it('refuses extracted text exactly at the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB), mimeType: 'text/plain' });
+    await expectTooLarge(ONE_MB);
+  });
+
+  it('refuses extracted text over the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB + 1), mimeType: 'text/plain' });
+    await expectTooLarge(ONE_MB + 1);
+  });
+
+  it('refuses PDF bytes exactly at the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Doc',
+      textContent: Buffer.alloc(ONE_MB, 1),
+      mimeType: 'application/pdf',
+    });
+    await expectTooLarge(ONE_MB);
+  });
+
+  it('measures multibyte text in bytes, not characters', async () => {
+    // 600k characters is under the limit; 1.2M UTF-8 bytes is not.
+    const text = '\u00e9'.repeat(600_000);
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: text, mimeType: 'text/plain' });
+    await expectTooLarge(Buffer.byteLength(text));
+  });
+
+  it('accepts extracted text one byte under the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'Page', textContent: 'a'.repeat(ONE_MB - 1), mimeType: 'text/plain' });
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters());
+    expect(fabFilesCreate).toHaveBeenCalledTimes(1);
+    expect(storageUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts PDF bytes one byte under the limit', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Doc',
+      textContent: Buffer.alloc(ONE_MB - 1, 1),
+      mimeType: 'application/pdf',
+    });
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, limitedAdapters());
+    expect(fabFilesCreate).toHaveBeenCalledTimes(1);
+    expect(storageUpload).toHaveBeenCalledTimes(1);
   });
 });

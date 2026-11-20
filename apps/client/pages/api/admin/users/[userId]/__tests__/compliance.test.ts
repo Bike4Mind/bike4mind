@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, MODERATION_PAGE_READ, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const { mockUserFind, mockIncidents, mockAuth, mockAuthByEvent } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),
@@ -9,19 +9,9 @@ const { mockUserFind, mockIncidents, mockAuth, mockAuthByEvent } = vi.hoisted(()
   mockAuthByEvent: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      {
-        use: () => chain,
-        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
-      }
-    );
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
@@ -89,12 +79,28 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/:userId/compliance', () => {
-  it('rejects non-admins and short-circuits before ANY data source', async () => {
-    const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual(
+      expect.objectContaining({ adminPermissions: { GET: MODERATION_PAGE_READ } })
+    );
+  });
+
+  it('refuses a delegate without a moderation read permission before ANY data source', async () => {
+    const { promise } = run({ user: { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] } });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: missingAdminPermissionMessage(MODERATION_PAGE_READ),
+    });
     expect(mockUserFind).not.toHaveBeenCalled();
     expect(mockIncidents).not.toHaveBeenCalled();
     expect(mockAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const { res, promise } = run({ user: { id: 'u2', isAdmin: false, adminPermissions: [permission] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFind).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an unauthenticated request (no req.user)', async () => {

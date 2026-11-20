@@ -1,0 +1,131 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, MODERATION_PAGE_READ, missingAdminPermissionMessage } from '@bike4mind/common';
+
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+
+const mockExport = vi.fn();
+vi.mock('@bike4mind/server-utils/admin/usersList/listAdminUsers', () => ({
+  exportAdminUsers: (...args: unknown[]) => mockExport(...args),
+}));
+
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
+}));
+
+import handler from '../export';
+
+const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+
+async function call(query: Record<string, string>, user: Record<string, unknown> = ADMIN) {
+  const { req, res } = createMocks({ method: 'GET', query });
+  Object.assign(req, { user, logger: { error: vi.fn() } });
+  await (handler as unknown as Handler)(req, res);
+  return res;
+}
+
+describe('GET /api/admin/users/export', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExport.mockResolvedValue({ users: [], truncated: false });
+    mockAudit.mockResolvedValue({});
+  });
+
+  describe('provider end-user identifier search', () => {
+    const DIGEST = 'cd'.repeat(32);
+
+    it.each(['ada', 'ada@example.com', 'ab'.repeat(12)])('does not audit the search %j', async search => {
+      await call({ search });
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+
+    it('audits a 64-hex search against the single matched account', async () => {
+      mockExport.mockResolvedValue({
+        users: [{ id: 'u1', username: 'ada', email: 'ada@example.com' }],
+        truncated: false,
+      });
+
+      const res = await call({ search: DIGEST.toUpperCase() });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.provider_id.resolved',
+          target: { kind: 'user', id: 'u1', displayName: 'ada@example.com' },
+          details: { providerEndUserId: DIGEST, source: 'users_export', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
+    it('audits a 64-hex search with no match against the system target', async () => {
+      await call({ search: DIGEST });
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          target: expect.objectContaining({ kind: 'system' }),
+          details: { providerEndUserId: DIGEST, source: 'users_export', matched: false, matchedCount: 0 },
+        })
+      );
+    });
+
+    it('fails the request when the audit write fails', async () => {
+      mockAudit.mockRejectedValue(new Error('audit down'));
+      await expect(call({ search: DIGEST })).rejects.toThrow('audit down');
+    });
+  });
+
+  it('requires JWT auth with admin scope', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ },
+    });
+  });
+
+  it('refuses a delegate without a moderation read permission before reading anything', async () => {
+    const delegate = { id: 'd'.repeat(24), isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(call({}, delegate)).rejects.toThrow(missingAdminPermissionMessage(MODERATION_PAGE_READ));
+    expect(mockExport).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await call({}, { id: 'd'.repeat(24), isAdmin: false, adminPermissions: [permission] });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockExport).toHaveBeenCalledTimes(1);
+  });
+
+  it('exports with the parsed filter and no-store caching', async () => {
+    mockExport.mockResolvedValue({ users: [{ username: 'u' }], truncated: true });
+    const res = await call({ status: 'suspended', emailDomain: 'Example.com' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(res._getJSONData()).toEqual({ users: [{ username: 'u' }], truncated: true });
+    expect(mockExport).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'suspended', emailDomain: 'example.com' })
+    );
+  });
+
+  it("accepts up to 50 tags, past qs's default array limit of 20", async () => {
+    const tags = Array.from({ length: 50 }, (_, index) => `tag${index}`);
+    const query = Object.fromEntries(tags.map((tag, index) => [`tags[${index}]`, tag]));
+    expect((await call(query))._getStatusCode()).toBe(200);
+    expect(mockExport.mock.calls[0][0]).toMatchObject({ tags });
+  });
+
+  it('rejects an invalid filter with 400', async () => {
+    const res = await call({ status: 'bogus' });
+    expect(res._getStatusCode()).toBe(400);
+    const { error, issues } = res._getJSONData() as { error: string; issues: unknown[] };
+    expect(typeof error).toBe('string');
+    expect(error.length).toBeGreaterThan(0);
+    expect(Array.isArray(issues)).toBe(true);
+    expect(mockExport).not.toHaveBeenCalled();
+  });
+});

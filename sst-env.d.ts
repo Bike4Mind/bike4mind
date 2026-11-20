@@ -14,6 +14,26 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "APNS_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_KEY_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_TEAM_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_TOPIC": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "FCM_SERVICE_ACCOUNT": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "AgentExecutor": {
       "name": string
       "type": "sst.aws.Function"
@@ -28,11 +48,6 @@ declare module "sst" {
       "value": string
     }
     "CliToolHandler": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
-    }
-    "CliWsCompletionHandler": {
       "name": string
       "type": "sst.aws.Function"
       "url": string
@@ -66,6 +81,22 @@ declare module "sst" {
       "value": string
     }
     "GEMINI_API_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_CLIENT_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_KEY_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_PRIVATE_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APPLE_TEAM_ID": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -110,6 +141,14 @@ declare module "sst" {
       "value": string
     }
     "GOOGLE_CLIENT_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "HMAC_SIGNING_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "HMAC_SIGNING_SECRET_PREVIOUS": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -265,51 +304,11 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "SECOPS_CODE_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_CODE_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_DISPATCH_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_PACKAGES_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "SECOPS_PROWLER_INGEST_TOKEN": {
       "type": "sst.sst.Secret"
       "value": string
     }
     "SECOPS_PROWLER_WORKFLOW_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_DISPATCH_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_INGEST_TOKEN": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_SECRETS_INGEST_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_WAF_DISTRIBUTION_ID": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-    "SECOPS_WAF_WEBACL_ARN": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -334,6 +333,14 @@ declare module "sst" {
       "value": string
     }
     "SESSION_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "SLACK_ALARMS_WEBHOOK_URL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "SLACK_COST_ALARMS_WEBHOOK_URL": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -365,6 +372,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "SLACK_FEEDBACK_DESTINATIONS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "STRIPE_PUBLISHABLE_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -392,6 +403,22 @@ declare module "sst" {
     "YOUTUBE_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string
+    }
+    "accountDataExportQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountDataExportQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountErasureQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountErasureQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
     }
     "agentContinuationQueue": {
       "type": "sst.aws.Queue"
@@ -462,6 +489,8 @@ declare module "sst" {
       "url": string
     }
     "dlqUrls": {
+      "account-data-export": string
+      "account-erasure": string
       "agent-continuation": string
       "agent-proactive-message": string
       "deep-agent-wake": string
@@ -491,7 +520,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhook-delivery": string
       "release-notes": string
-      "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
       "type": "sst.aws.Queue"
@@ -609,6 +637,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "riskEvidenceQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "riskEvidenceQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "lambdaFunctionNames": {
       "attackSimulation": string
       "type": "sst.sst.Linkable"
@@ -698,6 +734,8 @@ declare module "sst" {
       "url": string
     }
     "sourceQueueUrls": {
+      "accountDataExportQueue": string
+      "accountErasureQueue": string
       "agentContinuationQueue": string
       "agentProactiveMessageQueue": string
       "deepAgentWakeQueue": string
@@ -727,7 +765,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhookDeliveryQueue": string
       "whatsNewGenerationQueue": string
-      "whatsNewHighlightsQueue": string
     }
     "sreFixQueue": {
       "type": "sst.aws.Queue"
@@ -778,14 +815,6 @@ declare module "sst" {
       "url": string
     }
     "whatsNewGenerationQueueDLQ": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueue": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
     }

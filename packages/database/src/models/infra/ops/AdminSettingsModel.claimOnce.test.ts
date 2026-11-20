@@ -1,9 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminSettings, adminSettingsRepository } from './AdminSettingsModel';
 
 describe('AdminSettingsRepository.claimOnce', () => {
   setupMongoTest();
+
+  // setupMongoTest drops the database before each test, unique settingName index included, and
+  // claimOnce's model.init() only replays the connect-time build. Without this, a build that settled
+  // before the drop leaves the concurrent upserts free to insert more than one row.
+  beforeEach(async () => {
+    await AdminSettings.init();
+    await AdminSettings.createIndexes();
+  });
 
   it('grants the claim to exactly one of many concurrent callers', async () => {
     const results = await Promise.all(

@@ -1,10 +1,12 @@
 import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { IMessage } from '@bike4mind/common';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 // A name that is blank after trim is not a usable tag: keeping it would let one blank element make
 // an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot
@@ -115,6 +117,12 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  const accessDenial = aiAccessDeniedMessage(writer) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping tagging for session ${sessionId}: ${accessDenial}`);
+    return;
+  }
+
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
   // Skip if session already has tags, unless it's been a while (duplicate-processing guard)
@@ -150,7 +158,10 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  // Below the cheap exits above: the spider re-dispatches no-quest notebooks on every pass.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
+
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
 
   // Ask an LLM to tag the user's first Quest
@@ -189,6 +200,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
+    operation: 'notebook_tagging',
     user: payer,
     sessionId,
     modelId,

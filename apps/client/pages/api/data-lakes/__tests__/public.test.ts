@@ -58,7 +58,7 @@ vi.mock('@bike4mind/database', () => ({
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
 // query-bounds test; stub it. What matters at this seam is that the route builds the actor
 // through toAccessContext, so the catalog is gated per caller.
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 
 import handler from '@pages/api/data-lakes/public';
 

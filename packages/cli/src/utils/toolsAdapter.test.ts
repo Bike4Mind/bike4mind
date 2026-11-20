@@ -688,28 +688,32 @@ describe('generateCliTools checkpoint wiring', () => {
     const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-gen-'));
     const createCheckpoint = vi.fn().mockResolvedValue(undefined);
 
-    const { tools } = await generateCliTools(
-      'user-1',
-      {} as never, // llm: not exercised while tool schemas are built
-      'test-model',
-      new PermissionManager(new ToolCatalog(), [], []),
-      vi.fn(async () => ({ action: 'allow-once' as const })),
-      { currentAgent: null },
-      {} as ConfigStore,
-      {} as ApiClient,
-      undefined, // toolFilter
-      undefined, // showUserQuestion
-      { createCheckpoint } as never, // checkpointStore
-      undefined, // sandboxOrchestrator
-      [dir]
-    );
+    try {
+      const { tools } = await generateCliTools(
+        'user-1',
+        {} as never, // llm: not exercised while tool schemas are built
+        'test-model',
+        new PermissionManager(new ToolCatalog(), [], []),
+        vi.fn(async () => ({ action: 'allow-once' as const })),
+        { currentAgent: null },
+        {} as ConfigStore,
+        {} as ApiClient,
+        undefined, // toolFilter
+        undefined, // showUserQuestion
+        { createCheckpoint } as never, // checkpointStore
+        undefined, // sandboxOrchestrator
+        [dir]
+      );
 
-    const createFile = tools.find(t => t.toolSchema.name === 'create_file');
-    expect(createFile).toBeDefined();
-    const target = path.join(dir, 'made.txt');
-    await createFile!.toolFn({ path: target, content: 'hello' });
+      const createFile = tools.find(t => t.toolSchema.name === 'create_file');
+      expect(createFile).toBeDefined();
+      const target = path.join(dir, 'made.txt');
+      await createFile!.toolFn({ path: target, content: 'hello' });
 
-    expect(createCheckpoint).toHaveBeenCalledWith('create_file', [target], 'before-create_file-made.txt');
+      expect(createCheckpoint).toHaveBeenCalledWith('create_file', [target], 'before-create_file-made.txt');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -749,5 +753,36 @@ describe('generateCliTools decide availability', () => {
 
     const some = await build(modelProbeClient([{ id: 'gpt-6-luna' }]));
     expect(some.tools.map(t => t.toolSchema.name)).toContain('decide');
+  });
+});
+
+describe('generateCliTools while signed out', () => {
+  const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch', 'decide'];
+  const client = (signedOut: boolean) =>
+    ({ signedOut, get: vi.fn(async () => ({ models: [{ id: 'gpt-6-luna' }] })) }) as unknown as ApiClient;
+  const build = (apiClient: ApiClient) =>
+    generateCliTools(
+      'user-1',
+      {} as never,
+      'test-model',
+      new PermissionManager(new ToolCatalog(), [], []),
+      vi.fn(async () => ({ action: 'allow-once' as const })),
+      { currentAgent: null },
+      {} as ConfigStore,
+      apiClient
+    );
+
+  it('offers no tool that runs on the server and asks the server nothing', async () => {
+    const apiClient = client(true);
+    const names = (await build(apiClient)).tools.map(tool => tool.toolSchema.name);
+
+    expect(apiClient.get).not.toHaveBeenCalled();
+    for (const name of SERVER_TOOLS) expect(names).not.toContain(name);
+    expect(names).toEqual(expect.arrayContaining(['file_read', 'bash_execute', 'math_evaluate']));
+  });
+
+  it('still offers the server tools when signed in', async () => {
+    const names = (await build(client(false))).tools.map(tool => tool.toolSchema.name);
+    expect(names).toEqual(expect.arrayContaining(['weather_info', 'web_search', 'web_fetch']));
   });
 });

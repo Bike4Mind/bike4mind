@@ -120,14 +120,14 @@ export class SharePublisher {
 
     this.onProgress({ artifactId: request.artifactId, step: 'uploading' });
     try {
-      // Plain fetch, no app auth header: the URL carries its own capability either way. A
-      // self-hosted server answers step 1 with a same-origin PATH, which a browser would
-      // resolve implicitly and this process has to resolve explicitly - that is URL
-      // resolution, not a branch on the deployment.
+      // Plain fetch, no app auth header: the capability is the presigned URL itself, or on self-host
+      // the token in the entry's `headers`. A self-hosted server answers step 1 with a same-origin
+      // PATH, which a browser would resolve implicitly and this process has to resolve explicitly -
+      // that is URL resolution, not a branch on the deployment.
       const target = new URL(upload.url, axios.defaults.baseURL ?? undefined);
       const response = await fetch(target, {
         method: 'PUT',
-        headers: { 'Content-Type': INDEX_MIME },
+        headers: { ...upload.headers, 'Content-Type': INDEX_MIME },
         body: content,
       });
       if (!response.ok) {

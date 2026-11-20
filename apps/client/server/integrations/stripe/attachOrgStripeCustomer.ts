@@ -41,7 +41,11 @@ type OrgStripeCustomerTarget = {
  * for two different models, and has no test file at all. Until then, if you change the concurrency
  * contract here, change it in all three.
  */
-export async function attachOrgStripeCustomer(organization: OrgStripeCustomerTarget): Promise<string> {
+export async function attachOrgStripeCustomer(
+  organization: OrgStripeCustomerTarget,
+  /** Stamped on the customer when it is created here; typically the buyer's signup network (riskMetadata.ts). */
+  metadata?: Record<string, string>
+): Promise<string> {
   if (organization.stripeCustomerId) {
     return organization.stripeCustomerId;
   }
@@ -50,6 +54,7 @@ export async function attachOrgStripeCustomer(organization: OrgStripeCustomerTar
     email: organization.billingContact,
     name: organization.name,
     type: CustomerType.Organization,
+    ...(metadata && { metadata }),
   });
 
   const won = await Organization.findOneAndUpdate(

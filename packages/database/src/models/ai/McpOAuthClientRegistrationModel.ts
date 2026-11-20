@@ -72,6 +72,31 @@ class McpOAuthClientRegistrationRepository
     return result?.toJSON() ?? null;
   }
 
+  async findByIdWithCredentials(id: string): Promise<IMcpOAuthClientRegistrationDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model
+      .findOne({
+        _id: id,
+        $or: [{ clientSecretExpiresAt: null }, { clientSecretExpiresAt: { $gt: new Date() } }],
+      })
+      .select(WITH_CREDENTIALS);
+    return result?.toJSON() ?? null;
+  }
+
+  /** An expired row is dropped first; losing the insert race to a live row (E11000) just means reading theirs. */
+  async registerIfAbsent(
+    registration: IMcpOAuthClientRegistration
+  ): Promise<IMcpOAuthClientRegistrationDocument | null> {
+    const { issuer, redirectUri } = registration;
+    await this.model.deleteOne({ issuer, redirectUri, clientSecretExpiresAt: { $lte: new Date() } });
+    try {
+      await this.model.create(registration);
+    } catch (error) {
+      if ((error as { code?: number })?.code !== 11000) throw error;
+    }
+    return this.findByIssuerAndRedirect(issuer, redirectUri);
+  }
+
   private async upsertOnce(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument> {
     const { issuer, redirectUri, ...rest } = registration;
     const unset: Record<string, 1> = {};

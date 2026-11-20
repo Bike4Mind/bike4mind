@@ -10,7 +10,10 @@ const h = vi.hoisted(() => ({
   listByLake: vi.fn(),
   queueResearchRun: vi.fn(),
   queueUrl: undefined as string | undefined,
+  admit: vi.fn(),
 }));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -42,13 +45,14 @@ vi.mock('@bike4mind/database', () => ({
   // The balance pre-flight's holder reads (see StartResearchRunAdapters).
   userRepository: { name: 'users' },
   organizationRepository: { name: 'organizations' },
+  spendFreezeRepository: { name: 'spendFreezes' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('sst', () => ({
   Resource: {
@@ -99,6 +103,15 @@ describe('GET /api/data-lakes/[id]/research/runs', () => {
     expect(json).toHaveBeenCalledWith({ data: [queuedRun] });
   });
 
+  it('strips undeclared fields from each run in the history', async () => {
+    h.listByLake.mockResolvedValue([{ ...queuedRun, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' }]);
+    const { res, json } = makeRes();
+
+    await call(req('GET', { id: 'my-lake' }), res);
+
+    expect(json).toHaveBeenCalledWith({ data: [queuedRun] });
+  });
+
   it('honors an explicit limit', async () => {
     const { res } = makeRes();
     await call(req('GET', { id: 'l', limit: '5' }), res);
@@ -112,6 +125,17 @@ describe('GET /api/data-lakes/[id]/research/runs', () => {
 });
 
 describe('POST /api/data-lakes/[id]/research/runs', () => {
+  it('refuses an over-quota request before persisting or queueing a run', async () => {
+    const error = new Error('token quota exceeded');
+    h.admit.mockRejectedValueOnce(error);
+    const request = req('POST', { id: 'my-lake' }, { configId: 'config-1' });
+
+    await expect(call(request, makeRes().res)).rejects.toBe(error);
+    expect(h.admit).toHaveBeenCalledWith(request, { holdSlot: false });
+    expect(h.startResearchRun).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.queueResearchRun).not.toHaveBeenCalled();
+  });
   it('queues a run and answers 202 with the queued row', async () => {
     const { res, json } = makeRes();
 
@@ -124,6 +148,21 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
       expect.anything()
     );
     expect(h.queueResearchRun).toHaveBeenCalledWith(queuedRun, LAKE, 'https://sqs.example/research', expect.anything());
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(json).toHaveBeenCalledWith({ data: queuedRun });
+  });
+
+  it('strips undeclared fields from the queued run', async () => {
+    h.startResearchRun.mockImplementation(async () => ({
+      ...queuedRun,
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    }));
+    const { res, json } = makeRes();
+
+    await call(req('POST', { id: 'my-lake' }, { configId: 'config-1' }), res);
+
     expect(res.status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith({ data: queuedRun });
   });

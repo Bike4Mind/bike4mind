@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseArtifactsWithFallback } from './artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { groupReactArtifacts } from './reactArtifactGroup';
 
 interface TestArtifact {

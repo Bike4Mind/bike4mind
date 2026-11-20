@@ -48,10 +48,10 @@ vi.mock('@bike4mind/services', () => ({
 
 import '@pages/api/modals';
 
-function mocks(isAdmin: boolean, query: Record<string, string> = {}) {
+function mocks(isAdmin: boolean, query: Record<string, string> = {}, adminPermissions?: string[]) {
   const { req, res } = createMocks({ method: 'GET', query });
   (req as any).ability = { can: () => true };
-  (req as any).user = { id: 'user-1', isAdmin };
+  (req as any).user = { id: 'user-1', isAdmin, adminPermissions };
   return { req, res };
 }
 
@@ -87,5 +87,47 @@ describe('GET /api/modals - non-admin publication-state filter', () => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const startDateUpperBound = mockRefs.findFilter.$and[0].$or[2].startDate.$lte;
     expect(tomorrow <= startDateUpperBound).toBe(false);
+  });
+});
+
+describe('GET /api/modals - delegated settings:manage', () => {
+  beforeEach(() => {
+    mockRefs.findFilter = undefined;
+    mockRefs.modals = [];
+  });
+
+  it('lists drafts and expired modals for a settings:manage delegate', async () => {
+    const { req, res } = mocks(false, {}, ['settings:manage']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.enabled).toBeUndefined();
+    expect(mockRefs.findFilter.$and).toBeUndefined();
+  });
+
+  it("excludes What's New from the default list for a delegate, as for a full admin", async () => {
+    const { req, res } = mocks(false, {}, ['settings:manage']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.tags).toEqual({ $ne: 'whats-new' });
+  });
+
+  it('keeps the publication filter for a delegate holding only another permission', async () => {
+    const { req, res } = mocks(false, {}, ['support:read']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.enabled).toBe(true);
+  });
+});
+
+describe('GET /api/modals - response audience', () => {
+  it.each([
+    ['a full admin', true, undefined, true],
+    ['a settings:manage delegate', false, ['settings:manage'], true],
+    ['a delegate holding only another permission', false, ['support:read'], false],
+  ])('classifies %s', async (_case, isAdmin, adminPermissions, expectedAdmin) => {
+    const { viewerClassifier } = await import('@bike4mind/services');
+    vi.mocked(viewerClassifier.classify).mockClear();
+    const { req, res } = mocks(isAdmin, {}, adminPermissions);
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(viewerClassifier.classify).toHaveBeenCalledWith({ isAdmin: expectedAdmin });
   });
 });

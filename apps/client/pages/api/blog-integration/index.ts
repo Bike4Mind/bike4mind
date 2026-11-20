@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { z } from 'zod';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 /**
@@ -39,7 +39,7 @@ const handler = baseApi()
         connected: true,
         settings: {
           ...settings,
-          apiKeyPreview: `${apiKey.substring(0, 8)}...`, // Show first 8 chars only
+          apiKeyPreview: apiKey.length > 4 ? `...${apiKey.slice(-4)}` : '****',
         },
       });
     } catch (error) {

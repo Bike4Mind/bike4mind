@@ -54,6 +54,21 @@ export function isAwaitingEmailVerification(
   return user?.emailVerified === false && (user.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
 }
 
+/**
+ * Verified, yet the starter grant is still pending: a signup domain hold or risk review is deciding it.
+ * The daily budget pause shares the tag but has its own copy, so it is excluded here.
+ */
+export function isSignupGrantHeldForReview(
+  user:
+    { emailVerified?: boolean | null; tags?: string[] | null; signupGrantHeldReason?: string | null } | null | undefined
+): boolean {
+  return (
+    user?.emailVerified === true &&
+    (user.tags ?? []).includes(PENDING_FREE_CREDITS_TAG) &&
+    user.signupGrantHeldReason !== 'budget_exhausted'
+  );
+}
+
 export interface ResendVerificationError {
   response?: { status?: number; data?: { message?: string; isConfigError?: boolean } };
 }

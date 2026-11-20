@@ -74,4 +74,46 @@ describe('AdminSupportAccessAuditLog', () => {
     expect(reads).toHaveLength(2);
     expect(reads.map(r => r.actorUserId).sort()).toEqual(['admin-1', 'admin-2']);
   });
+
+  it('saves a ModelLogsSearch without a target user or session', async () => {
+    const doc = await adminSupportAccessAuditLogRepository.record({
+      action: AdminSupportAccessAction.ModelLogsSearch,
+      actorUserId: 'admin-1',
+      supportCase: 'ZD-4821',
+      details: { search: 'golden retriever', questIds: ['q1'] },
+    });
+
+    const found = await AdminSupportAccessAuditLog.findById(doc.id);
+    expect(found?.action).toBe(AdminSupportAccessAction.ModelLogsSearch);
+    expect(found?.targetUserId).toBeUndefined();
+    expect(found?.sessionId).toBeUndefined();
+  });
+
+  it('saves a ModelLogRead whose owner could not be resolved', async () => {
+    await expect(
+      adminSupportAccessAuditLogRepository.record({
+        action: AdminSupportAccessAction.ModelLogRead,
+        actorUserId: 'admin-1',
+        supportCase: 'ZD-4821',
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it.each([AdminSupportAccessAction.SessionRead, AdminSupportAccessAction.SessionQuestsRead])(
+    'still requires a session id for %s',
+    async action => {
+      await expect(AdminSupportAccessAuditLog.create({ ...baseEvent, action, sessionId: undefined })).rejects.toThrow(
+        /sessionId/
+      );
+    }
+  );
+
+  it.each([AdminSupportAccessAction.SessionRead, AdminSupportAccessAction.SessionQuestsRead])(
+    'still requires a target user for %s',
+    async action => {
+      await expect(
+        AdminSupportAccessAuditLog.create({ ...baseEvent, action, targetUserId: undefined })
+      ).rejects.toThrow(/targetUserId/);
+    }
+  );
 });

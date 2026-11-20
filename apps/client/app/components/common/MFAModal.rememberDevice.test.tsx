@@ -48,7 +48,7 @@ describe('MFAModal "remember this device"', () => {
   });
 
   it('is never offered during MFA setup, where there is no factor to skip yet', () => {
-    renderModal({ allowRememberDevice: true, title: 'Set Up Multi-Factor Authentication' });
+    renderModal({ allowRememberDevice: true, mode: 'setup', title: 'Set Up Multi-Factor Authentication' });
     expect(screen.queryByTestId(CHECKBOX)).toBeNull();
   });
 

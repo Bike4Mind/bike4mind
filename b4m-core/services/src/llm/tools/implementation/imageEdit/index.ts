@@ -1,3 +1,5 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+import { toolModelRefusal } from '../../helpers/toolModelRefusal';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
@@ -20,6 +22,7 @@ import {
   type ImageOutputFormat,
   type OpenAIImageBackground,
   type GeneratedAssetLineageEntry,
+  resolveLegacyImageModel,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -34,11 +37,26 @@ import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
-import { ImageModerationBlockedError, NotFoundError } from '@bike4mind/utils';
+import { ExpectedImageGenerationError, NotFoundError, logImageGenerationFailure } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
+import {
+  buildEditJobRequest,
+  createImageJobsForTool,
+  imageSelectionOf,
+  isImageJobToolConfig,
+  reportImageJobs,
+} from '../imageGeneration/imageJobTool';
+import type { CreateImageJobsErrorCode } from '../../../../imageJobs/types';
+
+// A refused input the in-process edit can still take: a file the caller can open but does not own, or a format
+// the job path refuses.
+const IN_PROCESS_EDIT_FALLBACK_CODES: ReadonlySet<string> = new Set<CreateImageJobsErrorCode>([
+  'input_image_not_found',
+  'unsupported_input_image',
+]);
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -108,16 +126,10 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
     throw new Error('This image is not available.');
   }
 
-  // Get signed URL if filePath exists, otherwise use fileUrl
   if (fabFile.filePath) {
     const signedUrl = await context.storage.getSignedUrl(fabFile.filePath);
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
     return { url: signedUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: true };
-  }
-
-  if (fabFile.fileUrl) {
-    // Stored verbatim, not signed by us - untrusted.
-    return { url: fabFile.fileUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: false };
   }
 
   throw new Error(`File ${fileId} has no accessible URL`);
@@ -248,6 +260,7 @@ export async function processAndStoreImage(
     contentType: mimeType,
     generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt, ...(request && { request }) },
     ...(derivedFrom?.length && { derivedFrom }),
+    generatedOutputKey: path,
   });
 
   return path;
@@ -308,10 +321,10 @@ async function updateQuestAndReturnMarkdown(
 
 export const imageEditTool: ToolDefinition = {
   name: 'edit_image',
-  implementation: (context, config: GenerateImageToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (shared with image_generation tool)
-      const imageConfig = config;
+      const imageConfig: GenerateImageToolCall | undefined = imageSelectionOf(config);
 
       const {
         image: toolImage,
@@ -343,6 +356,23 @@ export const imageEditTool: ToolDefinition = {
         return 'Error: Prompt is required for editing';
       }
 
+      // A job reads its inputs as the caller's own files, so only file ids take this path. A URL or a generated
+      // image key (older turns) still edits in-process, and so does an input IN_PROCESS_EDIT_FALLBACK_CODES covers.
+      if (isImageJobToolConfig(config) && isObjectIdShaped(toolImage) && (!toolMask || isObjectIdShaped(toolMask))) {
+        const request = buildEditJobRequest(
+          imageConfig,
+          prompt,
+          { image: toolImage, ...(toolMask && { mask: toolMask }) },
+          { size: toolSize, background: toolBackground, outputFormat: toolOutputFormat }
+        );
+        // Billing is the job's own credit hold, so this path never calls context.onStart/onFinish.
+        const result = await createImageJobsForTool(context, config, 'edit_image', request, 1);
+        if (typeof result === 'string') return result;
+        if (result.ok || !IN_PROCESS_EDIT_FALLBACK_CODES.has(result.code)) {
+          return reportImageJobs(context, config, 'Image edit', result);
+        }
+      }
+
       // Use imageConfig settings as defaults, allow tool call to override
       // IMPORTANT: The edit endpoint supports gpt-image-1, gpt-image-1.5, gpt-image-1-mini, and dall-e-2
       // NOTE: DALL-E 3 does NOT support image editing at all. Use GPT-Image models for editing.
@@ -352,7 +382,7 @@ export const imageEditTool: ToolDefinition = {
       // `generationModel` is only the starting point for that fallback and the model
       // recorded on a moderation incident; billing and dispatch both use `editModel`.
       const generationModel = imageConfig?.model || ImageModels.GPT_IMAGE_1_5;
-      let editModel = imageConfig?.editModel as ImageModels | undefined;
+      let editModel = resolveLegacyImageModel(imageConfig?.editModel) as ImageModels | undefined;
 
       if (!editModel) {
         // Fallback logic based on generation model provider
@@ -389,6 +419,9 @@ Please select a supported edit model in your image settings modal.`;
       if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
         editModel = ImageModels.GPT_IMAGE_1_5;
       }
+      const refusal = await toolModelRefusal(context, await createToolModelAdmission(context), editModel, 'edit_image');
+      if (refusal) return refusal;
+
       // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
       const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;
@@ -501,7 +534,10 @@ Please select a supported edit model in your image settings modal.`;
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
-          Logger.globalInstance.error('[ERROR] BFL image editing failed:', error);
+          logImageGenerationFailure(Logger.globalInstance, '[edit_image] BFL image editing failed:', error);
+          if (error instanceof ExpectedImageGenerationError) {
+            return `Error: ${error.message}`;
+          }
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {
@@ -559,7 +595,10 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
-          Logger.globalInstance.error('[ERROR] Gemini image editing failed:', error);
+          logImageGenerationFailure(Logger.globalInstance, '[edit_image] Gemini image editing failed:', error);
+          if (error instanceof ExpectedImageGenerationError) {
+            return `Error: ${error.message}`;
+          }
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {
@@ -609,13 +648,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
-          if (error instanceof ImageModerationBlockedError) {
-            Logger.globalInstance.warn('[WARN] OpenAI image editing blocked by content policy:', {
-              requestId: error.requestId,
-            });
-          } else {
-            Logger.globalInstance.error('[ERROR] OpenAI image editing failed:', error);
-          }
+          logImageGenerationFailure(Logger.globalInstance, '[edit_image] OpenAI image editing failed:', error);
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {

@@ -3,7 +3,7 @@ import { CcAgentRegisterAction, type ICcAgentCapability, type ICcAgentSource } f
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
-import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
+import { sendToClient, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /** Sprite pool used for Claude Code agent entities. Reuses existing sprite
@@ -127,12 +127,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     endpoint: 'ws/cc_agent_register',
     logger,
     handlerName: 'CC_AGENT_REGISTER',
+    recordKeyUse: true,
   });
   if (!auth) return { statusCode: 401 };
   const { userId } = auth;
 
   // Tavern access gate: a valid bridge identity isn't enough - the owning user
-  // must be allowed to reach the Tavern (admin or 'tavern' tag), the same
+  // must be allowed to reach the Tavern (admin, developer, or 'tavern' tag), the same
   // predicate the HTTP surface enforces via ensureTavernAccess.
   if (!(await connectionUserCanAccessTavern(userId))) {
     logger.warn(`[CC_AGENT_REGISTER] User ${userId} lacks Tavern access - rejecting register for ${instanceId}`);

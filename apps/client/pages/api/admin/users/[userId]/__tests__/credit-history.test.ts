@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({ findById: vi.fn(), getUserCreditHistory: vi.fn() }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -46,9 +46,10 @@ describe('GET /api/admin/users/[userId]/credit-history', () => {
     ]);
   });
 
-  it('rejects a non-admin with 403', async () => {
-    await expect(call(USER_ID, { id: 'u2', isAdmin: false }).promise).rejects.toMatchObject({ statusCode: 403 });
-    expect(mocks.findById).not.toHaveBeenCalled();
+  it('gates reads on the credits page permissions', () => {
+    expect((handler as unknown as { _config?: { adminPermissions?: unknown } })._config?.adminPermissions).toEqual({
+      GET: CREDITS_PAGE_READ,
+    });
   });
 
   it('rejects a malformed id with 400 and a missing user with 404', async () => {

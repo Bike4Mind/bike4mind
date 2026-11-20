@@ -5,10 +5,12 @@ import {
   createThinkMarkerEscaper,
   IMessage,
   isBedrockRegionProfileId,
+  isToolChangeMessage,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
-  REFUSAL_FALLBACK_MODELS,
+  refusalFallsBack,
+  THINK_OPEN_TAG,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type ProviderBlock,
@@ -28,18 +30,40 @@ import {
 } from '../backend';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
-import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, withRequestTtlMarkers } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
+import { closeThinkMarker } from '../thinkMarkers';
 import {
+  applyAnthropicOutputCeiling,
   buildThinkingParams,
+  continuesToolTurnWithoutThinking,
   effortForComplexity,
+  isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
+  thinkingTurnedOff,
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
-import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
+import { ensureToolPairingIntegrity } from '../toolPairingUtils';
+import { TOOL_CHANGES_BETA } from '../toolChanges';
+import { SafetyRefusalError } from '../llmRefusalErrors';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
+
+/**
+ * The completion loop logs a safety refusal only at debug and leaves the warning to the backend
+ * (the direct Anthropic backend warns the same way), so warn here before the throw.
+ */
+function safetyRefusalError(model: string): Error {
+  Logger.globalInstance.warn(
+    '[AnthropicBedrockBackend] Safety classifier refusal - falling back to an alternative model',
+    {
+      model,
+    }
+  );
+  return new SafetyRefusalError(model);
+}
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -273,8 +297,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     return true;
   }
 
+  protected override closeOpenReasoning(): { index: number; text: string } | undefined {
+    if (!this.isInThinkingBlock) return undefined;
+    this.isInThinkingBlock = false;
+    const text = closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened);
+    return text ? { index: this.thinkingBlockIndex, text } : undefined;
+  }
+
   // Track thinking block state
   private isInThinkingBlock = false;
+  // Waits for the first reasoning text; see closeThinkMarker.
+  private thinkMarkerOpened = false;
+  private thinkingBlockIndex = 0;
   private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Blocks of the assistant turn currently being translated, indexed by the stream's
@@ -326,6 +360,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Catalog record first: an operator row's refusalFallback must win over the table (see resolveApiSurface). */
+  private fallsBackOnRefusal(model: string, options?: Partial<ICompletionOptions>): boolean {
+    if (options?.settleRefusal) return false;
+    return refusalFallsBack(
+      this._dispatch.for(model) ??
+        this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Bedrock }
+    );
   }
 
   /**
@@ -669,13 +712,19 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 },
+          1_000_000: {
+            input: 2 / 1_000_000,
+            output: 10 / 1_000_000,
+            cache_read: 0.1 / 1_000_000,
+            cache_write: 2.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
         rank: 1,
+        trainingCutoff: '2026-06-01',
         description:
           "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
       },
@@ -786,7 +835,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.025x input on Fable 5.1, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000, cache_read: 0.25 / 1_000_000 },
+          1_000_000: {
+            input: 10 / 1_000_000,
+            output: 50 / 1_000_000,
+            cache_read: 0.25 / 1_000_000,
+            cache_write: 12.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -831,7 +885,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
+          1_000_000: {
+            input: 4 / 1_000_000,
+            output: 20 / 1_000_000,
+            cache_read: 0.2 / 1_000_000,
+            cache_write: 5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -886,13 +945,19 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     // Filter and validate messages to ensure content is valid
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
-    const filteredMessages = messages
-      .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+    const sanitizedMessages = messages
+      .filter(
+        m =>
+          isToolChangeMessage(m) ||
+          ((m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+      )
       // Unlike the other backends this one forwards IMessage objects into the request body largely
       // as-is, so control-only fields have to be dropped here rather than left to the invariant that
       // nothing sets them on a user/assistant message.
       .map(({ requiresTool: _requiresTool, ...m }) => m)
       .map(m => {
+        // tool_addition/tool_removal blocks go out verbatim, in place, as on the direct API.
+        if (isToolChangeMessage(m)) return m;
         // Handle string content - check for empty/whitespace-only
         if (typeof m.content === 'string') {
           const trimmed = m.content.trim();
@@ -936,6 +1001,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       })
       .filter(m => m.content !== '' && (Array.isArray(m.content) ? m.content.length > 0 : true));
 
+    // Dropping role/empty messages above can leave a tool_result with no tool_use right before it,
+    // which Bedrock rejects. Same pass anthropicBackend runs - keep the two in sync.
+    const filteredMessages = ensureToolPairingIntegrity(
+      sanitizedMessages as unknown as IMessage[],
+      Logger.globalInstance
+    ) as unknown as typeof sanitizedMessages;
+
     if (filteredMessages.length === 0) {
       throw new BadRequestError('request must contain at least one non-empty user or assistant message');
     }
@@ -944,7 +1016,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // needs a block boundary to attach to. The joined string below is still what the
     // non-caching path sends.
     const systemBlocks = messages
-      .filter(m => m.role === 'system' && m.content)
+      .filter(m => m.role === 'system' && m.content && !isToolChangeMessage(m))
       .map(m => ({ text: systemContentToText(m.content), cache: m.cache === true }))
       // A block array carrying no text flattens to '', which would otherwise
       // contribute a blank line to the joined prompt. Trim-checked because
@@ -953,11 +1025,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .filter(block => block.text.trim() !== '');
 
     // Append model identity so the model correctly identifies itself when asked.
-    // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
-    // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder
+    // Skipped for raw or while current_model_details is on the request (see
+    // shouldOmitIdentityReminder) - must stay in sync with anthropicBackend.
+    const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {
@@ -976,6 +1048,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       max_tokens: maxTokens,
       messages: filteredMessages,
     };
+    // Bedrock takes Anthropic betas in the body rather than as a header.
+    if (filteredMessages.some(m => isToolChangeMessage(m))) {
+      body.anthropic_beta = [TOOL_CHANGES_BETA];
+    }
 
     // A `cache: true` system message declares a breakpoint part-way down the stack (the
     // deployment-wide shareable prefix - see markShareablePrefixBoundary in @bike4mind/services).
@@ -1007,9 +1083,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // markHistoryCacheAnchor in @bike4mind/services). This backend forwards IMessage objects into
     // the request body, so the control flag has to become cache_control on the message's last
     // content block - and must never be serialized, since the wire has no such field.
-    body.messages = filteredMessages.map(message => {
+    // On a tool round only the newest flagged message is still read; see the same rule in anthropicBackend.
+    const newestFlagged =
+      (options._internal?.toolCallCount ?? 0) > 0 ? filteredMessages.findLastIndex(m => m.cache === true) : -1;
+    body.messages = filteredMessages.map((message, index) => {
       const { cache, ...wire } = message;
-      if (!emitCaching || cache !== true) return wire;
+      if (!emitCaching || cache !== true || index < newestFlagged) return wire;
       const content =
         typeof wire.content === 'string'
           ? [{ type: 'text' as const, text: wire.content }]
@@ -1067,7 +1146,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       // cast locally for that one field (thinking is already declared on the type).
       const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
       const reasoningEffort =
-        options.reasoningEffort ?? effortForComplexity(model, currentModelInfo, options.complexity);
+        options.reasoningEffort ??
+        (thinkingTurnedOff(model, currentModelInfo, options.thinking)
+          ? 'none'
+          : effortForComplexity(model, currentModelInfo, options.complexity));
       const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {
@@ -1075,6 +1157,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
         const effort = resolveAnthropicEffort({
+          model,
           questMaster: isQuestMaster,
           anthropicEffort: options.anthropicEffort,
           reasoningEffort: options.reasoningEffort,
@@ -1107,6 +1190,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         }
       }
     }
+    applyAnthropicOutputCeiling(
+      body,
+      options.outputTokenCeiling,
+      currentModelInfo !== undefined &&
+        !continuesToolTurnWithoutThinking(filteredMessages as unknown as IMessage[]) &&
+        isAdaptiveThinkingByDefault(model, currentModelInfo)
+    );
 
     // Log the complete payload for debugging
     console.log(
@@ -1154,6 +1244,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       );
     }
 
+    // A caller's own content-block markers ride in on `messages` untouched; Bedrock reports no 5m/1h
+    // split, so on a 1h request they must write at 1h to match what settlement charges.
+    if (cacheStrategy?.cacheTTL === '1h') Object.assign(body, withRequestTtlMarkers(body, cacheControl));
     Object.assign(body, capCacheControlMarkers(body));
 
     return {
@@ -1251,7 +1344,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateChunk(
     model: string,
-    chunk: Record<string, unknown>
+    chunk: Record<string, unknown>,
+    options?: Partial<ICompletionOptions>
   ): { done: boolean; chunk?: ICompletionResponseChunk | undefined } {
     try {
       // Parse the response from Anthropic API
@@ -1287,8 +1381,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
-      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
-        throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      if (stopReason === 'refusal' && this.fallsBackOnRefusal(model, options)) {
+        throw safetyRefusalError(model);
       }
 
       // Extract text content from the response
@@ -1348,7 +1442,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
   }
 
-  translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
+  translateStreamChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
     let refused = false;
     let choice: IChoice;
@@ -1398,9 +1496,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           this.assistantContent[chunk.index] = { type: 'tool_use', id: contentBlock.id, name: contentBlock.name };
         } else if (isThinkingContentBlock(contentBlock)) {
           this.isInThinkingBlock = true;
+          this.thinkMarkerOpened = false;
+          this.thinkingBlockIndex = chunk.index;
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantContent[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
-          choice.chunkText = '<think>';
           choice.channel = 'reasoning';
         } else if (isRedactedThinkingContentBlock(contentBlock)) {
           // Arrives whole and carries no readable text, so it opens no <think> markers -
@@ -1443,7 +1542,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isThinkingDelta(delta)) {
           // Escaped for the transcript; the replay copy in assistantContent stays
           // raw since it is resent to the API verbatim in tool-use loops.
-          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
+          const escaped = this.reasoningEscaper.push(delta.thinking);
+          const opensMarker = !!escaped && this.isInThinkingBlock && !this.thinkMarkerOpened;
+          choice.chunkText = opensMarker ? THINK_OPEN_TAG + escaped : escaped;
+          if (opensMarker) this.thinkMarkerOpened = true;
           choice.channel = 'reasoning';
           const block = this.assistantContent[chunk.index];
           if (block?.type === 'thinking') block.thinking = `${block.thinking}${delta.thinking}`;
@@ -1458,7 +1560,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
+          chunkText: this.isInThinkingBlock
+            ? closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened)
+            : '',
           ...(this.isInThinkingBlock ? { channel: 'reasoning' as const } : {}),
         } as IChoice;
 
@@ -1484,7 +1588,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           providerBlocks.push({ providerBlock: anthropicBlock(serverBlock), textOffset: 0 });
         }
       } else if (isMessageDelta(chunk)) {
-        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
+        refused = chunk.delta?.stop_reason === 'refusal' && this.fallsBackOnRefusal(model, options);
         // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
         // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
         // additionally tells the caller to re-send and resume a paused server tool loop.
@@ -1530,7 +1634,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     // Thrown outside the try: the catch above swallows errors.
     if (refused) {
-      throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      throw safetyRefusalError(model);
     }
 
     return {
@@ -1547,9 +1651,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
-      // `strict` is an OpenAI-only tool field. Anthropic rejects it with
-      // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
-      // spread copy (e.g. a tool schema that sets strict: true for OpenAI structured tools).
+      // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object
+      // not closed with additionalProperties: false, and this backend does not check the schema.
       delete rest.strict;
       return {
         ...rest,

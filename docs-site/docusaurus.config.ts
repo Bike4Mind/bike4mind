@@ -56,7 +56,17 @@ const config: Config = {
     ],
   ],
 
-  plugins: [],
+  plugins: [
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          { from: '/admin/subscribers', to: '/admin/waitlist' },
+          { from: '/admin/llm-dashboard', to: '/admin/models' },
+        ],
+      },
+    ],
+  ],
 
   themes: [
     [

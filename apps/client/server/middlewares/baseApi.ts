@@ -1,23 +1,31 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { logging } from '@server/middlewares/logging';
 import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { checkBlockedIP } from './checkBlockedIP';
 import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
+import { impersonationGate, impersonationAnonymousGate } from './impersonationGate';
 import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetection';
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
+import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
+import { clientUsageMiddleware } from '@server/middlewares/clientUsage';
+import { userActivityMiddleware } from '@server/middlewares/userActivity';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
+import { requestLogUrl } from './requestLogUrl';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
+registerOrgAlertObserver();
 
 interface BaseAPIOptions {
   /**
@@ -48,6 +56,14 @@ interface BaseAPIOptions {
    * doc comment (apiKeyScopeGate.ts).
    */
   alsoRequiredScopes?: ApiKeyScopeValue[];
+  /**
+   * Keep admitting legacy API keys that miss `requiredScopes` until the legacy window ends
+   * (LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts). Only for a route keys could reach before it
+   * declared scopes; a route that already enforced them must never opt in, or old keys would
+   * gain access they lack today. Methods narrowed in the handler pass the same flag to
+   * `assertApiKeyScope`.
+   */
+  grandfatherLegacyKeys?: boolean;
   /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
@@ -84,6 +100,25 @@ interface BaseAPIOptions {
    * no-match answer is a 404 that only fires after auth has already run.
    */
   allowedMethods?: readonly string[];
+  /**
+   * `false` opts this route out of the default per-user write limit (defaultWriteRateLimit.ts), for
+   * high-frequency, low-cost writes the app sends on its own, such as analytics events. Defaults to
+   * true; a route's own `rateLimit` still applies either way.
+   */
+  defaultWriteRateLimit?: boolean;
+  /**
+   * `false` marks this route's writes as ones a client or machine sends on its own (telemetry, socket
+   * tickets, polls, ingest), not actions the user took: they never stamp the user's `lastActiveAt`
+   * (userActivity.ts). Defaults to true.
+   */
+  recordsActivity?: boolean;
+  /**
+   * Whether an API-key call to this route is a use of the key: stamps its `lastUsedAt` and logs a USED
+   * event. Defaults to `recordsActivity`. Set `true` alongside `recordsActivity: false` for machine
+   * routes where the key is genuinely in use (ingest, partner calls, CLI polls), so the key does not
+   * read as unused; leave it to default `false` for first-party telemetry.
+   */
+  recordsKeyUse?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -165,6 +200,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
           connectMs: req.__connectMs ?? null,
           containerCold,
           aborted: !res.writableEnded, // true when the response never completed cleanly
+          // statusCode defaults to 200, so an aborted request is only a sent status when headersSent.
+          status: res.statusCode,
+          headersSent: res.headersSent,
+          ...(req.user ? { userId: req.user.id } : {}),
         })
         .info('req-timing');
     };
@@ -215,6 +254,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     router.use(middleware);
   }
 
+  if (!resolvedOptions.auth) router.use(impersonationAnonymousGate);
   if (resolvedOptions.auth) {
     // 'jwtOnly' skips the whole api-key chain, so a presented key is never
     // validated/metered/billed - it simply isn't a credential this route knows,
@@ -223,7 +263,12 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // Check API key authentication FIRST, before JWT
       // This allows API keys to work independently without requiring JWT/SST setup.
       // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
-      router.use(apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes));
+      router.use(
+        apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
+          recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
+          grandfatherLegacyKeys: resolvedOptions.grandfatherLegacyKeys,
+        })
+      );
 
       // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
       // This runs asynchronously and doesn't block requests
@@ -240,6 +285,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
     router.use(auth);
+    router.use(impersonationGate);
 
     // Default-deny relying-party OAuth tokens: a no-op for first-party sessions and API keys,
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.
@@ -248,6 +294,22 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
     router.use(analyticsMiddleware());
+
+    // Per-user record of which clients (web, desktop, CLI, API) they use; at most one write a day.
+    router.use(clientUsageMiddleware());
+
+    // An admin's `all` IP block refuses every write an authenticated caller makes from that network:
+    // checkout, every AI completion route, and whatever spends money or compute next, with no per-route
+    // list to keep current. Anonymous entry points (sign-in, signup, embed) opt in with checkBlockedIP.
+    router.use(checkBlockedIP({ surface: 'app', writesOnly: true, exemptAdmins: true }));
+
+    // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
+    // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
+    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
+
+    // "Last active" means an action, so only writes stamp it, throttled per user. Last in the chain,
+    // so a write the gates above refuse is not counted.
+    if (resolvedOptions.recordsActivity !== false) router.use(userActivityMiddleware());
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local
@@ -256,7 +318,8 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
   router.use(async (req, res, next) => {
     if (!isDevelopment()) {
-      req.logger.info(`API Request: ${req.method} ${req.url}`);
+      const path = requestLogUrl((req.url ?? '').split('?')[0]);
+      req.logger.info(`API Request: ${req.method} ${path}`);
     }
     next();
   });

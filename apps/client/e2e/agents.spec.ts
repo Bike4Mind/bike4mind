@@ -22,7 +22,7 @@ test.describe('Agents - Navigation, CRUD & Validation', () => {
       // Agents is an earned-nav destination (Gears): its sidenav row appears only
       // once the account has >=1 agent. A fresh run starts with zero (the prior run
       // deletes the agent it created), so the row is hidden - navigate directly, the
-      // way a first-time user reaches it via the Gears "Build your first agent" CTA.
+      // way a first-time user reaches it via the Gears "Build an agent" CTA.
       await page.goto('/agents');
       await page.waitForLoadState('domcontentloaded');
       await basePage.dismissModals();

@@ -12,10 +12,19 @@ const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() =>
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     configs.push(config);
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        handlers[method] = fn;
+        handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -23,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => db);
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/oauth-clients/index';
 
@@ -34,6 +43,7 @@ const view = {
   clientType: 'relying-party',
   tokenEndpointAuthMethod: 'client_secret_post',
   redirectUris: ['https://app.example.test/cb'],
+  postLogoutRedirectUris: [],
   allowedScopes: ['openid', 'email', 'profile'],
   isActive: true,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -56,7 +66,7 @@ beforeEach(() => {
 
 describe('/api/admin/oauth-clients', () => {
   it('requires the admin API-key scope', () => {
-    expect(configs).toEqual([{ requiredScopes: [ApiKeyScope.ADMIN] }]);
+    expect(configs).toEqual([expect.objectContaining({ requiredScopes: [ApiKeyScope.ADMIN] })]);
   });
 
   it.each(['get', 'post'])('rejects a non-admin on %s with ForbiddenError and touches nothing', async method => {
@@ -100,6 +110,32 @@ describe('/api/admin/oauth-clients', () => {
       })
     );
     expect(JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, input]) => input))).not.toContain(SECRET);
+  });
+
+  it('passes post-logout redirect URIs through and records them on the audit row', async () => {
+    const uris = ['https://app.example.test/signed-out'];
+    db.createOAuthClient.mockResolvedValue({ client: { ...view, postLogoutRedirectUris: uris }, clientSecret: SECRET });
+    const { req, res } = makeReqRes('POST', {
+      body: { name: 'My App', redirectUris: ['https://app.example.test/cb'], postLogoutRedirectUris: uris },
+    });
+    await handlers.post(req, res);
+    expect(db.createOAuthClient).toHaveBeenCalledWith(expect.objectContaining({ postLogoutRedirectUris: uris }));
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.objectContaining({ postLogoutRedirectUris: uris }) })
+    );
+  });
+
+  it('rejects an invalid post-logout redirect URI with a 400 before reaching the service', async () => {
+    const { req, res } = makeReqRes('POST', {
+      body: {
+        name: 'My App',
+        redirectUris: ['https://app.example.test/cb'],
+        postLogoutRedirectUris: ['http://app.example.test/out'],
+      },
+    });
+    await expect(handlers.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(db.createOAuthClient).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid redirect URI with a 400 before reaching the service', async () => {

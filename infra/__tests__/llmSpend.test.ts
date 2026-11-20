@@ -1,0 +1,580 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+
+const resources = vi.hoisted(() => {
+  function output<T>(value: T) {
+    return { value, apply: <Result>(callback: (input: T) => Result) => output(callback(value)) };
+  }
+  return {
+    output,
+    filter: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
+    alarm: vi.fn(function (name: string, _args: Record<string, unknown>) {
+      return { arn: output(`alarm-arn-${name}`) };
+    }),
+    dashboard: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
+    containerDefinitions: JSON.stringify([
+      { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
+    ]) as string,
+    topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
+    slackQuestLogGroup: { name: 'slack-quest-logs' } as { name: string } | undefined,
+    webServerLogGroup: { name: 'web-server-logs' } as { name: string } | undefined,
+    hasWebServer: true,
+  };
+});
+
+vi.mock('../chatCompletion', () => ({
+  chatCompletion: {
+    nodes: {
+      get taskDefinition() {
+        return resources.output({ containerDefinitions: resources.containerDefinitions });
+      },
+    },
+  },
+}));
+vi.mock('../functions', () => ({
+  slackQuestProcessor: {
+    nodes: {
+      get logGroup() {
+        return resources.output(resources.slackQuestLogGroup);
+      },
+    },
+  },
+}));
+vi.mock('../web', () => ({
+  web: {
+    nodes: {
+      get server() {
+        if (!resources.hasWebServer) return undefined;
+        return resources.output({ nodes: { logGroup: resources.webServerLogGroup } });
+      },
+    },
+  },
+}));
+vi.mock('../dlqAlarms', () => ({
+  get dlqAlarmTopic() {
+    return resources.topic;
+  },
+}));
+vi.mock('@bike4mind/infra', () => import('../../b4m-core/infra/src/stageGating'));
+vi.mock('@bike4mind/observability', () => import('../../b4m-core/observability/src/index'));
+
+const PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'];
+
+function callFor(mock: typeof resources.filter, name: string): Record<string, unknown> | undefined {
+  return mock.mock.calls.find(([logicalName]) => logicalName === name)?.[1];
+}
+
+async function load(stage = 'production', appName = 'test-app') {
+  vi.resetModules();
+  vi.stubGlobal('$app', { name: appName, stage });
+  return import('../llmSpend');
+}
+
+function dashboardBody(): { widgets: Array<{ type: string; properties: Record<string, unknown> }> } {
+  const args = resources.dashboard.mock.calls[0]?.[1] as { dashboardBody: { value: string } } | undefined;
+  if (!args) throw new Error('dashboard not created');
+  return JSON.parse(args.dashboardBody.value);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubEnv('ENABLE_MONITORING', undefined);
+  vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', undefined);
+  vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', undefined);
+  vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', undefined);
+  vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
+  vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', undefined);
+  vi.stubGlobal('aws', {
+    cloudwatch: {
+      LogMetricFilter: resources.filter,
+      MetricAlarm: resources.alarm,
+      Dashboard: resources.dashboard,
+    },
+    getRegionOutput: () => ({ name: resources.output('us-east-2') }),
+  });
+  vi.stubGlobal('$util', {
+    all: (values: Array<{ value: unknown }>) => resources.output(values.map(v => v.value)),
+  });
+  resources.containerDefinitions = JSON.stringify([
+    { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
+  ]);
+  resources.topic = { arn: 'alarm-topic' };
+  resources.slackQuestLogGroup = { name: 'slack-quest-logs' };
+  resources.webServerLogGroup = { name: 'web-server-logs' };
+  resources.hasWebServer = true;
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe('LLM spend metric filters', () => {
+  it('extracts estimated USD and output tokens with the provider as a dimension', async () => {
+    await load();
+    const pattern = (field: string) => `{ $.message = "llm-usage-settled" && $.provider = * && $.${field} >= 0 }`;
+    expect(resources.filter).toHaveBeenCalledWith('llmSpendUsdFilter', {
+      name: 'test-app-production-llm-spend-usd',
+      logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
+      pattern: pattern('usd'),
+      metricTransformation: {
+        name: 'EstimatedUsd',
+        namespace: 'test-app/production/LLMSpend',
+        value: '$.usd',
+        unit: 'None',
+        dimensions: { Provider: '$.provider' },
+      },
+    });
+    expect(resources.filter).toHaveBeenCalledWith('llmSpendTokensFilter', {
+      name: 'test-app-production-llm-spend-output-tokens',
+      logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
+      pattern: pattern('outputTokens'),
+      metricTransformation: {
+        name: 'TokensOutput',
+        namespace: 'test-app/production/LLMSpend',
+        value: '$.outputTokens',
+        unit: 'Count',
+        dimensions: { Provider: '$.provider' },
+      },
+    });
+  });
+
+  it('breaks spend down by model and counts the young-account share', async () => {
+    await load();
+    expect(callFor(resources.filter, 'llmSpendUsdByModelFilter')).toMatchObject({
+      pattern: '{ $.message = "llm-usage-settled" && $.provider = * && $.model = * && $.usd >= 0 }',
+      metricTransformation: {
+        name: 'EstimatedUsdByModel',
+        value: '$.usd',
+        dimensions: { Provider: '$.provider', Model: '$.model' },
+      },
+    });
+    expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')).toMatchObject({
+      pattern: '{ $.message = "llm-usage-settled" && $.isYoungAccount IS TRUE && $.usd >= 0 }',
+      metricTransformation: {
+        name: 'EstimatedUsdYoungAccounts',
+        namespace: 'test-app/production/LLMSpend',
+        value: '$.usd',
+      },
+    });
+    expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
+      'dimensions'
+    );
+    // Five filters for each of the three log groups that log the line.
+    expect(resources.filter).toHaveBeenCalledTimes(15);
+  });
+
+  it.each([
+    ['Slack quest processor', 'slack-quest', 'slack-quest-logs'],
+    ['Next.js server', 'web-server', 'web-server-logs'],
+  ])('applies every filter to the %s log group into the same metrics', async (_label, key, logGroupName) => {
+    await load();
+    const chatCompletionFilters = resources.filter.mock.calls.filter(
+      ([, args]) => (args.logGroupName as { value: string }).value === 'chat-completion-logs'
+    );
+    expect(chatCompletionFilters).toHaveLength(5);
+    for (const [logicalName, args] of chatCompletionFilters) {
+      expect(callFor(resources.filter, `${logicalName}-${key}`)).toEqual({
+        ...args,
+        name: String(args.name).replace('test-app-production-', `test-app-production-${key}-`),
+        logGroupName: expect.objectContaining({ value: logGroupName }),
+      });
+    }
+    expect(callFor(resources.filter, `completionCreditOverdraftFilter-${key}`)).toMatchObject({
+      name: `test-app-production-${key}-completion-credit-overdraft`,
+      metricTransformation: { name: 'CompletionCreditOverdrafts', namespace: 'test-app/production/LLMSpend' },
+    });
+  });
+
+  it('counts completions that cost more than the balance, on the CLI and in web chat', async () => {
+    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE, SETTLEMENT_DEBT_MESSAGE } = await load();
+    expect(callFor(resources.filter, 'completionCreditOverdraftFilter')).toEqual({
+      name: 'test-app-production-completion-credit-overdraft',
+      logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
+      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" || $.message = "${SETTLEMENT_DEBT_MESSAGE}" }`,
+      metricTransformation: {
+        name: 'CompletionCreditOverdrafts',
+        namespace: 'test-app/production/LLMSpend',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    // The alarm only sees these lines if the emitters log them verbatim.
+    const read = (path: string) =>
+      readFileSync(new URL(`../../b4m-core/services/src/${path}`, import.meta.url), 'utf8');
+    expect(read('cliCompletions.ts')).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
+    expect(read('llm/ChatCompletionProcess.ts')).toContain(`'${SETTLEMENT_DEBT_MESSAGE}'`);
+  });
+
+  it('selects every extracted metric value and dimension in the CloudWatch pattern', async () => {
+    await load();
+    for (const [, args] of resources.filter.mock.calls) {
+      const transformation = args.metricTransformation as { value: string; dimensions?: Record<string, string> };
+      // A constant value (a count filter) selects nothing from the log line.
+      const selectors = [transformation.value, ...Object.values(transformation.dimensions ?? {})].filter(selector =>
+        selector.startsWith('$.')
+      );
+      const pattern = String(args.pattern);
+      for (const selector of selectors) {
+        // Match a complete selector, so $.model cannot be satisfied by $.modelName.
+        expect(pattern).toMatch(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(?:=|>=)`));
+      }
+    }
+  });
+
+  it('keeps the provider list in sync with the log line', async () => {
+    const { LLM_SPEND_PROVIDERS } = await load();
+    const log = await import('../../b4m-core/services/src/llm/llmUsageSettledLog');
+    expect(LLM_SPEND_PROVIDERS).toEqual(log.LLM_SPEND_PROVIDERS);
+    expect(log.LLM_USAGE_SETTLED_MESSAGE).toBe('llm-usage-settled');
+  });
+});
+
+describe('LLM spend alarms', () => {
+  it.each(PROVIDERS)('alarms on 5-minute %s spend and routes ALARM and OK to Slack', async provider => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`llmSpendRate-${provider}`, {
+      name: `test-app-production-llm-spend-rate-${provider}`,
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsd',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 300,
+      statistic: 'Sum',
+      threshold: 25,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    });
+  });
+
+  it.each([
+    ['anthropic', 75],
+    ['openai', 20],
+  ])('warns on hourly %s spend at %i USD', async (provider, threshold) => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`llmSpendHourlyWarn-${provider}`, {
+      name: `test-app-production-llm-spend-hourly-warn-${provider}`,
+      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD warn line`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsd',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it.each([
+    ['anthropic', 150],
+    ['openai', 40],
+  ])('pages on hourly %s spend at a ceiling of %i USD', async (provider, threshold) => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`llmSpendHourly-${provider}`, {
+      name: `test-app-production-llm-spend-hourly-${provider}`,
+      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD page line`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsd',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+  });
+
+  it('alarms on hourly spend by accounts under 7 days old', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('youngAccountSpendRate', {
+      name: 'test-app-production-young-account-spend-rate',
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 5,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    });
+  });
+
+  it('warns on hourly spend by accounts under 7 days old at a lower line than the page', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('youngAccountSpendRateWarn', {
+      name: 'test-app-production-young-account-spend-rate-warn',
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD warn line',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 2,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('exports the page and warn hourly alarms, in that order, for the threshold override', async () => {
+    const { youngAccountSpendAlarms } = await load();
+    expect(youngAccountSpendAlarms.map(alarm => (alarm.arn as unknown as { value: string }).value)).toEqual([
+      'alarm-arn-youngAccountSpendRate',
+      'alarm-arn-youngAccountSpendRateWarn',
+    ]);
+  });
+
+  it('alarms on 5-minute spend by accounts under 7 days old', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('llmSpendYoungAccounts', {
+      name: 'test-app-production-llm-spend-young-accounts',
+      alarmDescription:
+        'Estimated LLM spend per 5 minutes by accounts under 7 days old at or above the configured USD ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 3,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    });
+  });
+
+  it('alarms on a single credit overdraft and routes it to Slack only', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('completionCreditOverdraft', {
+      name: 'test-app-production-completion-credit-overdraft',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'CompletionCreditOverdrafts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('reads the configured ceilings', async () => {
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '9');
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', '4');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '30');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '90');
+    vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR', '12');
+    vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '45');
+    vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '7');
+    await load();
+    const fixed: Record<string, number> = {
+      youngAccountSpendRate: 9,
+      youngAccountSpendRateWarn: 4,
+      llmSpendYoungAccounts: 7,
+      completionCreditOverdraft: 1,
+      'llmSpendHourly-anthropic': 90,
+      'llmSpendHourlyWarn-anthropic': 45,
+    };
+    const expected = (name: string) =>
+      fixed[name] ?? (name.startsWith('llmSpendHourlyWarn-') ? 12 : name.startsWith('llmSpendHourly-') ? 30 : 60);
+    for (const [name, args] of resources.alarm.mock.calls) expect(args.threshold).toBe(expected(name));
+  });
+
+  it('caps an unset warn line at a lowered page line', async () => {
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '15');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '60');
+    await load();
+    const threshold = (name: string) => resources.alarm.mock.calls.find(([n]) => n === name)?.[1].threshold;
+    expect(threshold('llmSpendHourlyWarn-openai')).toBe(15);
+    expect(threshold('llmSpendHourlyWarn-anthropic')).toBe(60);
+  });
+
+  it.each([
+    ['LLM_SPEND_WARN_USD_PER_HOUR', '41'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '151'],
+  ])('rejects a warn line above its page line %s=%s', async (name, raw) => {
+    vi.stubEnv(name, raw);
+    await expect(load()).rejects.toThrow(new RegExp(`${name} \\(${raw}\\) must not exceed`));
+  });
+
+  it.each([
+    ['LLM_SPEND_ALARM_USD_PER_HOUR', '0'],
+    ['LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '1.5'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR', '0'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '2.5'],
+  ])('rejects a malformed hourly ceiling %s=%s', async (name, raw) => {
+    vi.stubEnv(name, raw);
+    await expect(load()).rejects.toThrow(new RegExp(name));
+  });
+
+  it('rejects a malformed young-account ceiling', async () => {
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '0');
+    await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR/);
+  });
+
+  it('rejects a malformed young-account warn line', async () => {
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', '1.5');
+    await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR/);
+  });
+
+  it('rejects a malformed young-account 5-minute ceiling', async () => {
+    vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '2.5');
+    await expect(load()).rejects.toThrow(/LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN/);
+  });
+
+  it.each(['0', '2.5', 'abc'])('rejects a malformed ceiling %s', async raw => {
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', raw);
+    await expect(load()).rejects.toThrow(/LLM_SPEND_ALARM_USD_PER_5MIN/);
+  });
+
+  it('fails loudly when alarm routing is missing', async () => {
+    resources.topic = undefined;
+    await expect(load()).rejects.toThrow('alarm routing requires dlqAlarmTopic');
+  });
+
+  it('fails loudly when the ChatCompletion log group cannot be resolved', async () => {
+    resources.containerDefinitions = JSON.stringify([{}]);
+    await expect(load()).rejects.toThrow('ChatCompletion container log group');
+  });
+
+  it('fails loudly when the Slack quest processor log group cannot be resolved', async () => {
+    resources.slackQuestLogGroup = undefined;
+    await expect(load()).rejects.toThrow('SlackQuestProcessor function is missing its CloudWatch log group');
+  });
+
+  it('fails loudly when the Next.js server log group cannot be resolved', async () => {
+    resources.webServerLogGroup = undefined;
+    await expect(load()).rejects.toThrow('Next.js server function is missing its CloudWatch log group');
+  });
+
+  it('fails loudly when the Next.js server function is missing', async () => {
+    resources.hasWebServer = false;
+    await expect(load()).rejects.toThrow('LLM spend log sources require the Next.js server function');
+  });
+});
+
+describe('LLM spend dashboard', () => {
+  it('shows spend, tokens, young-account share, signup and WAF edge signals', async () => {
+    await load();
+    expect(callFor(resources.dashboard, 'LlmSpendDashboard')).toMatchObject({
+      dashboardName: 'test-app-production-llm-spend',
+    });
+    const { widgets } = dashboardBody();
+    const titles = widgets.map(w => w.properties.title);
+    expect(titles).toEqual([
+      'LLM Spend - Alarm Status',
+      'Estimated USD per 5 min by provider',
+      'Estimated USD in selected range',
+      'Estimated USD per hour by provider',
+      'Output tokens per 5 min by provider',
+      'Young-account share of estimated USD (%)',
+      'Estimated USD per 5 min by model',
+      'Sign-in code sends and API key creations per 5 min',
+      'WAF: sign-in code requests with hosting or bot signals per 5 min',
+      'Signup network caps skipped (failed open) per 5 min',
+    ]);
+    const byTitle = (title: string) => widgets.find(w => w.properties.title === title)!.properties;
+
+    expect(byTitle('LLM Spend - Alarm Status').alarms).toEqual(
+      PROVIDERS.flatMap(p => [
+        `alarm-arn-llmSpendRate-${p}`,
+        `alarm-arn-llmSpendHourly-${p}`,
+        `alarm-arn-llmSpendHourlyWarn-${p}`,
+      ])
+    );
+    expect(byTitle('Estimated USD per 5 min by provider')).toMatchObject({ stacked: true, period: 300 });
+    expect(byTitle('Estimated USD per hour by provider')).toMatchObject({
+      stacked: true,
+      period: 3600,
+      annotations: {
+        horizontal: [
+          { label: 'Hourly page (anthropic)', value: 150 },
+          { label: 'Hourly warn (anthropic)', value: 75 },
+          { label: 'Hourly page (other providers)', value: 40 },
+          { label: 'Hourly warn (other providers)', value: 20 },
+        ],
+      },
+    });
+    expect(byTitle('Estimated USD in selected range')).toMatchObject({
+      view: 'singleValue',
+      period: 300,
+      setPeriodToTimeRange: true,
+    });
+    expect(JSON.stringify(byTitle('Young-account share of estimated USD (%)').metrics)).toContain(
+      'EstimatedUsdYoungAccounts'
+    );
+    expect(byTitle('Sign-in code sends and API key creations per 5 min').metrics).toEqual([
+      ['test-app/production/Signup', 'SignupCodeSends', expect.any(Object)],
+      ['test-app/production/Signup', 'ApiKeyCreations', expect.any(Object)],
+    ]);
+    expect(byTitle('WAF: sign-in code requests with hosting or bot signals per 5 min')).toMatchObject({
+      region: 'us-east-1',
+      metrics: [['test-app/production/Signup', 'OtcEdgeSignalRequests', expect.any(Object)]],
+    });
+    expect(byTitle('Signup network caps skipped (failed open) per 5 min').metrics).toEqual([
+      ['test-app/production/Signup', 'SignupLimitFailOpen', expect.any(Object)],
+    ]);
+  });
+});
+
+describe('LLM spend stage gating', () => {
+  it.each(['dev', 'production'])('creates resources on %s', async stage => {
+    await load(stage);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 3 + 4);
+    expect(resources.dashboard).toHaveBeenCalledTimes(1);
+  });
+  it('creates nothing on an unmonitored stage', async () => {
+    const { youngAccountSpendAlarms } = await load('preview');
+    expect(youngAccountSpendAlarms).toEqual([]);
+    expect(resources.filter).not.toHaveBeenCalled();
+    expect(resources.alarm).not.toHaveBeenCalled();
+    expect(resources.dashboard).not.toHaveBeenCalled();
+  });
+  it('allows a preview to opt in to monitoring', async () => {
+    vi.stubEnv('ENABLE_MONITORING', 'true');
+    await load('preview');
+    expect(resources.dashboard).toHaveBeenCalledTimes(1);
+  });
+  it('declares the env var in the deploy contract and exports the module', () => {
+    const contract = JSON.parse(readFileSync(new URL('../deploy-contract.json', import.meta.url), 'utf8'));
+    expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_5MIN');
+    expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC');
+    expect(contract.deployEnv).toContain('LLM_SPEND_WARN_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC');
+    expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN');
+    expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './llmSpend';");
+  });
+});

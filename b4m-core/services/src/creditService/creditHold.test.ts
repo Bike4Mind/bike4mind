@@ -1,15 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CreditHolderType,
+  ForbiddenError,
+  getMemberCreditPeriodStart,
+  getQuestErrorCode,
+  isSpendFrozenError,
+  type ISpendFreeze,
+} from '@bike4mind/common';
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapters } from './creditHold';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 vi.mock('./deductCreditsWithOrgSupport', () => ({ deductCreditsWithOrgSupport: vi.fn(async () => undefined) }));
 import { deductCreditsWithOrgSupport } from './deductCreditsWithOrgSupport';
 
-const makeAdapters = (balances: { user: number; org?: number }) => {
+const makeAdapters = (balances: { user: number; org?: number }, userFields: Record<string, unknown> = {}) => {
   const state = { user: balances.user, org: balances.org ?? 0 };
-  const user = { id: 'u1', currentCredits: state.user } as unknown as IUserDocument;
+  const user = { id: 'u1', currentCredits: state.user, ...userFields } as unknown as IUserDocument;
   const org = { id: 'o1', currentCredits: state.org } as unknown as IOrganizationDocument;
   const adapters: CreditHoldAdapters = {
     users: {
@@ -28,6 +37,12 @@ const makeAdapters = (balances: { user: number; org?: number }) => {
       }),
     } as unknown as CreditHoldAdapters['organizations'],
     creditTransactions: {} as CreditHoldAdapters['creditTransactions'],
+    // The test user has no createdAt, so the new-account spend cap never applies here.
+    newAccountSpendCap: {
+      adminSettings: { findAll: vi.fn(async () => []), findBySettingNames: vi.fn(async () => []) },
+      personalSpendSince: vi.fn(async () => []),
+    } as unknown as CreditHoldAdapters['newAccountSpendCap'],
+    spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
   };
   return { adapters, state };
 };
@@ -67,12 +82,78 @@ describe('holdCredits', () => {
     expect(state.org).toBe(30);
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['moderation-suspended', { moderation: { status: 'suspended' } }],
+  ])('refuses a %s account before any balance moves', async (_label, userFields) => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 50 }, userFields);
+    const attempt = holdCredits(
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    await expect(attempt).rejects.toBeInstanceOf(ForbiddenError);
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(state).toEqual({ user: 100, org: 50 });
+  });
+
   it('rolls back and throws insufficient credits when the hold overdraws', async () => {
     const { adapters, state } = makeAdapters({ user: 10 });
     await expect(
       holdCredits({ userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger }, adapters)
     ).rejects.toThrow(/do not have enough credits for video/);
     expect(state.user).toBe(10);
+  });
+
+  it('reports a balance refusal to onInsufficientCredits, and still refuses when the hook throws', async () => {
+    const { adapters } = makeAdapters({ user: 10 });
+    const onInsufficientCredits = vi.fn(async () => {
+      throw new Error('store down');
+    });
+    await expect(
+      holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+        { ...adapters, onInsufficientCredits }
+      )
+    ).rejects.toThrow(/do not have enough credits for video/);
+    expect(onInsufficientCredits).toHaveBeenCalledWith({
+      userId: 'u1',
+      reason: 'balance',
+      featureLabel: 'video',
+      requiredCredits: 30,
+      availableCredits: 10,
+    });
+  });
+
+  it('refuses a hold beyond the member cap before moving either balance', async () => {
+    const observer = vi.fn();
+    setOrgEventObserver(observer);
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.organizations.findById).mockResolvedValueOnce({
+      id: 'o1',
+      currentCredits: 100,
+      maxCreditsPerMember: 50,
+      userDetails: [{ id: 'u1', usedCredits: 40, periodStart: getMemberCreditPeriodStart() }],
+    } as unknown as IOrganizationDocument);
+
+    const hold = holdCredits(
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 20, featureLabel: 'image generation', logger },
+      adapters
+    );
+
+    await expect(hold).rejects.toThrow(/organization member credit limit/);
+    await expect(hold).rejects.toSatisfy((error: unknown) => getQuestErrorCode(error) === 'insufficient_credits');
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(state).toEqual({ user: 100, org: 100 });
+    expect(observer).toHaveBeenCalledWith({
+      type: 'member_cap_check',
+      organizationId: 'o1',
+      userId: 'u1',
+      refused: true,
+    });
+    setOrgEventObserver(null);
   });
 
   it('logs a failed overdraw rollback and still answers insufficient credits', async () => {
@@ -148,6 +229,132 @@ describe('holdCredits', () => {
       )
     ).rejects.toThrow('nope');
     expect(state.user).toBe(100);
+  });
+});
+
+describe('holdCredits spend freeze', () => {
+  const frozen = (scopeType: ISpendFreeze['scopeType']) => ({ scopeType, frozenAt: new Date('2026-11-16T00:00:00Z') });
+  const hold = (
+    adapters: CreditHoldAdapters,
+    extra: {
+      organizationId?: string | null;
+      apiKeyId?: string | null;
+      apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+    } = {}
+  ) =>
+    holdCredits(
+      {
+        userId: 'u1',
+        organizationId: extra.organizationId ?? null,
+        requiredCredits: 30,
+        featureLabel: 'video',
+        logger,
+        apiKeyId: extra.apiKeyId,
+        apiKeyBillingOwnerType: extra.apiKeyBillingOwnerType,
+      },
+      adapters
+    );
+
+  it('refuses a frozen user before moving any balance', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozen('User') as ISpendFreeze);
+    const error = await hold(adapters).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.user).toBe(100);
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+      userId: 'u1',
+      organizationId: null,
+      apiKeyId: undefined,
+    });
+  });
+
+  it('refuses a frozen organization before moving any balance', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozen('Organization') as ISpendFreeze);
+    const error = await hold(adapters, { organizationId: 'o1' }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
+  });
+
+  it('refuses a frozen API key when one is given, and checks it with the acting user for an org-billed key', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozen('apiKey') as ISpendFreeze);
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.Organization,
+    }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
+    expect(adapters.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+      userId: 'u1',
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+    });
+  });
+
+  it('refuses a frozen owner of a user-billed key whose spend lands on an organization', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockImplementation(async subject =>
+      subject.userId === 'u1' ? (frozen('User') as ISpendFreeze) : null
+    );
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.User,
+    }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
+  });
+
+  it('refuses a frozen user spending through an org-billed key', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockImplementation(async subject =>
+      subject.userId === 'u1' ? (frozen('User') as ISpendFreeze) : null
+    );
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.Organization,
+    }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
+  });
+
+  it('checks the user alongside a user-billed key', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    await hold(adapters, { apiKeyId: 'k1' });
+    expect(adapters.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+      userId: 'u1',
+      organizationId: null,
+      apiKeyId: 'k1',
+    });
+  });
+
+  it('refuses after the access gate: a blocked user gets the access refusal, not the freeze', async () => {
+    const { adapters } = makeAdapters({ user: 100 }, { deletion: { scheduledFor: new Date() } });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValue(frozen('User') as ISpendFreeze);
+    const error = await hold(adapters).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(isSpendFrozenError(error)).toBe(false);
+  });
+
+  it('lets a settlement through while the subject is frozen', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    const reserved = await hold(adapters);
+    vi.mocked(adapters.spendFreezes.findActiveForSubject)
+      .mockClear()
+      .mockResolvedValue(frozen('User') as ISpendFreeze);
+    const charged = await settleCreditHold(
+      reserved,
+      10,
+      { type: 'video_generation_usage' } as never,
+      { featureLabel: 'video', logger },
+      adapters
+    );
+    expect(charged).toBe(10);
+    expect(adapters.spendFreezes.findActiveForSubject).not.toHaveBeenCalled();
   });
 });
 

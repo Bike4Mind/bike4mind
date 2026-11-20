@@ -6,15 +6,22 @@ import {
   organizationRepository,
   userRepository,
   realtimeConnectionRepository,
+  stripeDisputeRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  CreditPurchaseEvents,
+  CreditPurchaseStatus,
+  CURRENT_POLICY_VERSION,
+  isPlaceholderValue,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { logEventSafe } from '@server/utils/analyticsLog';
-import { StripeEvents } from '@server/utils/eventBus';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
+import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   customerExists,
@@ -22,24 +29,51 @@ import {
   isStripeConfigured,
   stripe,
 } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
-import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { sendToClient } from '@server/websocket/utils';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
+import { minorUnitsPerMajor } from '@bike4mind/server-utils/integrations/stripe/currency';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
+import {
+  adminOwnerSlackRef,
+  endedLifecycleEvent,
+  paymentFailedLifecycleEvent,
+  postSubscriptionLifecycleToSlack,
+} from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
+import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
+import { autoApproveRiskReviewAfterPayment } from '@bike4mind/server-utils/security/riskReviewAutoApproval';
+import {
+  forfeitHeldUnlockForFraudWarning,
+  forfeitHeldUnlockForRefund,
+  forfeitSignupUnlock,
+} from '@server/credits/paymentUnlockForfeit';
+import { clawbackRefundCredits } from '@server/billing/refundClawback';
+import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
+import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
+import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
+import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
+import { emitBillingEvent, emitPurchaseEvents } from '@bike4mind/server-utils/analytics/signupEvents';
+import { reverseSubscriptionRewardForRefund } from '@bike4mind/server-utils/referrals/subscriptionReward';
 import {
   creditBuyerForEvents,
   planDetails,
+  purchaseVisitId,
   rowTimestamps,
   subscriptionEventUser,
   wholeDaysBetween,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
+
+// Shorter than the 10s default: the post precedes invoice voiding, which a hung webhook must not starve.
+const DELETED_SLACK_POST_TIMEOUT_MS = 3_000;
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
   if (!isStripeConfigured()) {
@@ -90,6 +124,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   req.logger.info(`Received webhook of type ${event.type}`);
 
+  // Filled by branches that resolve something the payload alone cannot tell the BillingEvent store.
+  const recordHints: BillingEventHints = {};
+
   switch (event.type) {
     case 'payment_intent.succeeded': {
       const intent = event.data.object;
@@ -100,16 +137,36 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         req.logger.debug(`Ignoring non-invoice webhook: ${intent.object}`);
         break;
       }
+      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
+        // Subscription-related payment intents don't carry credits metadata
+        // and are handled via invoice.payment_succeeded instead. They are still screened for
+        // payment risk, ahead of the stage guard because they carry no environment metadata. A
+        // customer from another stage or an org resolves to no user here and is skipped.
+        req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
+        const subscriber = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
+        if (subscriber) {
+          await screenPaymentOutcome(
+            {
+              paymentIntentId: intent.id,
+              userId: subscriber.id,
+              kind: 'subscription',
+              amount: intent.amount_received ?? intent.amount,
+              currency: intent.currency,
+              outcome: 'succeeded',
+              chargeRef: intent.latest_charge,
+              livemode: intent.livemode,
+            },
+            req.logger
+          );
+          // After screening, which records the Radar outcome and card this reads.
+          await autoApproveRiskReviewAfterPayment(subscriber.id, req.logger);
+        }
+        break;
+      }
       if (intent.metadata?.environment !== Resource.App.stage) {
         req.logger.debug(
           `Ignoring webhook for wrong environment: ${intent.metadata?.environment}, wanted ${Resource.App.stage}`
         );
-        break;
-      }
-      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
-        // Subscription-related payment intents don't carry credits metadata
-        // and are handled via invoice.payment_succeeded instead
-        req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
         break;
       }
 
@@ -139,6 +196,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // The version the buyer was shown at start-payment, not the one current now.
+      if (intent.metadata.termsAcceptedVersion) {
+        await userRepository.update({
+          id: user.id,
+          checkoutTermsAcceptedVersion: intent.metadata.termsAcceptedVersion,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
+
       const credits = Number(intent.metadata.credits);
       // Ledger row and balance commit together (grantCreditPurchase), so 'already_granted' means
       // the credits really landed and a redelivery can be acknowledged. Any other failure rolled
@@ -166,7 +232,23 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         kind: 'credits',
         amountMinor: intent.amount_received ?? intent.amount,
         currency: intent.currency,
+        visitId: await purchaseVisitId(intent.id),
       });
+
+      // Runs last on both branches, so a failure here (thrown for a Stripe retry) never skips the
+      // first-grant-only work below; the retry lands on already_granted and finishes the release.
+      const releaseSignupGrant = async () => {
+        const signupUnlock = await unlockSignupGrantFromCreditPurchase(user.id, req.logger);
+        if (signupUnlock.creditsGranted > 0 || signupUnlock.heldUntil) {
+          req.logger.info('[CreditPurchase] Signup grant released by purchase', {
+            step: 'signup_unlock',
+            userId: user.id,
+            creditsGranted: signupUnlock.creditsGranted,
+            heldUntil: signupUnlock.heldUntil,
+            ...trace,
+          });
+        }
+      };
 
       if (outcome === 'already_granted') {
         req.logger.info('[CreditPurchase] Credits already granted for intent', {
@@ -185,8 +267,25 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           undefined,
           req.logger
         );
+        await releaseSignupGrant();
         break;
       }
+
+      // First grant only, so a redelivery does not alert twice. Never throws.
+      await screenPaymentOutcome(
+        {
+          paymentIntentId: intent.id,
+          userId: user.id,
+          kind: 'credits',
+          amount: intent.amount_received ?? intent.amount,
+          currency: intent.currency,
+          outcome: 'succeeded',
+          chargeRef: intent.latest_charge,
+          livemode: intent.livemode,
+        },
+        req.logger
+      );
+      await autoApproveRiskReviewAfterPayment(user.id, req.logger);
 
       req.logger.info('[CreditPurchase] Credits granted', {
         step: 'credits_granted',
@@ -209,13 +308,33 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         undefined,
         req.logger
       );
+
+      // A purchase grants plan:paid, so refresh the model picker (MODEL_CATALOG_QUERY_KEY in
+      // app/hooks/data/useModelInfo.ts) and entitlements now instead of on the next reload.
+      // Best-effort: allSettled never rejects, so it cannot fail a delivery whose credits landed.
+      await Promise.allSettled(
+        [['llm', 'models'], ['entitlements']].map(queryKey =>
+          sendToClient(user.id, Resource.websocket.managementEndpoint, { action: 'invalidate_query', queryKey })
+        )
+      );
+      await releaseSignupGrant();
       break;
     }
 
     // Subscription events
 
-    case 'checkout.session.completed':
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      // Set only while requireCheckoutTermsConsent was on; see server/integrations/stripe/termsConsent.ts.
+      if (session.consent?.terms_of_service === 'accepted' && session.client_reference_id) {
+        await userRepository.update({
+          id: session.client_reference_id,
+          checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
       break;
+    }
 
     case 'invoice.payment_succeeded': {
       const invoice = event.data.object;
@@ -231,10 +350,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      await StripeEvents.InvoicePaymentSucceeded.publish({
-        invoiceId: invoice.id,
-        subscriptionId,
-      });
+      await StripeEvents.InvoicePaymentSucceeded.publish(
+        { invoiceId: invoice.id, subscriptionId },
+        { requireAcceptance: true }
+      );
 
       break;
     }
@@ -243,10 +362,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const subscription = event.data.object;
 
       // Update subscription status in unified Subscription model
-      const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
-        status: 'canceled',
+      const canceled = {
+        status: 'canceled' as const,
         canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
-      });
+        ...stripeMirrorFields(subscription),
+      };
+      const previous = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+        subscription.id,
+        canceled
+      );
+      const updated = previous && { ...previous, ...canceled };
 
       // Ownership guard, and the only thing standing between a misrouted event and an
       // irreversible void: a stage with no row for this subscription does not own it
@@ -255,6 +380,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!updated) {
         req.logger.warn(`Ignoring deleted subscription ${subscription.id}: no matching row in this stage`);
         break;
+      }
+
+      // Posted by whichever write moves the row into canceled (customerSubscriptionUpdated.ts may get
+      // there first); a redelivery finds it canceled, so this precedes the slower work below.
+      if (previous?.status !== 'canceled') {
+        await postSubscriptionLifecycleToSlack(
+          endedLifecycleEvent(updated, subscription.cancellation_details?.reason),
+          {
+            timeoutMs: DELETED_SLACK_POST_TIMEOUT_MS,
+          }
+        );
       }
 
       // Safely access userId from metadata (may be missing for legacy subscriptions)
@@ -345,9 +481,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     case 'customer.subscription.updated': {
       const subscription = event.data.object;
 
-      await StripeEvents.CustomerSubscriptionUpdated.publish({
-        subscriptionId: subscription.id,
-      });
+      await StripeEvents.CustomerSubscriptionUpdated.publish(
+        { subscriptionId: subscription.id },
+        { requireAcceptance: true }
+      );
 
       break;
     }
@@ -363,6 +500,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
 
         await userRepository.update({ id: user.id, stripeCustomerId: null });
+        recordHints.owner = { ownerType: 'user', ownerId: user.id };
         req.logger.info(`Removed Stripe customer ID from user ${user.id}`);
       } else {
         const organization = await organizationRepository.findByStripeCustomerId(customer.id);
@@ -372,6 +510,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
 
         await organizationRepository.update({ id: organization.id, stripeCustomerId: null });
+        recordHints.owner = { ownerType: 'organization', ownerId: organization.id };
         req.logger.info(`Removed Stripe customer ID from organization ${organization.id}`);
       }
 
@@ -387,106 +526,141 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       let user = null;
 
+      // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
+      let reversalError: unknown;
       if (paymentIntentId) {
-        const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
-        if (originalTx) {
-          user = await userRepository.findById(originalTx.ownerId);
-          if (user) {
-            // Clawback the disputed credits (idempotent via stripeDisputeId unique index)
-            try {
-              await creditService.subtractCredits(
-                {
-                  type: 'generic_deduct',
-                  ownerId: user.id, // Always clawback from user, not org
-                  ownerType: CreditHolderType.User,
-                  credits: originalTx.credits,
-                  reason: 'dispute_clawback',
-                  stripeDisputeId: dispute.id,
-                  description: `Dispute clawback: Stripe dispute ${dispute.id}`,
-                },
-                {
-                  db: { creditTransactions: creditTransactionRepository },
-                  creditHolderMethods: userRepository,
-                }
-              );
-              req.logger.info(`Clawback of ${originalTx.credits} credits completed for dispute ${dispute.id}`);
-
-              // Kill the matching pack lot's remaining balance. No-op if no lot
-              // matches (e.g. a subscription grant stamped with an invoice-id ref).
-              await creditService.clawbackCreditLotsByStripeRef(paymentIntentId, 'full', originalTx.credits, {
-                db: { creditLots: creditLotRepository },
-              });
-            } catch (err: unknown) {
-              // Duplicate key (code 11000) = already processed - idempotent no-op
-              if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
-                req.logger.info(`Dispute ${dispute.id} already processed (duplicate key), skipping clawback`);
-              } else {
-                throw err;
-              }
-            }
-          }
+        try {
+          await reverseSubscriptionRewardForRefund({
+            paymentIntentId,
+            amountRefunded: dispute.amount,
+            amountCaptured: dispute.amount,
+            reason: 'disputed',
+          });
+        } catch (err: unknown) {
+          reversalError = err;
         }
       }
 
-      // Fall back to customer-ID lookup if payment intent didn't resolve a user
-      if (!user) {
-        const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
-        if (chargeId) {
-          const charge = await stripe.charges.retrieve(chargeId);
-          const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
-          if (customerId) {
-            user = await userRepository.findByStripeCustomerId(customerId);
-            if (!user) {
-              // Check if it belongs to an org (subscription dispute)
-              const org = await organizationRepository.findByStripeCustomerId(customerId);
-              if (org) {
-                await postMessageToSlack(
-                  `⚠️ *Stripe Dispute (Subscription/Org)* — dispute ${dispute.id}\n*Organization:* ${org.name} (${org.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+      let payerError: unknown;
+      disputePayer: try {
+        if (paymentIntentId) {
+          const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
+          if (originalTx) {
+            user = await userRepository.findById(originalTx.ownerId);
+            if (user) {
+              // Clawback the disputed credits (idempotent via stripeDisputeId unique index)
+              try {
+                await creditService.subtractCredits(
+                  {
+                    type: 'generic_deduct',
+                    ownerId: user.id, // Always clawback from user, not org
+                    ownerType: CreditHolderType.User,
+                    credits: originalTx.credits,
+                    reason: 'dispute_clawback',
+                    stripeDisputeId: dispute.id,
+                    description: `Dispute clawback: Stripe dispute ${dispute.id}`,
+                  },
+                  {
+                    db: { creditTransactions: creditTransactionRepository },
+                    creditHolderMethods: userRepository,
+                  }
                 );
-                req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
-                break;
+                req.logger.info(`Clawback of ${originalTx.credits} credits completed for dispute ${dispute.id}`);
+
+                // Kill the matching pack lot's remaining balance. No-op if no lot
+                // matches (e.g. a subscription grant stamped with an invoice-id ref).
+                await creditService.clawbackCreditLotsByStripeRef(paymentIntentId, 'full', originalTx.credits, {
+                  db: { creditLots: creditLotRepository },
+                });
+              } catch (err: unknown) {
+                // Duplicate key (code 11000) = already processed - idempotent no-op
+                if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+                  req.logger.info(`Dispute ${dispute.id} already processed (duplicate key), skipping clawback`);
+                } else {
+                  throw err;
+                }
               }
             }
           }
         }
+
+        // Fall back to customer-ID lookup if payment intent didn't resolve a user
+        if (!user) {
+          const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+          if (chargeId) {
+            const charge = await stripe.charges.retrieve(chargeId);
+            const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
+            if (customerId) {
+              user = await userRepository.findByStripeCustomerId(customerId);
+              if (!user) {
+                // Check if it belongs to an org (subscription dispute)
+                const org = await organizationRepository.findByStripeCustomerId(customerId);
+                if (org) {
+                  recordHints.owner = { ownerType: 'organization', ownerId: org.id };
+                  await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'organization', org.id));
+                  await postMessageToSlack(
+                    `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Resolve it in Admin > Disputes.`
+                  );
+                  req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
+                  break disputePayer;
+                }
+              }
+            }
+          }
+        }
+
+        const disputeRadarLine = await radarRiskLine(dispute.charge);
+        const disputeRadarSuffix = disputeRadarLine ? `\n${disputeRadarLine}` : '';
+
+        if (user) {
+          recordHints.owner = { ownerType: 'user', ownerId: user.id };
+          const { deactivatedKeys } = await userService.flagDisputePending(user, {
+            db: {
+              users: userRepository,
+              userApiKeys: userApiKeyRepository,
+              realtimeConnections: realtimeConnectionRepository,
+            },
+          });
+          // Cancels a signup bonus still held for this payment to settle.
+          await forfeitSignupUnlock(user.id, 'dispute', req.logger);
+          await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'user', user.id));
+
+          await postMessageToSlack(
+            `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
+          );
+          req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
+          // Never throws; keyed by the dispute so a redelivery alerts once.
+          await propagateAccountRisk(
+            { sourceUserId: user.id, trigger: 'dispute', key: `dispute:${dispute.id}:linked` },
+            req.logger
+          );
+        } else {
+          await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'unmatched', null));
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Review it in Admin > Disputes.${disputeRadarSuffix}`
+          );
+          req.logger.warn(`Could not find user for dispute ${dispute.id}`);
+        }
+      } catch (err: unknown) {
+        payerError = err;
       }
-
-      if (user) {
-        const { deactivatedKeys } = await userService.flagDisputePending(user, {
-          db: {
-            users: userRepository,
-            userApiKeys: userApiKeyRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-        });
-
-        await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
-        );
-        req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
-      } else {
-        await postMessageToSlack(
-          `⚠️ *Stripe Dispute Created — No User Found* — dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.`
-        );
-        req.logger.warn(`Could not find user for dispute ${dispute.id}`);
-      }
-
+      if (payerError ?? reversalError) throw payerError ?? reversalError;
       break;
     }
 
     case 'charge.dispute.closed': {
       const dispute = event.data.object;
-
-      // Only act when the merchant wins - lost disputes stay flagged pending manual review
-      if (dispute.status !== 'won') {
-        req.logger.debug(`Dispute ${dispute.id} closed with status ${dispute.status}, no action taken`);
-        break;
-      }
-
-      // Find the user via payment intent -> credit transaction, same lookup as charge.dispute.created
-      let user = null;
       const paymentIntentId =
         typeof dispute.payment_intent === 'string' ? dispute.payment_intent : dispute.payment_intent?.id;
+
+      // A lost dispute reverses the purchase's paid standing, besides the dispute handling below.
+      if (dispute.status === 'lost' && paymentIntentId) {
+        await reversePurchaseStanding({ paymentIntentId, reason: 'dispute_lost' }, req.logger);
+      }
+
+      // Same lookup as charge.dispute.created: payment intent -> credit transaction, then charge -> customer.
+      let user = null;
+      let orgId: string | null = null;
 
       if (paymentIntentId) {
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
@@ -502,100 +676,185 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
           if (customerId) {
             user = await userRepository.findByStripeCustomerId(customerId);
+            if (!user) orgId = (await organizationRepository.findByStripeCustomerId(customerId))?.id ?? null;
           }
         }
       }
 
-      if (user) {
-        await userRepository.update({ id: user.id, disputePending: false });
+      if (user) recordHints.owner = { ownerType: 'user', ownerId: user.id };
+      const facts = user
+        ? disputeFacts(dispute, 'user', user.id)
+        : orgId
+          ? disputeFacts(dispute, 'organization', orgId)
+          : disputeFacts(dispute, 'unmatched', null);
+      // Every close is recorded, so a closed record an admin can resolve never stays stuck open.
+      const record = await stripeDisputeRepository.recordClosed(facts, new Date());
+      if (dispute.status !== 'won' && dispute.status !== 'lost') {
+        req.logger.info(`Dispute ${dispute.id} closed with status ${dispute.status}, left for an admin to resolve`);
+        break;
+      }
+      const amountLine = `*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}`;
 
-        await postMessageToSlack(
-          `✅ *Stripe Dispute Won* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
-        );
-        req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
-      } else {
-        req.logger.warn(`Could not find user for won dispute ${dispute.id}`);
+      if (dispute.status === 'won') {
+        // The only path that clears a dispute flag.
+        if (user) {
+          await userRepository.update({ id: user.id, disputePending: false });
+          await postMessageToSlack(
+            `\u2705 *Stripe Dispute Won* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nAccount dispute flag cleared.`
+          );
+          req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
+        } else {
+          req.logger.warn(`Could not find user for won dispute ${dispute.id}`);
+        }
+        await resolveWonDispute(dispute.id, req.logger);
+        break;
       }
 
+      if (!user) {
+        // An organization's or an unmatched payment: no account to contain, so it waits for an admin.
+        if (record.subject === 'user') await stripeDisputeRepository.markUserGone(dispute.id);
+        if (record.state === 'open' && !record.redelivered) {
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n${orgId ? `*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: orgId })}` : '*No user or organization found*'}\n${amountLine}\nResolve it in Admin > Disputes.`
+          );
+        }
+        req.logger.warn(
+          `Lost dispute ${dispute.id} has no user (${orgId ? `org ${orgId}` : 'unmatched'}), queued for admin`
+        );
+        break;
+      }
+
+      if (record.subject === 'user' && record.subjectId !== user.id) {
+        // Containing the close's user would hit an account the record does not name.
+        if (!record.redelivered) {
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nThe record names a different account, so nothing was contained. Review it in Admin > Disputes.`
+          );
+        }
+        req.logger.warn(
+          `Lost dispute ${dispute.id} names a different user than the close found, left open for an admin`
+        );
+        break;
+      }
+
+      const outcome = await resolveLostUserDispute(record, user, req.logger);
+      if (outcome.status === 'already_resolved') {
+        if (record.resolution?.outcome === 'admin') {
+          if (!record.redelivered) {
+            await postMessageToSlack(
+              `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nAn admin resolved this dispute before the close arrived, so the account was not contained. Review it in Admin > Disputes.`
+            );
+          }
+          req.logger.warn(`Lost dispute ${dispute.id} was resolved by an admin first, account not contained`);
+        } else {
+          req.logger.info(`Lost dispute ${dispute.id} already resolved, no action taken`);
+        }
+        break;
+      }
+      const contain = outcome.item.contain;
+      const containLine = contain
+        ? `Account contained: ${[
+            contain.suspended && 'suspended',
+            contain.creditDelta !== 0 && `${Math.abs(contain.creditDelta)} credits removed`,
+            contain.apiKeysRevoked > 0 && `${contain.apiKeysRevoked} API key(s) revoked`,
+          ]
+            .filter(Boolean)
+            .join(', ')}. Undo from Admin > Disputes.`
+        : user.isAdmin
+          ? 'Admin account: not contained automatically. Review it by hand.'
+          : 'Account was already contained.';
+      await postMessageToSlack(
+        `\u{1F6A8} *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nDispute flag kept. ${containLine}`
+      );
+      req.logger.info(`Resolved lost dispute ${dispute.id} for user ${user.id} (${outcome.status})`);
       break;
     }
 
     case 'charge.refunded': {
       const charge = event.data.object;
-      const refunds = charge.refunds?.data ?? [];
-      if (refunds.length === 0) {
-        req.logger.debug(`charge.refunded has no refund objects, skipping`);
-        break;
-      }
-
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
-      if (!refundPaymentIntentId) {
-        req.logger.debug(`charge.refunded has no payment_intent, skipping`);
-        break;
+      // The reversal and the forfeit run before the refund-list guard: newer webhook API versions omit
+      // charge.refunds, and neither needs the refund objects (the reward reads the cumulative amount, the
+      // forfeit only the payer).
+      // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
+      let reversalError: unknown;
+      if (refundPaymentIntentId) {
+        try {
+          await reverseSubscriptionRewardForRefund({
+            paymentIntentId: refundPaymentIntentId,
+            amountRefunded: charge.amount_refunded,
+            amountCaptured: charge.amount_captured || charge.amount,
+          });
+        } catch (err: unknown) {
+          reversalError = err;
+        }
       }
 
-      const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
-      if (!originalTx) {
-        req.logger.debug(`No credit purchase found for refunded charge ${charge.id}, skipping`);
-        break;
+      // Also before the refund-list guard. `refunded` is true only once the whole charge is refunded.
+      let standingError: unknown;
+      if (refundPaymentIntentId && charge.refunded === true) {
+        try {
+          await reversePurchaseStanding({ paymentIntentId: refundPaymentIntentId, reason: 'refunded' }, req.logger);
+        } catch (err: unknown) {
+          standingError = err;
+        }
       }
 
-      const user = await userRepository.findById(originalTx.ownerId);
-      if (!user) {
-        req.logger.warn(`User ${originalTx.ownerId} not found for refunded charge ${charge.id}`);
-        break;
-      }
+      let payerError: unknown;
+      refundPayer: try {
+        // Before the purchase lookup too: a refunded subscription charge has no credit purchase row.
+        await forfeitHeldUnlockForRefund(charge, req.logger);
 
-      // Process each refund independently - idempotency enforced via stripeRefundId unique sparse index
-      const originalAmount = charge.amount_captured || charge.amount;
-      for (const refund of refunds) {
-        // Proportional clawback: refundAmount / originalChargeAmount * purchasedCredits
-        const refundRatio = originalAmount > 0 ? refund.amount / originalAmount : 0;
-        const creditsToClawback = Math.round(originalTx.credits * refundRatio);
-
-        if (creditsToClawback <= 0) {
-          req.logger.debug(`Computed 0 credits to clawback for refund ${refund.id}, skipping`);
-          continue;
+        const refunds = charge.refunds?.data ?? [];
+        if (refunds.length === 0) {
+          req.logger.debug(`charge.refunded has no refund objects, skipping`);
+          break refundPayer;
         }
 
-        try {
-          await creditService.subtractCredits(
-            {
-              type: 'generic_deduct',
-              ownerId: user.id, // Always clawback from user, not org
-              ownerType: CreditHolderType.User,
-              credits: creditsToClawback,
-              reason: 'refund_clawback',
-              stripeRefundId: refund.id,
-              description: `Refund clawback: Stripe refund ${refund.id} (${Math.round(refundRatio * 100)}% of purchase)`,
-            },
-            {
-              db: { creditTransactions: creditTransactionRepository },
-              creditHolderMethods: userRepository,
-            }
-          );
-          req.logger.info(`Clawback of ${creditsToClawback} credits completed for refund ${refund.id}`);
+        if (!refundPaymentIntentId) {
+          req.logger.debug(`charge.refunded has no payment_intent, skipping`);
+          break refundPayer;
+        }
 
-          // Proportionally shrink the matching pack lot's remaining balance.
-          // No-op if no lot matches.
-          await creditService.clawbackCreditLotsByStripeRef(refundPaymentIntentId, 'proportional', creditsToClawback, {
-            db: { creditLots: creditLotRepository },
+        const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
+        if (!originalTx) {
+          req.logger.debug(`No credit purchase found for refunded charge ${charge.id}, skipping`);
+          break refundPayer;
+        }
+
+        const user = await userRepository.findById(originalTx.ownerId);
+        if (!user) {
+          req.logger.warn(`User ${originalTx.ownerId} not found for refunded charge ${charge.id}`);
+          break refundPayer;
+        }
+
+        // Each refund is clawed back independently; idempotent per refund (see clawbackRefundCredits).
+        // A refund the early fraud warning response issued was already clawed back there.
+        const originalAmount = charge.amount_captured || charge.amount;
+        for (const refund of refunds) {
+          const clawback = await clawbackRefundCredits({
+            userId: user.id,
+            paymentIntentId: refundPaymentIntentId,
+            purchasedCredits: originalTx.credits,
+            chargeAmount: originalAmount,
+            refund,
           });
-
-          await postMessageToSlack(
-            `ℹ️ *Stripe Refund* — refund ${refund.id}\n*User:* ${user.name || user.email} (${user.id})\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
-          );
-        } catch (err: unknown) {
-          if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
-            req.logger.info(`Refund ${refund.id} already processed (duplicate key), skipping clawback`);
+          if (!clawback) {
+            req.logger.info(`Refund ${refund.id} already processed or nothing to claw back, skipping`);
             continue;
           }
-          throw err;
+          req.logger.info(`Clawback of ${clawback.credits} credits completed for refund ${refund.id}`);
+          await postMessageToSlack(
+            `\u2139\uFE0F *Stripe Refund* \u2014 refund ${refund.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${clawback.credits} (${Math.round(clawback.ratio * 100)}% of purchase)`
+          );
         }
+      } catch (err: unknown) {
+        payerError = err;
       }
-
+      const refundError = payerError ?? reversalError ?? standingError;
+      if (refundError) throw refundError;
       break;
     }
 
@@ -631,12 +890,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
       }
 
-      await postMessageToSlack(
-        `⚠️ *Subscription Payment Failed* \u2014 invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n*Owner:* ${updated.ownerType} ${updated.ownerId}\nStatus set to past_due.`
-      );
+      // First attempt only: Stripe's retries would otherwise post once per attempt.
+      if (invoice.attempt_count === 1) {
+        await postSubscriptionLifecycleToSlack(paymentFailedLifecycleEvent(updated, invoice));
+      }
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
 
-      await notifyPaymentFailed(updated, invoice, req.logger);
+      if (await notifyPaymentFailed(updated, invoice, req.logger)) {
+        recordHints.data = { dunningNoticeSent: true };
+        // Gated on the owner's notice claim, so a redelivered or non-renewal failure alerts nobody.
+        if (updated.ownerType === SubscriptionOwnerType.Organization && invoice.id) {
+          await notifyOrgEvent({ type: 'payment_failed', organizationId: updated.ownerId, invoiceId: invoice.id });
+        }
+      }
 
       // Each failed attempt is its own event: the row comes back on every retry, so the attempt
       // number goes into the occurrence, and a redelivery of the same attempt sends the same id.
@@ -659,8 +925,39 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       break;
     }
 
+    case 'radar.early_fraud_warning.created':
+    case 'review.opened': {
+      if (event.type === 'radar.early_fraud_warning.created') {
+        await forfeitHeldUnlockForFraudWarning(event.data.object, req.logger);
+        await respondToEarlyFraudWarning(event, req.logger);
+      } else await alertStripeRiskEvent(event, req.logger);
+      break;
+    }
+
     case 'payment_intent.payment_failed': {
       const intent = event.data.object;
+
+      // A Radar block or high-risk failure alerts on its own; every failed card attempt is also
+      // recorded so the per-account and per-network card counts see it. Neither throws.
+      const failedCharge = await alertStripeRiskEvent(event, req.logger);
+      const failedCustomerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+      const failedPayer = failedCustomerId ? await userRepository.findByStripeCustomerId(failedCustomerId) : null;
+      if (failedPayer) {
+        await screenPaymentOutcome(
+          {
+            paymentIntentId: intent.id,
+            userId: failedPayer.id,
+            kind: Number(intent.metadata?.credits) >= 1 ? 'credits' : 'subscription',
+            amount: intent.amount,
+            currency: intent.currency,
+            outcome: 'failed',
+            chargeRef: failedCharge ?? intent.last_payment_error?.charge,
+            livemode: intent.livemode,
+            fallbackCardFingerprint: intent.last_payment_error?.payment_method?.card?.fingerprint ?? null,
+          },
+          req.logger
+        );
+      }
 
       // Only act if credits were pre-allocated for this payment intent
       const failedTx = await creditTransactionRepository.findByPaymentIntentId(intent.id);
@@ -705,6 +1002,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       req.logger.debug(`Ignoring webhook of type ${event.type}`);
     }
   }
+
+  // After the side effects (or, for worker-handled types, the publish) succeeded: a throw above skips
+  // this, Stripe redelivers, and the replay re-runs them under their own per-entity dedupe keys.
+  await recordBillingEvent(event, recordHints, req.logger);
 
   return res.status(200).send();
 });

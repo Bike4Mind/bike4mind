@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
+import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 
 const state = vi.hoisted(() => ({
@@ -16,17 +16,32 @@ const state = vi.hoisted(() => ({
   reducedMotion: false,
   refetch: vi.fn(),
   credits: 5000,
-  account: undefined as { personal: boolean } | undefined,
+  account: undefined as { id?: string; personal: boolean; seats?: number } | undefined,
+  teamSubscriptions: [] as unknown[],
+  teamSubscriptionsPending: false,
+  teamSubscriptionsError: false,
+  teamRefetch: vi.fn(),
+  teamQueryOwner: undefined as { ownerId: string; enabled?: boolean } | undefined,
+  seatPlan: null as null | { organizationId: string; organizationName: string; planName: string },
+  seatPlanLoading: false,
 }));
 const logEvent = vi.hoisted(() => vi.fn());
+const trackUpsell = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
+    t: (key: string, fallback?: unknown, options?: Record<string, unknown>) => {
+      const text = typeof fallback === 'string' ? fallback : key;
+      return text.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(options?.[name] ?? ''));
+    },
   }),
 }));
 vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSeatPlan: () => ({
+    data: state.seatPlanLoading ? undefined : state.seatPlan,
+    isLoading: state.seatPlanLoading,
+  }),
   useGetSubscriptions: () => ({
     data: state.subscriptionsError ? undefined : state.subscriptions,
     isPending: state.subscriptionsPending,
@@ -34,6 +49,16 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
     isFetching: false,
     refetch: state.refetch,
   }),
+  useGetSubscriptionsByOwner: (_ownerType: string, ownerId: string, options?: { enabled?: boolean }) => {
+    state.teamQueryOwner = { ownerId, enabled: options?.enabled };
+    return {
+      data: state.teamSubscriptionsError ? undefined : state.teamSubscriptions,
+      isPending: state.teamSubscriptionsPending,
+      isError: state.teamSubscriptionsError,
+      isFetching: false,
+      refetch: state.teamRefetch,
+    };
+  },
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () =>
@@ -46,6 +71,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: state.account }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./CreditsExplanation', () => ({
   default: () => <div data-testid="credits-explanation" />,
@@ -112,6 +138,8 @@ const sectionOrder = () =>
 describe('BillingModal', () => {
   beforeEach(() => {
     state.subscriptions = [];
+    state.seatPlan = null;
+    state.seatPlanLoading = false;
     state.subscriptionsPending = false;
     state.subscriptionsError = false;
     state.plansLoading = false;
@@ -128,7 +156,13 @@ describe('BillingModal', () => {
     })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
     state.account = undefined;
+    state.teamSubscriptions = [];
+    state.teamSubscriptionsPending = false;
+    state.teamSubscriptionsError = false;
+    state.teamRefetch.mockClear();
+    state.teamQueryOwner = undefined;
     logEvent.mockClear();
+    trackUpsell.mockClear();
   });
 
   it('logs the open context and a close without purchase', () => {
@@ -152,6 +186,52 @@ describe('BillingModal', () => {
     expect(logEvent).toHaveBeenCalledWith({
       type: 'billing_closed_without_purchase',
       metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
+    });
+  });
+
+  describe('upsell reporting', () => {
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} entry="credits_chip" onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    it('reports one impression for a free user, then a dismiss on close without purchase', () => {
+      const { rerender } = render(content(true));
+      rerender(content(true));
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', { surface: 'billing_plans', trigger: 'credits_chip' });
+      rerender(content(false));
+      expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'billing_plans', trigger: 'credits_chip' });
+    });
+
+    it('reports nothing for a user with an active plan', () => {
+      state.subscriptions = [subRow()];
+      const { rerender } = render(content(true));
+      rerender(content(false));
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports an impression when plans become the lead section while open', () => {
+      state.subscriptions = [subRow()];
+      const { rerender } = render(content(true));
+      expect(trackUpsell).not.toHaveBeenCalled();
+
+      state.subscriptions = [subRow({ status: 'past_due' })];
+      rerender(content(true));
+      rerender(content(true));
+
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', { surface: 'billing_plans', trigger: 'credits_chip' });
+      rerender(content(false));
+      expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'billing_plans', trigger: 'credits_chip' });
+    });
+
+    it('does not report a dismiss after a purchase', () => {
+      const { rerender } = render(content(true));
+      fireEvent.click(screen.getByTestId('subscription-changed'));
+      rerender(content(false));
+      expect(trackUpsell).not.toHaveBeenCalledWith('dismiss', expect.anything());
     });
   });
 
@@ -251,6 +331,80 @@ describe('BillingModal', () => {
     const icon = screen.getByTestId('billing-balance-icon');
     expect(screen.getByTestId('billing-balance')).toContainElement(icon);
     expect(icon).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  describe('header balance layout', () => {
+    // globals.css sets `* { min-width: 0 }`, which removes a flex item's content-width floor. These rules
+    // put it back where it matters, so a large amount cannot be squeezed to overlap its unit.
+    it('keeps a 10,000,000 balance whole: it never shrinks, and the unit wraps below it', () => {
+      state.credits = 10000000;
+      renderModal();
+      const amount = screen.getByTestId('billing-balance-amount');
+      const unit = screen.getByTestId('billing-balance-unit');
+      const figure = screen.getByTestId('billing-balance-figure');
+      const row = screen.getByTestId('billing-balance-row');
+      expect(amount).toHaveTextContent('10,000,000');
+      expect(unit).toHaveTextContent('credits');
+
+      // The icon and the amount travel together; only the unit is free to move to the next line.
+      expect(figure).toContainElement(amount);
+      expect(figure).toContainElement(screen.getByTestId('billing-balance-icon'));
+      expect(figure).not.toContainElement(unit);
+      expect(row).toContainElement(figure);
+      expect(row).toContainElement(unit);
+
+      expect(getComputedStyle(figure).flexShrink).toBe('0');
+      expect(getComputedStyle(row).flexWrap).toBe('wrap');
+      // The balance box cannot be squeezed below the figure by the plan box beside it.
+      expect(getComputedStyle(screen.getByTestId('billing-balance')).minWidth).toBe('min-content');
+    });
+
+    it('still keeps the plan box beside the balance (regression guard; unchanged by the wrap fix)', () => {
+      state.credits = 10000000;
+      renderModal();
+      const balance = screen.getByTestId('billing-balance');
+      const plan = screen.getByTestId('billing-current-plan');
+      expect(balance.parentElement).toBe(plan.parentElement);
+      expect(getComputedStyle(balance.parentElement as HTMLElement).flexWrap).not.toBe('wrap');
+    });
+  });
+
+  describe('Team seat plan', () => {
+    it('shows the team plan instead of Free and offers no plans to upgrade to', () => {
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('Included with your seat in Acme');
+      expect(sectionOrder()).toEqual(['billing-section-credits', 'billing-section-plans']);
+      expect(screen.getByTestId('billing-seat-plan-notice')).toBeInTheDocument();
+      expect(screen.queryByTestId('plans-section-body')).not.toBeInTheDocument();
+      expect(trackUpsell).not.toHaveBeenCalledWith('impression', expect.anything());
+    });
+
+    it('points a low balance at a top-up and the team account, not at a plan', () => {
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      state.credits = 10;
+      renderModal();
+      expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('Acme account');
+      expect(screen.getByTestId('billing-low-balance-action')).toHaveTextContent('Top up');
+    });
+
+    it('keeps a personal plan in charge when the user also holds a seat', () => {
+      state.subscriptions = [subRow({ status: 'past_due' })];
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Payment failed');
+      expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+      expect(screen.getByTestId('plans-section-body')).toBeInTheDocument();
+      expect(screen.queryByTestId('billing-seat-plan-notice')).not.toBeInTheDocument();
+    });
+
+    it('holds the frame until the seat plan is known, so Free never flashes', () => {
+      state.seatPlanLoading = true;
+      renderModal();
+      expect(screen.queryByTestId('billing-current-plan-name')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('plans-section-body')).not.toBeInTheDocument();
+    });
   });
 
   it('leads with credit top-ups when the user has a plan in good standing', () => {
@@ -359,6 +513,91 @@ describe('BillingModal', () => {
     renderModal();
     expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('An organization admin can add credits');
     expect(screen.queryByTestId('billing-low-balance-action')).not.toBeInTheDocument();
+  });
+
+  describe('with a team account active', () => {
+    beforeEach(() => {
+      state.account = { id: 'org-1', personal: false, seats: 5 };
+      // The personal plan must not leak into the header while the team is the payer.
+      state.subscriptions = [subRow({ priceId: 'price_personal' })];
+    });
+
+    it("shows the team's plan, renewal and seats instead of the personal plan", () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(state.teamQueryOwner).toEqual({ ownerId: 'org-1', enabled: true });
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.getByTestId('billing-current-plan-name')).not.toHaveTextContent('Subscription');
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('subscriptions.renews_on');
+      expect(screen.getByTestId('billing-current-plan-seats')).toHaveTextContent('5 seats');
+    });
+
+    it('does not query the team plan while the modal is closed', () => {
+      render(
+        <TestWrapper>
+          <BillingModal open={false} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      expect(state.teamQueryOwner).toEqual({ ownerId: 'org-1', enabled: false });
+    });
+
+    it('shows a canceled team plan as expiring', () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team', canceledAt: new Date('2026-01-15T00:00:00Z') })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('subscriptions.expires_on');
+    });
+
+    it('omits the seats line when the team seat count is unknown', () => {
+      state.account = { id: 'org-1', personal: false };
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['errored', { subscriptionsError: true, subscriptionsPending: false }],
+      ['still loading', { subscriptionsError: false, subscriptionsPending: true }],
+    ])('shows the team plan while the personal plan read is %s', (_label, personal) => {
+      Object.assign(state, personal);
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.queryByTestId('billing-current-plan-retry')).not.toBeInTheDocument();
+    });
+
+    it('flags a failed team payment', () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team', status: 'past_due' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('Payment failed');
+    });
+
+    it('says the team has no plan rather than showing the personal one', () => {
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('No team plan');
+      expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
+    });
+
+    it('waits for the team plan instead of showing a stale or personal one', () => {
+      state.teamSubscriptionsPending = true;
+      renderModal();
+      expect(screen.queryByTestId('billing-current-plan-name')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('billing-current-plan-detail')).not.toBeInTheDocument();
+    });
+
+    it('retries the team read, not the personal one, when it fails', () => {
+      state.teamSubscriptionsError = true;
+      renderModal();
+      fireEvent.click(screen.getByTestId('billing-current-plan-retry'));
+      expect(state.teamRefetch).toHaveBeenCalledTimes(1);
+      expect(state.refetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not read a team plan for the personal account', () => {
+    renderModal();
+    expect(state.teamQueryOwner?.enabled).toBe(false);
+    expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
   });
 
   it('shows no low-balance banner when the balance is healthy', () => {

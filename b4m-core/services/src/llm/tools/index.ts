@@ -1,6 +1,8 @@
 import { ToolDefinition } from './base/types';
 export type { ToolContext, ToolDefinition } from './base/types';
 export { mergeRetrievalSummary, type RetrievalSummary } from './retrievalSummaryMerge';
+// For tools defined outside this package, so their nested llm.complete calls record usage the same way.
+export { recordToolOperationalUsage, type RecordToolOperationalUsageArgs } from './base/recordToolOperationalUsage';
 import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';
@@ -13,6 +15,7 @@ import { wolframAlphaTool } from './implementation/wolfram_alpha';
 import { mathTool } from './implementation/math';
 import { mermaidChartTool } from './implementation/mermaidChart';
 import { currentDateTimeTool } from './implementation/currentDateTime';
+import { currentModelDetailsTool } from './implementation/currentModelDetails';
 import { deepResearchTool } from './implementation/deepResearch';
 import { B4MLLMTools, PremiumOverlayToolName } from '@bike4mind/common';
 import { promptEnhancementTool } from './implementation/promptEnhancement';
@@ -80,6 +83,18 @@ export type {
 
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
 export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
+export {
+  AUDIO_JOB_INLINE_TIMEOUT_MS,
+  withAudioToolJobs,
+  type AudioToolConfig,
+  type AudioToolJobs,
+} from './implementation/audioGeneration';
+export {
+  isImageJobToolConfig,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './implementation/imageGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**
@@ -116,6 +131,7 @@ export const b4mTools = {
   math_evaluate: mathTool,
   mermaid_chart: mermaidChartTool,
   current_datetime: currentDateTimeTool,
+  current_model_details: currentModelDetailsTool,
   deep_research: deepResearchTool,
   prompt_enhancement: promptEnhancementTool,
   recharts: rechartsTool,
@@ -176,6 +192,20 @@ export const b4mTools = {
  * tool map explicitly.
  */
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+export {
+  generateCustomMcpTools,
+  customMcpToolId,
+  loadCustomMcpConnections,
+  isReadOnlyCustomTool,
+  isCustomToolOffered,
+  CUSTOM_MCP_DATA_NOTICE,
+  MAX_CUSTOM_TOOLS_PER_TURN,
+  type CustomMcpToolHost,
+  type CustomMcpListOptions,
+  type CustomMcpConnectionOffer,
+  type CustomMcpToolCallInput,
+  type CustomMcpApprovalRequest,
+} from './customMcpTools';
 
 // Shared "confirmed empty" guard so the chat path (ToolBuilder) and agent path (loadAgentMcpTools) cannot drift.
 export { MCP_EMPTY_TOOL_FETCH_TTL_MS, shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';

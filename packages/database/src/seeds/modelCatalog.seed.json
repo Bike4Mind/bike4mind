@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-24T12:32:55.506Z",
-  "notice": "Fallback defaults last maintained on 2026-10-24. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-12T12:06:08.138Z",
+  "notice": "Fallback defaults last maintained on 2026-11-12. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -650,7 +650,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-11-30"
         },
         "description": "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",
@@ -728,6 +729,41 @@
         "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Sonnet 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Sonnet model. Combines speed and intelligence for coding and agentic work, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2026-06-01"
       }
     },
     {
@@ -1002,6 +1038,58 @@
         },
         "description": "FLUX.2 Pro (Preview) - Preview build of FLUX.2 Pro, sharing its generation and editing request contract.",
         "rank": 8
+      }
+    },
+    {
+      "modelId": "flux-3-image",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-3-image",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX 3 Image",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and reference-guided transforms with up to ten reference images.",
+        "rank": 13
+      }
+    },
+    {
+      "modelId": "flux-3-image-klein",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-3-image-klein",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX 3 Image Klein",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and reference-guided transforms with up to ten reference images.",
+        "rank": 14
       }
     },
     {
@@ -2182,7 +2270,8 @@
         },
         "description": "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1
+        "rank": 1,
+        "trainingCutoff": "2026-06-01"
       }
     },
     {
@@ -2994,7 +3083,8 @@
         "supportsImageVariation": true,
         "lifecycle": {
           "status": "deprecated",
-          "deprecationDate": "2026-10-23"
+          "deprecationDate": "2026-10-23",
+          "replacedBy": "gpt-image-2"
         },
         "description": "OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.",
         "rank": 10

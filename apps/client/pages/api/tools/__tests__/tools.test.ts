@@ -9,25 +9,42 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditCreate, counters } = vi.hoisted(() => ({
+const {
+  mockResolveTrust,
+  mockValidate,
+  mockUserFindById,
+  mockKeyRateLimit,
+  mockSearch,
+  mockAuditCreate,
+  mockWebFetch,
+  counters,
+  logged,
+} = vi.hoisted(() => ({
+  mockResolveTrust: vi.fn(),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockKeyRateLimit: vi.fn(),
   mockSearch: vi.fn(),
   mockAuditCreate: vi.fn(),
+  mockWebFetch: vi.fn(),
   counters: new Map<string, number>(),
+  logged: [] as { message: string; metadata: Record<string, unknown> }[],
 }));
 
 const USER = { id: 'user-1', _id: 'user-1', username: 'jules', tokenVersion: 0, isBanned: false };
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveApiKeyTrust: (...a: unknown[]) => mockResolveTrust(...a),
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockKeyRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -42,6 +59,50 @@ vi.mock('@bike4mind/services', async orig => {
 });
 vi.mock('@bike4mind/services/llm/tools/implementation/websearch', () => ({
   performWebSearch: (...a: unknown[]) => mockSearch(...a),
+  resolveWebSearchProviders: async () => [null, null],
+}));
+// Records each metadata-carrying info line the request logger writes, then logs as usual.
+vi.mock('@server/middlewares/requestLogger', async orig => {
+  const actual = await orig<typeof import('@server/middlewares/requestLogger')>();
+  return {
+    ...actual,
+    createRequestLogger: (...a: Parameters<typeof actual.createRequestLogger>) => {
+      const logger = actual.createRequestLogger(...a);
+      const withMetadata = logger.withMetadata.bind(logger);
+      logger.withMetadata = ((metadata: Record<string, unknown>) => {
+        const chained = withMetadata(metadata);
+        const info = chained.info.bind(chained);
+        chained.info = (message: string) => {
+          logged.push({ message, metadata });
+          return info(message);
+        };
+        return chained;
+      }) as typeof logger.withMetadata;
+      return logger;
+    },
+  };
+});
+// Real fetch unless a test queues its own result, so the SSRF-refusal tests still reach the real guard.
+vi.mock('@bike4mind/server-utils/billing/billedWebTools', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    billedWebFetch: (...a: unknown[]) =>
+      mockWebFetch.getMockImplementation()
+        ? mockWebFetch(...a)
+        : (actual.billedWebFetch as (...args: unknown[]) => unknown)(...a),
+  };
+});
+// Billing has its own suite (billing.test.ts); here every call is free so the posture checks stay in focus.
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: async () => ({
+    ownerId: 'user-1',
+    ownerType: 'user',
+    reservedCredits: 0,
+    hold: null,
+    refund: async () => {},
+    settle: async () => 0,
+  }),
 }));
 
 vi.mock('@bike4mind/database', async orig => {
@@ -61,6 +122,7 @@ vi.mock('@bike4mind/database', async orig => {
       },
     },
     toolExecutionLogRepository: { create: (...a: unknown[]) => mockAuditCreate(...a) },
+    adminSettingsRepository: { findBySettingNames: async () => [], findBySettingName: async () => null },
   };
 });
 
@@ -77,6 +139,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import webSearch from '../web-search';
+import webFetch from '../web-fetch';
 import weather from '../weather';
 import { TOOL_ROUTES_HOURLY_LIMIT } from '@server/middlewares/toolRoutesRateLimit';
 
@@ -122,7 +185,10 @@ function keyWithScopes(scopes: ApiKeyScope[]) {
 describe('/api/tools/*', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockWebFetch.mockReset();
+    logged.length = 0;
     counters.clear();
+    mockResolveTrust.mockResolvedValue({ assessment: { status: 'trusted' }, settings: {} });
     mockUserFindById.mockResolvedValue(USER);
     mockKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
     mockSearch.mockResolvedValue({ formattedResults: 'results' });
@@ -187,11 +253,75 @@ describe('/api/tools/*', () => {
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'http://169.254.169.254/latest/meta-data/',
+    'http://2852039166/latest/meta-data/',
+    'http://0xA9FEA9FE/latest/meta-data/',
+    'http://127.0.0.1:8080/',
+  ])('400s a refused fetch target (%s) instead of a 500', async url => {
+    const res = await call(webFetch, '/api/tools/web-fetch', { url });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/not allowed or could not be resolved/);
+    expect(res._getJSONData().error).not.toMatch(/private|reserved|loopback|dns/i);
+    expect(mockAuditCreate).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'web_fetch', success: false }));
+  });
+
+  describe('web-fetch logging', () => {
+    const fetchLines = () => logged.filter(l => l.message === 'web-fetch').map(l => l.metadata);
+    const URL_WITH_SECRETS = 'https://docs.example.com/private/path/page?token=s3cret&q=1';
+
+    it('logs the host and an ok outcome, never the path or query', async () => {
+      mockWebFetch.mockResolvedValue({ markdown: 'page', title: 'T', offset: 0, truncated: false });
+      const res = await call(webFetch, '/api/tools/web-fetch', { url: URL_WITH_SECRETS });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(fetchLines()).toEqual([{ host: 'docs.example.com', outcome: 'ok' }]);
+      expect(JSON.stringify(logged)).not.toMatch(/private|s3cret|token=/);
+    });
+
+    it('logs a refused outcome for a blocked target and still answers 400', async () => {
+      const res = await call(webFetch, '/api/tools/web-fetch', { url: 'http://127.0.0.1:8080/secret/path?k=v' });
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(fetchLines()).toEqual([{ host: '127.0.0.1', outcome: 'refused' }]);
+      expect(JSON.stringify(logged)).not.toMatch(/secret|k=v/);
+    });
+
+    it('logs an error outcome when the fetch fails for another reason', async () => {
+      mockWebFetch.mockRejectedValue(new Error('provider down'));
+      const res = await call(webFetch, '/api/tools/web-fetch', { url: URL_WITH_SECRETS });
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(fetchLines()).toEqual([{ host: 'docs.example.com', outcome: 'error' }]);
+    });
+  });
+
   it('admits an API key holding ai:chat', async () => {
     keyWithScopes([ApiKeyScope.AI_CHAT]);
     const res = await search(VALID_KEY);
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('403s an untrusted account before the tool runs', async () => {
+    mockResolveTrust.mockResolvedValue({
+      assessment: { status: 'untrusted', reason: 'email_unverified' },
+      settings: {},
+    });
+    const res = await search();
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).toContain('account_trust_required');
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it('403s a moderated account with a message that is not AI-specific', async () => {
+    const res = await search(undefined, { ...USER, isModerated: true } as typeof USER);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).not.toMatch(/\bAI\b/);
+    expect(mockSearch).not.toHaveBeenCalled();
   });
 });

@@ -69,6 +69,30 @@ describe('ReActAgent abort log severity (#8947, #8669)', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('logs an error marked expected at warn and still rethrows', async () => {
+    const logger = createMockLogger();
+    const refusal = Object.assign(new Error('Insufficient credits to continue agent execution'), { expected: true });
+    const agent = new ReActAgent(createContext(logger, createThrowingLlm(refusal)));
+    agent.on('error', () => {});
+
+    await expect(agent.run('hi')).rejects.toBe(refusal);
+
+    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs an expected error from runIteration at warn', async () => {
+    const logger = createMockLogger();
+    const refusal = Object.assign(new Error('Insufficient credits to continue agent execution'), { expected: true });
+    const agent = new ReActAgent(createContext(logger, createThrowingLlm(refusal)));
+    agent.on('error', () => {});
+
+    await expect(agent.runIteration('hi')).rejects.toBe(refusal);
+
+    expect(logger.warn).toHaveBeenCalledWith('[ReActAgent] Iteration stopped:', refusal);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it('logs a genuine failure at error', async () => {
     const logger = createMockLogger();
     const agent = new ReActAgent(createContext(logger, createThrowingLlm(new Error('Kaboom: real failure'))));

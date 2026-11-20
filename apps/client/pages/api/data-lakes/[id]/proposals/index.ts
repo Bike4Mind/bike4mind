@@ -1,13 +1,15 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
-import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
+import { DATA_LAKE_PROPOSAL_STATUSES, lakeProposalListResponseSchema } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
+import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
   status: z.enum(DATA_LAKE_PROPOSAL_STATUSES).optional(),
@@ -50,7 +52,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       limit: limit ?? DEFAULT_LIMIT,
     });
 
-    return res.json({ data: proposals });
+    if (proposals.length > 0) {
+      const fileIds = proposals.flatMap(p => (p.admittedFabFileId ? [p.admittedFabFileId] : []));
+      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-proposals' });
+    }
+
+    return respond(res, lakeProposalListResponseSchema, { data: proposals });
   });
 
 export const config = {

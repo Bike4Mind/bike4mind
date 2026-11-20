@@ -223,7 +223,7 @@ export function canManageLake(
  * Runs a long manage door's gate-and-claim phase, bound by the caller to a transaction that touches
  * the returned `lake` last, so the claim serializes against a revoke (WRITE-TIME RESIDUAL on
  * `canManageLake`). The door's external step runs after it returns; a revoke landing then is the
- * accepted residual. Route-side binding: `serializeLakeClaim` in apps/client/server/dataLakes.
+ * accepted residual. Route-side binding: `serializeLakeClaim` in packages/server-utils/src/dataLakes.
  */
 export type SerializeLakeClaim = <T extends { lake: { id: string } }>(claim: () => Promise<T>) => Promise<T>;
 

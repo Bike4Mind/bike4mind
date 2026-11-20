@@ -13,11 +13,24 @@ const h = vi.hoisted(() => ({
   musicMutate: vi.fn(),
   navigate: vi.fn(),
   studioFeatures: {} as Record<string, boolean>,
+  featuresLoading: false,
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { useNavigate: () => h.navigate, createLink: createLinkStub };
+});
+vi.mock('@client/app/components/NotFound', () => ({ default: () => <div data-testid="not-found-stub" /> }));
 vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
+  useStudioFeatureAccess: (feature: string) => (h.studioFeatures[feature] ? 'open' : 'closed'),
+  useStudioFeaturesLoading: () => h.featuresLoading,
+}));
+vi.mock('@client/app/components/ImageStudio/ImageStudioWorkspace', () => ({
+  default: ({ testId }: { testId: string }) => <div data-testid="image-workspace-stub" data-test-id-prop={testId} />,
+}));
+vi.mock('@client/app/components/ImageStudio/ImageGallery', () => ({
+  default: () => <div data-testid="image-gallery-stub" />,
 }));
 vi.mock('@client/app/hooks/data/musicGenerations', () => ({
   useMusicModels: () => h.musicModels,
@@ -45,6 +58,8 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
 
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('@client/app/components/Studio/v2/StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
   useVideoModels: () => h.models,
@@ -60,11 +75,12 @@ vi.mock('@client/app/components/VideoStudio/VideoStudioForm', () => ({
 }));
 
 import { rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import type { StudioModality } from '@client/app/components/Studio/studioModality';
+import type { StudioMedium } from '@client/app/components/Studio/studioModality';
 import StudioPage from './$modality';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderPage = (modality: StudioModality = 'video') =>
+
+const renderPage = (modality: StudioMedium = 'video') =>
   render(
     <CssVarsProvider theme={appTheme}>
       <StudioPage modality={modality} />
@@ -74,6 +90,7 @@ const renderPage = (modality: StudioModality = 'video') =>
 beforeEach(() => {
   vi.clearAllMocks();
   h.studioFeatures = {};
+  h.featuresLoading = false;
 });
 
 describe('StudioPage (video)', () => {
@@ -208,17 +225,88 @@ describe('StudioPage (sound effects)', () => {
   });
 });
 
-describe('StudioPage (Image preview tab)', () => {
-  it('has no Image tab while the Image-in-Studio feature is closed', () => {
+describe('StudioPage with Create v2 off', () => {
+  it('renders the legacy tabs and no v2 chrome, whatever the Image flag says', () => {
+    h.studioFeatures = { image: false };
     h.models = { isPending: true, data: undefined };
     renderPage();
+    expect(screen.getByTestId('studio-tabs')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-tab-image')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-area-nav')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-medium-rail')).not.toBeInTheDocument();
   });
 
-  it('shows a disabled Image placeholder tab when the feature is open', () => {
-    h.studioFeatures = { image: true };
+  it('keeps showing the legacy page while the flags load', () => {
+    h.featuresLoading = true;
     h.models = { isPending: true, data: undefined };
     renderPage();
-    expect(screen.getByTestId('studio-tab-image')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('studio-tabs')).toBeInTheDocument();
+  });
+
+  it('answers not found for the Image medium, as the param parser did before it existed', () => {
+    h.studioFeatures = { createV2: true };
+    renderPage('image');
+    expect(screen.getByTestId('not-found-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('image-studio-page')).not.toBeInTheDocument();
+  });
+});
+
+describe('StudioPage with Create v2 on', () => {
+  beforeEach(() => {
+    h.studioFeatures = { createV2: true };
+  });
+
+  it('shows the Create / Library areas and a medium rail with the v2 labels', () => {
+    h.models = { data: [rangeModel], isPending: false, isError: false };
+    renderPage();
+    expect(screen.queryByTestId('studio-tabs')).not.toBeInTheDocument();
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('studio-area-library')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-area-productions')).not.toBeInTheDocument();
+    expect(screen.getByTestId('studio-rail-video')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('studio-rail-speech')).toHaveTextContent('Voice');
+    expect(screen.getByTestId('studio-rail-sound-effects')).toHaveTextContent('Sound FX');
+    expect(screen.queryByTestId('studio-rail-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-page')).toBeInTheDocument();
+    expect(screen.getByTestId('video-form-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('video-gallery-stub')).toBeInTheDocument();
+  });
+
+  it('reuses the legacy speech form under the Voice rail entry', () => {
+    h.audioProviders = { data: { speech: ['openai'], soundEffects: [] }, isPending: false };
+    renderPage('speech');
+    expect(h.useDocumentTitle).toHaveBeenCalledWith('Voice Studio');
+    expect(screen.getByTestId('speech-studio-form')).toBeInTheDocument();
+  });
+
+  it('links between media and areas', () => {
+    h.models = { data: [rangeModel], isPending: false, isError: false };
+    h.studioFeatures = { createV2: true, productions: true };
+    renderPage();
+    expect(screen.getByTestId('studio-rail-music')).toHaveAttribute('href', '/studio/music');
+    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('href', '/studio/productions');
+    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('href', '/studio/library');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/video');
+  });
+
+  it('leads the rail with Image and renders its workspace once the Image flag is open', () => {
+    h.studioFeatures = { createV2: true, image: true };
+    renderPage('image');
+    expect(h.useDocumentTitle).toHaveBeenCalledWith('Image Studio');
+    expect(screen.getByTestId('studio-medium-rail').firstElementChild).toContainElement(
+      screen.getByTestId('studio-rail-image')
+    );
+    expect(screen.getByTestId('studio-rail-image')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('image-studio-page')).toBeInTheDocument();
+    expect(screen.getByTestId('image-workspace-stub')).toHaveAttribute('data-test-id-prop', 'image-studio');
+    expect(screen.getByText('Your images')).toBeInTheDocument();
+    expect(screen.getByTestId('image-gallery-stub')).toBeInTheDocument();
+  });
+
+  it('waits for the flags before deciding on the Image medium', () => {
+    h.studioFeatures = { createV2: true };
+    h.featuresLoading = true;
+    renderPage('image');
+    expect(screen.getByTestId('studio-feature-gate-loading')).toBeInTheDocument();
   });
 });

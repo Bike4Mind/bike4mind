@@ -6,8 +6,10 @@ import {
   IOrganizationDocument,
   IOrganizationRepository,
   IUserDocument,
+  isOrgServiceAccountOf,
   type CompletionSource,
 } from '@bike4mind/common';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
 
 /**
@@ -33,6 +35,8 @@ export interface DeductCreditsCommonParams {
    * helper is invoked from web/agent chat-completion paths (image/video/text).
    */
   source?: CompletionSource;
+  /** The UserApiKey that authenticated the charged request; undefined for JWT/internal callers. */
+  apiKeyId?: string;
 }
 
 /**
@@ -65,6 +69,15 @@ export interface DeductVideoGenerationCreditsParams extends DeductCreditsWithOrg
 }
 
 /**
+ * Parameters for a tool's provider cost billed outside a chat turn (web_search, web_fetch on the
+ * stateless tool routes). `model` names the provider-and-tool that incurred it, e.g.
+ * `serpapi-web_search`, never a chat model. The quest id is a synthetic per-call id.
+ */
+export interface DeductToolUsageCreditsParams extends DeductCreditsWithOrgSupportParams {
+  type: 'tool_usage';
+}
+
+/**
  * Parameters for text generation credit deduction
  */
 export interface DeductTextGenerationCreditsParams extends DeductCreditsWithOrgSupportParams {
@@ -73,6 +86,9 @@ export interface DeductTextGenerationCreditsParams extends DeductCreditsWithOrgS
   inputTokens: number;
   /** Output tokens used */
   outputTokens: number;
+  /** Prompt-cache tokens, disjoint from inputTokens */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 /**
@@ -116,8 +132,8 @@ export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
   type: 'decision_usage';
   inputTokens: number;
   outputTokens: number;
-  /** Present for API key auth, undefined for JWT */
-  apiKeyId?: string;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 /** Quest-less text completion on a platform key outside chat (e.g. lattice chat, AI file edit). */
@@ -125,8 +141,8 @@ export interface DeductCompletionApiUsageCreditsParams extends DeductCreditsComm
   type: 'completion_api_usage';
   inputTokens: number;
   outputTokens: number;
-  /** Present for API key auth, undefined for JWT */
-  apiKeyId?: string;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 /**
@@ -136,6 +152,7 @@ export type DeductCreditsParams =
   | DeductImageGenerationCreditsParams
   | DeductImageEditCreditsParams
   | DeductVideoGenerationCreditsParams
+  | DeductToolUsageCreditsParams
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
   | DeductTtsCreditsParams
@@ -211,24 +228,29 @@ export async function deductCreditsWithOrgSupport(
     // already-served request - it only skips the usage tracking below, freezing `usedCredits`
     // at 0 forever so the cap can never trip (#1536). Always track.
 
-    // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
-    // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
-    // this their usage is never tracked and `maxCreditsPerMember` never trips for them. Idempotent
-    // and only writes when the row is actually absent, so already-tracked members pay nothing extra.
-    if (!memberDetails) {
-      await adapters.db.organizations.ensureUserDetails(organization.id, {
-        id: user.id,
-        email: user.email ?? user.username,
-        name: user.name,
-      });
-    }
+    // The org's service account (org-owned API keys) is not a member: it gets no `userDetails`
+    // row and no per-member budget (getMemberCreditCap); its usage is on each key.
+    if (!isOrgServiceAccountOf(user, organization.id)) {
+      // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
+      // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
+      // this their usage is never tracked and `maxCreditsPerMember` never trips for them. Idempotent
+      // and only writes when the row is actually absent, so already-tracked members pay nothing extra.
+      if (!memberDetails) {
+        await adapters.db.organizations.ensureUserDetails(organization.id, {
+          id: user.id,
+          email: user.email ?? user.username,
+          name: user.name,
+        });
+      }
 
-    // Atomically increment per-user usage tracking within the organization.
-    // Uses $inc to avoid race conditions with concurrent requests.
-    await adapters.db.organizations.updateUserDetails(organization.id, user.id, {
-      creditsDelta: credits,
-      lastCreditUsedAt: new Date(),
-    });
+      // Atomically increment per-user usage tracking within the organization.
+      // Uses $inc to avoid race conditions with concurrent requests.
+      await adapters.db.organizations.updateUserDetails(organization.id, user.id, {
+        creditsDelta: credits,
+        lastCreditUsedAt: new Date(),
+      });
+      await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId: user.id });
+    }
   }
 
   const baseParams = {
@@ -238,6 +260,7 @@ export async function deductCreditsWithOrgSupport(
     sessionId,
     model,
     source,
+    apiKeyId: params.apiKeyId,
   };
 
   let transactionParams: SubtractCreditsParameters;
@@ -249,6 +272,8 @@ export async function deductCreditsWithOrgSupport(
       questId: params.questId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     };
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
@@ -269,10 +294,11 @@ export async function deductCreditsWithOrgSupport(
       type,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
-      apiKeyId: params.apiKeyId,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     };
   } else {
-    // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
+    // Quest-scoped image/edit/video/tool types; questId is guaranteed by their param shape.
     transactionParams = {
       ...baseParams,
       type,

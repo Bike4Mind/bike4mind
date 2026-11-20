@@ -5,7 +5,8 @@ import { convertIds, Organization, User, UserActivityCounter, convertPipelineFor
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { mongoose } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import qs from 'qs';
 import { Pagination } from '@bike4mind/utils';
 
@@ -35,7 +36,8 @@ const handler = baseApi().get(
       // colleagues' activity. verifyOrgAccess answers NotFoundError identically for a missing org
       // and one the caller may not administer, and admits platform admins (who also supply orgId
       // above). It re-reads the org, so fetch the projected copy only once past the gate.
-      await verifyOrgAccess(req.user, orgId.toString());
+      const accessibleOrganization = await verifyOrgAccess(req.user, orgId.toString());
+      await recordOrganizationRead(req, [accessibleOrganization], { view: 'member_activity' });
 
       const organization = await Organization.findById(orgId).select('users -_id');
       if (!organization) throw new NotFoundError('Organization not found');

@@ -1,16 +1,18 @@
 import { useEffect, useId, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Divider from '@mui/joy/Divider';
-import LinearProgress from '@mui/joy/LinearProgress';
+import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { keyframes } from '@mui/system';
 import type { ChatProject } from '@shared/chat';
 import type { PrBarState } from '@shared/pullRequest';
-import { countTodos, type TodoItem } from '@shared/todos';
+import { todoProgress, type PlanItem } from '@shared/todos';
 import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { ChangesBar, CreatePullRequestButton } from './ChangesBar';
+import { ContextBreakdown } from './ContextBreakdown';
 import { DiffCount } from './DiffCount';
-import { DisclosureIcon } from './icons';
+import { CloseIcon, DisclosureIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { PrHeadline, PrStatusBar } from './PrStatusBar';
 import { SessionChips } from './SessionChips';
@@ -21,15 +23,7 @@ import {
   SESSION_PANEL_WIDTH,
   type SessionPanelSectionId,
 } from './sessionPanelState';
-import {
-  contextPercent,
-  describeCompaction,
-  formatOccupancy,
-  formatTokens,
-  occupancyArc,
-  occupancyColor,
-  type ComposerUsage,
-} from './statusLine';
+import { contextPercent, formatOccupancy, formatTokens, type ComposerUsage } from './statusLine';
 import { TodoList, visiblePlan } from './TodoPanel';
 import type { ProjectBindingController } from './useChat';
 
@@ -116,16 +110,17 @@ function SummaryText({ children }: { children: ReactNode }) {
 }
 
 export interface SessionPanelProps {
-  /** Docked beside the thread, or opened over it from the header button on a narrow window. */
-  variant: 'docked' | 'popover';
+  /** Docked beside the thread, or opened over it from the header button when the region is narrow. */
+  variant: 'docked' | 'overlay';
   collapsed: ReadonlySet<SessionPanelSectionId>;
   onToggleSection: (id: SessionPanelSectionId) => void;
-  /** Popover only: shut it on Escape or a click outside. */
+  /** Overlay only: shut it on Escape, a click outside, or its close button. */
   onDismiss?: () => void;
-  /** Popover only: the element that opened it, whose own click must not count as outside. */
+  /** Overlay only: the element that opened it, whose own click must not count as outside, and
+   * where focus goes back to when it shuts. */
   anchor?: RefObject<HTMLElement | null>;
   environment: {
-    project: ChatProject;
+    project: ChatProject | undefined;
     grantedDirectories?: readonly string[];
     binding: ProjectBindingController;
     settledTurns: number;
@@ -144,11 +139,12 @@ export interface SessionPanelProps {
   };
   /** The same figures the composer's usage ring draws; see ComposerUsage. */
   context: ComposerUsage;
-  plan: { todos: readonly TodoItem[] | null; turnOpen: boolean };
+  plan: { todos: readonly PlanItem[] | null; turnOpen: boolean };
   background: BackgroundSectionProps;
 }
 
-function environmentSection({ environment }: SessionPanelProps): SectionSpec {
+function environmentSection({ environment }: SessionPanelProps): SectionSpec | null {
+  if (!environment.project) return null;
   return {
     id: 'environment',
     title: 'Environment',
@@ -167,46 +163,20 @@ function environmentSection({ environment }: SessionPanelProps): SectionSpec {
   };
 }
 
-/**
- * How full the context window is. Left out until a request has been measured: an empty bar for a
- * figure nobody has stated would read as an empty window. Without a limit there is no percentage,
- * only the token count, rather than a share of a window this client made up.
- */
 function contextSection({ context }: SessionPanelProps): SectionSpec | null {
-  const tokens = context.contextTokens;
-  if (tokens === null) return null;
+  const tokens = context.contextSnapshot?.inputTokens ?? context.contextTokens;
   const percent = contextPercent(tokens, context.contextLimit);
-  const limit = context.contextLimit;
-  const share = percent === null ? `${formatTokens(tokens)} used` : formatOccupancy(percent, tokens);
+  const share =
+    tokens === null
+      ? 'Not measured'
+      : percent === null
+        ? `${formatTokens(tokens)} used`
+        : formatOccupancy(percent, tokens);
   return {
     id: 'context',
     title: 'Context',
     summary: <SummaryText>{share}</SummaryText>,
-    content: (
-      <Stack spacing={0.75} data-testid="session-panel-context">
-        {percent !== null && (
-          <LinearProgress
-            determinate
-            value={occupancyArc(percent)}
-            color={occupancyColor(percent)}
-            size="sm"
-            aria-label="Context window used"
-            aria-valuetext={share}
-            data-testid="session-panel-context-bar"
-          />
-        )}
-        <Typography level="body-xs" textColor="text.secondary" data-testid="session-panel-context-figure">
-          {limit === null
-            ? `${formatTokens(tokens)} used - this model reports no window size`
-            : `${formatTokens(tokens)} / ${formatTokens(limit)} (${share})`}
-        </Typography>
-        {limit !== null && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            {describeCompaction(limit, context.modelWindow ?? null)}
-          </Typography>
-        )}
-      </Stack>
-    ),
+    content: <ContextBreakdown context={context} />,
   };
 }
 
@@ -242,20 +212,21 @@ function changesSection({ changes }: SessionPanelProps): SectionSpec | null {
 function planSection({ plan }: SessionPanelProps): SectionSpec | null {
   const todos = visiblePlan(plan.todos, plan.turnOpen);
   if (!todos) return null;
+  const { done, total } = todoProgress(todos);
   return {
     id: 'plan',
     title: 'Plan',
-    summary: <SummaryText>{`${countTodos(todos).completed}/${todos.length}`}</SummaryText>,
+    summary: <SummaryText>{`${done}/${total}`}</SummaryText>,
     content: <TodoList todos={todos} />,
   };
 }
 
 function backgroundSection({ background }: SessionPanelProps): SectionSpec | null {
-  if (background.processes.length === 0 && background.spawned.length === 0) return null;
+  if (background.processes.length === 0 && background.spawned.length === 0 && !background.loop) return null;
   return {
     id: 'background',
     title: 'Background tasks',
-    summary: <SummaryText>{backgroundSummary(background.processes, background.spawned)}</SummaryText>,
+    summary: <SummaryText>{backgroundSummary(background.processes, background.spawned, background.loop)}</SummaryText>,
     content: <BackgroundSection {...background} />,
   };
 }
@@ -292,6 +263,7 @@ function useDismiss(
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
+      event.preventDefault();
       onDismiss();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -303,29 +275,85 @@ function useDismiss(
   }, [card, anchor, onDismiss]);
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keeps Tab inside the card while it is modal: focus moves in when it opens, wraps at either end,
+ * and goes back to the anchor when it shuts.
+ */
+function useFocusTrap(card: RefObject<HTMLElement | null>, active: boolean, anchor?: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const node = card.current;
+    if (!active || !node) return;
+    const focusables = () => [...node.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    (focusables()[0] ?? node).focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      // A menu the card opened is portalled out of it and handles its own Tab.
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"]')) return;
+      const items = focusables();
+      const first = items[0];
+      const last = items[items.length - 1];
+      const current = document.activeElement;
+      const inside = current instanceof Node && node.contains(current);
+      if (!first || !last) {
+        event.preventDefault();
+        node.focus();
+      } else if (event.shiftKey && (!inside || current === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (!inside || current === last)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      // Passive cleanup runs after the card left the DOM, so focus that was in it has fallen to the
+      // body. A card that only docked keeps its focus, and a click elsewhere keeps where it landed.
+      const current = document.activeElement;
+      if (!current || current === document.body) anchor?.current?.focus();
+    };
+  }, [card, active, anchor]);
+}
+
+const overlayIn = keyframes({
+  from: { opacity: 0, transform: 'translateY(-4px)' },
+  to: { opacity: 1, transform: 'none' },
+});
+const scrimIn = keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });
+const OVERLAY_ENTER = '140ms ease-out';
+
 /**
  * A Code session's status in one floating card over the top-right of the thread: where it runs,
  * what it has changed or the PR it opened, the plan, and what it has running in the background.
  *
  * Positioned against the thread region (see ChatShell), never the whole column, so it cannot reach
- * the composer; ChatShell docks it only when it fits beside the reading column
- * (panelFitsBesideThread) and otherwise opens it as a popover from the header button.
+ * the composer; ChatShell docks it while the region has room (sessionPanelLayout) and otherwise
+ * opens it from the header button as a modal overlay over a light scrim.
  */
 export function SessionPanel(props: SessionPanelProps) {
   const { variant, collapsed, onToggleSection, onDismiss, anchor } = props;
   const card = useRef<HTMLDivElement | null>(null);
-  useDismiss(card, variant === 'popover' ? onDismiss : undefined, anchor);
+  const overlay = variant === 'overlay';
+  useDismiss(card, overlay ? onDismiss : undefined, anchor);
+  useFocusTrap(card, overlay, anchor);
 
   const sections = SESSION_PANEL_SECTIONS.map(id => SECTION_BUILDERS[id](props)).filter(
     (section): section is SectionSpec => !!section
   );
 
-  return (
+  const panel = (
     <Box
       ref={card}
       id={SESSION_PANEL_ID}
-      role="complementary"
+      role={overlay ? 'dialog' : 'complementary'}
+      aria-modal={overlay || undefined}
       aria-label="Session"
+      tabIndex={overlay ? -1 : undefined}
       sx={{
         position: 'absolute',
         top: SESSION_PANEL_INSET,
@@ -339,13 +367,39 @@ export function SessionPanel(props: SessionPanelProps) {
         border: '1px solid',
         borderColor: 'neutral.outlinedBorder',
         borderRadius: 'md',
-        boxShadow: variant === 'popover' ? 'lg' : 'sm',
-        zIndex: variant === 'popover' ? 'popup' : 'table',
+        boxShadow: overlay ? 'lg' : 'sm',
+        zIndex: overlay ? 'popup' : 'table',
+        outline: 'none',
+        ...(overlay && {
+          animation: `${overlayIn} ${OVERLAY_ENTER}`,
+          '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+        }),
         ...thinScrollbarSx,
       }}
       data-testid="session-panel"
       data-variant={variant}
     >
+      {overlay && onDismiss && (
+        <>
+          <Stack direction="row" alignItems="center" sx={{ pl: 1.5, pr: 0.75, py: 0.5 }}>
+            <Typography level="body-xs" fontWeight="lg" textColor="text.secondary" sx={{ flex: 1 }}>
+              Session
+            </Typography>
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              aria-label="Close the session panel"
+              onClick={onDismiss}
+              data-testid="session-panel-close-btn"
+              sx={{ '--IconButton-size': '28px' }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Stack>
+          <Divider />
+        </>
+      )}
       {sections.map((section, index) => (
         <Box key={section.id}>
           {index > 0 && <Divider />}
@@ -357,5 +411,24 @@ export function SessionPanel(props: SessionPanelProps) {
         </Box>
       ))}
     </Box>
+  );
+  if (!overlay) return panel;
+  return (
+    <>
+      {/* Presses on it count as outside the card, so useDismiss shuts the overlay. */}
+      <Box
+        aria-hidden
+        data-testid="session-panel-scrim"
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          bgcolor: 'background.backdrop',
+          zIndex: 'popup',
+          animation: `${scrimIn} ${OVERLAY_ENTER}`,
+          '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+        }}
+      />
+      {panel}
+    </>
   );
 }

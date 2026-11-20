@@ -10,8 +10,8 @@ import { type MigrationFile } from './index';
  * filter origin in memory.
  *
  * Migration rather than autoIndex, for the same reason as 20260902000000_ensure-quest-retrieval-index
- * and 20260826000000_ensure-quest-status-updatedat-index: prod runs DocumentDB, where an index build
- * takes a foreground collection lock. Left to autoIndex, this one would build on whichever Lambda's
+ * and 20260826000000_ensure-quest-status-updatedat-index: autoIndex builds are fire-and-forget (a
+ * failure is silent). Left to autoIndex, this one would build on whichever Lambda's
  * cold boot touches sessions first after deploy - a live request, not a migration window.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the

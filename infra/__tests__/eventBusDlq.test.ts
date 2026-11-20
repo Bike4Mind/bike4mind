@@ -46,18 +46,22 @@ describe('every EventBridge subscription dead-letters its failures', () => {
   it('finds every subscription', () => {
     expect(allSubscriptions.map(s => s.name).sort()).toEqual(
       [
+        'brief-compose',
         'create-memento',
         'email-send',
         'notebook-curation-complete-analytics',
         'notebook-curation-start',
+        'notification-push',
         'session-auto-name',
         'session-context-summarize',
         'session-summarize',
         'session-tag',
         'slack-completion-start',
+        'slack-quick-ask',
         'spider-start',
         'stripe-customer-subscription-updated',
         'stripe-invoice-payment-succeeded',
+        'studio-job-completed',
         'telemetry-alert',
       ].sort()
     );

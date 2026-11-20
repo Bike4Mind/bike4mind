@@ -18,6 +18,7 @@ const SERVING_PROVIDER: Record<ModelBackend, string | null> = {
   [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.VoyageAI]: 'Voyage AI',
   [ModelBackend.Ollama]: null,
+  [ModelBackend.OpenAICompatible]: null,
   [ModelBackend.LocalImage]: null,
 };
 

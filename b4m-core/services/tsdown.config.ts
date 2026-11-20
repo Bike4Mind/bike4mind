@@ -8,6 +8,8 @@ export default defineConfig({
     'src/imageCost/index.ts',
     // Pure widening rule; the settings modal imports it from '@bike4mind/services/lakeGateWideningRule'.
     'src/dataLakeService/lakeGateWideningRule.ts',
+    // Pure mirror feed helpers, importable as '@bike4mind/services/notebookMirror' (the CLI must not pull the barrel).
+    'src/notebookExportService/mirror.ts',
     // Pure lake-RAG eval bank + grader, importable as '@bike4mind/services/evals/lakeRag'.
     'src/llm/evals/lakeRag/index.ts',
     // Pure tool-calling scorecard, importable as '@bike4mind/services/evals/toolCalling'.
@@ -18,9 +20,14 @@ export default defineConfig({
     'src/generationJobs/index.ts',
     'src/videoJobs/index.ts',
     'src/musicJobs/index.ts',
+    'src/sceneJobs/index.ts',
+    'src/audioJobs/index.ts',
+    'src/imageJobs/index.ts',
+    'src/renderJobs/index.ts',
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',
     'src/llm/index.ts',
+    'src/llm/embeddingProviders.ts',
     'src/llm/StatusManager.ts',
     'src/llm/questStartBody.ts',
     'src/llm/toolFinishObserver.ts',
@@ -35,6 +42,8 @@ export default defineConfig({
     'src/llm/reranker/index.ts',
     'src/llm/intentClassifier.ts',
     'src/llm/modelAdmission.ts',
+    'src/llm/shadowTier.ts',
+    'src/llm/orgToolPolicy.ts',
     // Pure account-state predicates; route gates import them without the services barrel.
     'src/userService/accountState.ts',
     'src/llm/refineText.ts',
@@ -47,6 +56,7 @@ export default defineConfig({
     'src/llm/tools/implementation/websearch/index.ts',
     'src/mfaService/utils.ts',
     'src/organizationService/create.ts',
+    'src/organizationService/orgEventObserver.ts',
     'src/organizationService/revokeAccess.ts',
     'src/organizationService/update.ts',
     'src/sreAgentService/index.ts',

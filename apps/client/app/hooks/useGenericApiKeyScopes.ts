@@ -3,7 +3,7 @@ import {
   type ApiKeyScopeAccess,
   type ApiKeyScopeOption,
   genericApiKeyScopesFor,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
 import {
   useApiKeyScopeEntitlements,

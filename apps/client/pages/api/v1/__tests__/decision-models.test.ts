@@ -16,12 +16,12 @@ const { registeredModels, callableProviders } = vi.hoisted(() => ({
   registeredModels: { value: [] as string[] },
   callableProviders: { value: [] as string[] },
 }));
-vi.mock('@server/decisions/providers', () => ({
+vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({ models: () => registeredModels.value }),
   resolveCallableDecisionProviders: vi.fn(async () => new Set(callableProviders.value)),
 }));
 
-import { resolveCallableDecisionProviders } from '@server/decisions/providers';
+import { resolveCallableDecisionProviders } from '@bike4mind/server-utils/decisions/providers';
 import handler from '../decision-models';
 
 const callHandler = async () => {

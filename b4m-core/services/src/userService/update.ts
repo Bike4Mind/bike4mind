@@ -5,10 +5,11 @@ import {
   IUserDocument,
   IUserPreferences,
   IUserRepository,
+  PushNotificationPreferencesSchema,
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { isDuplicateKeyErrorOn } from './duplicateKeyError';
 import { assertUsernameNotReserved } from './reservedUsername';
@@ -101,6 +102,8 @@ export const updateUserSchema = z.object({
       showFunTools: z.boolean().optional(),
       showSplashCards: z.boolean().optional(),
       desktopPromoDismissed: z.boolean().optional(),
+      promptCacheTtl: z.enum(['5m', '1h']).optional(),
+      pushNotifications: PushNotificationPreferencesSchema.optional(),
     })
     .nullable()
     .optional(),
@@ -193,7 +196,8 @@ export function toUserUpdatePartial(
  * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
  * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
  * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
- * deeper (mirrors the client in UserSettingsContext); nothing else in the schema nests.
+ * deeper (mirrors the client in UserSettingsContext), and so is `pushNotifications`, so toggling one
+ * category cannot reset the others; nothing else in the schema nests.
  */
 function mergePreferences(
   stored: IUserPreferences | null | undefined,
@@ -205,6 +209,9 @@ function mergePreferences(
     ...incoming,
     ...(incoming.experimentalFeatures !== undefined && {
       experimentalFeatures: { ...base.experimentalFeatures, ...incoming.experimentalFeatures },
+    }),
+    ...(incoming.pushNotifications !== undefined && {
+      pushNotifications: { ...base.pushNotifications, ...incoming.pushNotifications },
     }),
   };
 }
@@ -271,6 +278,12 @@ export async function updateUser(userId: string, parameters: UpdateUserParameter
 
   if (!userPassword) {
     throw new Error('User not found');
+  }
+
+  // A test persona keeps its server-built persona-<name>-<digits> name: the persona key can only
+  // delete accounts that still carry one, so a rename would put the persona beyond its cleanup.
+  if (userPassword.isPersona && params.username !== undefined && params.username !== userPassword.username) {
+    throw new ForbiddenError('A test persona cannot change its username');
   }
 
   await validateUsernameChange(userPassword, params, db.users, { adminSettings: db.adminSettings });

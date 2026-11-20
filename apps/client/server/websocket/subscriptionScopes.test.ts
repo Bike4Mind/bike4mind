@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Types } from 'mongoose';
 import { InviteType } from '@bike4mind/common';
-import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from './subscriptionScopes';
+import {
+  adminSettingsSubscriptionScope,
+  inviteSubscriptionScope,
+  questMasterPlanSubscriptionScope,
+} from './subscriptionScopes';
 
 describe('questMasterPlanSubscriptionScope', () => {
   const userId = new Types.ObjectId().toString();
@@ -72,5 +76,24 @@ describe('inviteSubscriptionScope', () => {
     expect(inviteSubscriptionScope('  user@example.com  ', projectIds).$or?.[0]).toEqual({
       'recipients.pending': { $in: ['user@example.com'] },
     });
+  });
+});
+
+describe('adminSettingsSubscriptionScope', () => {
+  it('ANDs the ability scope with the broadcast-safe setting allowlist', () => {
+    const abilityScope = { settingName: { $in: ['EnableQuestMaster'] } };
+    const scope = adminSettingsSubscriptionScope(abilityScope);
+
+    expect(scope.$and?.[0]).toBe(abilityScope);
+    const allowed = (scope.$and?.[1] as { settingName: { $in: string[] } }).settingName.$in;
+    expect(allowed).toContain('EnableQuestMaster');
+  });
+
+  it('keeps sensitive settings out of an unrestricted (admin) subscription', () => {
+    const scope = adminSettingsSubscriptionScope({});
+    const allowed = (scope.$and?.[1] as { settingName: { $in: string[] } }).settingName.$in;
+
+    expect(allowed).not.toContain('openaiDemoKey');
+    expect(allowed).not.toContain('sreAgentConfig');
   });
 });

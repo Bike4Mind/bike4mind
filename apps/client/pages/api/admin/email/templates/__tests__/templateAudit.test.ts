@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 
 type RouteFn = (req: unknown, res: unknown) => unknown;
 type Handler = (req: unknown, res: unknown) => Promise<void>;
@@ -12,11 +13,12 @@ const h = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   remove: vi.fn(),
-  sendEmail: vi.fn(),
+  publish: vi.fn(),
+  smtpSendEmail: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, RouteFn> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -40,8 +42,10 @@ vi.mock('@bike4mind/database', () => ({
     listTemplates: vi.fn(),
   },
 }));
-vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
-vi.mock('@server/utils/adminAudit', () => ({
+// The real queuedMailer runs: the event bus is the seam, and the SMTP mailer must stay untouched.
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: h.smtpSendEmail } }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));
@@ -71,13 +75,20 @@ const call = async (handler: unknown, method: 'POST' | 'PUT' | 'DELETE', body: R
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('B4M_SELF_HOST', 'false');
+  vi.spyOn(Logger, 'error').mockImplementation(() => {});
   h.audit.mockResolvedValue(null);
   h.findById.mockResolvedValue(template);
   h.findBySlug.mockResolvedValue(null);
   h.create.mockImplementation(async (input: Record<string, unknown>) => ({ id: 'tpl-2', ...input }));
   h.update.mockImplementation(async (input: Record<string, unknown>) => ({ ...template, ...input }));
   h.remove.mockResolvedValue(undefined);
-  h.sendEmail.mockResolvedValue(true);
+  h.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('POST /api/admin/email/templates', () => {
@@ -158,14 +169,36 @@ describe('POST /api/admin/email/templates/:id/test', () => {
       details: { recipientCount: 1 },
     });
     expect(JSON.stringify(input)).not.toContain('qa@example.com');
-    expect(h.sendEmail.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+    expect(h.publish.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
-  it('records nothing when the mailer fails', async () => {
-    h.sendEmail.mockResolvedValue(false);
+  it('publishes the test mail as an email.send event carrying the template text', async () => {
+    h.findById.mockResolvedValue({ ...template, textContent: 'Hi in plain text' });
+
+    await call(testHandler, 'POST', { email: 'qa@example.com' });
+
+    expect(h.publish).toHaveBeenCalledExactlyOnceWith({
+      to: 'qa@example.com',
+      subject: '[TEST] Hello',
+      body: '<p>Hi</p>',
+      text: 'Hi in plain text',
+    });
+    expect(h.smtpSendEmail).not.toHaveBeenCalled();
+  });
+
+  it('leaves the text off the event when the template has none', async () => {
+    await call(testHandler, 'POST', { email: 'qa@example.com' });
+
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    expect(h.publish.mock.calls[0][0]).not.toHaveProperty('text');
+  });
+
+  it('records nothing when the event cannot be queued', async () => {
+    h.publish.mockRejectedValue(new Error('bus unreachable'));
 
     await expect(call(testHandler, 'POST', { email: 'qa@example.com' })).rejects.toThrow();
 
+    expect(h.smtpSendEmail).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
 });

@@ -169,6 +169,8 @@ function installFetch(opts: {
   canComment: boolean;
   serverDateMs?: number;
   onPost?: () => Comment;
+  mineIds?: string[];
+  onMutation?: (method: string, body?: string) => StubResponse;
 }): void {
   vi.stubGlobal(
     'fetch',
@@ -181,7 +183,11 @@ function installFetch(opts: {
         return Promise.resolve(jsonRes({ accessToken: 'test.access.token' }));
       }
       if (u.endsWith('/can-comment')) {
-        return Promise.resolve(jsonRes({ commentPolicy: 'open', canComment: opts.canComment }));
+        const capability = { commentPolicy: 'open', canComment: opts.canComment, mineIds: opts.mineIds || [] };
+        return Promise.resolve(jsonRes(capability));
+      }
+      if (init?.method === 'PATCH' || init?.method === 'DELETE') {
+        return Promise.resolve(opts.onMutation!(init.method, (init as { body?: string }).body));
       }
       if (init?.method === 'POST') return Promise.resolve(jsonRes(opts.onPost!(), 201));
       return Promise.resolve(jsonRes({ annotations: opts.list(), commentPolicy: 'open' }, 200, opts.serverDateMs));
@@ -212,6 +218,169 @@ describe('publish comment widget - rendered behaviour', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('shows edit/delete only for owned comments and updates them through the mutation routes', async () => {
+    vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
+    const comments = [
+      { id: 'mine', authorDisplayName: 'Me', body: 'old', createdAt: new Date().toISOString(), resolvedAt: null },
+      {
+        id: 'other',
+        authorDisplayName: 'Other',
+        body: 'other body',
+        createdAt: new Date().toISOString(),
+        resolvedAt: null,
+      },
+    ];
+    const mutation = vi.fn((method: string, body?: string) =>
+      method === 'PATCH' ? jsonRes({ ...comments[0], body: JSON.parse(body!).body }) : jsonRes(null, 204)
+    );
+    installFetch({ list: () => comments, canComment: true, mineIds: ['mine'], onMutation: mutation });
+    vi.stubGlobal(
+      'prompt',
+      vi.fn(() => 'new text')
+    );
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true)
+    );
+
+    runWidget();
+    await flush();
+    click('b4m-launch');
+    await flush();
+
+    expect(document.querySelectorAll('.own-actions')).toHaveLength(1);
+    (document.querySelector('.own-actions button') as HTMLButtonElement).click();
+    await flush();
+    expect(mutation).toHaveBeenCalledWith('PATCH', JSON.stringify({ body: 'new text' }));
+    expect(listText()).toContain('new text');
+
+    (document.querySelector('.own-actions button:last-child') as HTMLButtonElement).click();
+    await flush();
+    expect(mutation).toHaveBeenCalledWith('DELETE', undefined);
+    expect(listText()).not.toContain('new text');
+    expect(listText()).toContain('other body');
+  });
+
+  const mineComment = () => ({
+    id: 'mine',
+    authorDisplayName: 'Me',
+    body: 'old',
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+  });
+  const openWithOwnComment = async (
+    onMutation: (m: string, b?: string) => StubResponse,
+    list = () => [mineComment()]
+  ) => {
+    vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
+    installFetch({ list, canComment: true, mineIds: ['mine'], onMutation });
+    runWidget();
+    await flush();
+    click('b4m-launch');
+    await flush();
+  };
+  const ownButton = (label: string) =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.own-actions button')).find(b => b.textContent === label)!;
+
+  it('keeps the old text and the controls when an edit is rejected', async () => {
+    const mutation = vi.fn(() => jsonRes({ error: 'no' }, 403));
+    const alertSpy = vi.fn();
+    vi.stubGlobal('prompt', () => 'new text');
+    vi.stubGlobal('alert', alertSpy);
+    await openWithOwnComment(mutation);
+
+    ownButton('Edit').click();
+    await flush();
+
+    expect(alertSpy).toHaveBeenCalledWith('Could not edit comment');
+    expect(listText()).toContain('old');
+    expect(listText()).not.toContain('new text');
+    expect(document.querySelectorAll('.own-actions')).toHaveLength(1);
+  });
+
+  it('keeps the comment and the controls when a delete fails', async () => {
+    const mutation = vi.fn(() => jsonRes({ error: 'boom' }, 500));
+    const alertSpy = vi.fn();
+    vi.stubGlobal('confirm', () => true);
+    vi.stubGlobal('alert', alertSpy);
+    await openWithOwnComment(mutation);
+
+    ownButton('Delete').click();
+    await flush();
+
+    expect(alertSpy).toHaveBeenCalledWith('Could not delete comment');
+    expect(listText()).toContain('old');
+    expect(document.querySelectorAll('.own-actions')).toHaveLength(1);
+  });
+
+  it.each([null, '   '])('sends nothing when the edit prompt returns %j', async answer => {
+    const mutation = vi.fn(() => jsonRes({}));
+    vi.stubGlobal('prompt', () => answer);
+    await openWithOwnComment(mutation);
+
+    ownButton('Edit').click();
+    await flush();
+
+    expect(mutation).not.toHaveBeenCalled();
+    expect(listText()).toContain('old');
+  });
+
+  it('sends nothing when the delete confirmation is declined', async () => {
+    const mutation = vi.fn(() => jsonRes(null, 204));
+    vi.stubGlobal('confirm', () => false);
+    await openWithOwnComment(mutation);
+
+    ownButton('Delete').click();
+    await flush();
+
+    expect(mutation).not.toHaveBeenCalled();
+    expect(listText()).toContain('old');
+  });
+
+  it('does not let a stale cached poll revert an edit', async () => {
+    vi.stubGlobal('prompt', () => 'new text');
+    const mutation = (method: string, body?: string) => jsonRes({ ...mineComment(), body: JSON.parse(body!).body });
+    // The list never reflects the edit: a cached response from before it.
+    await openWithOwnComment(mutation);
+
+    ownButton('Edit').click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(FIRST_POLL_MS);
+
+    expect(listText()).toContain('new text');
+    expect(listText()).not.toContain('old');
+  });
+
+  it('does not let a stale cached poll bring a deleted comment back', async () => {
+    vi.stubGlobal('confirm', () => true);
+    await openWithOwnComment(() => jsonRes(null, 204));
+
+    ownButton('Delete').click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(FIRST_POLL_MS);
+
+    expect(listText()).not.toContain('old');
+    expect(document.querySelectorAll('.own-actions')).toHaveLength(0);
+  });
+
+  it('refreshes an edited comment when a poll returns the same IDs with new text', async () => {
+    vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
+    let body = 'old text';
+    installFetch({
+      list: () => [{ id: 'c1', authorDisplayName: 'Me', body, createdAt: new Date().toISOString(), resolvedAt: null }],
+      canComment: false,
+    });
+
+    runWidget();
+    await flush();
+    click('b4m-launch');
+    expect(listText()).toContain('old text');
+
+    body = 'updated text';
+    await vi.advanceTimersByTimeAsync(FIRST_POLL_MS);
+    expect(listText()).toContain('updated text');
   });
 
   it('keeps every just-posted comment when a poll returns a list that predates them', async () => {

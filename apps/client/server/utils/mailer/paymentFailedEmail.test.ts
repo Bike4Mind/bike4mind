@@ -26,6 +26,7 @@ describe('buildPaymentFailedEmail', () => {
     const { body } = buildPaymentFailedEmail({ billingUrl: BILLING_URL });
 
     expect(body).toContain('Paid features are paused until the payment goes through');
+    expect(body).toContain('select Pay now on your billing page');
   });
 
   it('escapes the card issuer reason, which comes from Stripe', () => {

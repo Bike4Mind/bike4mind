@@ -5,8 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockSubCreate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
@@ -62,18 +62,37 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the reason 400s come from the route itself.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
     return null;
   }),
 }));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+const approvalMocks = vi.hoisted(() => ({
+  policy: vi.fn(async (_credits: number): Promise<unknown> => null),
+  request: vi.fn(),
+}));
+vi.mock('@server/admin/creditGrants/gate', () => ({
+  creditGrantNeedsApproval: async (credits: number) => {
+    const policy = await approvalMocks.policy(credits);
+    return policy ? { policy } : { policy: null, release: async () => undefined };
+  },
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: (...a: unknown[]) => approvalMocks.request(...a),
+}));
+const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+const PENDING = { approvalId: 'approval-1', status: 'pending' };
+
 import handler from '../grant';
 
 const BODY = {
@@ -109,13 +128,7 @@ describe('POST /api/admin/organizations/grant', () => {
     // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-
-  it('rejects a non-admin', async () => {
-    const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
-    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } });
   });
 
   it('creates the organization with a subscription for an admin', async () => {
@@ -124,6 +137,33 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockSubCreate).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
+  });
+
+  it('wakes the owner entitlement cache when the org plan price affects entitlements', async () => {
+    const { run } = call({});
+    await run();
+    expect(sendToClient).toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('skips the entitlements push when the price does not affect entitlements', async () => {
+    vi.mocked(priceAffectsEntitlements).mockReturnValueOnce(false);
+    const { run } = call({});
+    await run();
+    expect(sendToClient).not.toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('still answers success when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1' });
   });
 
   it('records org.credits.granted against the new organization', async () => {
@@ -170,8 +210,60 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
+        details: expect.objectContaining({
+          ownerId: 'owner-1',
+          seats: 5,
+          initialCredits: 1000,
+          credits: 1000,
+          subscriptionId: mockSubCreate.mock.calls[0][0].subscriptionId,
+        }),
       })
     );
+  });
+});
+
+describe('POST /api/admin/organizations/grant - approval gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('runs as before when the gate passes it through', async () => {
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.policy).toHaveBeenCalledWith(BODY.initialCredits);
+    expect(res._getStatusCode()).toBe(201);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+
+  it('answers 202 over the threshold and creates nothing', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual(PENDING);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:adjust',
+        requiresFullAdmin: false,
+        params: expect.objectContaining({ ownerEmail: BODY.ownerEmail, initialCredits: 1000, reason: BODY.reason }),
+      }),
+      POLICY
+    );
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner before storing a request', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValueOnce(null);
+    await expect(call({}).run()).rejects.toThrow('No user with email');
+    expect(approvalMocks.request).not.toHaveBeenCalled();
   });
 });

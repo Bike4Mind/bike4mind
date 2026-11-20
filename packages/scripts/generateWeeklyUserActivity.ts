@@ -93,10 +93,11 @@ class WeeklyInsightsGenerator {
           ? dayjs(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss.SSS')
           : endDate;
       } else {
-        // Default to current week
-        startDate = today.startOf('isoWeek').format('YYYY-MM-DD'); // Current week's Monday
-        endDate = today.endOf('isoWeek').format('YYYY-MM-DD'); // Current week's Sunday
-        processDate = today.format('YYYY-MM-DD HH:mm:ss.SSS'); // Current time for current week
+        // Default to the last completed ISO week, like the weekly cron
+        const lastWeek = today.subtract(1, 'week');
+        startDate = lastWeek.startOf('isoWeek').format('YYYY-MM-DD');
+        endDate = lastWeek.endOf('isoWeek').format('YYYY-MM-DD');
+        processDate = lastWeek.endOf('isoWeek').format('YYYY-MM-DD HH:mm:ss.SSS');
       }
 
       logger.log(`Generating weekly insights for ${startDate} to ${endDate} in ${this.options.stage} environment`);

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
+import { OrganizationEvents } from '@bike4mind/common';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
@@ -9,7 +14,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
     get: () => chain,
-    post: (fn: any) => {
+    post: (...fns: any[]) => {
+      const fn = fns[fns.length - 1];
       mockRefs.postHandler = fn;
       return chain;
     },
@@ -50,16 +56,19 @@ vi.mock('@bike4mind/common', async importOriginal => {
   };
 });
 vi.mock('@server/utils/respond', () => ({ respond: (_res: any, _schema: any, data: any) => data }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+const logEvent = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent }));
+const { ForbiddenError } = vi.hoisted(() => ({ ForbiddenError: class ForbiddenError extends Error {} }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
+  ForbiddenError,
 }));
 
 import '@pages/api/organizations/[id]/members/index';
 
-function makeReq(body: unknown) {
+function makeReq(body: unknown, { isAdmin = true }: { isAdmin?: boolean } = {}) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'org-123' } });
-  (req as any).user = { id: 'u1' };
+  (req as any).user = { id: 'u1', isAdmin };
   (req as any).ability = null;
   (req as any).body = body;
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -67,7 +76,25 @@ function makeReq(body: unknown) {
 }
 
 describe('POST /api/organizations/[id]/members -- Zod validation', () => {
-  beforeEach(() => addMember.mockClear());
+  beforeEach(() => {
+    addMember.mockClear();
+    logEvent.mockClear();
+  });
+
+  it('records the resolved member ID and trusted actor while retaining the analytics subject', async () => {
+    const { req, res } = makeReq({ email: 'new@example.com' });
+    Object.assign(req, { user: { id: 'u1', isAdmin: true, impersonatedBy: 'real-admin' } });
+    if (!mockRefs.postHandler) throw new Error('POST handler missing');
+    await mockRefs.postHandler(req, res);
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith(
+      {
+        userId: 'u1',
+        type: OrganizationEvents.ADD_ORG_MEMBER,
+        metadata: { organizationId: 'org-123', userId: 'new-u', memberEmail: 'new@example.com', memberLevel: 'member' },
+      },
+      { ability: null, organizationAuditActorUserId: 'real-admin' }
+    );
+  });
 
   it('accepts a real client payload with email (invite by email)', async () => {
     const { req, res } = makeReq({ email: 'new@example.com' });
@@ -96,5 +123,14 @@ describe('POST /api/organizations/[id]/members -- Zod validation', () => {
     const calledBody = addMember.mock.calls[0][1] as any;
     // service is called with organizationId from req.query, not from body
     expect(calledBody.organizationId).toBe('org-123');
+  });
+
+  it.each([
+    ['by email', { email: 'someone@example.com' }],
+    ['by user id', { userId: 'uid-abc' }],
+  ])('refuses a direct add %s from a non-admin before any lookup', async (_label, body) => {
+    const { req, res } = makeReq(body, { isAdmin: false });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(ForbiddenError);
+    expect(addMember).not.toHaveBeenCalled();
   });
 });

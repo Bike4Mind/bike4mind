@@ -47,6 +47,17 @@ describe('dispatchQuest', () => {
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-shared-secret');
   });
 
+  it('posts to a single-slash path when the linked URL ends in a slash', async () => {
+    mockResource.ChatCompletion.url = 'https://chat-origin.app.example.test/';
+    fetchMock.mockResolvedValueOnce(res(202));
+    try {
+      await dispatchQuest(params, logger);
+    } finally {
+      mockResource.ChatCompletion.url = 'http://chat-completion.internal';
+    }
+    expect(fetchMock.mock.calls[0][0]).toBe('https://chat-origin.app.example.test/process');
+  });
+
   it('does NOT retry on a 401 (deterministic auth failure)', async () => {
     fetchMock.mockResolvedValueOnce(res(401, 'Unauthorized'));
     await expect(dispatchQuest(params, logger)).rejects.toThrow(/401/);
@@ -73,6 +84,16 @@ describe('dispatchQuest', () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(promise).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends the retry the same visit as the first attempt', async () => {
+    const visitId = 'a'.repeat(32);
+    fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED')).mockResolvedValueOnce(res(202));
+    const promise = dispatchQuest({ ...params, visitId }, logger);
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+    const sentVisits = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body as string).visitId);
+    expect(sentVisits).toEqual([visitId, visitId]);
   });
 
   it('throws after exhausting the single retry', async () => {

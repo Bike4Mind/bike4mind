@@ -5,7 +5,8 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES, questGenerationJobs } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, questGenerationJobs } from '@bike4mind/common';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -16,7 +17,7 @@ import {
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
-import { type Logger } from '@bike4mind/observability';
+import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
   currentTurnUserMessage,
@@ -30,16 +31,20 @@ import {
   type CapturedToolCall,
   type OpenAIChatRequest,
 } from '@bike4mind/voice';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -144,6 +149,8 @@ async function runFullPipeline(
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // As chat.ts: audio_generation runs its job inline in this turn, so it stays in-process.
+    audioToolJobs: buildAudioToolJobs(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,
@@ -157,7 +164,13 @@ async function runFullPipeline(
     }: {
       organizationId: string | null;
       featureLabel: string;
-    }) => createCompletionMeter(user, logger, featureLabel, { sessionId: sessionCtx.sessionId, organizationId }),
+    }) =>
+      createCompletionMeter(user, logger, featureLabel, {
+        sessionId: sessionCtx.sessionId,
+        organizationId,
+        apiKeyId: sessionCtx.apiKeyId,
+        apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
+      }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately
@@ -166,6 +179,14 @@ async function runFullPipeline(
     // whole completion happens synchronously here.
     invokeLambda: async () => {},
   };
+  // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
+  if (sessionCtx.adminRoleWithheld) {
+    chatCompletionOptions.db = {
+      ...chatCompletionOptions.db,
+      users: ownerWithheldUsers(sessionCtx.userId, chatCompletionOptions.db.users),
+    };
+  }
 
   const invokeBody = {
     sessionId: sessionCtx.sessionId,
@@ -176,7 +197,8 @@ async function runFullPipeline(
     organizationId,
     // stream:true so the model emits tokens incrementally - ChatCompletionProcess
     // fires onReplyStream on each chunk, and the proxy relays SSE deltas.
-    params: { model: sessionCtx.reasoningModelId, max_tokens: 4096, stream: true },
+    // No max_tokens: ChatCompletionProcess sizes it per model, so a reasoning model keeps room to answer.
+    params: { model: sessionCtx.reasoningModelId, stream: true },
     promptMeta: { session: { id: sessionCtx.sessionId, userId: sessionCtx.userId, organizationId } },
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
@@ -207,6 +229,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -216,12 +239,14 @@ async function runFullPipeline(
   await processService.process({
     body: {
       ...invokeBody,
+      ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
       questId: quest.id,
       userId: sessionCtx.userId,
       // From the verified token, never the request body. process() reads the tool context's auth
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,
@@ -242,7 +267,11 @@ async function runFullPipeline(
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  const reply = stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  // A settled budget error resolves without throwing and its reply never went through onReplyStream,
+  // so speak it here rather than leave the caller in silence.
+  if (processService.terminalError) onReplyStream(reply);
+  return reply;
 }
 
 export const config = {
@@ -252,7 +281,10 @@ export const config = {
   },
 };
 
-const handler = baseApi({ auth: false }).post(async (req, res) => {
+// Anonymous by design (the voice session token is the auth), so it opts into the network block itself.
+const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP({ surface: 'app' }));
+
+const handler = ipGatedApi.post(async (req, res) => {
   const body = req.body as OpenAIChatRequest & {
     elevenlabs_extra_body?: { b4m_session?: unknown };
   };
@@ -428,7 +460,20 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!res.writableEnded) res.end();
       return;
     }
-    req.logger.error({ err }, '[voice-v2/llm-proxy] full pipeline failed');
+    // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
+    // the nested error object into `[object Object]`.
+    // A credit refusal is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
+    const failureFields = {
+      err,
+      errorName: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      errorCause: describeErrorCause(err),
+    };
+    if (isTerminalCreditRefusal(err)) {
+      req.logger.warn(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    } else {
+      req.logger.error(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    }
     try {
       if (res.writableEnded) return;
       // Only speak the fallback if nothing was streamed yet - otherwise the agent

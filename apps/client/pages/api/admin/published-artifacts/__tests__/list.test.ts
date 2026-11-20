@@ -9,19 +9,19 @@ const { mockFind, mockCount } = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (middleware: (typeof middlewares)[number]) => (middlewares.push(middleware), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
     );
     return chain;
   },
-}));
-
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
 }));
 
 // find() returns a chainable query terminating in lean(); capture the filter it was called with.
@@ -63,8 +63,22 @@ beforeEach(() => {
 describe('GET /api/admin/published-artifacts', () => {
   it('rejects non-admins', async () => {
     const { promise } = run({ user: { id: 'u1', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+    await expect(promise).rejects.toThrow(/missing permission/i);
     expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['support:read', 200],
+    ['users:moderate', 200],
+    ['keys:revoke', null],
+  ])('a delegate holding %s gets %s', async (permission, status) => {
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false, adminPermissions: [permission] } });
+    if (status === null) {
+      await expect(promise).rejects.toThrow(/missing permission/i);
+      return;
+    }
+    await promise;
+    expect(res._getStatusCode()).toBe(status);
   });
 
   it('defaults to the reported, non-deleted queue', async () => {

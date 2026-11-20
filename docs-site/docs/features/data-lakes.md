@@ -85,7 +85,7 @@ budget -- and they skip documents whose embeddings came from a different model t
 the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
 specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
 on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
-wait if the banner says documents are still being re-indexed.
+wait if the banner says documents are still being indexed.
 
 **I got "this data lake moved to '...' while it was being archived/deleted/restored". What happened?**
 Two lifecycle actions ran on the same lake at once -- for example Archive and Delete were both
@@ -95,8 +95,47 @@ that state and is safe to act on from there. Re-run the action you wanted if it 
 
 **I saved a research configuration and nothing new appeared in the lake's History tab. Why?**
 The History tab records a research-configuration edit only when a setting meaningfully changes.
-Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
+Saving the same values again, or reordering the same entries in **Sites to review**, **Never these
 sites** or **Tags to propose**, does not add a row.
+
+**Can research read a feed instead of searching the web?**
+Yes. Set **Source** to **Feed** on a research configuration and enter the address of an RSS or Atom
+feed. The **Topic** field then holds the question each feed item is judged against. Each run
+considers only items it has not seen before. Passing items go to the review queue like any other
+result. Changing the topic, the model, the relevance threshold or any site list
+re-checks the newest items under the new settings and keeps the items still waiting.
+Changing the feed address starts fresh from the newest items. A feed that publishes more items
+than **Feed items per run** allows falls behind. The run card shows how many items are waiting.
+
+**Can research add sources to a lake without my approval?**
+Only from sites you list as trusted. Add a site to **Trusted sites** on a research configuration and
+turn on automatic adding. A new source from that site, or one of its subdomains, is then added to the
+lake without waiting in the review queue. Everything else still waits for your approval. A relevance
+score never adds anything on its own, and a source you declined before is never added again. List only
+sites whose content you control or vouch for. Never list a host where anyone can publish, such as a
+blogging platform, a code-hosting site or a shared file host, because anyone could then put content
+into your lake. Broad entries such as a bare top-level domain are rejected. Each automatic addition
+is marked in the lake's History tab and on the source itself.
+
+**Can I stop research from proposing items I do not want, such as press releases?**
+Yes. Add **Item rules** to a research configuration. A rule is a short plain-language condition, for
+example "the author works for a named company". Each rule either blocks the item or sends it to review.
+A model checks every rule against the item's feed fields and the text of its page. A blocked item is
+dropped and counted on the run card as blocked by an item rule. A review item waits in the review
+queue, and the proposal says which rule sent it there.
+
+A rule can never add anything. It also never removes content that is already in the lake. If a rule
+(block or review) cannot be checked against a trusted item that would otherwise be added
+automatically, for example because the page has no text that answers it, the item goes to review.
+A failed check does the same. A rule that cannot be checked never blocks an item and never adds one.
+
+Review rules are a convenience for ordinary content. They are not a control against an author who
+writes a page to fool the checker. If anyone can post on a site, turn off automatic adding for it.
+You can have up to 10 rules, each up to 300 characters.
+
+Rule checks use the model you chose for the run, so they count toward the cost ceiling. A blocked
+search result is checked again on each run that finds it. Rules apply from the next run. Changing them
+re-checks a feed's newest items once.
 
 **Who can connect a Google Drive folder to a Data Lake?**
 On an organization Data Lake, an organization owner or manager (or a platform admin). On a
@@ -119,6 +158,16 @@ files to it. It is made only when the connection can actually start, so if it ca
 the lake is archived) the lake stays curated and nothing changes. The
 switch is recorded in the lake's History tab. If you leave GitHub's page without finishing, the lake
 stays connector-fed; switch it back in its settings if you no longer want that.
+
+**What happens when I disconnect a GitHub repository?**
+Every file the connection synced into the Data Lake is permanently deleted, the same way a Google
+Drive disconnect works, and the confirmation dialog shows how many files that is before you
+confirm. There is one extra consequence GitHub does not share with Drive: the GitHub App is
+installed on the whole account, so if this Data Lake is the last one bound to that installation,
+disconnecting also uninstalls the App from the account. The confirmation says so when that is the
+case. To reconnect afterwards, the account owner - an organization owner for an organization
+account - has to reinstall the App on GitHub first; **Refresh list** in the repository picker
+cannot bring back an uninstalled App.
 
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its

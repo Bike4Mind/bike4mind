@@ -11,7 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // rateLimit middleware is a no-op factory here; the per-client limit is exercised
 // via the cacheRepository mock below.
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({

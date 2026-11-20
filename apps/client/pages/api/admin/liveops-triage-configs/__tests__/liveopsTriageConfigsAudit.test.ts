@@ -22,6 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
+        use: () => chain,
         get: (fn: Route) => ((routes.GET = fn), chain),
         post: (fn: Route) => ((routes.POST = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
@@ -42,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   liveopsTriageRunRepository: { hasActiveRunForConfig: h.hasActiveRunForConfig },
   liveopsTriageConfigAuditLogRepository: { createLog: h.createLog },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import createHandler from '../index';
 import itemHandler from '../[id]';
@@ -68,6 +69,51 @@ beforeEach(() => {
 });
 
 describe('liveops triage configs admin audit', () => {
+  it('POST preserves the approver allowlist in persistence and the response', async () => {
+    h.createConfig.mockImplementation(async data => ({ id: CONFIG_ID, ...data }));
+    const { res } = await call(createHandler, {
+      method: 'POST',
+      body: {
+        name: 'Nightly',
+        slackChannelId: 'C123ABC',
+        issueTracker: 'github',
+        githubOwner: 'acme',
+        githubRepo: 'app',
+        modelId: 'some-model',
+        approverIds: 'U123, U456',
+      },
+    });
+    expect(res._getStatusCode()).toBe(201);
+    expect(h.createConfig).toHaveBeenCalledWith(expect.objectContaining({ approverIds: 'U123, U456' }));
+    expect(res._getJSONData()).toMatchObject({ approverIds: 'U123, U456' });
+  });
+
+  it.each(['U123, U456', ''])('PUT round-trips approverIds %j and audits the change', async approverIds => {
+    const existing = {
+      id: CONFIG_ID,
+      name: 'Nightly',
+      issueTracker: 'github',
+      githubOwner: 'acme',
+      githubRepo: 'app',
+      approverIds: 'U789',
+    };
+    h.findById.mockResolvedValue(existing);
+    h.updateConfig.mockImplementation(async (_id, data) => ({ ...existing, ...data }));
+    const { res } = await call(itemHandler, {
+      method: 'PUT',
+      query: { id: CONFIG_ID },
+      body: { approverIds },
+    });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.updateConfig).toHaveBeenCalledWith(CONFIG_ID, { approverIds });
+    expect(res._getJSONData()).toMatchObject({ approverIds });
+    expect(h.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: { approverIds: { old: 'U789', new: approverIds } },
+      })
+    );
+  });
+
   it('POST records ops.triage_config.created after the config is created', async () => {
     h.createConfig.mockResolvedValue({ id: CONFIG_ID, name: 'Nightly', enabled: false, issueTracker: 'github' });
 

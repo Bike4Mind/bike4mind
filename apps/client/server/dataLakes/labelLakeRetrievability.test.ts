@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { labelLakeRetrievability } from './labelLakeRetrievability';
-import type { RetrievalLakeScope } from './resolveRetrievalLakeScope';
+import type { RetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 
 const scopeOf = (tags: string[], lakeViewComplete?: boolean) =>
   ({

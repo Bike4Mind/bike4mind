@@ -1,4 +1,5 @@
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IUserDocument, IUserRepository, assertCanActOnAdminTarget, hasAdminPermission } from '@bike4mind/common';
+import { userHasMFAConfigured } from './utils';
 
 export interface ForceResetMFARequest {
   targetUserId: string;
@@ -11,14 +12,14 @@ export interface ForceResetMFAResponse {
 }
 
 /**
- * Force reset MFA for a user (admin only)
+ * Force reset MFA for a user (needs the users:moderate admin permission)
  * This completely removes MFA configuration, allowing the user to set it up again
  */
 export async function forceResetMFA(
   { targetUserId, adminUser }: ForceResetMFARequest,
   userRepository: Pick<IUserRepository, 'findById' | 'update'>
 ): Promise<ForceResetMFAResponse> {
-  if (!adminUser.isAdmin) {
+  if (!hasAdminPermission(adminUser, 'users:moderate')) {
     throw new Error('Only administrators can force reset MFA.');
   }
 
@@ -26,8 +27,9 @@ export async function forceResetMFA(
   if (!targetUser) {
     throw new Error('Target user not found.');
   }
+  assertCanActOnAdminTarget(adminUser, targetUser, 'reset MFA for');
 
-  if (!targetUser.mfa || !targetUser.mfa.totpEnabled) {
+  if (!userHasMFAConfigured(targetUser)) {
     throw new Error('Target user does not have MFA enabled.');
   }
 

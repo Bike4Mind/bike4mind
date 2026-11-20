@@ -1,4 +1,5 @@
 #!/usr/bin/env npx ts-node -r tsconfig-paths/register
+import { signupProtectionRepository } from '@bike4mind/database';
 
 /**
  * Grant the starting free credits to Google/GitHub signups that got none before OAuth signup
@@ -15,7 +16,7 @@
  *   --created-before=<ISO>         required; when the fix went live on this stage (prod lags main)
  *   --exclude-email-domain=<d>     repeatable; added to NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
  *   --execute                      write; without it the run is a dry run
- *   --expect-amount=<n>            required with --execute; must equal resolved defaultFreeCredits
+ *   --expect-amount=<n>            required with --execute; must equal the signup schedule's initial credits
  *
  * Usage (inside an SST shell so Resource.MONGODB_URI resolves; staging's stage is `dev`):
  *   npx sst shell --stage production pnpm --filter @bike4mind/scripts backfill:oauth-starting-grant --created-before=<ISO>
@@ -133,10 +134,15 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
             creditTransactions: creditTransactionRepository,
             creditLots: creditLotRepository,
             users: userRepository,
+            signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
           },
           reason: GRANT_REASON,
         }
       );
+      if (result.withheld) {
+        console.log(`  deferred ${describeUser(user)} - pending domain review`);
+        continue;
+      }
       granted++;
       console.log(`  ok  ${describeUser(user)}  +${result.creditsGranted} credits`);
     } catch (error) {
@@ -175,9 +181,9 @@ const run = async (): Promise<number> => {
   await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', stage));
 
   const amount = await userService.resolveFreeCreditAmount(null, adminSettingsRepository);
-  console.log(`defaultFreeCredits (admin setting): ${amount}`);
+  console.log(`Signup schedule initial credits: ${amount}`);
   if (args.execute && amount !== args.expectAmount) {
-    console.error(`Aborting: defaultFreeCredits is ${amount}, but --expect-amount=${args.expectAmount}.`);
+    console.error(`Aborting: signup schedule initial credits are ${amount}, but --expect-amount=${args.expectAmount}.`);
     return 1;
   }
   console.log('');

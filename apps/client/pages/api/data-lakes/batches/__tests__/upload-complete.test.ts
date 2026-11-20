@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
     softDeleteByIdsForUserBatch: h.fabSoftDeleteScoped,
   },
 }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
   enqueueTaxonomyAnalysisIfWanted: h.enqueueTaxonomyAnalysisIfWanted,
 }));

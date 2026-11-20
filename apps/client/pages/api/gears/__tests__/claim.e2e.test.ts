@@ -7,7 +7,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { User, Project, CreditTransaction, userRepository } from '@bike4mind/database';
+import { User, Project, CreditTransaction, AdminSettings, userRepository } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -48,6 +48,8 @@ afterAll(async () => {
 // dropDatabase removes it with the data - rebuild it for every test.
 beforeEach(async () => {
   await CreditTransaction.createIndexes();
+  // Gear rewards draw the trickle pool, and a missing pool setting pauses them.
+  await AdminSettings.create({ settingName: 'signupGrantTricklePoolDaily', settingValue: '1000000000' });
 });
 
 afterEach(async () => {
@@ -55,7 +57,8 @@ afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
-/** A user who owns a project, which unlocks the Projects gear (1000 credits). */
+/** A user who owns a project, which unlocks the Projects gear (1000 credits).
+ *  emailVerified and a past createdAt are set so the trust gate allows the payout. */
 const seedUnlockedUser = async () => {
   const user = await User.create({
     name: 'Claimer',
@@ -63,6 +66,8 @@ const seedUnlockedUser = async () => {
     password: null,
     hasUsablePassword: false,
     currentCredits: 0,
+    emailVerified: true,
+    createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
   });
   await Project.create({ name: 'First project', description: 'd', userId: user.id, users: [], fileIds: [] });
   return user;
@@ -98,7 +103,9 @@ describe('POST /api/gears/claim on a real replica set', () => {
     const results = await Promise.all([claim(user.id), claim(user.id), claim(user.id)]);
 
     expect(results.filter(r => r.body.creditsAwarded === 1000)).toHaveLength(1);
-    expect(results.filter(r => r.body.alreadyClaimed === true)).toHaveLength(2);
+    // A loser that sees the winner's draw before its ledger row exists queues (202) instead;
+    // the release cron then settles that row against the winner's ledger row without paying again.
+    expect(results.filter(r => r.body.alreadyClaimed === true || r.body.queued === true)).toHaveLength(2);
     expect(await balanceOf(user.id)).toBe(1000);
     expect(await ledgerRows(user.id)).toBe(1);
   });

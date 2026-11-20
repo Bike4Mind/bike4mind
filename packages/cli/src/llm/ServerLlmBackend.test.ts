@@ -268,6 +268,40 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
   });
 });
 
+describe('ServerLlmBackend request body', () => {
+  const bodySent = async (getSessionId?: () => string | undefined): Promise<Record<string, unknown>> => {
+    let body = '';
+    const stream = new PassThrough();
+    stream.end('data: [DONE]\n\n');
+    const apiClient = {
+      baseURL: 'http://localhost:3000',
+      fetch: async (input: Request | string, init?: RequestInit) => {
+        body = input instanceof Request ? await input.text() : String(init?.body ?? '');
+        return sseResponse(stream);
+      },
+    } as unknown as ApiClient;
+    const backend = new ServerLlmBackend({ apiClient, model: 'test-model', getSessionId });
+    const events = backend.open({ model: 'test-model', messages: [], options: {} });
+    while (!(await events[Symbol.asyncIterator]().next()).done) {
+      /* no-op */
+    }
+    return JSON.parse(body) as Record<string, unknown>;
+  };
+
+  it('sends the live session id, read per request', async () => {
+    let current = 'session-a';
+    const getSessionId = () => current;
+    expect(await bodySent(getSessionId)).toMatchObject({ sessionId: 'session-a' });
+    current = 'session-b';
+    expect(await bodySent(getSessionId)).toMatchObject({ sessionId: 'session-b' });
+  });
+
+  it('omits the field when there is no session', async () => {
+    expect(await bodySent()).not.toHaveProperty('sessionId');
+    expect(await bodySent(() => undefined)).not.toHaveProperty('sessionId');
+  });
+});
+
 describe('ServerLlmBackend pre-stream HTTP errors', () => {
   const errorOf = async (status: number, body: string, headers?: Record<string, string>): Promise<unknown> => {
     const backend = new ServerLlmBackend({

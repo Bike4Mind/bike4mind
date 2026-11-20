@@ -19,6 +19,12 @@ describe('resolveSessionOrigin', () => {
     expect(resolveSessionOrigin({ headers: { 'x-b4m-client': 'b4m-cli/1.0.0' } })).toEqual({ channel: 'cli' });
   });
 
+  it('stamps desktop for a JWT request from the desktop app', () => {
+    expect(
+      resolveSessionOrigin({ headers: { 'user-agent': 'b4m-desktop/1.4.2', 'x-b4m-client': 'b4m-desktop/1.4.2' } })
+    ).toEqual({ channel: 'desktop' });
+  });
+
   it('stamps web for a plain JWT request', () => {
     expect(resolveSessionOrigin({ headers: { 'user-agent': 'Mozilla/5.0' } })).toEqual({ channel: 'web' });
   });

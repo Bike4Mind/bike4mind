@@ -167,14 +167,6 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
     await this.model.findByIdAndUpdate(id, { $inc: { [field]: amount } });
   }
 
-  async updateOverallStatus(
-    id: string,
-    overallStatus: EmailJobOverallStatus,
-    updates?: Partial<IEmailJob>
-  ): Promise<void> {
-    await this.model.findByIdAndUpdate(id, { overallStatus, ...updates });
-  }
-
   /**
    * Atomically set overallStatus to SENDING only if not already SENDING.
    * Returns the updated doc, or null if the job was already sending (prevents duplicate sends).
@@ -197,6 +189,39 @@ export class EmailJobRepository extends BaseRepository<IEmailJobDocument> implem
       { $set: { status: EmailJobStatus.QUEUED, ...updates } },
       { new: true }
     );
+  }
+
+  /**
+   * Completes a send run from a recount. Matches only while the job is not cancelled, has not been
+   * re-claimed for a newer send since `runStartedAt` (its lastSentAt) was read, and is still at
+   * `version` (no other recount wrote since); returns whether it matched.
+   */
+  async completeRun(
+    id: string,
+    runStartedAt: Date | undefined,
+    version: number | undefined,
+    updates: Pick<IEmailJob, 'sentCount' | 'failedCount' | 'cancelledCount' | 'overallStatus' | 'completedAt'>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $ne: EmailJobStatus.CANCELLED }, lastSentAt: runStartedAt ?? null, __v: version ?? null },
+      { $set: { ...updates, status: EmailJobStatus.COMPLETED }, $inc: { __v: 1 } },
+      { runValidators: true }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /** Writes a recount's totals only while the job is still at `version`; returns whether it matched. */
+  async updateCounts(
+    id: string,
+    version: number | undefined,
+    counts: Pick<IEmailJob, 'sentCount' | 'failedCount' | 'cancelledCount'>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, __v: version ?? null },
+      { $set: counts, $inc: { __v: 1 } },
+      { runValidators: true }
+    );
+    return result.matchedCount > 0;
   }
 
   /**

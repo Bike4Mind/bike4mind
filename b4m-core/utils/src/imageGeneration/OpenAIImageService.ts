@@ -2,6 +2,7 @@ import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageSe
 import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
@@ -17,6 +18,10 @@ import {
 } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 import { sniffImageFormat } from './sniffImageFormat';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
+
+// Re-exported for existing importers that pull it from this module.
+export { ImageModerationBlockedError };
 
 // gpt-image's edit endpoint takes png/webp/jpg sources up to this size.
 // @see https://platform.openai.com/docs/api-reference/images/createEdit
@@ -103,20 +108,6 @@ const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? 
  * `content_policy_violation`.
  */
 const CONTENT_POLICY_ERROR_CODES = ['moderation_blocked', 'content_policy_violation'];
-
-/**
- * The provider refused the prompt on content-policy grounds. An expected, user-caused outcome:
- * callers log it below error level so it does not page the on-call alert channel.
- */
-export class ImageModerationBlockedError extends Error {
-  constructor(
-    message: string,
-    readonly requestId: string
-  ) {
-    super(message);
-    this.name = 'ImageModerationBlockedError';
-  }
-}
 
 export function buildModerationBlockedError(
   error: InstanceType<typeof OpenAI.APIError>
@@ -277,6 +268,7 @@ export class OpenAIImageService extends AIImageService {
         stream,
         ...openaiOptions
       } = options;
+      openaiOptions.user = toProviderEndUserId(openaiOptions.user);
 
       const parameterWarnings: string[] = [];
       let gptImageOutputOptions: ReturnType<typeof resolveGptImageOutputOptions> = {};
@@ -491,16 +483,20 @@ export class OpenAIImageService extends AIImageService {
         // require the OpenAI organization to be verified and to have active billing/quota.
         if (error.status === 402) {
           throw new Error(
-            `OpenAI image generation requires payment or verification (402). Ensure the OpenAI account has active billing/quota and that the organization is verified for GPT Image models, or pick a different image model (e.g. Flux Pro).`
+            `OpenAI image generation requires payment or verification (402). Ensure the OpenAI account has active billing/quota and that the organization is verified for GPT Image models, or pick a different image model (e.g. Flux Pro).`,
+            { cause: error }
           );
         }
         if (error.status === 401 || error.status === 403) {
           throw new Error(
-            `OpenAI API access denied (${error.status}). The OpenAI API key may be missing, invalid, or lack access to this image model.`
+            `OpenAI API access denied (${error.status}). The OpenAI API key may be missing, invalid, or lack access to this image model.`,
+            { cause: error }
           );
         }
         if (error.status === 429) {
-          throw new Error(`OpenAI API rate limit exceeded (429). Please wait a moment and try again.`);
+          throw new Error(`OpenAI API rate limit exceeded (429). Please wait a moment and try again.`, {
+            cause: error,
+          });
         }
       }
 
@@ -667,7 +663,7 @@ export class OpenAIImageService extends AIImageService {
               // the SDK's own union for this arm - so the cast narrows rather than widens.
               ...(forwardSize ? { size: size as '256x256' | '512x512' | '1024x1024' } : {}),
               response_format,
-              user,
+              user: toProviderEndUserId(user),
             }
       );
 

@@ -20,6 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 const mockOwnerUsageSummary = vi.fn();
 const mockApiKeyUsageForOwner = vi.fn();
 const mockSourceUsageForOwner = vi.fn();
+const mockUsageTotalForOwner = vi.fn();
 const mockFindByOrganizationId = vi.fn();
 const mockFindByUserId = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -27,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {
     apiKeyUsageForOwner: (...a: unknown[]) => mockApiKeyUsageForOwner(...a),
     sourceUsageForOwner: (...a: unknown[]) => mockSourceUsageForOwner(...a),
+    usageTotalForOwner: (...a: unknown[]) => mockUsageTotalForOwner(...a),
   },
   userApiKeyRepository: {
     findByOrganizationId: (...a: unknown[]) => mockFindByOrganizationId(...a),
@@ -35,8 +37,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockVerifyOrgOwner = vi.fn();
-vi.mock('@server/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
+  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -49,23 +51,32 @@ const ORG = '6650000000000000000000aa';
 const SELF = 'user-1';
 const OTHER_USER = 'user-2';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object }) {
+function call(options: {
+  isAdmin?: boolean;
+  hasUser?: boolean;
+  query?: object;
+  adminPermissions?: string[];
+  scopes?: string[];
+}) {
   const { req, res } = createMocks({
     method: 'GET',
     query: options.query ?? { ownerType: 'Organization', ownerId: ORG },
   });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
+      adminPermissions: options.adminPermissions,
       isAdmin: options.isAdmin ?? false,
       id: SELF,
     };
   }
+  if (options.scopes) (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: options.scopes };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
 
 const emptySummary = {
   overTime: [],
   byMember: [],
+  byProject: [],
   byModel: [],
   byFeature: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
@@ -74,12 +85,24 @@ const emptySummary = {
 describe('GET /api/usage - access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
+    mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: SELF });
     mockOwnerUsageSummary.mockResolvedValue(emptySummary);
     mockApiKeyUsageForOwner.mockResolvedValue([]);
     mockSourceUsageForOwner.mockResolvedValue([]);
+    mockUsageTotalForOwner.mockResolvedValue({ creditsCharged: 0, transactions: 0 });
     mockFindByOrganizationId.mockResolvedValue([]);
     mockFindByUserId.mockResolvedValue([]);
+  });
+
+  it('returns the ledger spend for the same owner and window as the usage events', async () => {
+    mockUsageTotalForOwner.mockResolvedValue({ creditsCharged: 5069, transactions: 12 });
+    const { res, run } = call({ isAdmin: true, query: { ownerType: 'User', ownerId: SELF, days: '7' } });
+
+    await run();
+
+    expect(mockUsageTotalForOwner).toHaveBeenCalledWith(SELF, 'User', 7);
+    expect(mockOwnerUsageSummary).toHaveBeenCalledWith(SELF, 'User', 7);
+    expect(res._getJSONData()).toMatchObject({ days: 7, totals: { requests: 0 }, ledger: { creditsCharged: 5069 } });
   });
 
   it('rejects an unauthenticated request', async () => {
@@ -95,6 +118,26 @@ describe('GET /api/usage - access', () => {
   });
 
   describe('Organization owner', () => {
+    it('returns manager-readable project usage without billing mutations', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({
+        id: ORG,
+        userId: 'owner',
+        adminUserIds: [SELF],
+        users: [{ userId: SELF }],
+      });
+      mockOwnerUsageSummary.mockResolvedValue({
+        ...emptySummary,
+        byProject: [{ projectId: null, requests: 1, creditsCharged: 3, cogsUsd: 0.01 }],
+      });
+      const { run, res } = call({ query: { ownerType: 'Organization', ownerId: ORG, days: '7' } });
+      await run();
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(ORG, 'Organization', 7);
+      expect(res._getJSONData().byProject).toEqual([
+        { projectId: null, requests: 1, creditsCharged: 3, cogsUsd: 0.01 },
+      ]);
+    });
+
     it('gates access through verifyOrgOwner for the requested org', async () => {
       const { run } = call({ isAdmin: false });
       await run();
@@ -146,6 +189,104 @@ describe('GET /api/usage - access', () => {
 
     it("lets an admin read another user's usage", async () => {
       const { run } = call({ isAdmin: true, query: { ownerType: 'User', ownerId: OTHER_USER } });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
+    it("keeps a full admin's API key without the ADMIN scope able to read another user's usage", async () => {
+      const { run } = call({ isAdmin: true, scopes: ['chat:read'], query: { ownerType: 'User', ownerId: OTHER_USER } });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
+    it("lets a support:read delegate read another user's usage", async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
+    it("refuses a delegate holding a different permission another user's usage", async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['settings:manage'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await expect(run()).rejects.toThrow(/your own usage/i);
+    });
+
+    it('passes the org check once as read-only platform access for a support:read delegate', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(mockVerifyOrgOwner).toHaveBeenCalledTimes(1);
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG);
+    });
+
+    it('omits key names and prefixes from a delegate org view', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(res._getJSONData().byApiKey[0].keyName).toBeUndefined();
+      expect(res._getJSONData().byApiKey[0].keyPrefix).toBeUndefined();
+    });
+
+    it('still denies a delegate with a bad org id', async () => {
+      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await expect(run()).rejects.toThrow(/not found/i);
+      expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
+    });
+
+    it('keeps key names for a delegate who owns the org', async () => {
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(res._getJSONData().byApiKey[0]).toMatchObject({ keyName: 'Org Key', keyPrefix: 'b4m_live_abcd' });
+    });
+
+    it('keeps key names for a full admin', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: true });
+      await run();
+      expect(res._getJSONData().byApiKey[0]).toMatchObject({ keyName: 'Org Key' });
+    });
+
+    it('denies a delegate API key without the ADMIN scope on both owner types', async () => {
+      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      const org = call({ isAdmin: false, adminPermissions: ['support:read'], scopes: ['chat:read'] });
+      await expect(org.run()).rejects.toThrow(/not found/i);
+      const user = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        scopes: ['chat:read'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await expect(user.run()).rejects.toThrow(/your own usage/i);
+      expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
+    });
+
+    it('allows a delegate API key that carries the ADMIN scope', async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        scopes: ['admin:*'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
       await run();
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
     });

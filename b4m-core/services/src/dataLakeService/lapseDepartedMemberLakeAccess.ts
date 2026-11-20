@@ -1,13 +1,19 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantDocument,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { grantChange, ownershipChange } from './diffLakeConfig';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { resolveEffectiveOwnerIds, type LakeGrant, type ManageActor } from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 export interface LapseDepartedMemberLakeAccessAdapters extends LakeConfigAuditAdapters {
-  // The event repo is REQUIRED here, matching `transferLakeOwnership`: the only callers are the two
-  // org-departure routes, so nothing is spared by making it optional and a route that forgot to
-  // wire it would go dark silently - the one failure mode an access-revocation audit must not have.
+  // The event repo is REQUIRED here, matching `transferLakeOwnership`: the only callers are the
+  // org-departure and org-delete routes, so nothing is spared by making it optional and a route
+  // that forgot to wire it would go dark silently - the one failure mode an access-revocation
+  // audit must not have.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     // `update` carries phase 2's actor stamp. It is also what makes the lake DOCUMENT a write both
@@ -91,11 +97,99 @@ export async function lapseDepartedMemberLakeAccess(
   const orgLakes = await db.dataLakes.findByOrganizationId(organization.id);
   if (orgLakes.length === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
 
-  const audit = (
-    lake: IDataLakeDocument,
-    action: 'revoke-access' | 'membership-succession',
-    changes: ReturnType<typeof grantChange>[]
-  ) =>
+  const audit = auditFor(triggeredBy, adapters);
+
+  const lapsedLakeIds = await lapseOwnGrants(departedUserId, orgLakes, db, audit, now);
+  const succeededLakeIds = await passOnCreatedLakes(
+    departedUserId,
+    organization,
+    orgLakes,
+    db,
+    audit,
+    triggeredBy,
+    now,
+    logger
+  );
+
+  return { lapsedLakeIds, succeededLakeIds };
+}
+
+/**
+ * Whole-org counterpart of `lapseDepartedMemberLakeAccess`, for an organization being deleted: every
+ * member departs at once. Same two phases and the same billing-owner successor, but phase 1 runs for
+ * ALL members before any phase 2. Run member by member instead, a creator's phase 2 could still see
+ * another member's owner grant as live, skip the hand-off, and then have that grant lapse - leaving
+ * the lake resolving to its creator through the `createdByUserId` fallback.
+ *
+ * Phase 1 is roster-scoped: grants held by non-members can be deliberate cross-org grants, and
+ * `organization`-principal grants describe the org, so neither is touched. Phase 2 also covers an
+ * off-roster creator of an org lake with no live owner grant (left before departures lapsed access,
+ * or reached the org another way), since the org going away leaves nobody else to hand their lakes
+ * on. One who still holds the seeded owner grant keeps the lake, consistent with leaving non-member
+ * grants alone. The billing
+ * owner is neither lapsed nor handed off from: they are the successor. One grants read serves both
+ * phases. Idempotent under a transaction retry for the same reasons as the single-member path.
+ */
+export async function lapseDissolvedOrganizationLakeAccess(
+  memberUserIds: readonly string[],
+  organization: LapsingOrganization,
+  triggeredBy: LakeAccessLapseTrigger,
+  adapters: LapseDepartedMemberLakeAccessAdapters,
+  now: Date = new Date()
+): Promise<LapseDepartedMemberLakeAccessResult> {
+  const { db, logger } = adapters;
+  const notOwner = (id: string | undefined): id is string => !!id && id !== organization.userId;
+
+  const orgLakes = await db.dataLakes.findByOrganizationId(organization.id);
+  if (orgLakes.length === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
+
+  const departing = new Set(memberUserIds.filter(notOwner));
+  const creators = new Set([...departing, ...orgLakes.map(lake => lake.createdByUserId).filter(notOwner)]);
+
+  const audit = auditFor(triggeredBy, adapters);
+  const orgLakesById = new Map(orgLakes.map(lake => [lake.id, lake]));
+  const active = await db.dataLakeAccessGrants.listActiveByLakes([...orgLakesById.keys()], { activeAsOf: now });
+  const lapsing = active.filter(grant => grant.principalType === 'user' && departing.has(grant.principalId));
+  const lapsedLakeIds = await expireGrants(lapsing, orgLakesById, db, audit, now);
+
+  const lapsed = new Set(lapsing);
+  const stillActive = active.filter(grant => !lapsed.has(grant));
+  // An off-roster creator can still hold the owner grant `createDataLake` seeds; phase 1 left it alone,
+  // so they remain the owner and there is nothing to succeed. Handing off would add a co-owner and
+  // audit a succession that never removed them.
+  const stillCreatorOwned = new Set(
+    stillActive
+      .filter(
+        grant =>
+          grant.principalType === 'user' &&
+          grant.role === 'owner' &&
+          orgLakesById.get(grant.dataLakeId)?.createdByUserId === grant.principalId
+      )
+      .map(grant => grant.dataLakeId)
+  );
+  const handOffCandidates = orgLakes.filter(lake => !stillCreatorOwned.has(lake.id));
+  const succeededLakeIds: string[] = [];
+  for (const creatorUserId of creators) {
+    succeededLakeIds.push(
+      ...(await passOnCreatedLakes(
+        creatorUserId,
+        organization,
+        handOffCandidates,
+        db,
+        audit,
+        triggeredBy,
+        now,
+        logger,
+        stillActive
+      ))
+    );
+  }
+
+  return { lapsedLakeIds, succeededLakeIds };
+}
+
+function auditFor(triggeredBy: LakeAccessLapseTrigger, { db, logger }: LapseDepartedMemberLakeAccessAdapters): AuditFn {
+  return (lake, action, changes) =>
     recordLakeConfigChange(
       {
         // The audit row wants a PRINCIPAL (who caused this), not an AUTHORITY (what allowed it):
@@ -113,20 +207,6 @@ export async function lapseDepartedMemberLakeAccess(
       },
       { db, logger }
     );
-
-  const lapsedLakeIds = await lapseOwnGrants(departedUserId, orgLakes, db, audit, now);
-  const succeededLakeIds = await passOnCreatedLakes(
-    departedUserId,
-    organization,
-    orgLakes,
-    db,
-    audit,
-    triggeredBy,
-    now,
-    logger
-  );
-
-  return { lapsedLakeIds, succeededLakeIds };
 }
 
 type AuditFn = (
@@ -160,8 +240,17 @@ async function lapseOwnGrants(
   const held = await db.dataLakeAccessGrants.listByPrincipal('user', departedUserId, { activeAsOf: now });
   const orgLakesById = new Map(orgLakes.map(lake => [lake.id, lake]));
   const lapsing = held.filter(grant => orgLakesById.has(grant.dataLakeId));
+  return expireGrants(lapsing, orgLakesById, db, audit, now);
+}
 
-  // Sequential, not Promise.all: both callers run inside `withTransaction`, and the ambient session
+async function expireGrants(
+  lapsing: IDataLakeAccessGrantDocument[],
+  orgLakesById: Map<string, IDataLakeDocument>,
+  db: Db,
+  audit: AuditFn,
+  now: Date
+): Promise<string[]> {
+  // Sequential, not Promise.all: every caller runs inside `withTransaction`, and the ambient session
   // a Mongo transaction carries does not accept concurrent operations.
   for (const grant of lapsing) {
     await db.dataLakeAccessGrants.upsertGrant({ ...grant, expiresAt: now });
@@ -224,8 +313,8 @@ async function lapseOwnGrants(
  *
  * That second arm holds only while the trigger is ATTRIBUTABLE: `lakeConfigWriteStamp` returns `{}`
  * for a blank actor id and the stamp write is skipped with it, which would leave the
- * creator-fallback case with no shared document. Both callers are routes passing `req.user.id`, so
- * it holds today; a future system-triggered departure has to supply an actor id to keep it. The
+ * creator-fallback case with no shared document. All three callers are routes passing `req.user.id`,
+ * so it holds today; a future system-triggered departure has to supply an actor id to keep it. The
  * write is deliberately NOT unconditional: an empty `$set` still bumps `updatedAt`, which is the
  * only status-move signal a transitional lake has (see the stranded-lake note on
  * `strandedCutoffMsFor` in DataLakeTypes), so stamping every org lake regardless would reset
@@ -239,7 +328,8 @@ async function passOnCreatedLakes(
   audit: AuditFn,
   triggeredBy: LakeAccessLapseTrigger,
   now: Date,
-  logger: LapseDepartedMemberLakeAccessAdapters['logger']
+  logger: LapseDepartedMemberLakeAccessAdapters['logger'],
+  prefetchedActiveGrants?: readonly IDataLakeAccessGrantDocument[]
 ): Promise<string[]> {
   const successorUserId = organization.userId;
   // Succeeding to yourself is a no-op that would merely log. Neither departure path can actually
@@ -256,10 +346,12 @@ async function passOnCreatedLakes(
 
   // Scoped to just these lakes rather than the whole org's grants: a member creates few lakes, and
   // this is only asked when they created any at all.
-  const activeGrants = await db.dataLakeAccessGrants.listActiveByLakes(
-    createdByDeparted.map(lake => lake.id),
-    { activeAsOf: now }
-  );
+  const activeGrants =
+    prefetchedActiveGrants ??
+    (await db.dataLakeAccessGrants.listActiveByLakes(
+      createdByDeparted.map(lake => lake.id),
+      { activeAsOf: now }
+    ));
 
   const grantsByLake = new Map<string, LakeGrant[]>();
   for (const grant of activeGrants) {
@@ -300,7 +392,7 @@ async function passOnCreatedLakes(
     //
     // NOT best-effort, which is where this diverges from transfer: that service is documented
     // non-atomic, so it swallows a stamp failure rather than reporting a transfer that in fact
-    // succeeded. Both callers here run inside `withTransaction`, so a throw aborts and retries the
+    // succeeded. Every caller here runs inside `withTransaction`, so a throw aborts and retries the
     // whole departure and there is no half-applied state to protect - swallowing would only hide a
     // real failure. A `null` result still warns rather than throws: `BaseModel.update` is a
     // `findOneAndUpdate` that resolves `null` when nothing matched, which inside the transaction's

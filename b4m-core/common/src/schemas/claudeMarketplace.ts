@@ -5,8 +5,10 @@ import { z } from 'zod';
  * (api-contract/contracts/skillMarket.contract.ts). The 200 body is a Claude Code
  * `marketplace.json`, so its field names follow Claude Code, not this API's snake_case.
  */
+/** Exactly one of `orgId` or `spaceId`; the route enforces that, since a refine here cannot reach OpenAPI. */
 export const ClaudeMarketplaceQuerySchema = z.object({
-  orgId: z.string().min(1),
+  orgId: z.string().min(1).optional().describe('The organization whose feed to return. Send this or `spaceId`.'),
+  spaceId: z.string().min(1).optional().describe('The Space whose feed to return. Send this or `orgId`.'),
 });
 
 export const ClaudePluginZipParamSchema = z.object({
@@ -20,7 +22,10 @@ export const ClaudePluginZipQuerySchema = z.object({
 export const ClaudeMarketplacePluginSchema = z.object({
   name: z.string(),
   description: z.string(),
-  /** The listing's approved version number; Claude Code offers an update when it changes. */
+  /**
+   * A listing's approved version number, or a bundle's content hash prefix; Claude Code offers an
+   * update when it changes (it compares for equality, not order).
+   */
   version: z.string(),
   source: z.object({
     source: z.literal('archive'),

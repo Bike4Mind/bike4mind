@@ -37,17 +37,6 @@ export function writeBrowserPaneOpen(open: boolean): void {
  */
 export const BROWSER_PANE_WIDTH = 560;
 
-/**
- * The most of the window the pane may ever take.
- *
- * Without it the conversation, which is `flex: 1` over `minWidth: 0`, gives up every pixel the
- * pane asks for: on a 900px window beside an open sidebar that left the transcript sixty pixels
- * wide. The pane yields first instead, and the page goes to its phone layout, which is the
- * honest outcome - at that size the two cannot both be read, and the window is the thing to
- * widen.
- */
-export const BROWSER_PANE_MAX_FRACTION = 0.42;
-
 interface Rect {
   x: number;
   y: number;
@@ -145,7 +134,7 @@ interface PopperState {
  * window's right edge, so left is always the way out - except for a popper anchored in the
  * pane's own chrome, which would land a pane's width from its button and is left to hide the
  * page instead. Offsets are document-relative, which is the viewport here: the app's document
- * never scrolls.
+ * never scrolls (enforced by viewport.css).
  */
 export const avoidPageModifier = {
   name: 'avoidBrowserPage',

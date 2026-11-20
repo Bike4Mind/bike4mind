@@ -58,14 +58,16 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
         ? next()
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toMemberAccessContext: mockToMemberAccessContext }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
+  toMemberAccessContext: mockToMemberAccessContext,
+}));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},

@@ -104,9 +104,10 @@ async function call(
   // username/email are optional so the identity-fallback cases below can omit them, the way a
   // session carrying neither display field reaches the router in production.
   user: { id: string; username?: string; email?: string; isAdmin?: boolean },
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  headers?: Record<string, string>
 ) {
-  const { req, res } = createMocks({ method, body, query: {} });
+  const { req, res } = createMocks({ method, body, query: {}, headers });
   (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
   (req as unknown as { user: typeof user }).user = user;
   (req as unknown as { logger: unknown }).logger = stubLogger();
@@ -153,6 +154,42 @@ describe('help feedback consolidation', () => {
 
     const text = await FeedbackTextModel.findById(reports[0]._id).lean();
     expect(text?.content).toBe('this section is wrong');
+  });
+
+  it('stamps the client context on a routed report from either surface, and keeps it through a revision', async () => {
+    const user = await makeUser();
+    const clientContext = { path: '/help?q=secret', platform: 'web', appVersion: '1.2.3', userAgent: 'forged' };
+    const headers = { 'user-agent': 'real-agent/1.0' };
+
+    await call(
+      articleHandler,
+      'POST',
+      user,
+      { slug: 'a', rating: 'helpful', comment: 'article note', clientContext },
+      headers
+    );
+    await call(
+      chatHandler,
+      'POST',
+      user,
+      { chatQuestion: 'q', chatAnswer: 'a', rating: 'helpful', comment: 'chat note', clientContext },
+      headers
+    );
+
+    const expected = { path: '/help', platform: 'web', appVersion: '1.2.3', userAgent: 'real-agent/1.0' };
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(2);
+    for (const report of reports) expect(report.clientContext).toEqual(expected);
+
+    await call(
+      articleHandler,
+      'POST',
+      user,
+      { slug: 'a', comment: 'article note, edited', clientContext: { path: '/elsewhere', platform: 'ios' } },
+      headers
+    );
+    const revised = await FeedbackModel.findOne({ 'helpContext.slug': 'a' }).lean();
+    expect(revised!.clientContext).toEqual(expected);
   });
 
   it('gives the routed text the same 90-day window the help event already had', async () => {

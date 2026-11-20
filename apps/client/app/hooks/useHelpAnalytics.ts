@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { buildFeedbackClientContext } from '@client/app/utils/feedbackClientContext';
 import type { HelpFeedbackRating, HelpFeedbackReportType } from '@bike4mind/common';
 
 type HelpEventPayload = {
@@ -148,7 +149,10 @@ export function useHelpFeedback() {
       reportType?: HelpFeedbackReportType;
       comment?: string;
     }) => {
-      const { data } = await api.post('/api/help/feedback', payload);
+      const { data } = await api.post('/api/help/feedback', {
+        ...payload,
+        clientContext: buildFeedbackClientContext(queryClient),
+      });
       return data;
     },
     onSuccess: () => {
@@ -163,7 +167,10 @@ export function useHelpFeedback() {
       rating: HelpFeedbackRating;
       comment?: string;
     }) => {
-      const { data } = await api.post('/api/help/chat-feedback', payload);
+      const { data } = await api.post('/api/help/chat-feedback', {
+        ...payload,
+        clientContext: buildFeedbackClientContext(queryClient),
+      });
       return data;
     },
     onSuccess: () => {

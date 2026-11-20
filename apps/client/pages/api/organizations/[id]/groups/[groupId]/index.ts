@@ -11,7 +11,10 @@ import { organizationGroupResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 
-const bodySchema = z.object({ name: z.string().trim().min(1).max(120) });
+const bodySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  expectedName: z.string().min(1).max(120).optional(),
+});
 const renameGroupResponseSchema = z.object({ group: organizationGroupResponseSchema });
 
 const handler = baseApi().patch(
@@ -22,13 +25,13 @@ const handler = baseApi().patch(
 
     // Let a ZodError propagate to the central errorHandler (maps it to 422 via fromZodError) rather
     // than hand-rolling a divergent 400 here.
-    const { name } = bodySchema.parse(req.body);
+    const { name, expectedName } = bodySchema.parse(req.body);
 
     // Authorization + the "group belongs to this org" invariant live in the service (shared with
     // the membership writes and covered by its tests), so this route only extracts and delegates.
     const updated = await organizationService.renameGroup(
       req.user!,
-      { organizationId, groupId, name },
+      { organizationId, groupId, name, ...(expectedName === undefined ? {} : { expectedName }) },
       { db: { organizations: organizationRepository, groups: groupRepository } }
     );
     // Null only if the group vanished between the service's existence check and the update (race).

@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
-/**
- * Payload schema for the What's New Highlights queue
- */
+/** Highlights job fields; on the What's New queue the message is `WhatsNewHighlightsJobSchema`, which adds `kind`. */
 export const WhatsNewHighlightsPayloadSchema = z.object({
   /** Unique ID for tracking this generation request */
   correlationId: z.string(),
@@ -21,6 +19,13 @@ export const WhatsNewHighlightsPayloadSchema = z.object({
 });
 
 export type WhatsNewHighlightsPayload = z.infer<typeof WhatsNewHighlightsPayloadSchema>;
+
+/** Highlights message as it travels on the merged What's New queue, which routes on `kind`. */
+export const WhatsNewHighlightsJobSchema = WhatsNewHighlightsPayloadSchema.extend({
+  kind: z.literal('highlights'),
+});
+
+export type WhatsNewHighlightsJob = z.infer<typeof WhatsNewHighlightsJobSchema>;
 
 /**
  * Configuration for highlights generation stored in AdminSettings

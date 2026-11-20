@@ -35,6 +35,9 @@ const REAL_CLOUDFRONT_ID = /^d[a-z0-9]{12,13}$/;
 const REAL_API_GATEWAY_ID = /^[a-z0-9]{10}$/;
 const PLACEHOLDER_OWNER = /^(org|owner|your-org|your-username|acme[a-z0-9-]*)$/i;
 
+// Rules with `scope` run only on files whose path under docs/ matches it (e.g. 'api/errors.md').
+const API_DOCS = /^api\//;
+
 const rules = [
   {
     name: 'aws-account-id',
@@ -127,14 +130,18 @@ const rules = [
         .map((m) => m[0]),
     ],
   },
+  { name: 'retired-model-id', scope: API_DOCS, re: /\bclaude-3[\w.-]*|\bgpt-3\.5[\w.-]*|\bgemini-pro\b/g },
+  { name: 'retired-model-id', scope: API_DOCS, re: /(?<![\w.-])gpt-4(?![\w.])/g },
+  { name: 'stale-api-keys-menu-path', scope: API_DOCS, re: /Settings\s*(?:->|>|\u2192|&gt;)\s*API Keys/g },
 ];
 
-export function scanText(text) {
+export function scanText(text, path = '') {
   const findings = [];
   const lines = text.split('\n');
   lines.forEach((line, i) => {
     if (i > 0 && lines[i - 1].trim() === IGNORE_MARKER) return;
     for (const rule of rules) {
+      if (rule.scope && !rule.scope.test(path)) continue;
       const hits = rule.test ? rule.test(line) : [...line.matchAll(rule.re)].map((m) => m[0]);
       if (hits.length > 0) findings.push({ line: i + 1, rule: rule.name });
     }
@@ -166,7 +173,7 @@ function main() {
   }
 
   for (const file of walk(docsDir).filter((f) => /\.(md|mdx|json)$/.test(f))) {
-    for (const f of scanText(readFileSync(file, 'utf8'))) {
+    for (const f of scanText(readFileSync(file, 'utf8'), relative(docsDir, file))) {
       failures.push(`${relative(root, file)}:${f.line} (rule: ${f.rule})`);
     }
   }

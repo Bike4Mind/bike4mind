@@ -1,13 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
 import {
   ADMIN_RETURN_COOKIE_NAME,
-  LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL,
   REFRESH_COOKIE_NAME,
   clearSessionCookies,
   readAdminReturnCookie,
   readRefreshCookie,
-  readRefreshCookieWithSource,
   sessionCookieName,
   setAdminReturnCookie,
   setRefreshCookie,
@@ -121,10 +119,6 @@ describe('refreshCookie', () => {
   describe('host-only prefixed name over https', () => {
     beforeEach(() => {
       process.env.NODE_ENV = 'production';
-      vi.useFakeTimers({ now: new Date('2026-10-25T00:00:00Z') });
-    });
-    afterEach(() => {
-      vi.useRealTimers();
     });
 
     it('names the cookie with the __Host- prefix only when Secure is set', () => {
@@ -160,32 +154,16 @@ describe('refreshCookie', () => {
 
     it('prefers the prefixed cookie over a bare-name one with a different value', () => {
       const req = reqWithCookies(`${REFRESH_COOKIE_NAME}=other.value; ${PREFIXED_REFRESH}=sid.secret`);
-      expect(readRefreshCookieWithSource(req)).toEqual({ token: 'sid.secret', legacy: false });
       expect(readRefreshCookie(req)).toBe('sid.secret');
     });
 
-    it('reports a single bare-name cookie as legacy so the refresh route can check the session', () => {
-      const req = reqWithCookies(`${REFRESH_COOKIE_NAME}=sid.secret`);
-      expect(readRefreshCookieWithSource(req)).toEqual({ token: 'sid.secret', legacy: true });
-    });
-
-    it('never falls back to the bare name for the plain readers', () => {
+    it('never falls back to the bare name', () => {
       expect(readRefreshCookie(reqWithCookies(`${REFRESH_COOKIE_NAME}=sid.secret`))).toBeNull();
       expect(readAdminReturnCookie(reqWithCookies(`${ADMIN_RETURN_COOKIE_NAME}=admin.sec`))).toBeNull();
     });
 
-    it('ignores the bare-name fallback when more than one copy is present', () => {
-      const req = reqWithCookies(`${REFRESH_COOKIE_NAME}=a.one; ${REFRESH_COOKIE_NAME}=b.two`);
-      expect(readRefreshCookieWithSource(req)).toBeNull();
-    });
-
-    it('turns the bare-name fallback off once the acceptance window has closed', () => {
-      vi.setSystemTime(LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL);
-      expect(readRefreshCookieWithSource(reqWithCookies(`${REFRESH_COOKIE_NAME}=sid.secret`))).toBeNull();
-      expect(readRefreshCookieWithSource(reqWithCookies(`${PREFIXED_REFRESH}=sid.secret`))).toEqual({
-        token: 'sid.secret',
-        legacy: false,
-      });
+    it('treats an empty prefixed cookie as absent rather than falling back to the bare name', () => {
+      expect(readRefreshCookie(reqWithCookies(`${PREFIXED_REFRESH}=; ${REFRESH_COOKIE_NAME}=sid.secret`))).toBeNull();
     });
 
     it('reads the prefixed admin return cookie without confusing it with the refresh cookie', () => {

@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IAdminSettingsRepository } from '@bike4mind/common';
+import type { DisposableListSource, IAdminSettingsRepository, SignupProtection } from '@bike4mind/common';
 import {
   createSignupEmailGate,
   isAdminBlockedEmailDomain,
   isDisposableEmail,
+  isPrivacyRelayDomain,
+  REJECT_TIER_SOURCES,
   shouldBlockDisposableEmail,
 } from './disposableEmail';
 
@@ -132,5 +134,108 @@ describe('isDisposableEmail', () => {
 
   it('is case-insensitive on the domain', () => {
     expect(isDisposableEmail('x@MAILINATOR.COM')).toBe(true);
+  });
+});
+
+describe('shouldBlockDisposableEmail with refreshed lists', () => {
+  const protectionWith = (sources: Record<string, DisposableListSource[]>) =>
+    ({
+      repository: {
+        disposableSources: vi.fn(async (domains: string[]) => domains.flatMap(domain => sources[domain] ?? [])),
+        isOrganizationDomain: vi.fn(async (email: string) => email.endsWith('@customer-org.test')),
+      },
+    }) as unknown as SignupProtection;
+
+  it('rejects a reject-tier domain, including a rotated subdomain under it', async () => {
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = protectionWith({ 'example-burner.test': ['aggregate', 'fakefilter'] });
+    expect(await shouldBlockDisposableEmail('x@q9.example-burner.test', { adminSettings, signupProtection })).toBe(
+      true
+    );
+  });
+
+  it('leaves an aggregate-only domain to the hold layer', async () => {
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = protectionWith({ 'aggregate-only.test': ['aggregate'] });
+    expect(await shouldBlockDisposableEmail('x@aggregate-only.test', { adminSettings, signupProtection })).toBe(false);
+  });
+
+  it('honours the blockDisposableEmails toggle for refreshed lists', async () => {
+    const { adminSettings } = adminSettingsWith({ blockDisposableEmails: 'false' });
+    const signupProtection = protectionWith({ 'curated-burner.test': ['curated'] });
+    expect(await shouldBlockDisposableEmail('x@curated-burner.test', { adminSettings, signupProtection })).toBe(false);
+  });
+
+  it('never rejects an organization or internal staff domain on a refreshed-list hit', async () => {
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff-co.test');
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = protectionWith({ 'customer-org.test': ['fakefilter'], 'staff-co.test': ['curated'] });
+    expect(await shouldBlockDisposableEmail('x@customer-org.test', { adminSettings, signupProtection })).toBe(false);
+    expect(await shouldBlockDisposableEmail('x@staff-co.test', { adminSettings, signupProtection })).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it('skips the list read when blockDisposableEmails is OFF, so a DB error cannot block', async () => {
+    const { adminSettings } = adminSettingsWith({ blockDisposableEmails: 'false' });
+    const signupProtection = {
+      repository: { disposableSources: vi.fn().mockRejectedValue(new Error('db down')) },
+    } as unknown as SignupProtection;
+    expect(await shouldBlockDisposableEmail('x@unknown.test', { adminSettings, signupProtection })).toBe(false);
+  });
+
+  it('fails closed when the list read throws', async () => {
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = {
+      repository: { disposableSources: vi.fn().mockRejectedValue(new Error('db down')) },
+    } as unknown as SignupProtection;
+    await expect(shouldBlockDisposableEmail('x@unknown.test', { adminSettings, signupProtection })).rejects.toThrow();
+  });
+
+  it('rejects on a tompec-only hit', async () => {
+    expect(REJECT_TIER_SOURCES.has('tompec')).toBe(true);
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = protectionWith({ 'tompec-burner.test': ['tompec'] });
+    expect(await shouldBlockDisposableEmail('x@tompec-burner.test', { adminSettings, signupProtection })).toBe(true);
+  });
+
+  it('records the reject-tier sources of every refusal, and a failing recorder does not unblock', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { adminSettings } = adminSettingsWith({});
+    const recordDisposableRefusal = vi.fn().mockRejectedValue(new Error('cloudwatch down'));
+    const signupProtection = {
+      ...protectionWith({ 'multi-burner.test': ['aggregate', 'curated', 'tompec'] }),
+      recordDisposableRefusal,
+    } as SignupProtection;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await shouldBlockDisposableEmail('x@multi-burner.test', { adminSettings, signupProtection })).toBe(true);
+    const refusal = { domain: 'multi-burner.test', sources: ['curated', 'tompec'] };
+    expect(recordDisposableRefusal).toHaveBeenCalledExactlyOnceWith(refusal);
+    expect(log).toHaveBeenCalledWith(JSON.stringify({ event: 'disposable-email-refused', ...refusal }));
+    vi.restoreAllMocks();
+  });
+
+  it('attributes static-list and admin-list refusals, and records nothing when allowed', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const recordDisposableRefusal = vi.fn();
+    const signupProtection = { ...protectionWith({}), recordDisposableRefusal } as SignupProtection;
+    const { adminSettings } = adminSettingsWith({ blockedEmailDomains: ['admin-blocked.test'] });
+    await shouldBlockDisposableEmail('x@mailinator.com', { adminSettings, signupProtection });
+    await shouldBlockDisposableEmail('x@admin-blocked.test', { adminSettings, signupProtection });
+    await shouldBlockDisposableEmail('x@ordinary.test', { adminSettings, signupProtection });
+    expect(recordDisposableRefusal.mock.calls.map(([refusal]) => refusal)).toEqual([
+      { domain: 'mailinator.com', sources: ['static'] },
+      { domain: 'admin-blocked.test', sources: ['admin'] },
+    ]);
+    vi.restoreAllMocks();
+  });
+});
+
+describe('privacy relays', () => {
+  it('never treats a privacy alias forwarder as disposable, including its per-user subdomains', async () => {
+    expect(isDisposableEmail('x@33mail.com')).toBe(false);
+    expect(isDisposableEmail('x@someone.33mail.com')).toBe(false);
+    expect(isPrivacyRelayDomain('someone.33mail.com')).toBe(true);
+    const { adminSettings } = adminSettingsWith({});
+    expect(await shouldBlockDisposableEmail('x@33mail.com', { adminSettings })).toBe(false);
   });
 });

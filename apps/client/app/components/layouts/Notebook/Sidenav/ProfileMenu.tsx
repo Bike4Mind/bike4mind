@@ -1,19 +1,31 @@
-import { forwardRef, KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  forwardRef,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Tooltip, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
+import { canEnterAdminConsole } from '@client/app/components/admin/adminTabPermissions';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useUser } from '@client/app/contexts/UserContext';
+import { userIsDeveloper } from '@client/app/utils/user';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { useDesktopPromoEnabled } from '@client/app/hooks/useDesktopPromoEnabled';
+import { usePreferenceArenaEnabled } from '@client/app/hooks/usePreferenceArenaEnabled';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
@@ -26,6 +38,12 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useGetAppFileUrl } from '@client/app/utils/s3';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import {
+  orderAccountsByRecentTeams,
+  readTeamPreference,
+  recentTeamsKey,
+  rememberTeam,
+} from '@client/app/components/organizations/teamPreferences';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -46,7 +64,7 @@ import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import ThumbsUpDownOutlinedIcon from '@mui/icons-material/ThumbsUpDownOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import ApiIcon from '@mui/icons-material/Api';
@@ -258,20 +276,28 @@ const ProfileMenu = () => {
 
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
-  const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
+  const avatarVersion = useUser(s => s.avatarVersion);
+  // Delegated admins too: the console admits anyone it has a tab to show.
+  const canOpenAdmin = canEnterAdminConsole(currentUser);
+  const { accounts, selectedAccount, setSelectedAccount, showAccountType, refetchOrganizations } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterEnabled = isFeatureEnabled('enableQuestMaster');
   const isHearthEnabled = isFeatureEnabled('enableHearth');
   // Premium-overlay launch points (codegen glue - empty array in the open-core
-  // fork). Visibility semantics (STRICT - no admin/developer bypass, hidden
-  // while entitlements load, hidden-not-redirected on denial) live in
-  // filterVisiblePremiumNavItems - see its doc comment and unit tests.
+  // fork). Visibility semantics live in filterVisiblePremiumNavItems.
+  const isStaff = isAdmin || userIsDeveloper(currentUser);
   const { data: entitlements } = useEntitlements();
-  const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const visiblePremiumNavItems = filterVisiblePremiumNavItems(
+    premiumNavItems,
+    entitlements,
+    currentUser?.tags,
+    isStaff
+  );
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
+  const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
 
+  const { updatePreferences } = useUserSettings();
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
@@ -289,6 +315,12 @@ const ProfileMenu = () => {
   const focusOnOpenRef = useRef<'first' | 'last'>('first');
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Re-read on each open, not on select, so the card you just clicked does not jump while the menu is up.
+  const orderedAccounts = useMemo(
+    () => orderAccountsByRecentTeams(accounts, currentUser ? readTeamPreference(recentTeamsKey(currentUser.id)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` is the refresh trigger for localStorage
+    [accounts, currentUser?.id, open]
+  );
   const { openView: openBillingView } = useBillingView();
 
   const closeAll = () => {
@@ -362,6 +394,12 @@ const ProfileMenu = () => {
     if (open) focusMenuItem(panelRef.current, focusOnOpenRef.current);
   }, [open]);
 
+  // Team balances only reach the client through the organizations query, which no push updates, so a
+  // spend made outside a streamed turn would otherwise show the stale pool until a reload.
+  useEffect(() => {
+    if (open) void refetchOrganizations();
+  }, [open, refetchOrganizations]);
+
   useEffect(() => {
     if (moreOpen) focusMenuItem(flyoutRef.current, 'first');
   }, [moreOpen]);
@@ -398,8 +436,7 @@ const ProfileMenu = () => {
     }
   };
 
-  const planLabel =
-    selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
+  const activeTeamName = selectedAccount && !selectedAccount.personal ? selectedAccount.name : null;
 
   return (
     <Box ref={rootRef} sx={{ position: 'relative' }}>
@@ -420,14 +457,17 @@ const ProfileMenu = () => {
           })}
         >
           <Stack sx={{ gap: 1, p: 0.5 }}>
-            {accounts.map(account => (
+            {orderedAccounts.map(account => (
               <AccountCard
                 key={account.id}
                 name={stripPersonalSuffix(account.name)}
                 typeLabel={showAccountType ? (account.personal ? '(Personal)' : '(Team)') : null}
                 credits={account.credits}
                 selected={selectedAccount?.id === account.id}
-                onSelect={() => setSelectedAccount(account)}
+                onSelect={() => {
+                  setSelectedAccount(account);
+                  if (currentUser && !account.personal) rememberTeam(currentUser.id, account.id);
+                }}
                 bare={accounts.length === 1}
                 showCredits={isCreditsEnabled}
               />
@@ -436,7 +476,7 @@ const ProfileMenu = () => {
 
           <Divider sx={{ my: 1 }} />
 
-          {isAdmin && (
+          {canOpenAdmin && (
             <MenuRow
               testId="profile-menu-admin"
               icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
@@ -491,7 +531,7 @@ const ProfileMenu = () => {
           <MenuRow
             testId="profile-menu-teams"
             icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
-            label={t('organization.teams', 'Teams')}
+            label={t('organization.organizations')}
             onClick={() => {
               navigateFromMenu('/organizations', () => navigate({ to: '/organizations' }));
             }}
@@ -505,6 +545,16 @@ const ProfileMenu = () => {
               toggleReferralModal();
             }}
           />
+          {isPreferenceArenaEnabled && (
+            <MenuRow
+              testId="profile-menu-arena"
+              icon={<ThumbsUpDownOutlinedIcon sx={{ fontSize: '18px' }} />}
+              label={t('preferenceArena.menuLabel', 'Rate answers, earn credits')}
+              onClick={() => {
+                navigateFromMenu('/arena', () => navigate({ to: '/arena' }));
+              }}
+            />
+          )}
           {isDesktopPromoEnabled && (
             <MenuRow
               testId="profile-menu-desktop-app"
@@ -529,6 +579,16 @@ const ProfileMenu = () => {
               }}
             />
           )}
+          <MenuRow
+            testId="profile-menu-send-feedback"
+            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('feedback.send', 'Send Feedback')}
+            onClick={() => {
+              closeToTrigger();
+              // Set, not toggle: the row must open the form even when it is already showing.
+              updatePreferences({ showHelp: true });
+            }}
+          />
           {modeToggleEnabled && (
             <Box
               role="group"
@@ -688,16 +748,6 @@ const ProfileMenu = () => {
                     openCookieSettings();
                   }}
                 />
-                {isQuestMasterEnabled && (
-                  <MenuRow
-                    testId="profile-more-quests"
-                    icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
-                    label={t('quests.my_quests', 'My Quests')}
-                    onClick={() => {
-                      navigateFromMenu('/quests', () => navigate({ to: '/quests' }));
-                    }}
-                  />
-                )}
                 {isHearthEnabled && (
                   <MenuRow
                     testId="profile-more-hearth"
@@ -842,6 +892,9 @@ const ProfileMenu = () => {
         <Avatar
           size="md"
           data-testid="profile-menu-avatar"
+          // The new key can reach the store before the S3 upload lands, so the first image
+          // load 403s and Avatar sticks on the initial; remounting after the upload retries it.
+          key={avatarVersion}
           // photoUrl is a storage key, not a URL: used as-is it resolves against the current route.
           src={currentUser?.photoUrl ? getAppFileUrl({ key: currentUser.photoUrl }) : undefined}
           sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}
@@ -852,9 +905,29 @@ const ProfileMenu = () => {
           <Typography level="title-sm" sx={{ fontWeight: 700 }} noWrap>
             {currentUser?.name}
           </Typography>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }} noWrap>
-            {planLabel}
-          </Typography>
+          {activeTeamName ? (
+            // The name truncates on its own so the "(Team)" marker always stays visible.
+            <Box
+              data-testid="profile-menu-active-account"
+              sx={{ display: 'flex', gap: 0.5, minWidth: 0, color: 'text.tertiary' }}
+            >
+              <Typography level="body-xs" sx={{ color: 'inherit', minWidth: 0 }} noWrap>
+                {activeTeamName}
+              </Typography>
+              <Typography level="body-xs" sx={{ color: 'inherit', flexShrink: 0 }}>
+                {t('account.team_suffix', '(Team)')}
+              </Typography>
+            </Box>
+          ) : (
+            <Typography
+              level="body-xs"
+              sx={{ color: 'text.tertiary' }}
+              noWrap
+              data-testid="profile-menu-active-account"
+            >
+              {t('account.personal', 'Personal')}
+            </Typography>
+          )}
         </Box>
         {open ? (
           <KeyboardArrowUpIcon sx={{ fontSize: '20px', color: 'text.tertiary' }} />

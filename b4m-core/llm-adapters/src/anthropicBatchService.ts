@@ -3,6 +3,7 @@ import type { MessageCreateParamsNonStreaming, MessageParam } from '@anthropic-a
 import type { MessageBatchResult } from '@anthropic-ai/sdk/resources/messages/batches';
 import { Logger } from '@bike4mind/observability';
 import { withRetry, isRetryableError } from '@bike4mind/common';
+import { isTransportError } from './transportRetry';
 
 /**
  * Lean, single-shot Anthropic Message Batches client.
@@ -118,8 +119,7 @@ export class AnthropicBatchService {
           return await fetch(input, init);
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
-          const isTransportError = err instanceof TypeError && (msg === 'terminated' || msg === 'fetch failed');
-          if (!isTransportError || attempt === MAX_TRANSPORT_RETRIES) throw err;
+          if (!isTransportError(err) || attempt === MAX_TRANSPORT_RETRIES) throw err;
           log.warn(`[AnthropicBatchService] Transport error "${msg}", retry ${attempt + 1}/${MAX_TRANSPORT_RETRIES}`);
           await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempt)));
         }

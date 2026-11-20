@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   MCP_API_KEY_VALUE_MAX_LENGTH,
+  isReadOnlyMcpConnectionTool,
+  requiresMcpConnectionToolApproval,
   MCP_TOOLS_REDISCOVERY_TTL_MS,
   mcpApiKeyHeaderNameProblem,
   mcpApiKeyValueProblem,
@@ -97,4 +99,27 @@ describe('shouldRediscoverMcpTools', () => {
       expect(shouldRediscoverMcpTools({ status }, now)).toBe(false);
     }
   });
+});
+
+describe('custom tool approval classification', () => {
+  const hints = [
+    { label: 'absent', annotations: undefined, readOnly: false },
+    { label: 'empty', annotations: {}, readOnly: false },
+    { label: 'write', annotations: { readOnlyHint: false }, readOnly: false },
+    { label: 'read', annotations: { readOnlyHint: true }, readOnly: true },
+    { label: 'non-destructive read', annotations: { readOnlyHint: true, destructiveHint: false }, readOnly: true },
+    { label: 'contradictory', annotations: { readOnlyHint: true, destructiveHint: true }, readOnly: false },
+    { label: 'destructive only', annotations: { destructiveHint: true }, readOnly: false },
+  ];
+  for (const { label, annotations, readOnly } of hints) {
+    it(`classifies ${label} hints independently of user approval`, () => {
+      expect(isReadOnlyMcpConnectionTool({ annotations })).toBe(readOnly);
+      for (const approval of ['default', 'always_allow', 'always_ask'] as const) {
+        for (const requireApprovalForAll of [false, true]) {
+          const expected = requireApprovalForAll || approval === 'always_ask' || (approval === 'default' && !readOnly);
+          expect(requiresMcpConnectionToolApproval({ annotations, approval }, requireApprovalForAll)).toBe(expected);
+        }
+      }
+    });
+  }
 });

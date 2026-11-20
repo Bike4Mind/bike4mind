@@ -171,7 +171,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
         aria-labelledby="pr-report-dialog-title"
         sx={{ width: 'min(860px, 96vw)', maxHeight: '92vh', overflow: 'auto' }}
       >
-        <DialogTitle id="pr-report-dialog-title">PR Status Digest</DialogTitle>
+        <DialogTitle id="pr-report-dialog-title">PR digest</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" sx={{ mb: 1 }}>
             Review and edit the draft below, then send it. Nothing is posted until you press Send.

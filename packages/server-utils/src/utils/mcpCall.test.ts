@@ -1,0 +1,201 @@
+import { ExpectedToolError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const h = vi.hoisted(() => {
+  class McpServerConfigError extends Error {
+    readonly missingKeys: string[];
+    constructor(serverName: string, missingKeys: string[]) {
+      super(`The ${serverName} integration is missing ${missingKeys.join(', ')}. Reconnect it in Settings.`);
+      this.name = 'McpServerConfigError';
+      this.missingKeys = missingKeys;
+    }
+  }
+  return {
+    fetch: vi.fn(),
+    ingestToken: 'ingest-token',
+    rateLimitLine: '{"type":"RATE_LIMIT_WARNING","integration":"github","usagePercent":95}',
+    // Replaces the default connect for one test; it is handed the client's stderr callback.
+    connect: undefined as ((onStderrLine: (line: string) => void) => Promise<void>) | undefined,
+    McpServerConfigError,
+  };
+});
+
+vi.mock('@bike4mind/mcp', () => ({
+  McpServerConfigError: h.McpServerConfigError,
+  MCPClient: class {
+    private readonly onStderrLine: (line: string) => void;
+    tools = [];
+
+    constructor(options: { onStderrLine: (line: string) => void }) {
+      this.onStderrLine = options.onStderrLine;
+    }
+
+    async connectToServer(): Promise<void> {
+      await h.connect?.(this.onStderrLine);
+    }
+
+    async callTool(): Promise<{ content: unknown[] }> {
+      this.onStderrLine(h.rateLimitLine);
+      return { content: [] };
+    }
+
+    async disconnect(): Promise<void> {}
+  },
+}));
+
+vi.mock('sst', () => ({
+  Resource: {
+    get RATE_LIMIT_INGEST_TOKEN() {
+      return { value: h.ingestToken };
+    },
+  },
+}));
+
+import { handler } from './mcpCall';
+import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
+
+function postedBody(): { events: unknown[]; tenantKey: string } {
+  const [, init] = h.fetch.mock.calls[0] as [string, RequestInit];
+  return JSON.parse(String(init.body));
+}
+
+describe('mcpCall rate-limit ingest', () => {
+  beforeEach(() => {
+    h.fetch.mockReset().mockResolvedValue(new Response(JSON.stringify({ persisted: 1 }), { status: 200 }));
+    vi.stubGlobal('fetch', h.fetch);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    h.ingestToken = 'ingest-token';
+  });
+
+  it("posts captured rate-limit events under the calling user's tenant", async () => {
+    await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', userId: 'user-1', envVariables: [] });
+
+    expect(postedBody()).toEqual({ events: [JSON.parse(h.rateLimitLine)], tenantKey: 'user-1' });
+  });
+
+  it('hands the events back on the result when the ingest route rejects them', async () => {
+    h.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'events array and tenantKey required' }), { status: 400 })
+    );
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    const result = await handler({
+      name: 'github',
+      action: 'callTool',
+      toolName: 'get_issue',
+      userId: 'user-1',
+      envVariables: [],
+    });
+
+    expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
+  });
+
+  it('hands the events back without posting while the ingest token is a placeholder', async () => {
+    h.ingestToken = 'not-configured';
+    // spyOn reuses an existing spy, so drop calls left by earlier tests in this file.
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    errorSpy.mockClear();
+
+    const result = await handler({
+      name: 'github',
+      action: 'callTool',
+      toolName: 'get_issue',
+      userId: 'user-1',
+      envVariables: [],
+    });
+
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
+  });
+
+  it('keeps the ingest response body out of the logged error', async () => {
+    h.fetch.mockResolvedValue(new Response('upstream-body-marker', { status: 502 }));
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', userId: 'user-1', envVariables: [] });
+
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = errorSpy.mock.calls.map(call =>
+      JSON.stringify(call, (_k, v) => (v instanceof Error ? v.message : v))
+    );
+    expect(logged.join('\n')).toContain('HTTP 502');
+    expect(logged.join('\n')).not.toContain('upstream-body-marker');
+  });
+
+  it('posts events from a call with no user under the unattributed tenant', async () => {
+    await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', envVariables: [] });
+
+    expect(postedBody().tenantKey).toBe(UNATTRIBUTED_MCP_TENANT);
+  });
+});
+
+describe('mcpCall connect failures', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    h.connect = undefined;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('refuses a misconfigured server once, at warn, without retrying', async () => {
+    const connect = vi.fn(async () => {
+      throw new h.McpServerConfigError('github', ['GITHUB_ACCESS_TOKEN']);
+    });
+    h.connect = connect;
+    const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+
+    await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toMatchObject({
+      name: 'McpServerConfigError',
+    });
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('GITHUB_ACCESS_TOKEN'));
+  });
+
+  it.each(['getTools', 'callTool'])(
+    "logs the child's own stderr once at error when it closes the connection on every attempt (%s)",
+    async action => {
+      h.connect = async onStderrLine => {
+        onStderrLine(h.rateLimitLine);
+        onStderrLine('Error: something the server could not survive');
+        throw new Error('MCP error -32000: Connection closed');
+      };
+      const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+
+      const failure = handler({ name: 'github', action, toolName: 'get_issue', envVariables: [] });
+      await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
+      await expect(failure).rejects.toThrow('Connection closed');
+
+      expect(error).toHaveBeenCalledTimes(1);
+      const logged = error.mock.calls.flat().map(String).join(' ');
+      expect(logged).toContain('something the server could not survive');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('retrying'));
+      expect(logged).not.toContain('RATE_LIMIT_WARNING');
+    }
+  );
+  it('retains error severity for a generic JSON-RPC server error', async () => {
+    h.connect = async () => {
+      throw new Error('MCP error -32000: database write failed');
+    };
+    const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toThrow(
+      'database write failed'
+    );
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+});

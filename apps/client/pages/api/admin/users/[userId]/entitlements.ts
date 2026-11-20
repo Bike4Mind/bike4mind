@@ -1,10 +1,9 @@
 import { userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { getEntitlingPlanByPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 import {
   DOMAIN_GRANTS,
   IMPLIED_ENTITLEMENTS,
@@ -15,9 +14,10 @@ import {
   grantTagForEntitlement,
   isBypassExemptEntitlement,
   normalizeTag,
-} from '@client/lib/entitlements/registry';
-import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
+import { partnerEntitlementsForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
+import { entitlementsForPaidSubscription } from '@bike4mind/server-utils/entitlements/paidStanding';
+import { ApiKeyScope, hasDeveloperUserTag, CREDITS_PAGE_READ } from '@bike4mind/common';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
 type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'implied' | 'admin-bypass' | 'developer-bypass';
@@ -49,12 +49,8 @@ interface EntitlementRow {
  * feature gated on a different principal (e.g. an org-billed embed key resolves
  * the org billing owner) matches only when that principal is the viewed user.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId } = req.query as { userId: string };
     if (typeof userId !== 'string') {
       throw new BadRequestError('Invalid user ID');
@@ -89,6 +85,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     const knownKeys = allKnownEntitlementKeys();
     const reportedKeys = [...knownKeys, ...[...partnerKeys].filter(key => !knownKeys.includes(key))];
 
+    const paidSubscriptionKeys = new Set<string>(entitlementsForPaidSubscription(activeSubscriptions));
+
     const literalSources = new Map<EntitlementKey, EntitlementSource[]>();
     for (const key of reportedKeys) {
       const sources: EntitlementSource[] = [];
@@ -113,6 +111,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
           const planName = getEntitlingPlanByPriceId(subscription.priceId)?.name ?? subscription.priceId;
           sources.push({ type: 'subscription', detail: planName });
         }
+      }
+      if (paidSubscriptionKeys.has(key)) {
+        sources.push({ type: 'subscription', detail: 'Active paid subscription' });
       }
       literalSources.set(key, sources);
     }

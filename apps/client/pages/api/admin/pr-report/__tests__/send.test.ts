@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
+    chain.use = () => chain;
     chain.post = (handler: unknown) => handler;
     return chain;
   },
@@ -20,7 +21,7 @@ vi.mock('@server/services/prReport/context', () => ({
   createSendDeps: () => ({}),
 }));
 vi.mock('@bike4mind/services', () => ({ prReportService: { sendReport: h.sendReport } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../send';
 

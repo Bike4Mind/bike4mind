@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { AxiosError, AxiosHeaders } from 'axios';
+import { toast } from 'sonner';
 import { CreditPurchaseEvents } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
@@ -21,8 +22,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 vi.mock('@client/app/hooks/data/analytics', () => ({
   useLogEvent: () => ({ mutate: logEvent }),
 }));
+let termsConsentRequired = false;
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: () => 0.01,
+  useGetSettingsValue: (key: string) => (key === 'requireCheckoutTermsConsent' ? termsConsentRequired : 0.01),
 }));
 vi.mock('@stripe/stripe-js', () => ({
   loadStripe: () => Promise.resolve(null),
@@ -174,6 +176,24 @@ describe('PaymentButton funnel events', () => {
     );
     expect(loggedTypes()).not.toContain(CreditPurchaseEvents.PAYMENT_FORM_OPENED);
   });
+
+  it('toasts a short message, not the page, when start-payment fails with an HTML error body', async () => {
+    apiPost.mockRejectedValue(
+      new AxiosError('Forbidden', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 403,
+        statusText: 'Forbidden',
+        data: '<!DOCTYPE HTML><HTML><HEAD><TITLE>ERROR: The request could not be satisfied</TITLE></HEAD></HTML>',
+        headers: { 'content-type': 'text/html' },
+        config: { headers: new AxiosHeaders() },
+      })
+    );
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Error: 403'));
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('PaymentButton start-payment requests', () => {
@@ -265,5 +285,69 @@ describe('PaymentButton start-payment requests', () => {
       packageId: CreditPackageId.Usd20,
     });
     expect(onPayment).toHaveBeenCalledWith(pack20.credits);
+  });
+});
+
+describe('PaymentButton terms consent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    termsConsentRequired = false;
+    apiPost.mockResolvedValue({
+      data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' },
+    });
+  });
+
+  it('asks for the terms first and sends acceptedTerms only after the box is ticked', async () => {
+    termsConsentRequired = true;
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    const continueBtn = await screen.findByTestId('credits-terms-continue-btn');
+    expect(continueBtn).toBeDisabled();
+    expect(apiPost).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('checkbox'));
+    await userEvent.click(continueBtn);
+
+    await screen.findByTestId('payment-modal-title');
+    expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+      '/api/stripe/start-payment',
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20, acceptedTerms: true },
+      { withCredentials: true }
+    );
+  });
+
+  it('keeps the terms row visible and gives the outer dialog scrolling', async () => {
+    termsConsentRequired = true;
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    expect(getComputedStyle(await screen.findByTestId('credits-terms-content')).overflow).toBe('visible');
+    expect(getComputedStyle(screen.getByTestId('credits-terms-dialog')).overflow).toBe('auto');
+  });
+
+  it('starts nothing when the terms dialog is cancelled', async () => {
+    termsConsentRequired = true;
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await userEvent.click(await screen.findByTestId('credits-terms-cancel-btn'));
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(screen.getByTestId('credits-purchase-btn')).toBeEnabled();
+  });
+
+  it('goes straight to payment without acceptedTerms when consent is not required', async () => {
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+
+    await screen.findByTestId('payment-modal-title');
+    expect(screen.queryByTestId('credits-terms-dialog')).not.toBeInTheDocument();
+    expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+      '/api/stripe/start-payment',
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+      { withCredentials: true }
+    );
   });
 });

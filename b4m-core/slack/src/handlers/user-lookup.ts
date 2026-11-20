@@ -1,5 +1,6 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER, type IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { getSlackDb } from '../di/registry';
 
 /**
@@ -7,7 +8,7 @@ import { getSlackDb } from '../di/registry';
  * @param slackUserId - The Slack user ID to search for
  * @returns User document if found, null otherwise
  */
-export async function findUserBySlackId(slackUserId: string) {
+export async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | null> {
   try {
     const { User } = getSlackDb();
     const user = await (User as any)
@@ -56,8 +57,8 @@ export async function handleUnlinkedUser(
     text: string,
     slackBotToken?: string,
     threadTs?: string,
-    blocks?: any[]
-  ) => Promise<any>
+    blocks?: (KnownBlock | Block)[]
+  ) => Promise<unknown>
 ) {
   // Log as warning (not error) since this is an expected scenario for unlinked accounts
   Logger.warn(`⚠️ Slack account not linked - Slack ID: ${slackUserId}`, {

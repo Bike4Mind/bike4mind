@@ -1,6 +1,6 @@
 import { KeepCommandResponseAction } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
-import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
+import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /**

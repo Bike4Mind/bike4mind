@@ -37,9 +37,13 @@ export function desktopAppGuidance(mcp: 'manage' | 'read' | null): string[] {
     'connect something here.',
     ...PERMISSIONS_GUIDANCE,
   ];
-  if (!mcp) return identity;
+  return [...identity, ...mcpGuidance(mcp)];
+}
+
+/** The MCP half of {@link desktopAppGuidance}: empty in a build with no MCP. */
+export function mcpGuidance(mcp: 'manage' | 'read' | null): string[] {
+  if (!mcp) return [];
   return [
-    ...identity,
     'This app connects to MCP (Model Context Protocol) servers, which add tools for other programs',
     'and services. They are managed under Customize -> MCP, or by you with the mcp_* tools:',
     mcp === 'manage'

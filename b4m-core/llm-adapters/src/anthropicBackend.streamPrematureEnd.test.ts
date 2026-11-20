@@ -84,6 +84,25 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
     expect(texts.join('')).toBe('Let me check.<think>hmm</think>');
   });
 
+  it.each([
+    ['emits no markers for a cut-off block that streamed no reasoning', [], 'Let me check.'],
+    ['wraps reasoning the escaper still held when the block was cut off', ['<th'], 'Let me check.<think><th</think>'],
+  ])('%s', async (_name, deltas, expected) => {
+    // thinkingCutOff without its 'hmm' delta.
+    const turn = [
+      ...thinkingCutOff().slice(0, 5),
+      ...deltas.map(thinking => ({ type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking } })),
+    ];
+    const backend = buildBackend([turn]);
+    const { texts, cb } = collect();
+
+    await backend
+      .complete(ChatModels.CLAUDE_4_8_OPUS, [{ role: 'user', content: 'hi' }], { stream: true }, cb)
+      .catch(() => {});
+
+    expect(texts.join('')).toBe(expected);
+  });
+
   it('resolves with stopReason "aborted" when the abort signal fired', async () => {
     const backend = buildBackend([thinkingCutOff()]);
     const { texts, infos, cb: record } = collect();

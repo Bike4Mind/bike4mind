@@ -29,9 +29,11 @@ vi.mock('@server/middlewares/baseApi', () => {
   chain.use = () => chain;
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
-vi.mock('@server/services/githubService', () => ({ GitHubService: { forOrganization: h.forOrganization } }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
+  GitHubService: { forOrganization: h.forOrganization },
+}));
 vi.mock('@bike4mind/database', () => ({ orgGitHubConnectionRepository: h.connectionRepo }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: h.encryptSecret,

@@ -7,8 +7,20 @@ import { z } from 'zod';
  * to NCMEC via the admin triage flow.
  */
 
-export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'false_positive', 'reported'] as const;
+// 'no_action' = the block was right (the image was explicit) and nothing suggests a minor, so no
+// report is due. 'false_positive' = the classifier was wrong. Kept apart so accuracy data stays honest.
+export const INCIDENT_REVIEW_STATUSES = [
+  'pending_review',
+  'confirmed_csam',
+  'false_positive',
+  'no_action',
+  'reported',
+] as const;
 export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
+
+// Closing verdicts that record_manual_report may still override; kept as previousReviewStatus.
+export const INCIDENT_OVERRIDABLE_REVIEW_STATUSES = ['false_positive', 'no_action'] as const;
+export type IncidentOverridableReviewStatus = (typeof INCIDENT_OVERRIDABLE_REVIEW_STATUSES)[number];
 
 // 'manual' = an admin filed the CyberTip on the CyberTipline web form and recorded it via the
 // record_manual_report verdict. Absent = recorded without a channel: the API paths
@@ -20,6 +32,11 @@ export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
 // Which product path produced the image. Absent on incidents recorded before it was tracked.
 export const INCIDENT_SURFACES = ['generation', 'edit', 'upload'] as const;
 export type IncidentSurface = (typeof INCIDENT_SURFACES)[number];
+
+// How an incident reached the second review step: a reviewer escalated it, or the review sweep did
+// once it had waited too long for a verdict.
+export const INCIDENT_ESCALATION_TRIGGERS = ['manual', 'timeout'] as const;
+export type IncidentEscalationTrigger = (typeof INCIDENT_ESCALATION_TRIGGERS)[number];
 
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
@@ -54,16 +71,40 @@ export const ImageModerationIncidentSchema = z.object({
   reportedBy: z.string().optional(),
   // When the incident moved to 'reported'; unlike updatedAt, later writes do not move it.
   reportedAt: z.union([z.string(), z.date()]).optional(),
-  // Set only when record_manual_report overrode a 'false_positive' verdict. Together with
-  // falsePositiveBy/falsePositiveAt (kept through the override) both sides of the reviewer
+  // Set only when record_manual_report overrode a 'false_positive' or 'no_action' verdict. Together
+  // with falsePositiveBy/At or noActionBy/At (kept through the override) both sides of the reviewer
   // disagreement stay on the record.
-  previousReviewStatus: z.literal('false_positive').optional(),
+  previousReviewStatus: z.enum(INCIDENT_OVERRIDABLE_REVIEW_STATUSES).optional(),
   // Admin user id and time of a 'false_positive' verdict.
   falsePositiveBy: z.string().optional(),
   falsePositiveAt: z.union([z.string(), z.date()]).optional(),
+  // Admin user id and time of a 'no_action' verdict.
+  noActionBy: z.string().optional(),
+  noActionAt: z.union([z.string(), z.date()]).optional(),
   // When the reviewer alert was delivered. Absent means no alert went out (none configured, or the
-  // send failed), so a later sweep can find the incidents nobody was told about.
+  // send failed) or a queued one is not confirmed yet, so a later sweep can find the incidents
+  // nobody was told about.
   alertedAt: z.union([z.string(), z.date()]).optional(),
+  // When the alert was handed to the email-send worker, and when a reviewer's copy last failed
+  // there or at publish. Neither means delivered; a queued alert is not resent while still in flight.
+  alertQueuedAt: z.union([z.string(), z.date()]).optional(),
+  alertFailedAt: z.union([z.string(), z.date()]).optional(),
+  // When a scheduled sweep reminder digest last covered this incident while it awaited a verdict.
+  lastReminderAt: z.union([z.string(), z.date()]).optional(),
+  // Second review step. Escalation is stamped on an incident that is still pending and never changes
+  // reviewStatus, so every pending query keeps matching it.
+  escalatedAt: z.union([z.string(), z.date()]).optional(),
+  // Admin user id that escalated it; absent when the sweep escalated it.
+  escalatedBy: z.string().optional(),
+  escalationTrigger: z.enum(INCIDENT_ESCALATION_TRIGGERS).optional(),
+  // When the escalation email was delivered. Absent means a later sweep still owes it.
+  escalationAlertedAt: z.union([z.string(), z.date()]).optional(),
+  // Same as alertQueuedAt / alertFailedAt, for the escalation email.
+  escalationAlertQueuedAt: z.union([z.string(), z.date()]).optional(),
+  escalationAlertFailedAt: z.union([z.string(), z.date()]).optional(),
+  // When a sweep reminder digest to the second reviewers last covered this incident. Separate from
+  // lastReminderAt so the two lists are reminded independently of each other.
+  escalationLastReminderAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

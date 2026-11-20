@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { incrementCounterConditional: h.incrementCounterConditional },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: h.validateTargetUrl,
   fetchPinned: h.fetchMock,

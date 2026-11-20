@@ -4,12 +4,12 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { LakeAccessView, LakeOwnershipCandidateList } from '@bike4mind/common';
+import type { LakeAccessViewWithAdminBypass, LakeOwnershipCandidateList } from '@bike4mind/common';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
 
 const downloadCsv = vi.fn();
 let viewState: {
-  data?: { view: LakeAccessView; canTransferOwnership: boolean; readerGrantsEnforced: boolean };
+  data?: { view: LakeAccessViewWithAdminBypass; canTransferOwnership: boolean; readerGrantsEnforced: boolean };
   isLoading: boolean;
   isError: boolean;
   error?: unknown;
@@ -48,7 +48,7 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const fullView: LakeAccessView = {
+const fullView: LakeAccessViewWithAdminBypass = {
   lakeId: 'lake1',
   lakeName: 'Sales Intelligence',
   grants: [
@@ -75,6 +75,7 @@ const fullView: LakeAccessView = {
       principalName: 'Bob',
       readCount: 7,
       noResultCount: 2,
+      adminBypassReadCount: 0,
       firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
       lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
       surfaces: ['chat-kb-search'],
@@ -101,7 +102,7 @@ const lake = { id: 'lake1', name: 'Sales Intelligence' };
 /** A loaded access view. `canTransferOwnership` defaults off - the server decides it, not the client.
  *  `readerGrantsEnforced` defaults ON here so the disclosure note is opt-in per test rather than
  *  present in every unrelated assertion. */
-const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrantsEnforced = true) => ({
+const loaded = (view: LakeAccessViewWithAdminBypass, canTransferOwnership = false, readerGrantsEnforced = true) => ({
   data: { view, canTransferOwnership, readerGrantsEnforced },
   isLoading: false,
   isError: false,
@@ -130,6 +131,17 @@ describe('DataLakeAccessModal', () => {
       'Acme (3 members with access)'
     );
     expect(screen.getByTestId('datalake-access-history-table')).toBeInTheDocument();
+  });
+
+  it('shows the platform admin access count only when it is non-zero', () => {
+    const entry = fullView.history[0];
+    viewState = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 2 }] });
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-history-admin-bypass')).toHaveTextContent('Platform admin access: 2');
+
+    viewState = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 0 }] });
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.queryByTestId('datalake-access-history-admin-bypass')).not.toBeInTheDocument();
   });
 
   it('qualifies access history as a lower bound whether or not it has rows', () => {
@@ -177,7 +189,7 @@ describe('DataLakeAccessModal', () => {
     // A cached response from before the field, or an older server: rendering blank would read as
     // "measured, nothing to report".
     const { candidateCapPressure: _omitted, ...withoutPressure } = fullView;
-    viewState = loaded(withoutPressure as LakeAccessView);
+    viewState = loaded(withoutPressure as LakeAccessViewWithAdminBypass);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
   });
@@ -208,7 +220,7 @@ describe('DataLakeAccessModal', () => {
 
   it('degrades to not-reported when the view carries no supersession object at all', () => {
     const { supersessionPressure: _omitted, ...withoutPressure } = fullView;
-    viewState = loaded(withoutPressure as LakeAccessView);
+    viewState = loaded(withoutPressure as LakeAccessViewWithAdminBypass);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
       /not reported for this window/i

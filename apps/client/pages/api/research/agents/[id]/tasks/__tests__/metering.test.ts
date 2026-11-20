@@ -5,14 +5,17 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { insufficientCreditsError, ResearchTaskExecutionType } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   assertOwnerCanAfford: vi.fn(),
   create: vi.fn(),
   retry: vi.fn(),
+  admit: vi.fn(),
   posts: [] as ((req: unknown, res: unknown) => unknown)[],
 }));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
@@ -23,8 +26,10 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: m.assertOwnerCanAfford }));
-vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  assertOwnerCanAfford: m.assertOwnerCanAfford,
+}));
+vi.mock('@bike4mind/server-utils/utils/researchTasks', () => ({ researchTaskJobs: {} }));
 vi.mock('@bike4mind/services', () => ({ researchTaskService: { create: m.create, retry: m.retry } }));
 vi.mock('@bike4mind/database', () => ({
   researchTaskRepository: {},
@@ -54,6 +59,37 @@ beforeEach(() => {
 });
 
 describe('research task create/retry metering', () => {
+  it('refuses an over-quota immediate task before creating it', async () => {
+    const error = new Error('token quota exceeded');
+    m.admit.mockRejectedValueOnce(error);
+
+    await expect(
+      call(createHandler, { id: AGENT }, { title: 'T', description: 'd', type: 'deepResearch', prompt: 'p' })
+    ).rejects.toBe(error);
+    expect(m.admit).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'u1' } }), { holdSlot: false });
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-quota retry before requeueing it', async () => {
+    const error = new Error('token quota exceeded');
+    m.admit.mockRejectedValueOnce(error);
+
+    await expect(call(retryHandler, { id: AGENT, taskId: 't1' })).rejects.toBe(error);
+    expect(m.retry).not.toHaveBeenCalled();
+  });
+
+  it.each([ResearchTaskExecutionType.SCHEDULED, ResearchTaskExecutionType.PERIODIC])(
+    'does not apply request quotas when defining a %s task',
+    async executionType => {
+      await call(
+        createHandler,
+        { id: AGENT },
+        { title: 'T', description: 'd', type: 'deepResearch', prompt: 'p', executionType }
+      );
+      expect(m.create).toHaveBeenCalledOnce();
+      expect(m.admit).not.toHaveBeenCalled();
+    }
+  );
   it('refuses to create a task for a caller who cannot pay', async () => {
     m.assertOwnerCanAfford.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 

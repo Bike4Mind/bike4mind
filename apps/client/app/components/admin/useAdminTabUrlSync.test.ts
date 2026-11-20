@@ -80,22 +80,134 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('applies a deep-linked tab instead of the store default', () => {
+    routerMock.search = { tab: 'models' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Models);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('replaces a legacy subscribers link with the waitlist slug without setting the store', () => {
+    routerMock.search = { tab: 'subscribers' };
+
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Users);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { to, replace, search } = lastNavigation();
+    expect(to).toBe('/admin');
+    expect(replace).toBe(true);
+    expect(search({ tab: 'subscribers' }).tab).toBe('waitlist');
+
+    // The router commits the rewrite; the next run selects the tab and writes nothing more.
+    routerMock.search = { tab: 'waitlist' };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the invite section when rewriting a legacy subscribers link', () => {
+    routerMock.search = { tab: 'subscribers', inviteSection: 'pending' };
+
+    renderHook(() => useHarness(AdminTab.Users));
+
+    expect(lastNavigation().search({ tab: 'subscribers', inviteSection: 'pending' })).toMatchObject({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+    });
+  });
+
+  it.each([
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'packages'],
+  ])('rewrites the retired %s link to the %s Invite Center section, once', (slug, section) => {
+    routerMock.search = { tab: slug };
+
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Dashboard), { wrapper: StrictMode });
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+    for (const [call] of routerMock.navigate.mock.calls) {
+      expect(call.replace).toBe(true);
+      expect(call.search({ tab: slug, q: 'stale' })).toMatchObject({ tab: 'waitlist', inviteSection: section });
+      expect(call.search({ tab: slug, q: 'stale' }).q).toBeUndefined();
+    }
+    expect(routerMock.navigate).toHaveBeenCalled();
+
+    routerMock.navigate.mockClear();
+    routerMock.search = { tab: 'waitlist', inviteSection: section };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('rewrites the retired sec-ops-triage link to the Security page, Scans view, once', () => {
+    routerMock.search = { tab: 'sec-ops-triage' };
+
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Dashboard), { wrapper: StrictMode });
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+    expect(routerMock.navigate).toHaveBeenCalled();
+    for (const [call] of routerMock.navigate.mock.calls) {
+      expect(call.replace).toBe(true);
+      expect(call.search({ tab: 'sec-ops-triage' })).toMatchObject({
+        tab: 'security-dashboard',
+        securityView: 'scans',
+      });
+    }
+
+    routerMock.navigate.mockClear();
+    routerMock.search = { tab: 'security-dashboard', securityView: 'scans' };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.SecurityDashboard);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('replaces a legacy llm-dashboard link with the models slug', () => {
     routerMock.search = { tab: 'llm-dashboard' };
 
     const { result } = renderHook(() => useHarness(AdminTab.Users));
 
-    expect(result.current.activeTab).toBe(AdminTab.LLMDashboard);
-    expect(routerMock.navigate).not.toHaveBeenCalled();
+    expect(result.current.activeTab).toBe(AdminTab.Models);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    expect(lastNavigation().search({ tab: 'llm-dashboard' })).toMatchObject({
+      tab: 'models',
+      modelsSection: undefined,
+    });
+  });
+
+  it('opens the Discovery section of Models from a legacy model-lifecycle link', () => {
+    routerMock.search = { tab: 'model-lifecycle' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Models);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { replace, search } = lastNavigation();
+    expect(replace).toBe(true);
+    expect(search({ tab: 'model-lifecycle' })).toMatchObject({ tab: 'models', modelsSection: 'discovery' });
+  });
+
+  it('drops the invite section when leaving the waitlist tab', () => {
+    routerMock.search = { tab: 'waitlist', inviteSection: 'pending' };
+    const { result } = renderHook(() => useHarness(AdminTab.Waitlist));
+    routerMock.navigate.mockClear();
+
+    act(() => result.current.setActiveTab(AdminTab.Users));
+
+    const search = lastNavigation().search({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(search.tab).toBe('users');
+    expect(search.inviteSection).toBeUndefined();
   });
 
   // Mount effects run twice in development; a first-run flag would let the store default
   // overwrite the deep link on the second pass.
   it('keeps a deep link on StrictMode double-run', () => {
-    routerMock.search = { tab: 'llm-dashboard' };
+    routerMock.search = { tab: 'models' };
 
     const { result } = renderHook(() => useHarness(AdminTab.Users), { wrapper: StrictMode });
 
-    expect(result.current.activeTab).toBe(AdminTab.LLMDashboard);
+    expect(result.current.activeTab).toBe(AdminTab.Models);
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
@@ -116,8 +228,18 @@ describe('useAdminTabUrlSync', () => {
 
     act(() => result.current.setActiveTab(AdminTab.AuditLog));
 
-    const previous = { tab: 'admin-settings', section: 'security', q: 'slack', category: 'credits', entryId: 'e1' };
-    expect(lastNavigation().search(previous)).toEqual({ tab: 'audit-log', category: 'credits', entryId: 'e1' });
+    const previous = {
+      tab: 'admin-settings',
+      section: 'security',
+      q: 'slack',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    };
+    expect(lastNavigation().search(previous)).toEqual({
+      tab: 'audit-log',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    });
   });
 
   it('leaves an Audit Log deep link, filters included, untouched', () => {
@@ -130,15 +252,16 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('keeps feedbackId on the Feedback tab and drops it elsewhere', () => {
-    routerMock.search = { feedbackId: 'abc' };
+    const FEEDBACK_ID = 'abcabcabcabcabcabcabcabc';
+    routerMock.search = { feedbackId: FEEDBACK_ID };
     const { result } = renderHook(() => useHarness(AdminTab.Feedback));
 
-    expect(lastNavigation().search({ feedbackId: 'abc' })).toEqual({ tab: 'feedback', feedbackId: 'abc' });
+    expect(lastNavigation().search({ feedbackId: FEEDBACK_ID })).toEqual({ tab: 'feedback', feedbackId: FEEDBACK_ID });
 
     routerMock.navigate.mockClear();
     act(() => result.current.setActiveTab(AdminTab.Users));
 
-    expect(lastNavigation().search({ tab: 'feedback', feedbackId: 'abc' })).toEqual({ tab: 'users' });
+    expect(lastNavigation().search({ tab: 'feedback', feedbackId: FEEDBACK_ID })).toEqual({ tab: 'users' });
   });
 
   it('corrects a slug that names no known tab', () => {
@@ -185,6 +308,26 @@ describe('useAdminTabUrlSync', () => {
     expect(lastNavigation().search({}).tab).toBe('analytics');
   });
 
+  it.each(['subscribers', 'registration-invites', 'partner-signup-rules'])(
+    'does not rewrite legacy %s links outside the admin route',
+    slug => {
+      routerMock.pathname = '/profile';
+      routerMock.search = { tab: slug };
+      renderHook(() => useHarness(AdminTab.Users));
+      expect(routerMock.navigate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['registration-invites', 'partner-signup-rules'])(
+    'does not redirect %s to a section the admin cannot render',
+    slug => {
+      routerMock.search = { tab: slug };
+      const { result } = renderHook(() => useHarness(AdminTab.Modals, tab => tab === AdminTab.Modals));
+      expect(result.current.activeTab).toBe(AdminTab.Modals);
+      expect(lastNavigation().search({ tab: slug }).tab).toBe('modals');
+    }
+  );
+
   it('writes nothing while mounted off the admin route', () => {
     routerMock.pathname = '/profile';
 
@@ -208,6 +351,29 @@ describe('useAdminTabUrlSync', () => {
     expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
   });
 
+  it("falls back to the first sidebar tab it can render when Users is not one (a delegated admin's console)", () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, tab => tab === AdminTab.Modals));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(lastNavigation().search({}).tab).toBe('modals');
+  });
+
+  it('leaves the store alone when no sidebar tab can render', () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, () => false));
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+  });
+
+  it("applies a delegate's deep link when the store default is a tab they cannot render", () => {
+    routerMock.search = { tab: 'modals' };
+    const delegateGate: IsAdminTabRenderable = tab => tab === AdminTab.Modals || tab === AdminTab.Models;
+
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateGate));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
   // The gate can resolve after a deep link has already selected the tab.
   it('falls back to Users when the selected tab stops being renderable', () => {
     routerMock.search = { tab: 'live-ops-triage' };
@@ -221,5 +387,16 @@ describe('useAdminTabUrlSync', () => {
 
     expect(result.current.activeTab).toBe(AdminTab.Users);
     expect(lastNavigation().search({}).tab).toBe('users');
+  });
+
+  it("falls back when a delegate's deep link names a tab they cannot open", () => {
+    routerMock.search = { tab: 'live-ops-triage' };
+    const delegateTabs: IsAdminTabRenderable = tab => tab === AdminTab.Models || tab === AdminTab.HelpAnalytics;
+
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateTabs));
+
+    expect(result.current.activeTab).not.toBe(AdminTab.LiveOpsTriage);
+    expect(delegateTabs(result.current.activeTab as AdminTab)).toBe(true);
+    expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).not.toBe('live-ops-triage');
   });
 });

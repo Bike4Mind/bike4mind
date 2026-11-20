@@ -20,7 +20,7 @@
 import { z } from 'zod';
 import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { cacheRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { oauthClientRepository, userRepository } from '@bike4mind/database/auth';

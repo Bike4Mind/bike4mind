@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import { convertMessagesToOpenAIFormat, convertOpenAIToolHistoryToCanonical } from './messageFormatConverter';
 import type { IMessage } from '@bike4mind/common';
 
 /**
@@ -147,5 +147,102 @@ describe('convertMessagesToOpenAIFormat - reasoning_content on a fallback hop', 
     convertMessagesToOpenAIFormat([message]);
 
     expect(message).toHaveProperty('reasoning_content', 'step one');
+  });
+});
+
+describe('convertOpenAIToolHistoryToCanonical', () => {
+  const openAIRound = (): IMessage[] =>
+    [
+      { role: 'user', content: 'find a and b' },
+      {
+        role: 'assistant',
+        content: null,
+        reasoning_content: 'search twice',
+        tool_calls: [
+          { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+          { id: 't2', type: 'function', function: { name: 'search', arguments: 'not json' } },
+        ],
+      },
+      { role: 'tool', content: '{"result":"A"}', tool_call_id: 't1' },
+      { role: 'tool', content: '{"result":"B"}', tool_call_id: 't2' },
+    ] as unknown as IMessage[];
+
+  it('returns the same array when there is no OpenAI-shape tool history', () => {
+    const messages = [{ role: 'user', content: 'hi' }] as IMessage[];
+    expect(convertOpenAIToolHistoryToCanonical(messages)).toBe(messages);
+  });
+
+  it('rewrites tool_calls into tool_use blocks and folds tool messages into one tool_result turn', () => {
+    const messages = openAIRound();
+
+    const result = convertOpenAIToolHistoryToCanonical(messages);
+
+    expect(result[0]).toBe(messages[0]);
+    expect(result.slice(1)).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 't1', name: 'search', input: { q: 'a' } },
+          // Unparseable arguments degrade to an empty input rather than failing the hop.
+          { type: 'tool_use', id: 't2', name: 'search', input: {} },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 't1', content: '{"result":"A"}' },
+          { type: 'tool_result', tool_use_id: 't2', content: '{"result":"B"}' },
+        ],
+      },
+    ]);
+  });
+
+  it('drops the DeepSeek-private reasoning_content', () => {
+    const [, assistant] = convertOpenAIToolHistoryToCanonical(openAIRound());
+    expect(assistant).not.toHaveProperty('reasoning_content');
+  });
+
+  it('keeps assistant text alongside the tool_use blocks', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: 'let me look',
+        tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+      },
+      { role: 'tool', content: 'r', tool_call_id: 't1' },
+    ] as unknown as IMessage[];
+
+    const [assistant] = convertOpenAIToolHistoryToCanonical(messages);
+
+    expect(assistant.content).toEqual([
+      { type: 'text', text: 'let me look' },
+      { type: 'tool_use', id: 't1', name: 'search', input: {} },
+    ]);
+  });
+
+  it('round-trips back to the same OpenAI tool history', () => {
+    const canonical = convertOpenAIToolHistoryToCanonical(openAIRound());
+    const [, assistant, ...tools] = convertMessagesToOpenAIFormat(canonical) as Array<Record<string, unknown>>;
+
+    expect(assistant.tool_calls).toEqual([
+      { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+      { id: 't2', type: 'function', function: { name: 'search', arguments: '{}' } },
+    ]);
+    expect(tools).toEqual([
+      { role: 'tool', content: '{"result":"A"}', tool_call_id: 't1' },
+      { role: 'tool', content: '{"result":"B"}', tool_call_id: 't2' },
+    ]);
+  });
+
+  it("folds Gemini's role: 'tool' messages, which already carry tool_result blocks, into a user turn", () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'search', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r' }] },
+    ] as unknown as IMessage[];
+
+    const [assistant, results] = convertOpenAIToolHistoryToCanonical(messages);
+
+    expect(assistant).toBe(messages[0]);
+    expect(results).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r' }] });
   });
 });

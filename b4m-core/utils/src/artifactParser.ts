@@ -41,7 +41,7 @@ export interface ArtifactParseResult {
  * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
  * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
  * the input from every opening that never finds a closer: quadratic on a run of bare
- * `<!--` tokens. Exported so apps/client/app/utils/artifactParser.ts imports this copy
+ * `<!--` tokens. Exported so packages/server-utils/src/app/utils/artifactParser.ts imports this copy
  * instead of keeping its own.
  */
 export function stripHtmlComments(value: string): string {
@@ -93,7 +93,7 @@ export interface ExtractArtifactBlocksOptions {
 /**
  * Every `<artifact ...>...</artifact>` block in `content`, in source order, with its
  * attributes resolved and its position kept so callers can strip or replace the tag.
- * Shared by this module's parseArtifacts and the client's (apps/client/app/utils/artifactParser.ts),
+ * Shared by this module's parseArtifacts and the client's (packages/server-utils/src/app/utils/artifactParser.ts),
  * which differ only in what they do with the tags afterwards.
  */
 export function extractArtifactBlocks(content: string, options: ExtractArtifactBlocksOptions = {}): ParsedArtifact[] {

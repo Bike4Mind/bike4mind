@@ -27,13 +27,14 @@ import type { ClassifierLlm, ClassifierResult } from './classifySkill';
 import { classifySkill } from './classifySkill';
 import {
   canReviewListing,
+  type MarketAudience,
   loadMarketSettings,
   notifyUser,
   skillContentHash,
   toSnapshot,
   type MarketActor,
   type MarketSettings,
-} from './market';
+} from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Submit -> scan -> decide, for both a new listing's first version and every resubmit. The scan
@@ -313,7 +314,8 @@ export function denormFor(version: ISkillListingVersion, autoChecked: boolean): 
     description: version.snapshot.description,
     honestSummaryText: version.honestSummary?.whatItDoes,
     descriptionMatches: version.honestSummary?.descriptionMatches ?? true,
-    usesTools: (version.snapshot.allowedTools?.length ?? 0) > 0,
+    usesTools:
+      (version.snapshot.allowedTools?.length ?? 0) + (version.snapshot.claudeCodeAllowedTools?.length ?? 0) > 0,
     riskTier: version.riskTier,
     autoChecked,
   };
@@ -331,7 +333,7 @@ export type ReviewDecision =
 export async function decideVersion(
   versionId: string,
   actor: MarketActor,
-  adminOrgIds: string[],
+  adminAudience: MarketAudience,
   decision: ReviewDecision
 ): Promise<ISkillListingVersion> {
   const versionDoc = mongoose.isObjectIdOrHexString(versionId) ? await SkillListingVersion.findById(versionId) : null;
@@ -341,7 +343,7 @@ export async function decideVersion(
   if (!listingDoc) throw new NotFoundError('Listing not found');
   const listing = listingDoc.toJSON() as unknown as ISkillListing;
 
-  if (!canReviewListing(listing, actor, adminOrgIds)) {
+  if (!canReviewListing(listing, actor, adminAudience)) {
     throw new ForbiddenError(
       listing.authorUserId === actor.id && listing.visibility === 'public'
         ? 'You cannot review your own Public listing'

@@ -1,4 +1,4 @@
-import { runSkillMarketReviewSla } from '@server/skillMarket/reviewSla';
+import { runSkillMarketReviewSla } from '@workers/skillMarket/reviewSla';
 import type { SelfHostWorker } from './selfHostWorker';
 
 /** Matches the hosted skillMarketReviewSla cron's rate(1 day) in infra/cron.ts. */

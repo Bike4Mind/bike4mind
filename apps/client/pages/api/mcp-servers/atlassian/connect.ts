@@ -7,7 +7,7 @@ import {
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user.id;

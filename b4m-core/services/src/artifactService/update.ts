@@ -1,4 +1,7 @@
 import {
+  IArtifactDocument,
+  IArtifactContentDocument,
+  IArtifactVersionDocument,
   IArtifactRepository,
   IArtifactContentRepository,
   IArtifactVersionRepository,
@@ -185,6 +188,7 @@ export const update = async (
         parentVersionId: artifact.currentVersionId,
         changes: changes || ['Content updated'],
         changeDescription: changeDescription || versionMessage || 'Updated artifact content',
+        ...(versionTag !== undefined && { versionTag }),
         createdBy: userId,
         isActive: true,
       });
@@ -249,6 +253,7 @@ export const update = async (
         parentVersionId: artifact.currentVersionId,
         changes: changes || ['Version created'],
         changeDescription: changeDescription || versionMessage || 'Created new version',
+        ...(versionTag !== undefined && { versionTag }),
         createdBy: userId,
         isActive: true,
       });
@@ -259,6 +264,9 @@ export const update = async (
     }
   }
 
+  // An explicit new version without a tag must not inherit the previous version's tag on the artifact.
+  if (newVersion && createNewVersion && versionTag === undefined) updateData.versionTag = null;
+
   // One gated write for metadata and the version pointer together.
   const updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
   if (!updatedArtifact) {
@@ -267,7 +275,11 @@ export const update = async (
     throw new UnauthorizedError('Write access denied');
   }
 
-  const result: any = {
+  const result: {
+    artifact: IArtifactDocument;
+    content?: IArtifactContentDocument;
+    version?: IArtifactVersionDocument;
+  } = {
     artifact: updatedArtifact,
   };
 

@@ -357,6 +357,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                           disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
                           size="md"
                           onClick={async () => await handleSendClick()}
+                          aria-label={t('session.sendMessage')}
                           data-testid="send-message-btn"
                         >
                           {submitting || pendingAutoSubmitGoal || isModelsLoading ? (

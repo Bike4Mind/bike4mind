@@ -101,7 +101,7 @@ describe('passphrase shell - owner bypass', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    sessionStorage.clear(); // the one-shot mint sentinel is keyed on pathname; do not leak it
+    sessionStorage.clear(); // the mint sentinel is keyed on pathname; do not leak it
   });
 
   it('starts with the form hidden so the owner never sees a prompt they do not need', () => {
@@ -173,18 +173,80 @@ describe('passphrase shell - owner bypass', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it('attempts the mint only once per path, so a cookie that will not stick cannot loop', async () => {
-    // Simulates the reload having already happened once without the cookie taking effect: the
-    // sentinel is set, so the shell goes straight to the form instead of minting again.
+  it('does not mint again on the load right after a mint, so a cookie that will not stick cannot loop', async () => {
+    // First load mints and arms the sentinel; the reload re-serves the shell (cookie did not stick).
     stubFetch({ signedIn: true, ownerStatus: 204 });
-    sessionStorage.setItem('b4m-pp-tried-/p/u/scope/my-slug', '1');
+    await runShell();
+    expect(reload).toHaveBeenCalledTimes(1);
 
+    calls = [];
+    mountShell();
     await runShell();
 
     expect(called(OWNER_ROUTE)).toBe(false);
     expect(called(REFRESH)).toBe(false);
     expect(formVisible()).toBe(true);
-    expect(reload).not.toHaveBeenCalled();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the bypass on a manual refresh after the loop breaker fired', async () => {
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    await runShell(); // mint + reload
+    mountShell();
+    await runShell(); // loop breaker -> form, sentinel consumed
+
+    calls = [];
+    mountShell();
+    await runShell(); // user refreshes
+
+    expect(called(OWNER_ROUTE)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  // REGRESSION GUARD. The sentinel used to be a permanent '1' in sessionStorage, set before the
+  // mint and never cleared, so once the 2h proof cookie expired - or any earlier attempt failed -
+  // every refresh of that tab went straight to the form and the owner was asked for the passphrase.
+  it('admits the owner again once the proof cookie has expired in the same tab', async () => {
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    await runShell(); // mint + reload; the artifact is then served and viewed for a while
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000); // proof cookie TTL elapses
+    calls = [];
+    mountShell();
+    await runShell(); // refresh in the same tab re-serves the shell
+
+    expect(called(OWNER_ROUTE)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(formVisible()).toBe(false);
+  });
+
+  it('mints again once the sentinel is just past its freshness window', async () => {
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    await runShell(); // mint + reload
+
+    await vi.advanceTimersByTimeAsync(15001);
+    calls = [];
+    mountShell();
+    await runShell();
+
+    expect(called(OWNER_ROUTE)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries the bypass on refresh after a failed attempt', async () => {
+    // A transient mint failure must not disable the bypass for the rest of the tab's life.
+    stubFetch({ signedIn: true, ownerStatus: 500 });
+    await runShell();
+    expect(formVisible()).toBe(true);
+
+    vi.unstubAllGlobals();
+    calls = [];
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    mountShell();
+    await runShell();
+
+    expect(called(OWNER_ROUTE)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('still unlocks on a correct passphrase for a non-owner', async () => {

@@ -1,10 +1,10 @@
 import React from 'react';
-import { Box, Button, Card, Chip, Divider, Stack, Typography } from '@mui/joy';
-import AppsIcon from '@mui/icons-material/Apps';
+import { Box, Button, Chip, Divider, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { useOAuthGrants, useRevokeOAuthGrant } from '@client/app/hooks/data/oauthGrants';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { toConsentScopes } from '@client/app/routes/oauth/consentScopes';
+import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 
 const formatDate = (value: string): string =>
   new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -40,16 +40,7 @@ const ApprovedAppsSection: React.FC = () => {
   };
 
   return (
-    <Card variant="outlined" sx={{ p: 3, mt: 2 }} data-testid="approved-apps-section">
-      <Typography level="h4" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <AppsIcon /> Approved Apps
-      </Typography>
-      <Typography level="body-sm" sx={{ mb: 2 }}>
-        Third-party apps you have authorized to access your Bike4Mind account. Revoking an app
-        stops it from renewing access; any active session it holds may continue for up to 30
-        minutes before it expires.
-      </Typography>
-
+    <Box sx={theme => ({ ...cardSurfaceSx(theme) })} data-testid="approved-apps-section">
       {isLoading && <Typography level="body-sm">Loading...</Typography>}
 
       {isError && !isLoading && !grants && (
@@ -107,7 +98,7 @@ const ApprovedAppsSection: React.FC = () => {
           })}
         </Stack>
       )}
-    </Card>
+    </Box>
   );
 };
 

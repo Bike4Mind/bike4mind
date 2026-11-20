@@ -6,7 +6,18 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { getEmbeddingModelCost, insufficientCreditsError } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  getEmbeddingModelCost,
+  insufficientCreditsError,
+} from '@bike4mind/common';
+
+const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { quotaAdmission: vi.fn().mockResolvedValue({ release }), quotaRelease: release };
+});
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -17,6 +28,7 @@ const m = vi.hoisted(() => ({
   settleEmbedding: vi.fn(),
   refundEmbedding: vi.fn(),
   findOrg: vi.fn(),
+  findFreeze: vi.fn(),
   meter: vi.fn(),
   settle: vi.fn(),
   reserveText: vi.fn(),
@@ -25,28 +37,57 @@ const m = vi.hoisted(() => ({
   realExpansion: false,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
+      return chain;
+    };
+    chain.post =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      };
+    return chain;
+  },
+  methodNotAllowedHandler: () => () => undefined,
+}));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: async () => 'text-embedding-3-small' },
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
   creditTransactionRepository: {},
+  spendFreezeRepository: { findActiveForSubject: m.findFreeze },
   organizationRepository: { findById: m.findOrg },
   userRepository: {},
   sessionRepository: {
     findSessionIdsByUserId: async () => ['s1'],
     find: async () => [{ id: 's1', name: 'Bike trip' }],
   },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/database/content', () => ({
   Quest: { find: () => ({ lean: async () => [{ sessionId: 's1', prompt: 'bike trip plans', reply: 'Go to Paris' }] }) },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: class {
-    createEmbeddingService = () => ({ generateEmbedding: m.embed });
-  },
-  getProviderFromModel: () => 'openai',
+vi.mock('@bike4mind/services/llm/embeddingProviders', () => ({
+  buildEmbeddingRegistry: () => ({}),
+  bindEmbeddingModel: () => ({}),
+  embedOne: (_model: unknown, text: string) => m.embed(text),
+  embeddingBackendForModel: () => 'openai',
   resolveEmbeddingWithKeylessFallback: (model: string) => ({ config: {}, missing: undefined, model }),
 }));
 vi.mock('@bike4mind/services', async () => ({
@@ -60,7 +101,7 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: { isCurrentOrgMember: () => true },
   creditService: { isMemberAtOrOverCap: () => false, MEMBER_CREDIT_CAP_MESSAGE: 'cap' },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => m.enforce,
   reserveCompletionCredits: m.reserveEmbedding,
   settleCompletion: m.settleEmbedding,
@@ -110,7 +151,7 @@ vi.mock('@bike4mind/services/llm/reranker', async importOriginal => {
 });
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),
   },
@@ -119,6 +160,8 @@ vi.mock('@client/services/operationsModelService', () => ({
 const { default: handler } = await import('@pages/api/sessions/semantic-search');
 
 const QUERY = 'bike trip';
+
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 async function call(
   currentCredits: number,
@@ -130,7 +173,7 @@ async function call(
   Object.assign(req, {
     user: { id: 'u1', currentCredits, organizationId },
     apiKeyInfo,
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() },
+    logger: testLogger,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
@@ -156,6 +199,7 @@ beforeEach(() => {
     return 1;
   });
   m.findOrg.mockResolvedValue(null);
+  m.findFreeze.mockResolvedValue(null);
   // Expansion reports 100/20 tokens, the re-rank 300/40.
   m.complete
     .mockImplementationOnce(async (_m, _msgs, _o, cb) => cb(['{}'], { inputTokens: 100, outputTokens: 20 }))
@@ -214,9 +258,11 @@ describe('POST /api/sessions/semantic-search metering', () => {
       expect((await response)._getStatusCode()).toBe(200);
       expect(m.complete).toHaveBeenCalledTimes(2);
       expect(m.settle).not.toHaveBeenCalled();
+      expect(quotaRelease).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(7_000);
       expect(m.settle).toHaveBeenCalledTimes(2);
+      expect(quotaRelease).toHaveBeenCalledTimes(1);
       expect(m.settle).toHaveBeenNthCalledWith(1, { inputTokens: 100, outputTokens: 20 });
       expect(m.settle).toHaveBeenNthCalledWith(2, { inputTokens: 100, outputTokens: 20 });
       expect(m.refund).not.toHaveBeenCalled();
@@ -235,6 +281,20 @@ describe('POST /api/sessions/semantic-search metering', () => {
     expect(m.embed).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.realExpansion = true;
+    m.reserveText.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call(100)).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(m.embed).not.toHaveBeenCalled();
+  });
+
   it('propagates a real reranker credit refusal instead of accepting its cosine fallback', async () => {
     m.realReranking = true;
     m.reserveText.mockResolvedValueOnce({ settle: m.settle, refund: m.refund });
@@ -243,6 +303,30 @@ describe('POST /api/sessions/semantic-search metering', () => {
     await expect(call(100)).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).toHaveBeenCalledOnce();
     expect(m.settle).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen before any provider call, credits on or off', async () => {
+    m.enforce = false;
+    m.findFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+
+    await expect(call(100)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'user' },
+    });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: null });
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.embed).not.toHaveBeenCalled();
+  });
+
+  it('checks an org-billed key against its org, the key and its user', async () => {
+    m.findOrg.mockResolvedValue({ id: 'o2', currentCredits: 50 });
+    m.findFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date('2026-11-01T00:00:00Z') });
+
+    await expect(
+      call(0, undefined, { billingOwnerType: 'Organization', organizationId: 'o2', keyId: 'k1' })
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'o2', apiKeyId: 'k1' });
+    expect(m.complete).not.toHaveBeenCalled();
   });
 
   it('reads the org once and gates on its pool', async () => {
@@ -289,6 +373,19 @@ describe('POST /api/sessions/semantic-search metering', () => {
     );
   });
 
+  it('aborts with the free-tier daily cap 429 when a later input cannot be reserved', async () => {
+    m.reserveEmbedding.mockResolvedValueOnce({ refund: m.refundEmbedding });
+    m.reserveEmbedding.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call(100, undefined, undefined, false)).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+  });
+
   it('refunds an embedding hold when its provider fails', async () => {
     m.embed.mockRejectedValue(new Error('embedding unavailable'));
 
@@ -305,4 +402,14 @@ describe('POST /api/sessions/semantic-search metering', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(m.embed).toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call(1000)).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.embed).not.toHaveBeenCalled();
 });

@@ -1,18 +1,28 @@
+import { CreditHolderType } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { claimVoiceHold, openVoiceHold, incrementCredits, createTransaction, logInfo, logError } = vi.hoisted(() => ({
-  claimVoiceHold: vi.fn(),
-  openVoiceHold: vi.fn(),
-  incrementCredits: vi.fn(),
-  createTransaction: vi.fn(),
-  logInfo: vi.fn(),
-  logError: vi.fn(),
-}));
+const { findActiveForSubject, claimVoiceHold, openVoiceHold, incrementCredits, createTransaction, logInfo, logError } =
+  vi.hoisted(() => ({
+    findActiveForSubject: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    openVoiceHold: vi.fn(),
+    incrementCredits: vi.fn(),
+    createTransaction: vi.fn(),
+    logInfo: vi.fn(),
+    logError: vi.fn(),
+  }));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  warmExchangeAttribution: async () => undefined,
   sessionRepository: { claimVoiceHold, openVoiceHold },
-  userRepository: { incrementCredits },
+  // A user without createdAt predates the new-account spend cap, so reserveVoiceHold's cap check passes.
+  userRepository: { incrementCredits, findById: async (id: string) => ({ id }) },
   creditTransactionRepository: { createTransaction },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -209,10 +219,13 @@ describe('reserveVoiceHold', () => {
     startedAt: STARTED,
     realtime: true,
     unaffordable: () => new Error('insufficient credits'),
+    organizationId: null,
+    spendFreezes: { findActiveForSubject },
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    findActiveForSubject.mockResolvedValue(null);
     openVoiceHold.mockResolvedValue(true);
     incrementCredits.mockResolvedValue(undefined);
   });
@@ -241,6 +254,42 @@ describe('reserveVoiceHold', () => {
     incrementCredits.mockResolvedValue({ currentCredits: -1 });
 
     await expect(reserveVoiceHold(RESERVE)).rejects.toThrow('insufficient credits');
+  });
+
+  it.each([
+    ['a frozen user', {}, { userId: 'u1', organizationId: null, apiKeyId: null }],
+    ['a frozen API key', { apiKeyId: 'key-1' }, { userId: 'u1', organizationId: null, apiKeyId: 'key-1' }],
+  ])('refuses %s with nothing moved, credits enforced or not', async (_label, extra, subject) => {
+    findActiveForSubject.mockResolvedValue({ scopeType: 'User', frozenAt: new Date(), reason: 'test freeze' });
+
+    for (const reservedCredits of [600, null]) {
+      await expect(reserveVoiceHold({ ...RESERVE, ...extra, reservedCredits })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
+    }
+    expect(findActiveForSubject).toHaveBeenCalledWith(subject);
+    expect(openVoiceHold).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('checks the key, the organization and the acting user for an org-billed key', async () => {
+    await reserveVoiceHold({
+      ...RESERVE,
+      apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+    });
+
+    expect(findActiveForSubject).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'org-1', apiKeyId: 'key-1' });
+  });
+
+  it('lets a read error propagate with nothing moved', async () => {
+    findActiveForSubject.mockRejectedValue(new Error('db down'));
+
+    await expect(reserveVoiceHold(RESERVE)).rejects.toThrow('db down');
+    expect(openVoiceHold).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
   });
 
   it('opens a hold without touching the balance when credits are not enforced', async () => {

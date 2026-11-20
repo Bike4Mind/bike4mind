@@ -5,6 +5,9 @@ import {
   BadRequestError,
   ConflictError,
   NotFoundError,
+  isOAuthClientScope,
+  OAUTH_FEDERATED_DEFAULT_SCOPES,
+  OAUTH_IDENTITY_SCOPES,
   OAUTH_OPT_IN_SCOPES,
   nonOptInScopes,
   createOAuthClientSchema,
@@ -27,11 +30,11 @@ import { OAuthClientModel, type IOAuthClientDocument } from './OAuthClientModel'
 
 export const OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS = 10;
 
-const IDENTITY_SCOPES = ['openid', 'email', 'profile'];
+const IDENTITY_SCOPES = [...OAUTH_IDENTITY_SCOPES];
 // A federated client mints per-user ai:generate keys via /api/oauth/ai-token, which requires the
 // user to have approved ai:generate at /authorize, so the scope must be requestable there.
 // Opt-in scopes (OAUTH_OPT_IN_SCOPES in b4m-core/common) are deliberately left out of this default.
-const FEDERATED_SCOPES = [...IDENTITY_SCOPES, 'ai:generate', 'me:read'];
+const FEDERATED_SCOPES = [...IDENTITY_SCOPES, ...OAUTH_FEDERATED_DEFAULT_SCOPES];
 
 // The b4m_<slug>_<8 hex> shape is parsed back by oauthClientSourceSlug (b4m-core/common/src/constants/oauthClients.ts).
 export function generateOAuthClientId(name: string): string {
@@ -57,6 +60,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
     clientType: doc.clientType,
     tokenEndpointAuthMethod: doc.tokenEndpointAuthMethod,
     redirectUris: [...(doc.redirectUris ?? [])],
+    postLogoutRedirectUris: [...(doc.postLogoutRedirectUris ?? [])],
     allowedScopes: [...(doc.allowedScopes ?? [])],
     isActive: doc.isActive,
     ...(doc.federatedIdp
@@ -70,6 +74,26 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
           },
         }
       : {}),
+    ...(doc.overwatchProductId ? { overwatchProductId: doc.overwatchProductId } : {}),
+    ...(doc.rateLimit
+      ? {
+          rateLimit: {
+            requestsPerMinute: doc.rateLimit.requestsPerMinute,
+            requestsPerDay: doc.rateLimit.requestsPerDay,
+          },
+        }
+      : {}),
+    ...(doc.unpaidAccountLimits
+      ? {
+          unpaidAccountLimits: {
+            requestsPerMinute: doc.unpaidAccountLimits.requestsPerMinute,
+            requestsPerDay: doc.unpaidAccountLimits.requestsPerDay,
+            tokensPerMinute: doc.unpaidAccountLimits.tokensPerMinute,
+            maxConcurrent: doc.unpaidAccountLimits.maxConcurrent,
+          },
+        }
+      : {}),
+    ...(doc.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: doc.unpaidAccountsAllowed } : {}),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -96,18 +120,26 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     throw new BadRequestError(error instanceof Error ? error.message : String(error));
   }
 
+  if (data.unpaidAccountLimits && !federatedIdp) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
+  }
+
   const clientSecret = generateOAuthClientSecret();
   const doc = await OAuthClientModel.create({
     clientId,
     clientSecretHash: await bcrypt.hash(clientSecret, OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS),
     name: data.name,
     redirectUris: data.redirectUris,
+    postLogoutRedirectUris: data.postLogoutRedirectUris ?? [],
     allowedScopes: federatedIdp ? FEDERATED_SCOPES : IDENTITY_SCOPES,
     // Always confidential: the client is handed a secret, so it must present it at /token.
     tokenEndpointAuthMethod: 'client_secret_post',
     clientType: data.clientType,
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
+    ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountLimits ? { unpaidAccountLimits: data.unpaidAccountLimits } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
   });
 
   return { client: toOAuthClientView(doc), clientSecret };
@@ -158,16 +190,97 @@ export async function updateOAuthClient(
       throw new BadRequestError(`${uri}: ${parsed.error.issues[0]?.message ?? 'invalid redirect URI'}`);
   }
 
-  // Exact-match the list we validated against, so a concurrent edit cannot slip an unchecked URI past it.
-  const filter = data.redirectUris ? { _id: id, redirectUris: before.redirectUris } : { _id: id };
-  const doc = await OAuthClientModel.findOneAndUpdate(
-    filter,
-    { $set: data },
-    { new: true, runValidators: true }
-  ).exec();
+  let federatedIdp;
+  if (data.federatedIdp) {
+    try {
+      federatedIdp = resolveOAuthFederatedIdp(data.federatedIdp, before.clientId);
+    } catch (error) {
+      throw new BadRequestError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const storedScopes = new Set(before.allowedScopes);
+  const unknownScopes = (data.allowedScopes ?? []).filter(
+    scope => !storedScopes.has(scope) && !isOAuthClientScope(scope)
+  );
+  if (unknownScopes.length) throw new BadRequestError(`Unknown scope: ${unknownScopes.join(', ')}`);
+
+  const scopesOrTrustChanged = data.allowedScopes !== undefined || data.federatedIdp !== undefined;
+  const finalFederated = data.federatedIdp === undefined ? !!before.federatedIdp : data.federatedIdp !== null;
+  const finalRateLimit = data.rateLimit === undefined ? before.rateLimit : data.rateLimit;
+  if (finalRateLimit && !finalFederated) {
+    throw new BadRequestError('A rate-limit profile requires a federated client');
+  }
+  const finalUnpaidAccountLimits =
+    data.unpaidAccountLimits === undefined ? before.unpaidAccountLimits : data.unpaidAccountLimits;
+  if (finalUnpaidAccountLimits && !finalFederated) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
+  }
+  const finalScopes = data.allowedScopes ?? before.allowedScopes;
+  const grantsOptIn = nonOptInScopes(finalScopes).length < finalScopes.length;
+  if (scopesOrTrustChanged && grantsOptIn) {
+    if (!finalFederated || before.clientType !== 'relying-party') {
+      throw new BadRequestError('Opt-in scopes can only be granted to a federated relying-party client');
+    }
+  }
+
+  const $set: Record<string, unknown> = {
+    ...(data.redirectUris ? { redirectUris: data.redirectUris } : {}),
+    ...(data.postLogoutRedirectUris ? { postLogoutRedirectUris: data.postLogoutRedirectUris } : {}),
+    ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+    ...(data.allowedScopes ? { allowedScopes: data.allowedScopes } : {}),
+    ...(federatedIdp ? { federatedIdp } : {}),
+    ...(data.overwatchProductId ? { overwatchProductId: data.overwatchProductId } : {}),
+    ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountLimits ? { unpaidAccountLimits: data.unpaidAccountLimits } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
+  };
+  const $unset: Record<string, ''> = {
+    ...(data.federatedIdp === null ? { federatedIdp: '' } : {}),
+    ...(data.overwatchProductId === null ? { overwatchProductId: '' } : {}),
+    ...(data.rateLimit === null ? { rateLimit: '' } : {}),
+    ...(data.unpaidAccountLimits === null ? { unpaidAccountLimits: '' } : {}),
+  };
+  const update = { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) };
+
+  // Exact-match the lists we validated against, so a concurrent edit cannot slip an unchecked value past them.
+  const filter: Record<string, unknown> = { _id: id };
+  if (data.redirectUris) filter.redirectUris = before.redirectUris;
+  if (scopesOrTrustChanged) filter.allowedScopes = before.allowedScopes;
+  if (data.federatedIdp !== undefined) {
+    // Per field, not the whole subdocument: subdocument equality depends on key order. null matches absent.
+    for (const key of ['issuer', 'audience', 'jwksUri', 'providerName', 'subjectSource'] as const) {
+      filter[`federatedIdp.${key}`] = before.federatedIdp?.[key] ?? null;
+    }
+  } else if (scopesOrTrustChanged && grantsOptIn) {
+    // Federation must still exist when this write leaves an opt-in scope in place.
+    filter.federatedIdp = { $exists: true };
+    filter.clientType = 'relying-party';
+  }
+  if (data.expectedUpdatedAt !== undefined) {
+    filter.updatedAt = data.expectedUpdatedAt === null ? null : new Date(data.expectedUpdatedAt);
+  }
+  if (data.rateLimit !== undefined || data.federatedIdp !== undefined) {
+    filter['rateLimit.requestsPerMinute'] = before.rateLimit?.requestsPerMinute ?? null;
+    filter['rateLimit.requestsPerDay'] = before.rateLimit?.requestsPerDay ?? null;
+    if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
+  }
+
+  if (data.unpaidAccountLimits !== undefined || data.federatedIdp !== undefined) {
+    for (const key of ['requestsPerMinute', 'requestsPerDay', 'tokensPerMinute', 'maxConcurrent'] as const) {
+      filter[`unpaidAccountLimits.${key}`] = before.unpaidAccountLimits?.[key] ?? null;
+    }
+    if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
+  }
+
+  const doc = await OAuthClientModel.findOneAndUpdate(filter, update, { new: true, runValidators: true }).exec();
   if (!doc) {
-    if (data.redirectUris && (await OAuthClientModel.exists({ _id: id }))) {
-      throw new ConflictError('Redirect URIs changed while saving; reload and try again');
+    if (Object.keys(filter).length > 1 && (await OAuthClientModel.exists({ _id: id }))) {
+      throw new ConflictError(
+        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined || data.unpaidAccountLimits !== undefined
+          ? 'OAuth client changed while saving; reload and try again'
+          : 'Redirect URIs changed while saving; reload and try again'
+      );
     }
     throw new NotFoundError('OAuth client not found');
   }
@@ -180,7 +293,8 @@ export async function updateOAuthClient(
  * is a no-op. Relying-party only: first-party clients skip the grant gate (federatedGrantGate.ts), so
  * the scope would reach them with no user consent. Throws BadRequestError on an empty list, a scope
  * outside OAUTH_OPT_IN_SCOPES, or a client that is not federated or not a relying party; NotFoundError
- * when no client has that clientId. There is no remove counterpart: revoking is a manual $pull.
+ * when no client has that clientId. An admin removes an opt-in scope through updateOAuthClient
+ * (the admin console edit form).
  */
 export async function addOAuthClientOptInScopes(clientId: string, scopes: readonly string[]): Promise<OAuthClientView> {
   if (scopes.length === 0) throw new BadRequestError('No opt-in scopes given');

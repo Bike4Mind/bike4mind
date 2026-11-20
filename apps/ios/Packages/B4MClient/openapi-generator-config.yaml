@@ -1,0 +1,23 @@
+# Inputs to swift-openapi-generator; see apps/ios/README.md ("Generated API client").
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic
+# Output is committed, so filenames are stable and the diff of a regeneration is reviewable.
+filter:
+  # Only the operations the app calls. The full spec generates ~140k lines that every build would
+  # compile for endpoints the app never uses. Later milestones add their operations here and rerun
+  # `make generate-client`.
+  operations:
+    - listSessions
+    - getSession
+    - listSessionQuests
+    - getQuest
+    - getCreditBalance
+    - listCreditTransactions
+    - getMe
+  # Left out on purpose: sendChatMessage. Its request schema declares both `max_tokens` and `maxTokens`,
+  # which collide under the idiomatic naming strategy and generate code that does not compile. M3 (chat)
+  # must resolve that (spec fix, or a `maxTokens` rename via the generator's name overrides) when it
+  # adds the operation here.

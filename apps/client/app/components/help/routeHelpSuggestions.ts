@@ -29,7 +29,6 @@ export const ROUTE_HELP_SUGGESTIONS: RouteHelpSuggestion[] = [
     helpIds: ['features/organizations-teams'],
     label: 'Learn about Teams',
   },
-  { path: '/quests', helpIds: ['features/quest-master'], label: 'Learn about Quest Master' },
 ];
 
 /**

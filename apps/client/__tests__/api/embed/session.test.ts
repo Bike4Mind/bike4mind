@@ -12,10 +12,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // CORS + rate-limit middlewares are exercised in their own tests; no-op here.
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: (...a: unknown[]) => mockVerifyEmbedApiKey(...a),
 }));
 
@@ -125,9 +125,18 @@ describe('POST /api/embed/session - mint embed session token', () => {
     expect(res._getStatusCode()).toBe(403);
   });
 
-  it('accepts Origin: null on a key with no allowed origins', async () => {
+  it('rejects Origin: null on a key with no allowed origins', async () => {
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
     const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'null' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('accepts a request without an Origin header on a key with no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (handler as any)(req, res);
     expect(res._getStatusCode()).toBe(200);

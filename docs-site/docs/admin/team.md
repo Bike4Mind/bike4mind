@@ -13,7 +13,7 @@ The Team tab provides an internal contact list for managing team members used in
 
 Team members are displayed as a responsive grid of cards, sorted alphabetically by name. Each card shows the member's name, phone number (clickable to initiate a call), and optional details including email, role, and department.
 
-When no team members exist, an informational alert prompts the administrator to use the Create Team Member button.
+When no team members exist, the page shows "No team members yet" with a **Create team member** button.
 
 ### Card Information
 
@@ -36,7 +36,7 @@ Each card provides two action buttons:
 
 ## Creating a Team Member
 
-Click the **Create Team Member** button to open the creation modal. The modal contains a form with the following fields:
+Click the **Create team member** button to open the creation modal. The modal contains a form with the following fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -50,7 +50,7 @@ Validation requires that both Name and Phone are non-empty. If validation fails,
 
 ## Editing a Team Member
 
-Click the edit icon on any team member card to open the edit modal. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update Team Member** button.
+Click the edit icon on any team member card to open the edit modal. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update team member** button.
 
 ## Deleting a Team Member
 

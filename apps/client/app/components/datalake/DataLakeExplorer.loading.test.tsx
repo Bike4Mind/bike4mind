@@ -49,6 +49,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   // which is fine here - this suite only asserts the tree's isLoading wiring.
   useGetDataLakes: () => ({ data: [] }),
   useGetDataLakesWithRetrievability: () => ({ data: [] }),
+  useRefreshLakePickerReads: () => () => {},
   useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

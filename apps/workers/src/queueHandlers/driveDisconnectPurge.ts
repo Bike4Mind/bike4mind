@@ -14,8 +14,8 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { lakeConnectionOwnerOf, type IDataLakeDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { releaseDriveConnection } from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   deleteDriveOrphans,
   listDeletableDriveOrphans,

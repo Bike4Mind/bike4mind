@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
 import { BadRequestError as ServerBadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError } from '@bike4mind/common';
+import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError, hasAdminPermission } from '@bike4mind/common';
 
 const storageRefusal = () =>
   new StorageLimitError('File size exceeds storage limit', {
@@ -13,7 +13,7 @@ const storageRefusal = () =>
   });
 
 // Passthrough the wrapper so we drive the raw handler directly.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   lakeFind: vi.fn(),
   userFindById: vi.fn(),
+  defineAbilitiesFor: vi.fn((..._args: unknown[]) => ({})),
+  findAdminRoles: vi.fn(),
   userRepoFindById: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
   fabFileFindById: vi.fn(),
@@ -87,6 +89,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+  adminRoleRepository: { findByIds: (ids: string[]) => h.findAdminRoles(ids) },
   organizationRepository: {
     findById: (id: string) => h.orgFindById(id),
     incrementCurrentStorage: h.incrementCurrentStorage,
@@ -178,12 +181,14 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   acceptDocumentDate: (await importOriginal<typeof import('@bike4mind/fab-pipeline')>()).acceptDocumentDate,
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
-vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({
+  default: (...args: unknown[]) => h.defineAbilitiesFor(...args),
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
-vi.mock('@server/integrations/google/drive/common', async () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async () => ({
   getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   releaseDriveConnection: h.releaseDriveConnection,
@@ -210,9 +215,9 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async i
 });
 // Mocks only the network-touching calls; keeps the real DriveWalkTimeBudgetExceededError export so
 // tests and the handler agree on the class an `instanceof` check below is testing against.
-vi.mock('@server/integrations/google/drive/driveContent', async () => {
-  const actual = await vi.importActual<typeof import('@server/integrations/google/drive/driveContent')>(
-    '@server/integrations/google/drive/driveContent'
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveContent', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveContent')>(
+    '@bike4mind/server-utils/integrations/google/drive/driveContent'
   );
   return {
     ...actual,
@@ -221,7 +226,7 @@ vi.mock('@server/integrations/google/drive/driveContent', async () => {
     isUnderRoot: h.isUnderRoot,
   };
 });
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
@@ -235,7 +240,7 @@ import {
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
 import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
+import { DriveWalkTimeBudgetExceededError } from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
@@ -2131,6 +2136,58 @@ describe('driveLakeIngest consumer', () => {
       'token-claim',
       expect.stringContaining('no longer matches its data lake owner')
     );
+  });
+
+  describe('role-held admin permissions', () => {
+    const ROLE_ID = 'a'.repeat(24);
+    const DELETED_ROLE_ID = 'c'.repeat(24);
+    const connectingUserWith = (adminRoleIds: unknown[]) =>
+      h.userFindById.mockResolvedValue({ id: 'user1', adminRoleIds, save: h.userSave });
+    const userHandedToAbility = () => h.defineAbilitiesFor.mock.calls[0][0] as Parameters<typeof hasAdminPermission>[0];
+
+    beforeEach(() => {
+      h.findAdminRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    });
+
+    it('counts a permission held only through a role on the user the ability is built from', async () => {
+      connectingUserWith([ROLE_ID]);
+
+      await run();
+
+      expect(h.findAdminRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(true);
+    });
+
+    it('refuses the permission on the next run once the role is removed', async () => {
+      connectingUserWith([ROLE_ID]);
+      await run();
+      expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(true);
+
+      h.defineAbilitiesFor.mockClear();
+      connectingUserWith([]);
+      await run();
+
+      expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(false);
+    });
+
+    it('grants nothing for a deleted or malformed role id', async () => {
+      h.findAdminRoles.mockResolvedValue([]);
+      connectingUserWith([DELETED_ROLE_ID, 'not-an-id']);
+
+      await run();
+
+      expect(h.findAdminRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+      expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(false);
+    });
+
+    it('builds no ability when the role lookup fails', async () => {
+      connectingUserWith([ROLE_ID]);
+      h.findAdminRoles.mockRejectedValue(new Error('db down'));
+
+      await run().catch(() => undefined);
+
+      expect(h.defineAbilitiesFor).not.toHaveBeenCalled();
+    });
   });
 
   describe('personal connection owner', () => {

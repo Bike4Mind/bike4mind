@@ -4,7 +4,7 @@ import {
   GENERIC_MODAL_API_KEY_SCOPES,
   DEDICATED_FLOW_SCOPES,
   genericApiKeyScopesFor,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
 const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);
@@ -36,12 +36,8 @@ describe('API reference scopes table', () => {
       [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
     );
 
-    // Pin the line count; the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(2);
-    expect(required).toContain('projects:read');
-    expect(required).toContain('projects:write');
-    expect(required).toContain('agents:read');
-    expect(required).toContain('agents:write');
+    // Endpoint sections are generated from contracts now, so there may be no hand-written line left;
+    // any that is added must still name scopes the table documents.
     for (const scope of required) {
       expect(listed).toContain(scope);
     }

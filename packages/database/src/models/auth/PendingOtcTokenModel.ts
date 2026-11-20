@@ -25,6 +25,8 @@ interface IPendingOtcCode {
   expiresAt: Date;
   /** bcrypt hash of the emailed code, read by validateAndRotateNonce. */
   otcHash?: string;
+  /** Signup bot-check signals, read by validateAndRotateNonce; never sent to the client. */
+  riskSignals?: string[];
 }
 
 interface IPendingOtcToken {
@@ -50,7 +52,12 @@ const pendingOtcTokenSchema = new Schema<IPendingOtcTokenDocument>({
   codes: {
     type: [
       new Schema<IPendingOtcCode>(
-        { nonce: String, expiresAt: Date, otcHash: { type: String, select: false } },
+        {
+          nonce: String,
+          expiresAt: Date,
+          otcHash: { type: String, select: false },
+          riskSignals: { type: [String], select: false, default: undefined },
+        },
         { _id: false }
       ),
     ],
@@ -69,11 +76,18 @@ const modelName = 'PendingOtcToken';
  * Update pipeline that makes `nonce` the newest live code: expired codes are dropped and the list is
  * capped at MAX_LIVE_OTC_CODES, evicting the oldest.
  */
-function pushLiveCodePipeline(nonce: string, otcHash: string, debugCode: string | undefined, now: Date) {
+function pushLiveCodePipeline(
+  nonce: string,
+  otcHash: string,
+  debugCode: string | undefined,
+  now: Date,
+  riskSignals: string[] = []
+) {
   const code = {
     nonce: { $literal: nonce },
     expiresAt: new Date(now.getTime() + OTC_CODE_TTL_MS),
     otcHash: { $literal: otcHash },
+    riskSignals: { $literal: riskSignals },
   };
   const stillLive = {
     $filter: { input: { $ifNull: ['$codes', []] }, cond: { $gt: ['$$this.expiresAt', now] } },
@@ -227,11 +241,12 @@ export class PendingOtcTokenRepository {
     reservedAt: Date,
     nonce: string,
     otcHash: string,
-    debugCode?: string
+    debugCode?: string,
+    riskSignals?: string[]
   ): Promise<boolean> {
     const result = await PendingOtcTokenModel.findOneAndUpdate(
       { email, createdAt: reservedAt },
-      pushLiveCodePipeline(nonce, otcHash, debugCode, new Date()),
+      pushLiveCodePipeline(nonce, otcHash, debugCode, new Date(), riskSignals),
       { new: true }
     );
     return result !== null;
@@ -240,11 +255,16 @@ export class PendingOtcTokenRepository {
   /**
    * Validate that the provided nonce is one of the live codes for this email, then atomically
    * replace it with a new nonce (for the re-issued token), keeping that code's expiry and hash.
-   * Returns the code hash to compare the submitted code against, or null if the nonce is
+   * Returns the code hash to compare the submitted code against, plus the signup bot-check signals
+   * stored with the code (kept server-side so a client cannot see which check fired), or null if the nonce is
    * stale/missing/expired or its entry has no hash (written before hashes lived here), in which
    * case nothing is rotated and the caller must treat it as an invalid code.
    */
-  async validateAndRotateNonce(email: string, currentNonce: string, newNonce: string): Promise<string | null> {
+  async validateAndRotateNonce(
+    email: string,
+    currentNonce: string,
+    newNonce: string
+  ): Promise<{ otcHash: string; riskSignals: string[] } | null> {
     const rotated = await PendingOtcTokenModel.findOneAndUpdate(
       {
         email,
@@ -252,8 +272,9 @@ export class PendingOtcTokenRepository {
       },
       { $set: { 'codes.$.nonce': newNonce } },
       { new: true }
-    ).select('+codes.otcHash');
-    return rotated?.codes.find(c => c.nonce === newNonce)?.otcHash ?? null;
+    ).select('+codes.otcHash +codes.riskSignals');
+    const code = rotated?.codes.find(c => c.nonce === newNonce);
+    return code?.otcHash ? { otcHash: code.otcHash, riskSignals: code.riskSignals ?? [] } : null;
   }
 
   /**

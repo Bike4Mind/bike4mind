@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 import { getSettingsMap } from '@bike4mind/utils';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

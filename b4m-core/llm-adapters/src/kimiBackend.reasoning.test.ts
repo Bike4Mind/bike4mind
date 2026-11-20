@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { KimiBackend } from './kimiBackend';
 import type { CompletionInfo } from './backend';
+import { isOutputBudgetExhaustedError, isStreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 
 /**
  * The non-streaming reasoning path. Every case here was a real defect in the first
@@ -98,6 +99,107 @@ describe('KimiBackend reasoning capture', () => {
     expect(toolFn).toHaveBeenCalledOnce();
     expect(frames.at(-1)?.text[0]).toBe('final answer');
     expect(frames.at(-1)?.info.toolsUsed?.map(t => t.name)).toEqual(['search']);
+  });
+
+  it('replays a parallel round as ONE assistant message carrying every call and the reasoning', async () => {
+    // Moonshot's thinking guide requires the monologue back inside a tool-call
+    // loop. One assistant message per call left every message after the first
+    // without reasoning_content, and the replay dropped it entirely before that.
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+
+    await runTurn(backend, ChatModels.KIMI_K3, {
+      tools: [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }],
+    });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+    expect(secondRequest.messages.slice(-2).map(m => [m.role, m.tool_call_id, m.name])).toEqual([
+      ['tool', 't1', 'search'],
+      ['tool', 't2', 'search'],
+    ]);
+  });
+
+  it('hands the reasoning to executeTools:false callers so an agent replay keeps it', async () => {
+    // Agent loops (ReActAgent) run the tools themselves and replay each call through
+    // pushToolMessages(info.thinking); without `thinking` on the emit every replayed
+    // tool-call message lacked reasoning_content.
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+    const tools = [
+      { toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn: vi.fn() },
+    ];
+
+    const messages = userMessages();
+    let info: CompletionInfo | undefined;
+    await backend.complete(
+      ChatModels.KIMI_K3,
+      messages,
+      { stream: false, tools, executeTools: false },
+      async (_t, i) => {
+        info = i;
+      }
+    );
+    expect(info?.thinking).toEqual(['search twice']);
+
+    for (const used of info!.toolsUsed!) {
+      backend.pushToolMessages(
+        messages,
+        { id: used.id!, name: used.name, parameters: used.arguments as string },
+        'out',
+        info!.thinking
+      );
+    }
+    await backend.complete(ChatModels.KIMI_K3, messages, { stream: false, tools, executeTools: false }, async () => {});
+
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages.map(m => m.reasoning_content)).toEqual(['search twice', 'search twice']);
   });
 
   it('throws a diagnosable error when reasoning consumed the whole output budget', async () => {
@@ -430,6 +532,81 @@ describe('KimiBackend streaming reasoning', () => {
     expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
   });
 
+  it('replays a streamed parallel round as ONE assistant message carrying the reasoning', async () => {
+    const toolFn = vi.fn().mockResolvedValue('42');
+    const { backend, create } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+                  { index: 1, id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'the answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 6 },
+        },
+      ],
+    ]);
+
+    await runStream(backend, ChatModels.KIMI_K3, {
+      tools: [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }],
+    });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    // Raw, unescaped and without the <think> wrapper the UI stream gets.
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+  });
+
+  it('hands the raw streamed reasoning to executeTools:false callers', async () => {
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const info = (
+      await runStream(backend, ChatModels.KIMI_K3, {
+        tools: [
+          { toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn: vi.fn() },
+        ],
+        executeTools: false,
+      })
+    ).at(-1)!.info;
+
+    expect(info.thinking).toEqual(['search twice']);
+  });
+
   it('keeps the prose from a delta that carries the monologue tail and the answer together', async () => {
     // The reasoning branch used to return before the block-closing branch ever
     // ran, so a chunk holding both fields lost its content silently - no error,
@@ -452,6 +629,47 @@ describe('KimiBackend streaming reasoning', () => {
       .join('');
 
     expect(joined).toBe('<think>thinking more</think>The answer is 42');
+  });
+
+  it('types a budget-exhausted turn so callers can classify it', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: '' }, finish_reason: 'length' }]);
+
+    const err = await runTurn(backend, ChatModels.KIMI_K3).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+  });
+
+  it('types a budget-exhausted stream so callers can classify it', async () => {
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.KIMI_K3).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+  });
+
+  it('types a stream that ends with no finish reason as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+
+    const err = await runStream(backend, ChatModels.KIMI_K3).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(true);
+    expect(isOutputBudgetExhaustedError(err)).toBe(false);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type an aborted stream as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+    const abortSignal = AbortSignal.abort();
+
+    const err = await runStream(backend, ChatModels.KIMI_K3, { abortSignal }).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/returned no content/);
   });
 
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {

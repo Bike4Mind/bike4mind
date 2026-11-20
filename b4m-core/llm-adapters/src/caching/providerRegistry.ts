@@ -105,6 +105,15 @@ export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilit
     maxTTL: '0',
     costSavings: 0,
   },
+  [ModelBackend.OpenAICompatible]: {
+    backend: ModelBackend.OpenAICompatible,
+    supported: false,
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
   [ModelBackend.BFL]: {
     backend: ModelBackend.BFL,
     supported: false, // Image generation, not text

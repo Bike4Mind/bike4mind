@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { normalizeEnvKey, type AuthLogger, type AuthTokens, type TokenStore } from '@bike4mind/client-auth';
 import type { EnvironmentSelection, TokenStorageStatus } from '@shared/auth';
+import { resealed } from '../secrets/reseal';
 
 /**
  * The slice of Electron's `safeStorage` this module needs. Narrowed to a port so the vault
@@ -11,6 +13,8 @@ export interface SecretCipher {
   isEncryptionAvailable(): boolean;
   encryptString(plainText: string): Buffer;
   decryptString(encrypted: Buffer): string;
+  /** True for a blob in an older format that the vault should re-save (see secrets/appSecretCipher.ts). */
+  needsReencrypt?(encrypted: Buffer): boolean;
 }
 
 /** Persistence port for the vault document. Backed by a JSON file under `userData`. */
@@ -33,16 +37,12 @@ interface VaultDocument {
 
 const EMPTY_DOCUMENT: VaultDocument = { version: 1, tokens: {} };
 
-function isAuthTokens(value: unknown): value is AuthTokens {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.accessToken === 'string' &&
-    typeof candidate.refreshToken === 'string' &&
-    typeof candidate.expiresAt === 'string' &&
-    typeof candidate.userId === 'string'
-  );
-}
+const authTokensSchema = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  expiresAt: z.string(),
+  userId: z.string(),
+});
 
 /**
  * Per-environment token storage backed by the OS keychain via `safeStorage`.
@@ -61,6 +61,18 @@ export class TokenVault {
   private document: VaultDocument | null = null;
   /** Decrypted tokens by environment key; the only copy when encryption is unavailable. */
   private readonly cache = new Map<string, AuthTokens>();
+  private documentOperation: Promise<void> = Promise.resolve();
+
+  /** Keep each local read/compare/write together, including its disk persistence. */
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.documentOperation.then(operation);
+    // A caller receives its failure; the next independent operation can still run.
+    this.documentOperation = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   constructor(
     private readonly cipher: SecretCipher,
@@ -73,54 +85,99 @@ export class TokenVault {
     return this.cipher.isEncryptionAvailable() ? 'available' : 'unavailable';
   }
 
-  async getEnvironment(): Promise<EnvironmentSelection | undefined> {
-    return (await this.load()).environment;
+  getEnvironment(): Promise<EnvironmentSelection | undefined> {
+    return this.serialize(async () => (await this.load()).environment);
   }
 
-  async setEnvironment(environment: EnvironmentSelection): Promise<void> {
-    const document = await this.load({ fromDisk: true });
-    document.environment = environment;
-    await this.persist(document);
+  setEnvironment(environment: EnvironmentSelection): Promise<void> {
+    return this.serialize(async () => {
+      const document = await this.load({ fromDisk: true });
+      document.environment = environment;
+      await this.persist(document);
+    });
   }
 
-  async getTokens(envUrl: string): Promise<AuthTokens | null> {
-    const key = normalizeEnvKey(envUrl);
-    const cached = this.cache.get(key);
-    if (cached) return cached;
-
-    if (this.storageStatus() === 'unavailable') return null;
-    return this.decryptInto(envUrl, await this.load());
+  getTokens(envUrl: string): Promise<AuthTokens | null> {
+    return this.serialize(async () => {
+      const cached = this.cache.get(normalizeEnvKey(envUrl));
+      if (cached) return cached;
+      if (this.storageStatus() === 'unavailable') return null;
+      return this.decryptInto(envUrl, await this.load());
+    });
   }
 
-  /**
-   * {@link getTokens}, but read from the file rather than the cache. Another process sharing this
-   * `userData` (a second app instance, or a dev build next to the packaged one) rotates the same
-   * refresh token, so anything about to present it must see that process's latest write.
-   */
-  async reloadTokens(envUrl: string): Promise<AuthTokens | null> {
-    if (this.storageStatus() === 'unavailable') return this.cache.get(normalizeEnvKey(envUrl)) ?? null;
-    return this.decryptInto(envUrl, await this.load({ fromDisk: true }), { keepCachedOnFailure: true });
+  /** Read another process's persisted rotation before presenting credentials. */
+  reloadTokens(envUrl: string): Promise<AuthTokens | null> {
+    return this.serialize(async () => {
+      if (this.storageStatus() === 'unavailable') return this.cache.get(normalizeEnvKey(envUrl)) ?? null;
+      return this.decryptInto(envUrl, await this.load({ fromDisk: true }), { keepCachedOnFailure: true });
+    });
   }
 
   async setTokens(envUrl: string, tokens: AuthTokens): Promise<void> {
-    const key = normalizeEnvKey(envUrl);
-    this.cache.set(key, tokens);
-
-    if (this.storageStatus() === 'unavailable') return;
-
-    const document = await this.load({ fromDisk: true });
-    document.tokens[key] = this.cipher.encryptString(JSON.stringify(tokens)).toString('base64');
-    await this.persist(document);
+    await this.writeTokens(envUrl, tokens);
   }
 
   async clearTokens(envUrl: string): Promise<void> {
-    const key = normalizeEnvKey(envUrl);
-    this.cache.delete(key);
+    await this.writeTokens(envUrl, null);
+  }
 
+  private writeTokens(envUrl: string, tokens: AuthTokens | null, expectedRefreshToken?: string): Promise<boolean> {
+    return this.serialize(async () => {
+      const key = normalizeEnvKey(envUrl);
+      const available = this.storageStatus() === 'available';
+      if (!available && expectedRefreshToken !== undefined) {
+        if (this.cache.get(key)?.refreshToken !== expectedRefreshToken) return false;
+        if (tokens) this.cache.set(key, tokens);
+        else this.cache.delete(key);
+        return true;
+      }
+      let document: VaultDocument;
+      try {
+        document = await this.load({ fromDisk: true, requireFresh: expectedRefreshToken !== undefined });
+      } catch (error) {
+        if (expectedRefreshToken !== undefined) return false;
+        throw error;
+      }
+      if (expectedRefreshToken !== undefined) {
+        const current = available
+          ? await this.decryptInto(envUrl, document, { preserveOnFailure: true })
+          : this.cache.get(key);
+        if (current?.refreshToken !== expectedRefreshToken) return false;
+      }
+      if (tokens) {
+        this.cache.set(key, tokens);
+        if (!available) return true;
+        document.tokens[key] = this.cipher.encryptString(JSON.stringify(tokens)).toString('base64');
+      } else {
+        this.cache.delete(key);
+        if (!(key in document.tokens)) return true;
+        delete document.tokens[key];
+      }
+      await this.persist(document);
+      return true;
+    });
+  }
+
+  /**
+   * Re-saves every blob the cipher reports as an older format. One it cannot open is left on disk
+   * for the read path, and tried again on the next launch.
+   */
+  reencrypt(): Promise<void> {
+    return this.serialize(() => this.reencryptDocument());
+  }
+
+  private async reencryptDocument(): Promise<void> {
+    if (!this.cipher.needsReencrypt || this.storageStatus() === 'unavailable') return;
     const document = await this.load({ fromDisk: true });
-    if (!(key in document.tokens)) return;
-    delete document.tokens[key];
-    await this.persist(document);
+    let changed = false;
+    for (const [key, blob] of Object.entries(document.tokens)) {
+      const next = resealed(this.cipher, blob);
+      if (next === null) continue;
+      document.tokens[key] = next;
+      changed = true;
+    }
+    if (changed) await this.persist(document);
   }
 
   /** A {@link TokenStore} bound to one environment, for the shared auth package to consume. */
@@ -128,8 +185,8 @@ export class TokenVault {
     return {
       getAuthTokens: () => this.getTokens(envUrl),
       reloadAuthTokens: () => this.reloadTokens(envUrl),
-      setAuthTokens: tokens => this.setTokens(envUrl, tokens),
-      clearAuthTokens: () => this.clearTokens(envUrl),
+      setAuthTokens: (tokens, expected) => this.writeTokens(envUrl, tokens, expected),
+      clearAuthTokens: expected => this.writeTokens(envUrl, null, expected),
       isAuthenticated: async () => (await this.getTokens(envUrl)) !== null,
     };
   }
@@ -141,7 +198,13 @@ export class TokenVault {
   private async decryptInto(
     envUrl: string,
     document: VaultDocument,
-    { keepCachedOnFailure = false }: { keepCachedOnFailure?: boolean } = {}
+    {
+      keepCachedOnFailure = false,
+      preserveOnFailure = false,
+    }: {
+      keepCachedOnFailure?: boolean;
+      preserveOnFailure?: boolean;
+    } = {}
   ): Promise<AuthTokens | null> {
     const key = normalizeEnvKey(envUrl);
     const blob = document.tokens[key];
@@ -151,11 +214,14 @@ export class TokenVault {
     }
 
     try {
-      const parsed: unknown = JSON.parse(this.cipher.decryptString(Buffer.from(blob, 'base64')));
-      if (!isAuthTokens(parsed)) throw new Error('unexpected token shape');
+      const parsed = authTokensSchema.parse(JSON.parse(this.cipher.decryptString(Buffer.from(blob, 'base64'))));
       this.cache.set(key, parsed);
       return parsed;
     } catch (err) {
+      if (preserveOnFailure) {
+        this.logger.warn('AUTH: vault comparison unavailable; preserving stored credentials');
+        return null;
+      }
       const cached = this.cache.get(key);
       if (keepCachedOnFailure && cached) {
         this.logger.warn(
@@ -168,7 +234,9 @@ export class TokenVault {
       this.logger.warn(
         `AUTH: clearing stored credentials for ${key}: vault decrypt failed (${err instanceof Error ? err.name : 'unknown'})`
       );
-      await this.clearTokens(envUrl);
+      this.cache.delete(key);
+      delete document.tokens[key];
+      await this.persist(document);
       return null;
     }
   }
@@ -178,7 +246,10 @@ export class TokenVault {
    * process's latest tokens, passes `fromDisk` so it starts from the file as it is now - a
    * read-modify-write over a stale copy would put back tokens that process already replaced.
    */
-  private async load({ fromDisk = false }: { fromDisk?: boolean } = {}): Promise<VaultDocument> {
+  private async load({
+    fromDisk = false,
+    requireFresh = false,
+  }: { fromDisk?: boolean; requireFresh?: boolean } = {}): Promise<VaultDocument> {
     if (this.document && !fromDisk) return this.document;
 
     let document: VaultDocument = { ...EMPTY_DOCUMENT, tokens: {} };
@@ -193,6 +264,10 @@ export class TokenVault {
         };
       }
     } catch (err) {
+      if (requireFresh) {
+        this.logger.warn('AUTH: fresh vault comparison unavailable; preserving stored credentials');
+        throw err;
+      }
       // A re-read that fails keeps the copy already in hand rather than "starting empty", which
       // a following write would persist as a wipe of every environment.
       if (this.document) {

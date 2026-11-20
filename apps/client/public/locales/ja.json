@@ -102,7 +102,9 @@
     "no_subscription": "サブスクリプションがありません",
     "x_members": "{{count}} メンバー",
     "x_credits": "{{count}} クレジット",
-    "owner": "オーナー"
+    "roles": {
+      "owner": "オーナー"
+    }
   },
   "session": {
     "typeYourMessage": "ここにメッセージを入力してください",

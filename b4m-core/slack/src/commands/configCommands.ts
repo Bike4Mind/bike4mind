@@ -71,6 +71,7 @@ export function formatModelName(modelId: string): string {
     // SYSTEM_MODEL_DEFAULTS.modelId is global.anthropic.claude-sonnet-5 -> covers the Bedrock Sonnet 5 id
     [SYSTEM_MODEL_DEFAULTS.modelId]: SYSTEM_MODEL_DEFAULTS.modelDisplayName,
     'claude-sonnet-5': 'Claude Sonnet 5',
+    'claude-sonnet-5-5': 'Claude Sonnet 5.5',
     'global.anthropic.claude-sonnet-5-5': 'Claude Sonnet 5.5',
     'claude-sonnet-4-6': 'Claude Sonnet 4.6',
     'global.anthropic.claude-sonnet-4-6': 'Claude Sonnet 4.6',

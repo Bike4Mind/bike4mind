@@ -7,6 +7,11 @@ import reactHooksPlugin from 'eslint-plugin-react-hooks';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
+import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
+import noContentInLogMessage from './eslint-rules/no-content-in-log-message.mjs';
+import noWorkersServerBridge from './eslint-rules/no-workers-server-bridge.mjs';
+import noDirectDecryptSecret from './eslint-rules/no-direct-decrypt-secret.mjs';
+import requireUpdateValidators from './eslint-rules/require-update-validators.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -43,18 +48,10 @@ const b4mv3RestrictedPaths = [
       'validateUrlForFetch',
       'isPrivateIP',
       'isPrivateOrInternalHostname',
-      'EmbeddingFactory',
-      'EmbeddingConfig',
-      'EmbeddingService',
       'EmbeddingModelProvider',
       'EmbeddingModelInfo',
-      'getProviderFromModel',
-      'BedrockEmbeddingService',
-      'BedrockCredentials',
       'BEDROCK_EMBEDDING_MODEL_MAP',
-      'OpenAIEmbeddingService',
       'OPENAI_EMBEDDING_MODEL_MAP',
-      'VoyageAIEmbeddingProvider',
       'VOYAGEAI_EMBEDDING_MODEL_MAP',
       'BaseStorage',
       'S3Storage',
@@ -311,7 +308,8 @@ const noWorkersImportInClient = [
 // optimizePackageImports rewrites these for the app bundle, but vitest loads the barrel as-is:
 // `@mui/icons-material` alone requires ~10k icon modules (a third of the client shard's import
 // time), and `lodash` loads the whole library for one function. Spread into every apps/client
-// block that owns no-restricted-imports, for the last-rule-wins reason above.
+// block that owns no-restricted-imports, for the last-rule-wins reason above, and into the
+// packages/server-utils block, since the shared server code moved there from apps/client.
 const noHeavyBarrelImportsInClient = [
   {
     name: '@mui/icons-material',
@@ -327,8 +325,8 @@ const noHeavyBarrelImportsInClient = [
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
 // anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
-// legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
-// same bridge described above.
+// legitimately imports non-UI apps/client code (e.g. @client/lib/userSubscriptions/constants) through
+// the same bridge described above.
 const WORKERS_NO_UI_MESSAGE =
   'apps/workers must never import UI code (React, Next.js, MUI). Workers are backend job/event ' +
   'runners; shared logic belongs in apps/client/server (imported via @server/*) or a shared package.';
@@ -386,7 +384,16 @@ const SERVER_UTILS_BOUNDARY = {
 
 // Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
 // the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
-const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRuleSources = [
+  './eslint-rules/no-raw-entity-response.mjs',
+  './eslint-rules/no-raw-admin-joy.mjs',
+  './eslint-rules/admin-joy-legacy.mjs',
+  './eslint-rules/admin-joy-legacy-imports.mjs',
+  './eslint-rules/no-content-in-log-message.mjs',
+  './eslint-rules/no-workers-server-bridge.mjs',
+  './eslint-rules/no-direct-decrypt-secret.mjs',
+  './eslint-rules/require-update-validators.mjs',
+];
 const localRulesPlugin = {
   meta: {
     name: 'b4m-local-rules',
@@ -395,7 +402,14 @@ const localRulesPlugin = {
       .digest('hex')
       .slice(0, 12),
   },
-  rules: { 'no-raw-entity-response': noRawEntityResponse },
+  rules: {
+    'no-raw-entity-response': noRawEntityResponse,
+    'no-raw-admin-joy': noRawAdminJoy,
+    'no-content-in-log-message': noContentInLogMessage,
+    'no-workers-server-bridge': noWorkersServerBridge,
+    'no-direct-decrypt-secret': noDirectDecryptSecret,
+    'require-update-validators': requireUpdateValidators,
+  },
 };
 
 export default defineConfig([
@@ -497,6 +511,12 @@ export default defineConfig([
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
+  {
+    files: ['apps/client/app/components/admin/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}'],
+    ignores: ['apps/client/app/components/admin/shared/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-raw-admin-joy': 'error' },
+  },
   // TypeScript custom rules
   {
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
@@ -512,7 +532,6 @@ export default defineConfig([
           caughtErrors: 'none',
         },
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/triple-slash-reference': [
         'error',
         {
@@ -770,6 +789,14 @@ export default defineConfig([
     },
   },
 
+  // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
+  // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
+  {
+    files: ['apps/workers/**/*.ts', 'apps/workers/src/**/*.{mts,cts}'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-workers-server-bridge': 'error' },
+  },
+
   // packages/server-utils - the server code apps/client and apps/workers share. Both apps depend on
   // it, so it must never reach back into either app (by path or through their tsconfig aliases) or
   // pull in UI code. Comes after the generic b4m-core/packages block above and so replaces it
@@ -780,11 +807,31 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths, ...SERVER_UTILS_BOUNDARY.paths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient, ...SERVER_UTILS_BOUNDARY.paths],
           patterns: [...b4mv3RestrictedPatterns, ...SERVER_UTILS_BOUNDARY.patterns],
         },
       ],
     },
+  },
+
+  // Server code logs through the structured Logger (redaction + metadata), never console.* directly;
+  // see b4m-core/observability. Its own rule id, so the no-restricted-imports blocks above are untouched.
+  // server-utils/src/bootstrap patches console by design, so it is exempt.
+  {
+    files: ['packages/server-utils/src/**/*.{ts,tsx,mts,cts}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'packages/server-utils/src/bootstrap/**',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  {
+    files: ['apps/workers/src/**/*.{ts,mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
   },
 
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
@@ -837,5 +884,54 @@ export default defineConfig([
     rules: {
       'b4m/no-raw-entity-response': 'error',
     },
+  },
+
+  // Syntax-only: these database method names also cover native-driver writes, which need a
+  // reasoned opt-out. Existing production calls are frozen by per-file bulk suppressions.
+  {
+    files: ['**/*.{ts,tsx,js,jsx,mjs,cjs}', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx,js,mjs}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/require-update-validators': 'error' },
+  },
+
+  // Stored secrets are read through the helpers that try the current key and then the previous one;
+  // see eslint-rules/no-direct-decrypt-secret.mjs. Exempt: those helpers, and the re-encrypt commands,
+  // which must address each key on its own.
+  {
+    // The .mts/.cts globs match the ones other blocks already lint; a wider glob would pull
+    // otherwise unlinted config and declaration files into the run.
+    files: [
+      '{apps,b4m-core,packages}/**/*.{ts,tsx}',
+      'apps/client/**/*.{mts,cts}',
+      'apps/workers/src/**/*.{mts,cts}',
+      'packages/server-utils/**/*.{mts,cts}',
+    ],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'b4m-core/utils/src/security/secretsAtRest.ts',
+      'packages/server-utils/src/security/tokenEncryption.ts',
+      'packages/server-utils/src/security/secretEncryption.ts',
+      'packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts',
+      'packages/scripts/migrate/encrypt-tokens-at-rest.ts',
+    ],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-direct-decrypt-secret': 'error' },
+  },
+
+  // Server log lines stay free of prompts, queries and model output; see eslint-rules/no-content-in-log-message.mjs.
+  {
+    files: [
+      'apps/client/pages/api/**/*.{ts,tsx}',
+      'apps/client/server/**/*.ts',
+      'apps/workers/src/**/*.ts',
+      'b4m-core/*/src/**/*.ts',
+      'packages/server-utils/src/**/*.ts',
+    ],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-content-in-log-message': 'error' },
   },
 ]);

@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { AGENT_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 
 /**
@@ -36,11 +44,11 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: vi.fn(),
 }));
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({ createAttachmentLakeAccess: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({ createAttachmentLakeAccess: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, creditService: {}, meterCompletionBackend: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 await import('../create-from-context');
 

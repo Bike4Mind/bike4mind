@@ -4,11 +4,11 @@ import { assertTargetUrlIsSafe, probeFetch } from './probeUtils';
 
 const PROBE_NAME = 'ingestTokenSecurity';
 
+/** Must match ATTACK_SIMULATION_HEADER in packages/server-utils/src/security/ingestToken.ts. */
+const ATTACK_SIMULATION_HEADER = 'x-attack-simulation-token';
+
 const INGEST_PATHS = [
   '/api/admin/security-dashboard/web-owasp-ingest',
-  '/api/admin/security-dashboard/code-semgrep-ingest',
-  '/api/admin/security-dashboard/packages-ingest',
-  '/api/admin/security-dashboard/secrets-ingest',
   '/api/admin/security-dashboard/cloud-prowler-ingest',
   '/api/admin/security-dashboard/attack-simulation-ingest',
 ];
@@ -35,12 +35,21 @@ function unauthorizedAccept(status: number): boolean {
   return status >= 200 && status < 300;
 }
 
+/**
+ * `simulationToken` is the simulation's own ingest secret, sent as the marker header
+ * (packages/server-utils/src/security/ingestToken.ts) so the API probe detector does not count these
+ * deliberate refusals. It is never sent as the ingest token under test.
+ */
 export async function ingestTokenSecurityProbe(
-  targetUrl: string
+  targetUrl: string,
+  simulationToken?: string
 ): Promise<{ probeName: string; findings: AttackSimulationFinding[]; error?: string }> {
   try {
     const target = assertTargetUrlIsSafe(targetUrl);
     const findings: AttackSimulationFinding[] = [];
+    const simulationHeaders: Record<string, string> = simulationToken
+      ? { [ATTACK_SIMULATION_HEADER]: simulationToken }
+      : {};
 
     for (const path of INGEST_PATHS) {
       const url = `${target.origin}${path}`;
@@ -48,7 +57,7 @@ export async function ingestTokenSecurityProbe(
       // No token
       const noTokenResponse = await probeFetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...simulationHeaders },
         body: JSON.stringify({}),
       });
 
@@ -91,6 +100,7 @@ export async function ingestTokenSecurityProbe(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...simulationHeaders,
           'x-security-ingest-token': 'definitely-wrong-token-do-not-use',
         },
         body: JSON.stringify({}),
@@ -117,6 +127,7 @@ export async function ingestTokenSecurityProbe(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...simulationHeaders,
           'x-security-ingest-token': 'not-configured',
         },
         body: JSON.stringify({}),

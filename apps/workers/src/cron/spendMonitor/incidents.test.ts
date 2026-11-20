@@ -1,0 +1,395 @@
+import { describe, it, expect } from 'vitest';
+import { spendAlertOpenKey, type SpendAlertRecord } from '@bike4mind/common';
+import { decideIncidents } from './incidents';
+import type { SpendBreach } from './rules';
+
+const now = new Date('2026-10-30T12:00:00.000Z');
+const windowEnd = new Date('2026-10-30T11:55:00.000Z');
+const previousWindowEnd = new Date('2026-10-30T11:50:00.000Z');
+
+const breach = (overrides: Partial<SpendBreach> = {}): SpendBreach => ({
+  rule: 'account_spike',
+  scopeType: 'User',
+  scopeId: 'u1',
+  severity: 'warning',
+  value: 100,
+  baseline: 10,
+  ratio: 10,
+  ...overrides,
+});
+
+const active = (overrides: Partial<SpendAlertRecord> = {}): SpendAlertRecord => ({
+  id: 'a1',
+  rule: 'account_spike',
+  scopeType: 'User',
+  scopeId: 'u1',
+  openKey: spendAlertOpenKey('account_spike', 'User', 'u1'),
+  status: 'open',
+  severity: 'warning',
+  openedAt: new Date('2026-10-30T11:00:00.000Z'),
+  peakValue: 100,
+  lastValue: 100,
+  lastNotifiedValue: 100,
+  lastNotifiedSeverity: 'warning',
+  clearRuns: 0,
+  lastEvaluatedWindowEnd: previousWindowEnd,
+  context: {},
+  ...overrides,
+});
+
+describe('decideIncidents', () => {
+  it('snapshots account facts and policy reasons on each breach and clears obsolete facts on lookup failure', () => {
+    const accountContext = {
+      accountAgeDays: 30,
+      responsibleAccountAgeDays: 30,
+      emailVerified: true,
+      reviewState: 'approved' as const,
+      riskScore: 5,
+      reviewReopened: false,
+      banned: false,
+      paymentRiskEvent: false,
+      hasCreditPurchase: true,
+      lastCreditPurchaseAgeDays: 2,
+      payments: {
+        status: 'observed' as const,
+        succeeded: 1,
+        failed: 0,
+        radarBlocked: 0,
+        elevatedRisk: 0,
+        latestSucceededAgeDays: 2,
+      },
+      evidence: { status: 'missing' as const, ageHours: null },
+    };
+    const withContext = { ...breach(), accountContext, policyReasons: ['established_paid_account'] };
+    const [opened] = decideIncidents([], [withContext], now, windowEnd);
+    expect(opened).toMatchObject({
+      alert: { context: { accountContext, policyReasons: ['established_paid_account'] } },
+    });
+    const previous = active({ context: { accountContext, policyReasons: ['established_paid_account'] } });
+    const [updated] = decideIncidents(
+      [previous],
+      [{ ...breach(), policyReasons: ['account_context_unavailable'] }],
+      now,
+      windowEnd
+    );
+    expect(updated).toMatchObject({ patch: { context: { policyReasons: ['account_context_unavailable'] } } });
+    if (updated.kind === 'open') throw new Error('expected an existing incident update');
+    expect(updated.patch.context).not.toHaveProperty('accountContext');
+  });
+
+  it('opens an incident for a breach with no active incident', () => {
+    const [decision] = decideIncidents([], [breach({ value: 120 })], now, windowEnd);
+
+    expect(decision).toMatchObject({
+      kind: 'open',
+      alert: {
+        openKey: 'account_spike:User:u1',
+        status: 'open',
+        severity: 'warning',
+        openedAt: now,
+        peakValue: 120,
+        lastValue: 120,
+        clearRuns: 0,
+        lastEvaluatedWindowEnd: windowEnd,
+        context: { baseline: 10, ratio: 10 },
+      },
+    });
+  });
+
+  it('snapshots the applied account tier and thresholds on open and update', () => {
+    const paidBreach = breach({ accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 });
+    const [opened] = decideIncidents([], [paidBreach], now, windowEnd);
+    expect(opened).toMatchObject({
+      kind: 'open',
+      alert: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    const [updated] = decideIncidents([active({ context: { trusted: true } })], [paidBreach], now, windowEnd);
+    expect(updated).toMatchObject({
+      kind: 'update',
+      patch: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    if (updated.kind !== 'open') expect(updated.patch.context).not.toHaveProperty('trusted');
+  });
+
+  it('treats 1.5x the last notified value as a silent update', () => {
+    const [decision] = decideIncidents([active()], [breach({ value: 150 })], now, windowEnd);
+
+    expect(decision).toEqual({
+      kind: 'update',
+      id: 'a1',
+      patch: {
+        lastValue: 150,
+        peakValue: 150,
+        clearRuns: 0,
+        lastEvaluatedWindowEnd: windowEnd,
+        context: { baseline: 10, ratio: 10 },
+      },
+    });
+  });
+
+  it('escalates at 2x the last notified value', () => {
+    const [decision] = decideIncidents([active()], [breach({ value: 200 })], now, windowEnd);
+
+    expect(decision).toEqual({
+      kind: 'escalate',
+      id: 'a1',
+      patch: {
+        lastValue: 200,
+        peakValue: 200,
+        severity: 'warning',
+        clearRuns: 0,
+        lastEvaluatedWindowEnd: windowEnd,
+        context: { baseline: 10, ratio: 10 },
+      },
+    });
+  });
+
+  it('never sets lastNotifiedValue on escalate', () => {
+    const [decision] = decideIncidents([active()], [breach({ value: 500 })], now, windowEnd);
+
+    expect(decision?.kind === 'escalate' && decision.patch).not.toHaveProperty('lastNotifiedValue');
+  });
+
+  it('escalates on warning to critical even below 2x', () => {
+    const [decision] = decideIncidents([active()], [breach({ value: 110, severity: 'critical' })], now, windowEnd);
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { severity: 'critical' } });
+  });
+
+  it('escalates an acknowledged incident on a severity rise', () => {
+    const [decision] = decideIncidents(
+      [active({ status: 'acknowledged' })],
+      [breach({ value: 110, severity: 'critical' })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { severity: 'critical' } });
+  });
+
+  it('keeps an acknowledged incident silent at 3x', () => {
+    const [decision] = decideIncidents([active({ status: 'acknowledged' })], [breach({ value: 300 })], now, windowEnd);
+
+    expect(decision).toMatchObject({ kind: 'update', patch: { lastValue: 300, peakValue: 300 } });
+  });
+
+  it('never lowers severity or peak on a silent update', () => {
+    const [decision] = decideIncidents(
+      [active({ severity: 'critical', lastNotifiedSeverity: 'critical', peakValue: 400 })],
+      [breach({ value: 120, severity: 'warning' })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toEqual({
+      kind: 'update',
+      id: 'a1',
+      patch: {
+        lastValue: 120,
+        peakValue: 400,
+        clearRuns: 0,
+        lastEvaluatedWindowEnd: windowEnd,
+        context: { baseline: 10, ratio: 10 },
+      },
+    });
+  });
+
+  it('does not lower severity when escalating on growth', () => {
+    const [decision] = decideIncidents(
+      [active({ severity: 'critical', lastNotifiedSeverity: 'critical' })],
+      [breach({ value: 250, severity: 'warning' })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { severity: 'critical' } });
+  });
+
+  it('re-escalates a stored critical whose announcement never landed, even below 2x', () => {
+    const [decision] = decideIncidents(
+      [active({ severity: 'critical', lastNotifiedSeverity: 'warning' })],
+      [breach({ value: 110, severity: 'critical' })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { severity: 'critical' } });
+  });
+
+  it('counts the first clear run silently', () => {
+    const [decision] = decideIncidents([active()], [], now, windowEnd);
+
+    expect(decision).toEqual({
+      kind: 'update',
+      id: 'a1',
+      patch: { clearRuns: 1, lastEvaluatedWindowEnd: windowEnd },
+    });
+  });
+
+  it('resolves after two consecutive clear runs', () => {
+    const [decision] = decideIncidents([active({ clearRuns: 1 })], [], now, windowEnd);
+
+    expect(decision).toEqual({
+      kind: 'resolve',
+      id: 'a1',
+      patch: { status: 'resolved', resolvedAt: now, clearRuns: 2, lastEvaluatedWindowEnd: windowEnd },
+    });
+  });
+
+  it('leaves the stored tier and policy context untouched when an incident resolves', () => {
+    const context = { accountTier: 'standard', policyReasons: ['account_young'], baseline: 10, ratio: 10 };
+    const [decision] = decideIncidents([active({ clearRuns: 1, context })], [], now, windowEnd);
+
+    expect(decision.kind).toBe('resolve');
+    if (decision.kind === 'open') throw new Error('expected an existing incident decision');
+    expect(decision.patch).not.toHaveProperty('context');
+  });
+
+  it('resets clearRuns when a breach follows a clear run', () => {
+    const [decision] = decideIncidents([active({ clearRuns: 1 })], [breach({ value: 100 })], now, windowEnd);
+
+    expect(decision).toMatchObject({ kind: 'update', patch: { clearRuns: 0 } });
+  });
+
+  it('counts an incident whose scope is absent from the breaches toward resolution', () => {
+    const other = breach({ scopeId: 'someone-else' });
+
+    const decisions = decideIncidents([active({ clearRuns: 1 })], [other], now, windowEnd);
+
+    expect(decisions.map(d => d.kind).sort()).toEqual(['open', 'resolve']);
+  });
+
+  it('escalates when lastNotifiedValue is undefined after a failed post', () => {
+    const [decision] = decideIncidents(
+      [active({ lastNotifiedValue: undefined })],
+      [breach({ value: 100 })],
+      now,
+      windowEnd
+    );
+
+    expect(decision?.kind).toBe('escalate');
+  });
+
+  it('refreshes the baseline and ratio snapshot on escalation', () => {
+    const [decision] = decideIncidents(
+      [active({ context: { baseline: 10, ratio: 10 } })],
+      [breach({ value: 400, baseline: 20, ratio: 20 })],
+      now,
+      windowEnd
+    );
+
+    expect(decision).toMatchObject({ kind: 'escalate', patch: { context: { baseline: 20, ratio: 20 } } });
+  });
+
+  it('skips an incident a run already evaluated for this window, without opening a duplicate', () => {
+    const decisions = decideIncidents([active({ lastEvaluatedWindowEnd: windowEnd })], [breach()], now, windowEnd);
+
+    expect(decisions).toEqual([]);
+  });
+
+  it('leaves clearRuns at 1 when the same window is evaluated twice', () => {
+    let alert = active();
+    for (let run = 0; run < 2; run++) {
+      for (const decision of decideIncidents([alert], [], now, windowEnd)) {
+        if (decision.kind !== 'open') alert = { ...alert, ...decision.patch };
+      }
+    }
+
+    expect(alert).toMatchObject({ status: 'open', clearRuns: 1, lastEvaluatedWindowEnd: windowEnd });
+  });
+
+  it('decides every breach and every active incident in one call', () => {
+    const decisions = decideIncidents(
+      [
+        active({ id: 'a1', scopeId: 'u1', openKey: spendAlertOpenKey('account_spike', 'User', 'u1') }),
+        active({ id: 'a2', scopeId: 'u2', openKey: spendAlertOpenKey('account_spike', 'User', 'u2'), clearRuns: 1 }),
+      ],
+      [breach({ scopeId: 'u1', value: 150 }), breach({ scopeId: 'u3', value: 300 })],
+      now,
+      windowEnd
+    );
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ kind: 'update', id: 'a1', patch: expect.objectContaining({ lastValue: 150 }) }),
+      expect.objectContaining({ kind: 'resolve', id: 'a2' }),
+      expect.objectContaining({
+        kind: 'open',
+        alert: expect.objectContaining({ scopeId: 'u3', openKey: 'account_spike:User:u3', lastValue: 300 }),
+      }),
+    ]);
+  });
+
+  describe('superseded incidents', () => {
+    const spikeKey = spendAlertOpenKey('account_spike', 'User', 'u1');
+    const ceiling = breach({ rule: 'account_ceiling', severity: 'critical', value: 6000 });
+
+    it('silently resolves a spike when the same scope breaches the ceiling, and opens the ceiling', () => {
+      const decisions = decideIncidents([active()], [ceiling], now, windowEnd);
+
+      expect(decisions).toEqual([
+        {
+          kind: 'resolve',
+          id: 'a1',
+          patch: { status: 'resolved', resolvedAt: now, clearRuns: 2, lastEvaluatedWindowEnd: windowEnd },
+          announce: false,
+        },
+        expect.objectContaining({ kind: 'open', alert: expect.objectContaining({ rule: 'account_ceiling' }) }),
+      ]);
+    });
+
+    it('resolves an acknowledged superseded incident too', () => {
+      const [decision] = decideIncidents([active({ status: 'acknowledged' })], [ceiling], now, windowEnd);
+
+      expect(decision).toMatchObject({ kind: 'resolve', announce: false, patch: { status: 'resolved' } });
+    });
+
+    it('resolves a caller-supplied superseded key that was never notified', () => {
+      const alert = active({ lastNotifiedAt: undefined, lastNotifiedValue: undefined });
+      const decisions = decideIncidents([alert], [], now, windowEnd, new Set([spikeKey]));
+
+      expect(decisions).toEqual([expect.objectContaining({ kind: 'resolve', id: 'a1', announce: false })]);
+    });
+
+    it('leaves a spike on another scope alone', () => {
+      const [decision] = decideIncidents([active()], [{ ...ceiling, scopeId: 'u2' }], now, windowEnd);
+
+      expect(decision).toMatchObject({ kind: 'update', id: 'a1' });
+    });
+
+    it('does not open a spike while the same scope still has an active ceiling incident', () => {
+      const ceilingAlert = active({ id: 'a2', rule: 'account_ceiling', openKey: 'account_ceiling:User:u1' });
+      const decisions = decideIncidents([ceilingAlert], [breach()], now, windowEnd);
+
+      expect(decisions).toEqual([
+        expect.objectContaining({ kind: 'update', id: 'a2', patch: expect.objectContaining({ clearRuns: 1 }) }),
+      ]);
+    });
+
+    it('opens the spike once the ceiling incident resolves', () => {
+      const ceilingAlert = active({
+        id: 'a2',
+        rule: 'account_ceiling',
+        openKey: 'account_ceiling:User:u1',
+        clearRuns: 1,
+      });
+      const decisions = decideIncidents([ceilingAlert], [breach()], now, windowEnd);
+
+      expect(decisions).toEqual([
+        expect.objectContaining({ kind: 'resolve', id: 'a2' }),
+        expect.objectContaining({ kind: 'open', alert: expect.objectContaining({ rule: 'account_spike' }) }),
+      ]);
+    });
+
+    it('writes viaKeys into the context on open and on a breach patch', () => {
+      const withKeys = { ...ceiling, viaKeys: ['ci-key'], viaKeyIds: ['k1'] };
+      const [opened] = decideIncidents([], [withKeys], now, windowEnd);
+      const ceilingAlert = active({ id: 'a2', rule: 'account_ceiling', openKey: 'account_ceiling:User:u1' });
+      const [patched] = decideIncidents([ceilingAlert], [withKeys], now, windowEnd);
+
+      expect(opened).toMatchObject({ alert: { context: { viaKeys: ['ci-key'], viaKeyIds: ['k1'] } } });
+      expect(patched).toMatchObject({
+        patch: { context: { baseline: 10, ratio: 10, viaKeys: ['ci-key'], viaKeyIds: ['k1'] } },
+      });
+    });
+  });
+});

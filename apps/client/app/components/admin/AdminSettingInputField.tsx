@@ -3,9 +3,9 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
+// admin-toolkit-allow 2026-11-12 -- Existing price and embedding confirmations retain their save behavior during the field-row cleanup.
 import {
   Button,
-  Card,
   Divider,
   FormControl,
   FormHelperText,
@@ -26,9 +26,13 @@ import {
   Stack,
   Box,
 } from '@mui/joy';
-import { useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { SettingFieldRow } from './shared/SettingFieldRow';
+import { useAdminSaveShortcut } from './shared/adminKeyboard';
+import { StatusChip } from './shared/StatusChip';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
-import { rangeMessage } from './settingFieldHelpers';
+import { describeMoneyValue, moneyChangeWarning, rangeMessage } from './settingFieldHelpers';
+import { useSettingsDraft } from './SettingsDraftProvider';
 
 interface SubSetting {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
@@ -37,13 +41,20 @@ interface SubSetting {
 
 /** Inline toggle row rendered inside a parent card - no card wrapper. */
 const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
-  const [value, setValue] = useState<boolean>(() => {
+  const saveRef = useRef<HTMLDivElement>(null);
+  useAdminSaveShortcut(saveRef);
+  const initialValue = (() => {
     if (typeof defaultValue === 'boolean') return defaultValue;
     if (typeof defaultValue === 'number') return defaultValue === 1;
     if (typeof defaultValue === 'string') return defaultValue === 'true' || defaultValue === '1';
     return false;
-  });
+  })();
   const updateSettings = useUpdateSettings();
+  const draft = useSettingsDraft(setting.key, initialValue, {
+    name: setting.name,
+    save: value => updateSettings.mutateAsync({ key: setting.key, value }),
+  });
+  const { value, setValue } = draft;
   const resolvedDefault =
     typeof defaultValue === 'boolean'
       ? defaultValue
@@ -53,7 +64,13 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   const isDirty = value !== resolvedDefault;
 
   return (
-    <Box sx={{ py: 0.75 }}>
+    <Box
+      ref={draft.staged ? null : saveRef}
+      data-admin-settings-editor
+      tabIndex={0}
+      aria-label={`${setting.name} settings editor`}
+      sx={{ py: 0.75 }}
+    >
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="title-md" sx={{ fontSize: '13px' }}>
@@ -64,13 +81,16 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-          <Switch checked={value} onChange={e => setValue(e.target.checked)} />
-          {isDirty && (
+          <Switch checked={value} disabled={draft.pending} onChange={e => setValue(e.target.checked)} />
+          {isDirty && !draft.staged && (
             <Tooltip title="Save" placement="top">
               <Button
                 color="success"
                 size="sm"
                 loading={updateSettings.isPending}
+                data-admin-save
+                data-testid={`admin-setting-${setting.key}-save-btn`}
+                aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
                 onClick={() => updateSettings.mutate({ key: setting.key, value })}
               >
                 <SaveIcon sx={{ fontSize: '16px' }} />
@@ -91,26 +111,64 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
 
 const AdminSettingInputField = ({
   setting,
-  index,
   defaultValue,
   subSettings,
+  lockedNote,
+  valueHelper,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
   // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
   defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
+  /** Locks the setting: its control and Save are disabled and this replaces the description. */
+  lockedNote?: string;
+  valueHelper?: ReactNode;
 }) => {
-  const [value, setValue] = useState<string | number | boolean | null>(() => {
-    if (typeof defaultValue === 'object') return null;
-    return defaultValue ?? null;
-  });
+  const saveRef = useRef<HTMLDivElement>(null);
+  useAdminSaveShortcut(saveRef);
   const updateSettings = useUpdateSettings();
+  const draft = useSettingsDraft<string | number | boolean | null>(
+    setting.key,
+    typeof defaultValue === 'object' ? null : (defaultValue ?? null),
+    {
+      name: setting.name,
+      equals: (left, right) => (setting.clearDeletesRow && left === '' ? null : left) === right,
+      save: async next => {
+        if (next === null) throw new Error('Enter a setting value before saving.');
+        return updateSettings.mutateAsync({
+          key: setting.key,
+          value: next,
+          ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
+          ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
+        });
+      },
+      blocked: next =>
+        lockedNote ??
+        (setting.type === 'number' && next !== '' && next !== null
+          ? rangeMessage(Number(next), setting.min, setting.max)
+          : undefined),
+      // Staged edits never reach saveValue - the SaveBar commits them - so the price
+      // confirmation has to come from the warning the provider batches.
+      warning: next =>
+        setting.key === 'defaultEmbeddingModel'
+          ? [
+              'Changing the embedding model affects new files. Existing files may need reprocessing to restore search accuracy.',
+            ]
+          : setting.changesCustomerPrice
+            ? [moneyChangeWarning(setting.key, setting.name, defaultValue, next)]
+            : [],
+    }
+  );
+  const { value, setValue } = draft;
+  const [secretFocused, setSecretFocused] = useState(false);
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
+  const [showMoneyWarning, setShowMoneyWarning] = useState(false);
   // Whether the admin actually typed into a sensitive field, as opposed to the field
   // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
   // key" from an accidental empty write - see the guard in saveValue.
-  const [secretEdited, setSecretEdited] = useState(false);
+  const [localSecretEdited, setSecretEdited] = useState(false);
+  const secretEdited = draft.staged ? draft.dirty : localSecretEdited;
 
   // A sensitive field sitting empty purely because focus cleared its mask is not an edit,
   // so Save stays disabled. Without this the field reads as dirty the moment it is focused
@@ -121,6 +179,7 @@ const AdminSettingInputField = ({
   const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
+  const changesCustomerPrice = setting.changesCustomerPrice === true;
 
   // Only number settings declare bounds, and only some of those, so they are read through
   // the type discriminant rather than off the union.
@@ -183,6 +242,12 @@ const AdminSettingInputField = ({
       return;
     }
 
+    // Unstaged only; a staged edit is confirmed through the SaveBar's batched warning above.
+    if (changesCustomerPrice && isDirty) {
+      setShowMoneyWarning(true);
+      return;
+    }
+
     // Save directly for other settings
     saveValue(value);
   };
@@ -193,22 +258,44 @@ const AdminSettingInputField = ({
     setShowEmbeddingWarning(false);
   };
 
+  const confirmMoneyChange = () => {
+    if (value === null) return;
+    saveValue(value);
+    setShowMoneyWarning(false);
+  };
+
   return (
     <>
-      <Card
-        variant="outlined"
-        sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
+      <SettingFieldRow
+        ref={draft.staged ? null : saveRef}
+        data-admin-settings-editor
+        data-testid={`admin-setting-${setting.key}-row`}
+        tabIndex={0}
+        aria-label={`${setting.name} settings editor`}
       >
         <Grid container spacing={2}>
           <Grid xs={12} md={6}>
             <FormControl error={Boolean(fieldError)} sx={{ width: '100%' }}>
-              <FormLabel>{setting.name}</FormLabel>
+              <FormLabel>
+                {setting.name}
+                {changesCustomerPrice && (
+                  <Box component="span" sx={{ ml: 1 }}>
+                    <StatusChip
+                      tone="warn"
+                      label="Changes customer price"
+                      data-testid={`admin-setting-${setting.key}-money-badge`}
+                    />
+                  </Box>
+                )}
+              </FormLabel>
 
               {setting.type === 'boolean' ? (
                 <Switch
                   sx={{ alignSelf: 'baseline' }}
                   checked={typeof value === 'string' ? value === 'true' : (value as boolean)}
                   onChange={e => setValue(e.target.checked)}
+                  disabled={Boolean(lockedNote) || draft.pending}
+                  slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-switch` } }}
                 />
               ) : setting.type === 'number' ? (
                 <Input
@@ -233,11 +320,15 @@ const AdminSettingInputField = ({
                   // Locked during the save round-trip: onSuccess resyncs this field from the
                   // server's resolved value, so an edit typed mid-flight would be silently
                   // overwritten by the response for the previous submission.
-                  disabled={updateSettings.isPending}
+                  disabled={Boolean(lockedNote) || updateSettings.isPending || draft.pending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
-                  <Select value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
+                  <Select
+                    disabled={Boolean(lockedNote) || draft.pending}
+                    value={(value as string) || ''}
+                    onChange={(e, v) => setValue(v)}
+                  >
                     {Array.from(new Set(setting.options)).map((option, i) => (
                       <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
                         {option}
@@ -252,7 +343,8 @@ const AdminSettingInputField = ({
                     // rather than leaving a pasted key rendered until the page is left. The
                     // server mask stays plain text so its last-4 tail is readable.
                     type={setting.isSensitive && secretEdited ? 'password' : 'text'}
-                    value={(value as string) || ''}
+                    value={draft.staged && secretFocused && showsStoredSecretMask ? '' : (value as string) || ''}
+                    disabled={Boolean(lockedNote) || draft.pending}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => {
                       setValue(e.target.value);
@@ -263,10 +355,12 @@ const AdminSettingInputField = ({
                     // value, and restore it on an untouched blur so the field stays non-dirty.
                     // A field the admin deliberately emptied is left alone - that is a clear.
                     onFocus={() => {
-                      if (showsStoredSecretMask) setValue('');
+                      if (draft.staged) setSecretFocused(true);
+                      else if (showsStoredSecretMask) setValue('');
                     }}
                     onBlur={() => {
-                      if (setting.isSensitive && value === '' && !secretEdited) {
+                      setSecretFocused(false);
+                      if (!draft.staged && setting.isSensitive && value === '' && !secretEdited) {
                         setValue((defaultValue as string) ?? '');
                       }
                     }}
@@ -278,26 +372,34 @@ const AdminSettingInputField = ({
                 {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
                     whenever `floorWarning` is truthy, so the warning must be the line the admin sees
                     before that save, not one hidden behind a previous failure's message. */}
-                {rangeError ?? floorWarning ?? saveError ?? setting.description}
+                {rangeError ?? floorWarning ?? saveError ?? lockedNote ?? setting.description}
               </FormHelperText>
+              {valueHelper && (
+                <FormHelperText sx={{ display: 'block', color: 'admin.inkMuted' }}>{valueHelper}</FormHelperText>
+              )}
             </FormControl>
           </Grid>
 
-          <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-            <Tooltip title="Update Setting" placement="top">
-              <Button
-                data-testid={`admin-setting-${setting.key}-save-btn`}
-                color="success"
-                size="sm"
-                type="button"
-                loading={updateSettings.isPending}
-                onClick={handleSaveSetting}
-                disabled={!isDirty || Boolean(rangeError)}
-              >
-                <SaveIcon sx={{ marginX: 1 }} />
-              </Button>
-            </Tooltip>
-          </Grid>
+          {!draft.staged && (
+            <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
+              <Tooltip title="Save setting (Cmd/Ctrl+S, including from inputs)" placement="top">
+                <Button
+                  data-testid={`admin-setting-${setting.key}-save-btn`}
+                  data-admin-save
+                  aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
+                  aria-keyshortcuts="Meta+s Control+s"
+                  color="success"
+                  size="sm"
+                  type="button"
+                  loading={updateSettings.isPending}
+                  onClick={handleSaveSetting}
+                  disabled={!isDirty || Boolean(rangeError) || Boolean(lockedNote)}
+                >
+                  <SaveIcon sx={{ marginX: 1 }} />
+                </Button>
+              </Tooltip>
+            </Grid>
+          )}
         </Grid>
 
         {/* Warning alert for embedding model changes */}
@@ -334,7 +436,51 @@ const AdminSettingInputField = ({
             <ScopedSettingOverrides setting={setting} />
           </>
         )}
-      </Card>
+      </SettingFieldRow>
+
+      <Modal open={showMoneyWarning} onClose={() => setShowMoneyWarning(false)}>
+        <ModalDialog variant="outlined" role="alertdialog" data-testid="admin-setting-money-dialog">
+          <DialogTitle>
+            <WarningIcon color="warning" sx={{ mr: 1 }} />
+            Confirm a change to what customers pay
+          </DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <Typography level="body-md" data-testid="admin-setting-money-dialog-change">
+                <strong>{setting.name}</strong> changes from{' '}
+                <strong>{describeMoneyValue(setting.key, defaultValue)}</strong> to{' '}
+                <strong>{describeMoneyValue(setting.key, value)}</strong>.
+              </Typography>
+              <Alert color="warning" variant="soft">
+                <Typography level="body-sm">
+                  This changes what customers are charged, or what they receive for money already paid. The change takes
+                  effect immediately and is recorded in the admin audit log.
+                </Typography>
+              </Alert>
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="warning"
+              onClick={confirmMoneyChange}
+              loading={updateSettings.isPending}
+              data-testid="admin-setting-money-confirm-btn"
+            >
+              Save price change
+            </Button>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => setShowMoneyWarning(false)}
+              disabled={updateSettings.isPending}
+              data-testid="admin-setting-money-cancel-btn"
+            >
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
 
       {/* Confirmation Modal for Embedding Model Changes */}
       <Modal open={showEmbeddingWarning} onClose={() => setShowEmbeddingWarning(false)}>

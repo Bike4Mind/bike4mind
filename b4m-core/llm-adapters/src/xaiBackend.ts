@@ -15,10 +15,11 @@ import {
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -36,6 +37,11 @@ import {
 } from './backend';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from './identityReminder';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 import { DispatchModel } from './dispatchModel';
@@ -66,7 +72,7 @@ export class XAIBackend implements ICompletionBackend {
     if (!apiKey) {
       throw new Error('XAI API key is required');
     }
-    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl });
+    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
   }
 
@@ -363,7 +369,7 @@ export class XAIBackend implements ICompletionBackend {
     // Base parameters that work for all models
     const parameters: ChatCompletionCreateParams = {
       model,
-      messages: this.formatMessages(messagesWithFormat),
+      messages: this.formatMessages(messagesWithFormat, model, options),
       temperature: options.temperature ?? 0.9,
     };
 
@@ -569,6 +575,11 @@ export class XAIBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+                  toolName: outcome.name,
+                  error: errorMessage,
+                });
                 const observation = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${errorMessage}`,
                   ARTIFACT_REMOVED_PLACEHOLDER
@@ -889,6 +900,11 @@ export class XAIBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+            this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+              toolName: outcome.name,
+              error: errorMessage,
+            });
             const observation = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${errorMessage}`,
               ARTIFACT_REMOVED_PLACEHOLDER
@@ -953,9 +969,20 @@ export class XAIBackend implements ICompletionBackend {
     }
   }
 
-  private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
+  private formatMessages(
+    messages: IMessage[],
+    model: string,
+    options: Partial<ICompletionOptions>
+  ): OpenAI.ChatCompletionMessageParam[] {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool)
-    return convertMessagesToOpenAIFormat(messages) as OpenAI.ChatCompletionMessageParam[];
+    return convertMessagesToOpenAIFormat(
+      shouldOmitIdentityReminder(options)
+        ? messages
+        : appendIdentityReminderToMessages(
+            messages,
+            buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+          )
+    ) as OpenAI.ChatCompletionMessageParam[];
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {

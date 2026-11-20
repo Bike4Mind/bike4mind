@@ -1,3 +1,4 @@
+import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
 /**
  * The chat vocabulary that crosses the contextBridge.
  *
@@ -9,10 +10,21 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
-import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { GithubRef } from './githubRefs';
+import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
+import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
+import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
+
+export {
+  localModelId,
+  parseLocalModelId,
+  REASONING_EFFORT_SETTINGS,
+  type ReasoningEffortSetting,
+} from '@bike4mind/local-models/model-settings';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -88,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -160,6 +175,8 @@ export interface ChatToolCall {
   name: string;
   input: Record<string, unknown>;
   status: ChatToolStatus;
+  /** Trusted local skill result; retained so resumed replies preserve its provenance. */
+  ownContent?: true;
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
@@ -177,6 +194,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
+  /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
+  approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode because it acts as the
+   * signed-in user (`askInFull`). Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -200,6 +231,18 @@ export interface ChatToolCall {
    * (Claude Code syntax) that the card's "Always allow" saves. Never on an irreversible call.
    */
   approvalRules?: string[];
+  /**
+   * Set with `approvalId` when the call can be allowed for its project: the prefix rules "Allow in this
+   * project" saves, which apply to every session in that project and its worktrees.
+   */
+  approvalProjectRules?: string[];
+  /** Set with `approvalProjectRules`: the project folder they are saved for. */
+  approvalProject?: string;
+  /**
+   * Set with `approvalId` on a shell call where only some sub-commands need a decision: those, as
+   * written, each with why. The rest are already allowed, and the card's answers cover only these.
+   */
+  approvalParts?: { text: string; reason?: string }[];
   /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
@@ -229,12 +272,6 @@ export interface ChatToolCall {
    * conversation, and only the call that resolved the id knows its title.
    */
   label?: string;
-  /**
-   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
-   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
-   * Kept on the row so a continued reply, which replays it, judges it the same way.
-   */
-  ownContent?: true;
   /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
@@ -283,6 +320,8 @@ export type ChatApprovalDecidedBy =
       option?: string;
       /** With answer 'always': the derived rules were also saved for every session. */
       everywhere?: true;
+      /** With answer 'always': the derived prefix rules were also saved for every session in the project. */
+      project?: true;
     }
   /** A saved permission rule; `source` names where it lives (desktop or Claude Code settings). */
   | { kind: 'rule'; rule: string; source?: string }
@@ -297,7 +336,10 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  /**
+   * Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop),
+   * or, in Full access, which of its stops held the call.
+   */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -393,11 +435,13 @@ export interface ChatApprovalAnswer {
    * every later session. Main saves the rules it derived itself; this only says yes to them.
    */
   everywhere?: boolean;
+  /** With decision 'always': also save the card's `approvalProjectRules` for its project. */
+  project?: boolean;
 }
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
- * the prompt.
+ * the prompt. A PDF is stored whole but reaches the model as its extracted text.
  *
  * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
  * for something; an attachment is the user handing something over - "here is the screenshot of
@@ -407,7 +451,7 @@ export interface ChatApprovalAnswer {
  * because this descriptor is what gets persisted into the session JSON, and that file is read
  * in full every time the sidebar lists conversations.
  */
-export type ChatAttachmentKind = 'image' | 'text';
+export type ChatAttachmentKind = 'image' | 'text' | 'pdf';
 
 export interface ChatAttachment {
   id: string;
@@ -421,6 +465,8 @@ export interface ChatAttachment {
   sourceBytes: number;
   /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
   truncated?: boolean;
+  /** Page count, for a PDF. */
+  pages?: number;
 }
 
 /**
@@ -455,6 +501,23 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
+
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -618,21 +681,68 @@ export interface ChatRelayOrigin {
   /** The sending conversation's title as it was at send time, for the row that names it. */
   fromTitle: string;
   hops: number;
+  /** The sender's project folder name, set only when it is not the receiver's project. */
+  fromProject?: string;
+  /** The sender asked to be told when the turn this message runs in ends. */
+  notify?: boolean;
+  /**
+   * 'done' is the app's own notice back to a sender that asked for `notify`: the receiver's
+   * turn ended. Its text is app-written, never the receiver's words. Absent on a message.
+   */
+  kind?: 'done';
 }
 
 /**
- * A turn the APP started on the user's standing instruction rather than anyone typing it: today
- * only auto-fix on a pull request (see main/pr/autoFix.ts). Carried on the queue entry and on
- * the message it becomes, so the thread can say who started it and a guard can hold the turn to
- * the rules the user agreed to (no force-push, no merge).
+ * A relay waiting for the receiving conversation's user to let it in.
+ *
+ * Held rather than queued when delivering it could let the sender reach something its own user
+ * never allowed: a receiver in a different project works in other folders, and a receiver in a
+ * looser approval mode would run tools the sender would have had to ask for. See relayHoldReason.
+ * In memory only, like the queue: a hold outliving a restart would surface hours later.
  */
-export interface ChatAutomaticOrigin {
-  kind: 'auto-fix';
-  prUrl: string;
-  prNumber: number;
-  /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
-  summary: string;
+export interface ChatHeldRelay {
+  id: string;
+  /** The receiving conversation. */
+  sessionId: string;
+  text: string;
+  relay: ChatRelayOrigin;
+  heldAt: string;
+  reason: ChatRelayHoldReason;
 }
+
+export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
+
+/**
+ * A turn the APP started rather than anyone typing it. Carried on the queue entry and on the
+ * message it becomes, so the thread can say who started it.
+ *
+ * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
+ * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
+ * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
+ * 'agents-settled' tells an Orchestrate parent that every agent it started has stopped running
+ * (see main/chat/agentWake.ts).
+ */
+export type ChatAutomaticOrigin =
+  | {
+      kind: 'auto-fix';
+      prUrl: string;
+      prNumber: number;
+      /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
+      summary: string;
+    }
+  | {
+      kind: 'background-exit';
+      processIds: string[];
+      /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    }
+  | {
+      kind: 'agents-settled';
+      /** The agents whose turns ended since the parent was last woken. */
+      sessionIds: string[];
+      /** One line for the thread's collapsed row, e.g. "3 agents: 2 done, 1 failed". */
+      summary: string;
+    };
 
 export interface ChatMessage {
   id: string;
@@ -654,8 +764,19 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /** The model an assistant reply started on; a continuation on another model does not change it. Absent on older replies. */
+  model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /**
+   * A plain reply's one request: its server request id and settled charge, which a reply with
+   * `rounds` keeps per round instead (see ChatReplyRound.requestId). Absent on older replies.
+   */
+  requestId?: string;
+  settled?: ChatSettledCharge;
+  /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
+  promptCache?: ChatPromptCacheStamp;
+  contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -669,6 +790,11 @@ export interface ChatMessage {
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
   error?: string;
+  /**
+   * On an orchestrating parent's reply that called quest_complete successfully: this reply is the
+   * job's final summary, and the finale points at it. Absent on every other message.
+   */
+  questComplete?: true;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
   /**
@@ -689,6 +815,12 @@ export interface ChatMessage {
   /** Set with `system` when the app started this turn on its own; see ChatAutomaticOrigin. */
   automatic?: ChatAutomaticOrigin;
   /**
+   * Set on a spawned session's first prompt, which the parent conversation's model wrote. The
+   * thread still draws it as the prompt, but nothing that trusts what the user typed counts it:
+   * a session mention in it must not open another project to session_read (ChatService.knownTo).
+   */
+  seed?: true;
+  /**
    * What the THREAD shows in place of `content`, on messages the app wrote rather than either
    * speaker.
    *
@@ -701,6 +833,11 @@ export interface ChatMessage {
    * user-facing wording for. A reader that finds it missing falls back to `content`.
    */
   display?: string;
+  /**
+   * Set with `system` on the message a side chat opens with, naming the conversation it was
+   * branched from, so the thread can say so and link back. See ChatService.startSideChat.
+   */
+  sideChatOf?: { sessionId: string; title: string };
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
@@ -730,6 +867,25 @@ export interface ChatMessage {
    * per request so the replayed history stays byte-identical and the prompt cache holds.
    */
   notes?: string[];
+  /**
+   * On a user turn of a deferred-tools conversation: the optional tools offered from this turn on
+   * and the guidance that goes with them. Stored for the same reason as `notes`; see
+   * chat/deferredTools.ts for how a request replays it.
+   */
+  toolState?: ChatToolState;
+  /**
+   * On an assistant reply from a deferred-tools turn. Its calls were sent after that turn's tool
+   * changes, so a replay keeps them as they were; a call from any other turn gets an addition
+   * before it when its tool is not active there (chat/deferredTools.ts insertToolChanges).
+   */
+  deferred?: boolean;
+}
+
+export interface ChatToolState {
+  /** Optional tool names, sorted. The core tools are always loaded and never listed. */
+  tools: string[];
+  /** The tool and access guidance, read by the model as a reminder on this turn. */
+  text: string;
 }
 
 /**
@@ -778,7 +934,7 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
-  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  /** A Skill Market import, written by someone else, so its body is framed as theirs. */
   imported?: true;
 }
 
@@ -820,19 +976,105 @@ export interface BackgroundProcessInfo {
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
 /**
+ * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
+ * and a grandchild and refuses the next one.
+ *
+ * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
+ * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
+ * disappears is not a cap.
+ */
+export const MAX_SPAWN_DEPTH = 2;
+
+/**
+ * Whether a session is an agent its parent started, as opposed to a top-level conversation or a
+ * side chat the user drives. The agent surfaces (background panel, roster, quest readiness)
+ * list only these; the sidebar still nests every child under its parent.
+ */
+export function isAgentSession(session: { origin?: Pick<ChatSessionOrigin, 'kind'> }): boolean {
+  return session.origin !== undefined && session.origin.kind !== 'side-chat';
+}
+
+/** Whether this session may still start one under MAX_SPAWN_DEPTH. */
+export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
+  return (session.origin?.depth ?? 0) < MAX_SPAWN_DEPTH;
+}
+
+/**
+ * Orchestrate in effect, not merely switched on: a session at the depth cap could start no
+ * agent, so it keeps its ordinary prompt and gated start whatever the flag says.
+ */
+export function orchestratesAgents(session: Pick<ChatSessionMeta, 'orchestrate' | 'origin'>): boolean {
+  return session.orchestrate === true && canSpawnDeeper(session);
+}
+
+/** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
+export function isLocalModel(id: string): boolean {
+  return id.startsWith('local:');
+}
+
+/**
+ * Whether a turn on this model is sent any tools. A device-local model needs its catalog entry
+ * to know; a hosted one is assumed able unless the catalog says otherwise. Main decides the
+ * turn's tools by this, and the renderer hides controls that only work through them.
+ */
+export function modelSupportsTools(
+  modelId: string,
+  option: Pick<ChatModelOption, 'supportsTools'> | undefined
+): boolean {
+  return option?.supportsTools !== false && (!isLocalModel(modelId) || !!option);
+}
+
+export function isLocalBackend(model: { backend?: string }): boolean {
+  return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
+}
+
+export function localBackend(runtimeId: string): string {
+  return `local-${runtimeId}`;
+}
+
+/**
+ * Held by a device-local conversation with no model to pick. Malformed on purpose: `isLocalModel`
+ * is true so it never goes hosted, `parseLocalModelId` is null so it names no model.
+ */
+export const NO_LOCAL_MODEL = 'local:';
+
+/** The listed entry for a saved model id, including an id saved on one of its aliases. */
+export function findModelOption<T extends { id: string; aliasIds?: readonly string[] }>(
+  models: readonly T[] | undefined,
+  id: string | null | undefined
+): T | undefined {
+  if (!models || !id) return undefined;
+  return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
+}
+
+/**
+ * The device-local model a conversation moves to: the remembered pick if listed, else the first ready one. A
+ * remembered pick on a server still listing is kept; the fallback never lands on such a model unasked.
+ */
+export function pickLocalModel(
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string; pending?: boolean }[],
+  remembered?: string | null
+): string | null {
+  const usable = models.filter(model => !model.unavailable);
+  const remembers = models.filter(model => !model.unavailable || model.pending);
+  if (remembered && findModelOption(remembers, remembered)) return remembered;
+  return usable[0]?.id ?? null;
+}
+
+/**
  * One model this deployment offers, as the picker renders it.
  *
  * Sourced from `GET /api/models`, which builds the list from the calling account's effective
  * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
  * never ships a list of its own.
  */
-export const LOCAL_MODEL_PREFIX = 'local:ollama:';
-
 export interface ChatModelOption {
   id: string;
   name: string;
   /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
   backend?: string;
+  /** Release day as YYYY-MM-DD, from the server's catalog. Absent for local and saved-server models. */
+  releaseDate?: string;
   contextWindow?: number;
   /**
    * The most output tokens this model can produce in one reply, sent as `max_tokens` on every
@@ -852,36 +1094,68 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
+  supportsOneHourCache?: boolean;
   /**
-   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
-   * so the effort picker becomes that switch, stored as `default` (on) and
-   * THINKING_OFF_SETTING (off).
+   * A local model that can think. Its server takes no effort, only thinking on or off, so the
+   * effort picker becomes that switch, stored as `default` (on) and THINKING_OFF_SETTING (off);
+   * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
+  /** A model whose template always thinks, so Off is unavailable; set with or without `thinkingToggle`. */
+  thinkingAlwaysOn?: boolean;
+  /**
+   * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
+   * where that was an effort the server ignored before the switch existed.
+   */
+  minimalThinks?: true;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
+  /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
+  server?: { id: string; name: string };
+  /** A LoRA adapter's base model on the same server, shown with it in the picker. */
+  baseModel?: string;
+  /** `contextWindow` is set by the server (vLLM --max-model-len), so Desktop cannot grow it to fit its tools. */
+  contextFixed?: boolean;
+  /** Ids of the other names a server serves this model under; a conversation saved on one resolves here. */
+  aliasIds?: string[];
+  /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
+  unavailable?: string;
+  /** Set with `unavailable` while its server is still listing models: not picked yet, but not down either. */
+  pending?: boolean;
+  /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
+  wantsCredentials?: 'missing' | 'rejected';
+  /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
+  disabled?: boolean;
+  /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
+  pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
+  /** The generation settings this model takes, built in main; see shared/generation.ts. */
+  controls?: ModelControls;
+  /** An Ollama model's weights blob sha256, from /api/show; ties a copy under another name to its curated build. */
+  modelBlob?: string;
+  /** An Ollama model with an ADAPTER layer; it matches no curated build. */
+  hasAdapter?: boolean;
+  /** An Ollama model's Modelfile PARAMETER lines, from /api/show; a model that sets its own sampling keeps it. */
+  modelParameters?: string;
+  /** A local model that matches a curated build, on any local server: its family's recommended sampling. */
+  catalogSampling?: CatalogSampling;
 }
 
-/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
-export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
+/** The setting a `thinkingToggle` model's "Off" is stored as. */
+export const THINKING_OFF_SETTING = 'none' satisfies ReasoningEffortSetting;
 
 /**
- * How hard a model that reasons thinks before answering.
- *
- * `default` sends nothing and leaves the provider at its own effort, which is what every
- * conversation did before the setting existed. It is a real choice in the picker rather than
- * an empty state, because "let the provider decide" is a different instruction from "low".
+ * Whether a stored setting switches a `thinkingToggle` model's thinking off, which a model listing
+ * effort levels has no switch for. `minimal` does too unless `minimalThinks`, since Off was stored
+ * that way before `none` existed. Every other setting thinks.
  */
-export type ReasoningEffortSetting = 'default' | 'minimal' | 'low' | 'medium' | 'high';
-
-/** Ascending, which is the order the picker lists them in. */
-export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
-  'default',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-];
+export function thinkingSwitchedOff(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined
+): boolean {
+  if (!option?.thinkingToggle || option.controls?.effort) return false;
+  return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
+}
 
 /**
  * The answer to `listModels`.
@@ -897,7 +1171,17 @@ export interface ChatModelCatalog {
 }
 
 /**
- * Token counts the SERVER reported, never a client-side estimate.
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
+}
+
+/**
+ * Token counts the SERVER reported, never a client-side estimate. `rate` is the one exception,
+ * and says so when its timing is this app's own.
  *
  * The completions endpoint reports usage per request, so an agent turn - which makes one
  * request per tool round trip - produces several of these, and the turn's cost is their sum.
@@ -914,6 +1198,28 @@ export interface ChatUsage {
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
+  /** Generation speed, from self-hosted model servers only; see ChatTokenRate. */
+  rate?: ChatTokenRate;
+}
+
+/**
+ * How fast a self-hosted model server ran these requests, as token counts paired with the time
+ * they took, so requests sum and the rate is always tokens over time. Each pair is present only
+ * when the server reported it.
+ */
+export interface ChatTokenRate {
+  /** Generated tokens timed by `evalMs`. */
+  evalTokens: number;
+  evalMs: number;
+  promptTokens?: number;
+  promptMs?: number;
+  /** Time spent loading the model into memory before the request ran. */
+  loadMs?: number;
+  /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
+  draftTokens?: number;
+  draftAccepted?: number;
+  /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
+  estimated?: boolean;
 }
 
 /**
@@ -931,18 +1237,16 @@ export type ChatSessionMode = 'chat' | 'code';
  * goes ahead.
  *
  * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
- * may do without stopping, and it governs one axis only: filesystem and execution. The
- * generation tools are gated on COST, not safety, and ask in every mode - approving
- * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ * may do without stopping.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
- *           opencode's permission defaults; see ChatService.autoApproves.
- *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
- *           this user can read and reach the internet with nobody looking. Chosen per
- *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *           command that writes outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, or the same call a third time in a row.
+ *           Commands that cannot be parsed or fully followed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
+ *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
+ *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
  * output can raise it; see ChatService.setApprovalMode and HostContext.
@@ -1022,9 +1326,17 @@ export interface ChatSessionOrigin {
   depth: number;
   /** The prompt it was started with, so the row can say what it was sent off to do. */
   seedPrompt: string;
+  /**
+   * 'side-chat' for a child the user branched off a highlight (ChatService.startSideChat). It
+   * nests under its parent like a spawn but is not an agent; see isAgentSession.
+   */
+  kind?: 'side-chat';
 }
 
 interface ChatSessionMeta {
+  orchestrationPolicy?: RootPolicy;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
   id: string;
   /**
    * What the sidebar row says. Provisionally a truncation of the first prompt, replaced moments
@@ -1052,11 +1364,23 @@ interface ChatSessionMeta {
    * careful one is a thing to do WITHIN one app, and reopening a thread should resume the
    * effort it was held at rather than whatever the last conversation was set to.
    *
-   * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
-   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
+   * Only a level the model's `controls.effort` lists is actually sent. For a model with
+   * `thinkingToggle`, it turns thinking off or on instead; see thinkingSwitchedOff. Otherwise
+   * this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
+  /**
+   * How long the server's prompt cache for this conversation lives between requests. Absent on
+   * conversations from before the choice existed, which run at '5m'. Sent only to a model that
+   * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
+   */
+  promptCacheTtl?: PromptCacheTtl;
+  /**
+   * Overrides of the model's sampling and output defaults, absent until one is set. Kept across
+   * a model switch; each turn sends only what the current model's `controls` list. Titles,
+   * suggestions and compaction never carry them.
+   */
+  generation?: GenerationSettings;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
@@ -1071,6 +1395,12 @@ interface ChatSessionMeta {
   grantedDirectories?: string[];
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
+  /**
+   * The user turned on Orchestrate: the model is steered to split work across agents, and the
+   * agents it asks for start without a card, the switch being the approval. Never inherited by
+   * a session it spawns, and like 'full' approval it lasts one run of the app (SessionStore).
+   */
+  orchestrate?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
   /** Set on a session imported from Claude; see ChatImportOrigin. */
@@ -1098,11 +1428,26 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
+  /** How the last assistant turn ended; absent when the session has no assistant message. */
+  lastOutcome?: ChildOutcome;
+  /** One-line excerpt of the last assistant message; absent when it has no text. */
+  lastSnippet?: string;
+  /** Sum of usage.usdCost over all messages; absent when none reported it. */
+  totalUsdCost?: number;
+  /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
+  totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  githubRefs?: GithubRef[];
 }
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.
@@ -1127,6 +1472,14 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+}
+
+/** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
+export interface ChatSessionExportResult {
+  saved: boolean;
+  path?: string;
+  /** Items left out of a local data export. */
+  warnings?: string[];
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
@@ -1164,6 +1517,9 @@ export interface WorkspacePreparation {
 export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
+/** A newer context notice of the same kind replaces the older one for a conversation. */
+export type ContextNoticeKind = 'context-size' | 'no-tools';
+
 export type ChatStreamEvent =
   | {
       type: 'start';
@@ -1198,13 +1554,24 @@ export type ChatStreamEvent =
       content: string;
       stopReason?: string;
       usage?: ChatUsage;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
       toolCalls?: ChatToolCall[];
       /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
       rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
+      promptCache?: ChatPromptCacheStamp;
+      /** See ChatMessage.questComplete. */
+      questComplete?: true;
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
+  | {
+      type: 'error';
+      sessionId: string;
+      messageId: string;
+      message: string;
+      stopReason?: string;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+    }
   | {
       type: 'background-output';
       sessionId: string;
@@ -1230,6 +1597,10 @@ export type ChatStreamEvent =
    * summary failed, so the turn went out with the conversation as it was.
    */
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
+  /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
+  | { type: 'context-trimmed'; sessionId: string; dropped: number }
+  /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
+  | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -1244,7 +1615,9 @@ export type ChatStreamEvent =
    */
   | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
-  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
+  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] }
+  /** Messages from other conversations waiting for this one's user; carries the whole list. */
+  | { type: 'held-relays'; sessionId: string; held: ChatHeldRelay[] };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -1267,13 +1640,31 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
+  preparing?: SessionSetupStep;
 }
+
+/**
+ * What a session is doing before its first reply: cutting its worktree, or starting the turn
+ * itself. A worktree's dependency install is not a step: it runs alongside the first turn.
+ */
+export type SessionSetupStep = 'worktree' | 'starting';
+
+export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
+  worktree: 'Creating worktree',
+  starting: 'Starting up',
+};
 
 export interface SendMessageRequest {
   sessionId: string;
   text: string;
   /** Descriptors returned by `addAttachments`; their bytes are already on disk. */
   attachments?: ChatAttachment[];
+  /**
+   * App-written context for this turn only, sent to the model and never drawn (ChatMessage.notes);
+   * e.g. the part a point-and-edit request in the 3D pane is about.
+   */
+  notes?: string[];
 }
 
 /**
@@ -1307,7 +1698,7 @@ export interface ChatQueuedMessage {
    */
   relay?: ChatRelayOrigin;
   /**
-   * Set when the app queued this on its own (auto-fix). Like a relay it never merges, never
+   * Set when the app queued this on its own (auto-fix, a background exit). Like a relay it never merges, never
    * goes back to the composer, and is not offered "send now".
    */
   automatic?: ChatAutomaticOrigin;
@@ -1545,7 +1936,7 @@ export function branchHolder(
  * child's worktree is unusable or already taken. Told apart so the model reports it back rather
  * than retrying, since nothing it can do changes the answer.
  */
-export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
+export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch' | 'model-policy';
 
 /**
  * A task the model proposed handing to a new session, waiting on the user.
@@ -1582,6 +1973,14 @@ export interface ChatSpawnSuggestion {
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
 export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
+
+/**
+ * Where a started task goes when nobody picked otherwise: the suggestion card's first choice
+ * and a delegated spawn's placement (ChatService.delegatedPlacement), kept as one rule.
+ */
+export function defaultSpawnPlacement(repository: boolean): 'worktree' | 'local' {
+  return repository ? 'worktree' : 'local';
+}
 
 interface SpawnSuggestionStartBase {
   title: string;
@@ -1627,6 +2026,14 @@ export interface StartSpawnSuggestionRequest {
   branch?: string;
 }
 
+/** Branch a side chat off `sessionId` about text the user highlighted in its thread. */
+export interface StartSideChatRequest {
+  sessionId: string;
+  selection: string;
+}
+
+export type StartSideChatResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
+
 export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 
 /**
@@ -1636,7 +2043,20 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
  * and are told apart because only one of them is worth waiting out: a turn that has run out of
  * hops will never get more, and saying so stops the model retrying.
  */
-export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
+export type RelayRefusal =
+  'hops' | 'fan-out' | 'no-target' | 'ambiguous' | 'archived' | 'self' | 'empty-message' | 'held-full' | 'unavailable';
+
+/**
+ * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
+ * token (or its end when nothing streamed), which is after the cache was written, so an
+ * expiry read off it is late by at most the prompt's processing time, never early.
+ */
+export interface ChatPromptCacheStamp {
+  cachedAt: number;
+  ttl: PromptCacheTtl;
+  /** The cache is per model, so a conversation switched since holds none on its new one. */
+  model: string;
+}
 
 /**
  * One tool round of a reply: what the model said, and then what it went on to run.
@@ -1659,6 +2079,8 @@ export interface ChatReplyRound {
   timing?: ChatRoundTiming;
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
+  /** The model this round's request went to; a continued reply's rounds can differ. Absent on older rounds. */
+  model?: string;
   /**
    * The model's readable reasoning before this round's prose, drawn in the transcript as a row
    * that is closed by default (ReasoningRow) and never drawn for the round still streaming -
@@ -1668,6 +2090,40 @@ export interface ChatReplyRound {
    * `thinking`, never this.
    */
   reasoning?: string;
+  /**
+   * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
+   * read the cache entry its last round wrote (see toCompletionMessages). The exception is a round
+   * that attached tool images, whose images turn is not replayed (see sentRounds in ChatService). Absent on older rounds.
+   * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
+   */
+  sent?: ChatSentRound;
+  /**
+   * The server's id for this round's request: the `X-Request-ID` it was sent with, as the stream's
+   * `meta` event echoed it. The key that counts the round's charge exactly once. Absent on older
+   * rounds and on servers that send no `meta`.
+   */
+  requestId?: string;
+  /** What the server's ledger recorded for this round's request; see ChatSettledCharge. */
+  settled?: ChatSettledCharge;
+}
+
+/**
+ * The charge the server committed for one request, from the stream's `settled` event. Unlike
+ * `usage.creditsUsed`, computed before settlement, this is what the ledger holds. Stored only:
+ * totals still come from `usage`.
+ */
+export interface ChatSettledCharge {
+  creditsCharged: number;
+  usdCost?: number;
+  /** The server run the charge was billed under, as the `settled` event echoed it; absent outside a run. */
+  runId?: string;
+}
+
+/** A round's assistant message as sent, plus any app text appended to its last tool result. */
+export interface ChatSentRound {
+  thinking?: unknown[];
+  text: string;
+  resultNote?: string;
 }
 
 /**
@@ -1690,6 +2146,9 @@ export function isTurnBudgetStop(reason?: string): boolean {
  * paused turn instead, under the one re-auth notice, rather than as a red line per message.
  */
 export const SESSION_EXPIRED_STOP = 'session_expired';
+
+/** The stop reason of a turn a model server refused with 401 or 403; the thread offers to enter new credentials. */
+export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at

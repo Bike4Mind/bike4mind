@@ -15,9 +15,9 @@ import crypto from 'crypto';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
@@ -80,7 +80,7 @@ const handler = baseApi().post(
       throw new Error('SECRET_ENCRYPTION_KEY not configured');
     }
 
-    const secret = decryptSecret(webhookConfig.secret, encryptionKey);
+    const secret = decryptStoredSecret(webhookConfig.secret);
 
     const testPayload = {
       action: 'ping',

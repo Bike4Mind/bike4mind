@@ -9,7 +9,7 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
@@ -17,14 +17,27 @@ import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fa
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/dataLakes/dataLakeBatchProgress';
+} from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
-import { isChunkClaimLostError, isSupportedEmbeddingModel, provenancePayloadShape } from '@bike4mind/common';
+import {
+  isChunkClaimLostError,
+  isMediaOnlyMimeType,
+  isPasswordProtectedPdfError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
+  isSupportedEmbeddingModel,
+  isSupportedFabFileMimeType,
+  NotFoundError,
+  provenancePayloadShape,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { CHUNK_CLAIM_STALE_MS } from '@workers/s3/chunkScan';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
@@ -53,6 +66,37 @@ const ChunkFabFilePayload = z.object({
  * error from elsewhere is never wiped by a successful re-enqueue.
  */
 const VECTORIZE_ENQUEUE_ERROR_PREFIX = 'Could not hand off for vector indexing';
+
+const UNSUPPORTED_FORMAT_ERROR =
+  'This file format is not supported, so the file was not indexed. Save it as PDF, DOCX, XLSX or PPTX and upload it again.';
+
+/** A type chunkFabfile has no reader for. Keep in sync with its `default:` branch (b4m-core/fab-pipeline/src/chunk.ts). */
+const isUnreadableFormat = (mimeType: string | null | undefined): boolean =>
+  !!mimeType &&
+  !isSupportedFabFileMimeType(mimeType) &&
+  !mimeType.startsWith('text/') &&
+  !isMediaOnlyMimeType(mimeType);
+
+/**
+ * True only when a chunking failure is a not-found AND a fresh read confirms the file is no longer
+ * accessible - i.e. it was deleted mid-run. Any other not-found (a missing storage object, say)
+ * still counts as a real failure. A failed confirmation read answers false, so the delivery keeps
+ * its ordinary retry instead of being dropped on a guess.
+ */
+async function wasRemovedMidRun(
+  err: unknown,
+  user: Parameters<typeof fabFileRepository.shareable.findAccessibleById>[0],
+  fabFileId: string
+): Promise<boolean> {
+  // The name check covers a second module realm of @bike4mind/common, as isChunkClaimLostError does.
+  const isNotFound = err instanceof NotFoundError || (err instanceof Error && err.name === 'NotFoundError');
+  if (!isNotFound) return false;
+  try {
+    return !(await fabFileRepository.shareable.findAccessibleById(user, fabFileId));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
@@ -139,17 +183,30 @@ async function accountFileFailure(params: {
   action: string;
   errorMessage: string;
   supersedes?: boolean;
+  /** A deterministic verdict a retry cannot change: account it on this delivery instead of deferring. */
+  terminal?: boolean;
 }): Promise<void> {
-  const { event, logger, fabFileId, batchId, userId, action, errorMessage, supersedes = false } = params;
+  const {
+    event,
+    logger,
+    fabFileId,
+    batchId,
+    userId,
+    action,
+    errorMessage,
+    supersedes = false,
+    terminal = false,
+  } = params;
 
   if (
-    await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+    !terminal &&
+    (await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
       fabFileId,
       batchId,
       action,
       errorMessage,
       logger,
-    })
+    }))
   ) {
     return;
   }
@@ -1023,6 +1080,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         return null;
       }
 
+      // The owner deleted the file (or lost access to it) after the pre-flight read above but
+      // before prepare re-read it. Nothing is left to chunk and no retry can bring it back, so
+      // acknowledge instead of retrying toward the DLQ.
+      if (await wasRemovedMidRun(err, user, fabFileId)) {
+        logger.warn(`FabFile ${fabFileId}: removed while it was being chunked - this delivery is a no-op`);
+        return null;
+      }
+
+      // A locked PDF is the user's to fix and no retry can open it: fail the file now with a message
+      // that says how, and acknowledge the delivery instead of retrying toward the DLQ.
+      if (isPasswordProtectedPdfError(err)) {
+        logger.warn(`FabFile ${fabFileId}: PDF is password-protected - marking it failed without retry`);
+        await accountFileFailure({
+          event,
+          logger,
+          fabFileId,
+          batchId: fabFile.batchId,
+          userId,
+          action: 'Chunking',
+          errorMessage: PASSWORD_PROTECTED_PDF_MESSAGE,
+          terminal: true,
+        });
+        return null;
+      }
+
       // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without the
       // accounting below, the file would sit at chunkCount:0 with no error - visually identical
       // to a silently-dropped record.
@@ -1038,9 +1120,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw err;
     });
 
-    // The claim was lost to a successor mid-run (see the catch above) - that successor owns
-    // finishing this file (notifications, batch progress, vectorize dispatch), so this delivery
-    // stops here rather than acting on a stale/absent chunk result.
+    // The catch above settled this delivery without chunks: the claim was lost to a successor that
+    // owns finishing the file, the file was removed, or it was failed terminally. Either way this
+    // delivery stops here rather than acting on a stale/absent chunk result.
     if (fabFileChunks === null) {
       return;
     }
@@ -1095,9 +1177,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // The stamp doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter), so
       // the rescue sweep never re-enqueues a file that deterministically chunks to zero. Its own
       // field rather than prose in `notes` (#2016), which is the owner's text.
-      await FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
-        logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
-      );
+      const stampNoExtractableText = () =>
+        FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
+          logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
+        );
+      // No reader for this format: tell the user rather than completing it silently, and count it as
+      // failed so the batch shows why. Stamped only once the failure is recorded, since the stamp
+      // makes a redelivery skip the file.
+      if (isUnreadableFormat(fabFile.mimeType)) {
+        logger.warn(`fabFile ${fabFileId} has an unsupported format: ${fabFile.mimeType}`);
+        await accountFileFailure({
+          event,
+          logger,
+          fabFileId,
+          batchId: fabFile.batchId,
+          userId,
+          action: 'Chunking',
+          errorMessage: UNSUPPORTED_FORMAT_ERROR,
+          terminal: true,
+        });
+        await stampNoExtractableText();
+        return;
+      }
+      await stampNoExtractableText();
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the
       // reconciler. Account for it as complete here so batch math closes immediately.

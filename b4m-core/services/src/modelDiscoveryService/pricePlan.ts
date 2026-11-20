@@ -12,6 +12,7 @@ import type {
   DiscoveredPriceBracket,
   DiscoveredRates,
   DiscoverySourceKind,
+  LongContextGap,
   PlannedPriceRow,
   PriceFlag,
   PriceFlagKind,
@@ -148,6 +149,12 @@ export interface PricePlan {
    * unchanged is the steady state, and the stale mirror is the news either way.
    */
   overrides: PriceOverride[];
+  /**
+   * Flat rows (planned or already in force) that a trusted source's long-context
+   * ladder outruns. Like `overrides`, raised whether or not a row is appended,
+   * and never a flag: see LongContextGap.
+   */
+  longContextGaps: LongContextGap[];
   /** Usable observations that produced neither a row nor a flag, and why. */
   skipped: PriceSkip[];
 }
@@ -175,6 +182,7 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
   const rows: IModelPriceInput[] = [];
   const flags: PriceFlag[] = [];
   const overrides: PriceOverride[] = [];
+  const longContextGaps: LongContextGap[] = [];
   const skipped: PriceSkip[] = [];
   const skip = (modelId: string, reason: PriceSkipReason) => skipped.push({ modelId, reason });
 
@@ -242,6 +250,8 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     const { observation: trusted, valueSources, corroborating, dissenting } = consensus;
     const proposed = trusted.price;
 
+    // Operator rows raise no long-context gap either: the operator chose the row's
+    // shape, and a flat one may be deliberate.
     if (current && classifyPriceRow(current) === 'operator') {
       if (currentTier && diverges(proposed, tierAsPrice(currentTier), PRICE_AGREEMENT_TOLERANCE)) {
         flag(
@@ -352,6 +362,13 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       });
     }
 
+    // Steady state too: the row stays flat run after run, so an 'unchanged' plan
+    // is exactly when the missing ladder still needs saying.
+    if (!ladder) {
+      const gap = longContextGapOf(modelId, trusted.source, planned[0].key, proposed);
+      if (gap) longContextGaps.push(gap);
+    }
+
     // Carried forward per tier: the cache and audio rates no feed publishes come
     // from the tier under the SAME threshold, never from the row's lowest one.
     const literal = input.adapterTiers?.get(modelId);
@@ -409,7 +426,35 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     });
   }
 
-  return { rows, flags, overrides, skipped };
+  return { rows, flags, overrides, longContextGaps, skipped };
+}
+
+/**
+ * The brackets of `price` a flat row keyed at `threshold` cannot bill. Keys are
+ * upper bounds (tierForTokens picks the first threshold >= the prompt), so a
+ * bracket is reachable only when it starts below the key: a seed row keyed at the
+ * context window never sees a bracket at or past it. A '0' key bills every
+ * prompt, so every bracket counts.
+ */
+function longContextGapOf(
+  modelId: string,
+  source: string,
+  threshold: string,
+  price: DiscoveredPrice
+): LongContextGap | undefined {
+  const ceiling = Number(threshold);
+  const reachable = (price.brackets ?? []).filter(bracket => ceiling === 0 || bracket.aboveTokens < ceiling);
+  if (reachable.length === 0) return undefined;
+  return {
+    modelId,
+    source,
+    base: perMTokOf(price),
+    brackets: reachable.map(bracket => ({ aboveTokens: bracket.aboveTokens, ...perMTokOf(bracket) })),
+    detail:
+      `${source} publishes ${describe(price)} but the row is flat at ${rateList(price)}, so prompts ` +
+      `above ${reachable[0].aboveTokens} tokens bill at the base rate; discovery never writes the upper ` +
+      'tiers of a flat row, so an operator has to reprice it as a ladder',
+  };
 }
 
 /** One model's comparable cost: the lowest tier's rates, in USD per single token. */

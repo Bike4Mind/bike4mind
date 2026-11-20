@@ -18,6 +18,8 @@ export {
 export type { RepeatedCallGuardOptions, RepeatedCallRecord } from './repeatedCallGuard';
 export { PERSONA_ALLOWED_SUBAGENTS } from './types';
 export { isContextLimitError } from './errors';
+export { usableEvidenceConfidence } from './iterationConfidence';
+export type { ScoredToolCall } from './iterationConfidence';
 export type {
   AgentCheckpoint,
   AgentContext,
@@ -201,6 +203,7 @@ export {
   createAgentExtensionRegistry,
   CONTRIBUTED_GUARD_PRIORITY_MIN,
   CONTRIBUTED_GUARD_PRIORITY_MAX,
+  LOW_CONFIDENCE_COMPLETION_MODES,
 } from './deepAgent/runtime';
 export type {
   DeepAgentStore,
@@ -225,6 +228,7 @@ export type {
   AgentExtensionRegistry,
   AgentExtensionSource,
   ResolvedOrchestrationProfile,
+  LowConfidenceCompletionMode,
   SurfaceProfileContext,
   SurfaceProfileEntry,
   ToolMapGuardContext,

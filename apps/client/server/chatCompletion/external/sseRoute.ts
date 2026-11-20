@@ -1,5 +1,9 @@
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -11,6 +15,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
+  buildSettledEvent,
   buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
@@ -21,8 +26,10 @@ import {
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
+  type CompletionRunAttribution,
   type CompletionSource,
   type CompletionSseErrorCode,
+  type IMessage,
   type SSEErrorEvent,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -30,6 +37,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
+import { isOutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -40,12 +48,17 @@ import {
   userApiKeyRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
-import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
-import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { findCallerCompletionRun, type CompletionRunCaller } from '@server/completionRuns/callerCompletionRun';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
@@ -53,7 +66,16 @@ import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
+import { recordPlatformEndUserSeen, resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -91,12 +113,23 @@ const OPERATOR_SIDE_4XX_PATTERNS = [
   /api key (?:not valid|is invalid|has expired|is missing)/i,
   /invalid api key/i,
   /credit balance/i,
+  // Anthropic's org spend cap; keep in sync with isProviderSpendLimitError (@bike4mind/utils).
+  /reached your specified api usage limits/i,
 ];
 
 function isUpstreamCallerError(error: unknown): error is Error {
   if (!(error instanceof Error) || error instanceof HTTPError) return false;
   if (!UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)) return false;
   return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
+}
+
+/** The attribution, with the stored run id, once findCallerCompletionRun confirms this caller minted it. */
+async function verifyRunOwnership(
+  run: CompletionRunAttribution,
+  caller: CompletionRunCaller
+): Promise<CompletionRunAttribution> {
+  const stored = await findCallerCompletionRun(run.runId, caller);
+  return { ...run, runId: stored.runId };
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {
@@ -108,6 +141,8 @@ function toJsonError(
   error: unknown,
   requestId: string
 ): { status: number; headers: Record<string, string>; body: Record<string, unknown> } {
+  // A freeze is a 403 with its scope, not the 422 every other quest code maps to.
+  if (isSpendFrozenError(error)) return httpErrorToResponse(error, requestId);
   const questCode = resolveQuestErrorCode(error);
   if (questCode) {
     const message = error instanceof Error ? error.message : 'Insufficient credits';
@@ -124,14 +159,21 @@ function toJsonError(
 }
 
 /** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
-function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxTokens: boolean): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
-    if (error instanceof Error && isSafetyRefusalError(error)) {
+    // Retrying the same budget fails the same way, unlike provider_error. Only a budget the caller
+    // chose gets its own code; a server-chosen one is not theirs to raise.
+    if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
+      frameError = new Error(
+        'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
+      );
+      code = 'output_budget_exhausted';
+    } else if (error instanceof Error && isSafetyRefusalError(error)) {
+      // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (isUpstreamCallerError(error)) {
@@ -232,10 +274,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
     };
 
+    let completionOutcome: ApiCompletionOutcome = 'unknown';
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
 
     try {
       // The service connects at boot in the background; a request can land first.
@@ -247,6 +291,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           throw new HTTPError(503, 'Service temporarily unavailable. Retry shortly.');
         }
       }
+
+      // Client-version gate (CONVENTIONS.md section 9), ahead of validation as on every transport.
+      const upgradeRequired = await checkClientVersion(req.headers, logger);
+      if (upgradeRequired) throw upgradeRequired;
 
       const parsed = CompletionRequestSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -260,7 +308,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       let authResult;
       try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
+        authResult = await resolveContractAuth(headers, createCompletionContract, { allowExchangeKeys: true });
       } catch (authError) {
         logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
         // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
@@ -273,16 +321,38 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
+        // Register before admission so authenticated rejections count as requests too.
+        await logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
+          logger,
+          track,
+        });
         logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
           endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
         });
+        // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
+        // provider call keeps running after the client goes.
+        quota = await admitApiKeyCompletion({
+          owner: apiKeyInfo.userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          unpaidAccountLimits: apiKeyInfo.unpaidAccountLimits,
+          holdSlot: true,
+        });
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
+      const platformEndUser = resolvePlatformEndUser(body.end_user_id, { userId, apiKeyInfo });
 
       timing?.phase('rateLimited');
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
@@ -298,6 +368,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      const run = body.run
+        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId: apiKeyInfo?.organizationId })
+        : undefined;
+
       // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
       let finalOutputTokens = 0;
@@ -306,14 +380,35 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalTurnUsage: TurnUsage[] | undefined;
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
+      // A holder, not a `let`: control-flow analysis does not see the assignment inside the callback.
+      const settled: { outcome?: CompletionSettlement } = {};
+
+      // Before the free-tier cap and every hold; executeCompletion skips its own lookup once this has run.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, apiKeyInfo?.organizationId ?? null),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+
+      // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+      await checkFreeTierDailySpendCap({
+        userId,
+        userRepository,
+        billingOrganizationId: apiKeyInfo?.organizationId,
+        usageEventRepository,
+        logger,
+      });
+
+      // Tracked, not awaited: the drain waits for it, the stream does not.
+      if (platformEndUser) track(recordPlatformEndUserSeen(platformEndUser, logger));
 
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
-        creditHolds: createCompletionCreditHolds(logger),
+        getThinkingVisibility: resolveThinkingVisibility,
+        creditHolds: createCompletionCreditHolds(logger, apiKeyInfo?.keyId),
         userId,
         model: body.model,
-        messages: body.messages,
+        messages: body.messages as IMessage[],
         options: body.options,
         db: {
           adminSettings: adminSettingsRepository,
@@ -326,17 +421,28 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           usageEvents: usageEventRepository,
           // Required to reserve/settle against an org pool for org-billed API keys.
           organizations: organizationRepository,
+          cache: cacheRepository,
+          recordLimitEvent: recordUserLimitEvent,
+          spendFreezes: spendFreezeRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
         scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
         billingOrganizationId: apiKeyInfo?.organizationId,
+        apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
+        spendFreezeChecked: true,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
+        run,
+        providerEndUserId: platformEndUser?.providerEndUserId,
         logger,
         onReady,
+        onSettled: outcome => {
+          settled.outcome = outcome;
+        },
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -349,6 +455,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
         },
       });
+
+      completionOutcome = 'completed';
+
+      // After the last content event and before [DONE]. Embed streams never send it: it carries usdCost.
+      if (settled.outcome?.committed) {
+        write(serializeSSEEvent(buildSettledEvent({ ...settled.outcome, runId: run?.runId })));
+      }
 
       // Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
@@ -378,7 +491,18 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
-      const level = jsonError.status < 500 ? 'warn' : 'error';
+      completionOutcome =
+        jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
+          ? 'daily_cap_rejected'
+          : jsonError.status < 500
+            ? 'rejected'
+            : 'failed';
+      // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
+      // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
+      // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
+      const budgetExhausted = isOutputBudgetExhaustedError(error);
+      const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
+      const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
@@ -386,7 +510,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {
@@ -417,6 +541,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      await quota.release();
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });

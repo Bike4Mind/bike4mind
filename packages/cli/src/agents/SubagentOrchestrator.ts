@@ -180,6 +180,8 @@ export interface OrchestratorDependencies {
   sandboxOrchestrator?: SandboxOrchestrator;
   /** Live filesystem allow-list shared with the parent, for the same reason. */
   additionalDirectories?: string[];
+  /** The parent session's WrapToolDeps.isCancelled, so a subagent's late tool call never runs after it ends. */
+  isCancelled?: () => boolean;
 }
 
 /**
@@ -322,7 +324,8 @@ export class SubagentOrchestrator {
       this.deps.checkpointStore,
       this.deps.sandboxOrchestrator,
       this.deps.additionalDirectories,
-      effectiveInteractionMode
+      effectiveInteractionMode,
+      this.deps.isCancelled
     );
 
     // Apply wildcard filtering
@@ -340,6 +343,7 @@ export class SubagentOrchestrator {
       allowedDirectories: this.deps.additionalDirectories,
       interactionModeOverride: effectiveInteractionMode,
       checkpointStore: this.deps.checkpointStore,
+      isCancelled: this.deps.isCancelled,
     };
 
     // Inject additional tools (e.g., decompose_task for coordinator agent)
@@ -368,6 +372,7 @@ export class SubagentOrchestrator {
         permission: {
           permissionManager: this.deps.permissionManager,
           promptFn: this.deps.showPermissionPrompt,
+          isCancelled: this.deps.isCancelled,
         },
         // Confine skill @file refs to the workspace (plus granted dirs).
         allowedDirectories: this.deps.additionalDirectories,
@@ -399,6 +404,7 @@ export class SubagentOrchestrator {
       permission: {
         permissionManager: this.deps.permissionManager,
         promptFn: this.deps.showPermissionPrompt,
+        isCancelled: this.deps.isCancelled,
       },
     };
 
@@ -423,6 +429,12 @@ export class SubagentOrchestrator {
     // Link agent context
     updatedContext.currentAgent = agent;
 
+    const assertSessionActive = () => {
+      abortSignal?.throwIfAborted();
+      if (this.deps.isCancelled?.()) throw new DOMException('Parent session ended', 'AbortError');
+    };
+    assertSessionActive();
+
     // Invoke beforeRunCallback to allow caller to subscribe to events
     if (this.beforeRunCallback) {
       this.beforeRunCallback(agent, agentName);
@@ -435,6 +447,7 @@ export class SubagentOrchestrator {
       const { result: agentResult, attempts } = await withRetry(
         () =>
           agent.run(task, {
+            signal: abortSignal,
             maxIterations,
             parallelExecution: this.deps.enableParallelToolExecution === true,
             isReadOnlyTool: toolName => this.deps.permissionManager.catalog.isReadOnly(toolName),
@@ -455,6 +468,7 @@ export class SubagentOrchestrator {
       if (attempts > 0) {
         this.deps.logger.info(`[${agentName}] Recovered after ${attempts} retry attempt${attempts === 1 ? '' : 's'}`);
       }
+      assertSessionActive();
       result = agentResult;
     } catch (error) {
       if (error instanceof HookBlockedError) {

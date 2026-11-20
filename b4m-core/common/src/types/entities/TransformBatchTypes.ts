@@ -18,6 +18,8 @@ export interface ITransformBatchCustomIdMapping {
   clientRef: string;
   /** The request's model, so the poll can price its usage. Absent on rows from before metering. */
   model?: string;
+  /** The model that ran, when a restricted-tier substitute replaced `model`. */
+  executedModel?: string;
 }
 
 /**

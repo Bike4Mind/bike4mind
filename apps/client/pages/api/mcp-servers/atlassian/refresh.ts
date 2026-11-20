@@ -3,7 +3,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
-import { encryptToken, decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 interface TokenResponse {
   access_token: string;

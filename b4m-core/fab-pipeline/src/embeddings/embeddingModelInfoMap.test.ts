@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EmbeddingModelProvider } from './EmbeddingService';
-import { BEDROCK_EMBEDDING_MODEL_MAP } from './providers/BedrockEmbeddingService';
-import { OLLAMA_EMBEDDING_MODEL_MAP } from './providers/OllamaEmbeddingService';
-import { OPENAI_EMBEDDING_MODEL_MAP } from './providers/OpenAIEmbeddingService';
-import { VOYAGEAI_EMBEDDING_MODEL_MAP } from './providers/VoyageAIEmbeddingService';
+import { EmbeddingModelProvider } from './embeddingModelInfo';
+import { BEDROCK_EMBEDDING_MODEL_MAP } from './embeddingModelInfo';
+import { OLLAMA_EMBEDDING_MODEL_MAP } from './embeddingModelInfo';
+import { OPENAI_EMBEDDING_MODEL_MAP } from './embeddingModelInfo';
+import { VOYAGEAI_EMBEDDING_MODEL_MAP } from './embeddingModelInfo';
 
 // Pinned to the hand-written maps these replaced. dimensions[0] sizes Atlas vector indexes over persisted chunks and
 // contextWindow sizes chunks, so a catalog edit that moves either must fail here, not in a re-index.

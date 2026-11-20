@@ -44,7 +44,6 @@ const EXPECTED_CORE_DISALLOWED = [
   '/organizations',
   '/profile',
   '/projects',
-  '/quests',
   '/skills',
   '/status',
   '/studio',
@@ -85,7 +84,6 @@ describe('CORE_DISALLOWED_PATHS', () => {
     ['/admin-emergency', '/admin'],
     ['/agents', '/agent'],
     ['/agent-executions', '/agent'],
-    ['/quests-v5', '/quests'],
     ['/verify-email', '/verify-'],
     ['/verify-change', '/verify-'],
   ])('covers %s by prefix via %s', (route, pattern) => {

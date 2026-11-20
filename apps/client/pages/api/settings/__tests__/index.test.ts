@@ -3,15 +3,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError } from '@bike4mind/common';
 
-// baseApi: unwrap the chain so handler.get(fn) just returns fn.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
+// baseApi: handler.get(fn) returns fn behind adminApi's real permission guard.
+vi.mock('@server/middlewares/baseApi', () => {
+  let guard: (req: unknown, res: unknown, next: () => void) => void;
+  const chain = {
+    use: (fn: typeof guard) => {
+      guard = fn;
+      return chain;
     },
-    get: (fn: unknown) => fn,
-  }),
-}));
+    get: (fn: (req: unknown, res: unknown) => unknown) => async (req: unknown, res: unknown) => {
+      guard(req, res, () => {});
+      return fn(req, res);
+    },
+  };
+  return { baseApi: () => chain };
+});
 
 // AdminSettings: the full settings collection. It MUST NOT be queried on a denied call,
 // since its rows include (encrypted) provider API keys.

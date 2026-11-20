@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import {
@@ -7,17 +7,21 @@ import {
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   organizationRepository,
+  spendFreezeRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { researchRunEnvelopeResponseSchema, researchRunListResponseSchema } from '@bike4mind/common';
 import { InternalServerError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
+import { respond } from '@server/utils/respond';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -46,7 +50,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { limit } = ListQuery.parse(req.query);
 
     const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
-    return res.json({ data: runs });
+    return respond(res, researchRunListResponseSchema, { data: runs });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -72,6 +76,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         throw new InternalServerError('Research runs are not available on this deployment');
       }
 
+      await admitRequestCompletion(req, { holdSlot: false });
+
       const started = await dataLakeResearchService.startResearchRun(
         configId,
         lake,
@@ -82,6 +88,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
             dataLakeResearchRuns: dataLakeResearchRunRepository,
             users: userRepository,
             organizations: organizationRepository,
+            spendFreezes: spendFreezeRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,
@@ -94,7 +101,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     await queueResearchRun(run, lake, queueUrl, req.logger);
 
-    return res.status(202).json({ data: run });
+    return respond(res, researchRunEnvelopeResponseSchema, { data: run }, 202);
   });
 
 export const config = {

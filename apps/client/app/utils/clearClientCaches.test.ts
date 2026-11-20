@@ -15,6 +15,7 @@ vi.mock('./dexie', () => ({ dexie: { delete: vi.fn().mockResolvedValue(undefined
 vi.mock('./tagCache', () => ({ tagCacheManager: { clearAllCaches: vi.fn().mockResolvedValue(undefined) } }));
 
 import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
+import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
 import { clearClientCaches } from './clearClientCaches';
 
 function setPrefixes(prefixes: string[]) {
@@ -84,5 +85,13 @@ describe('clearClientCaches identity-scoped stores', () => {
     await clearClientCaches();
 
     expect(localStorage.getItem('llm-settings')).toBeNull();
+  });
+
+  it('drops the MFA enrollment hint so the next account is checked from scratch', async () => {
+    localStorage.setItem(MFA_ENROLLMENT_HINT_KEY, JSON.stringify({ userId: 'u1', enrolled: true }));
+
+    await clearClientCaches();
+
+    expect(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY)).toBeNull();
   });
 });

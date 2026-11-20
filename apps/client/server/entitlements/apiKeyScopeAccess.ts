@@ -1,9 +1,15 @@
 import { hasDeveloperUserTag, settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
-import type { ApiKeyScopeAccess } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeAccess } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest, type EntitlementUser } from './index';
+import {
+  getOrganizationEntitlements,
+  getRequestEntitlements,
+  getUserEntitlements,
+  type EntitlementRequest,
+  type EntitlementUser,
+} from '@bike4mind/server-utils/entitlements/index';
 
 /**
  * Server half of useApiKeyScopeAccess: the same product gates the scoped routes apply to a key's
@@ -18,6 +24,15 @@ export async function resolveApiKeyScopeAccess(req: EntitlementRequest): Promise
 /** resolveApiKeyScopeAccess for a user other than the caller, e.g. the target of an admin mint. */
 export async function resolveApiKeyScopeAccessForUser(user: EntitlementUser): Promise<ApiKeyScopeAccess> {
   return resolveAccess(user, () => getUserEntitlements(user));
+}
+
+/**
+ * The product access an organization's own keys get: the org plan's entitlements, with no admin or
+ * developer bypass, since the minting admin's own role says nothing about what the org holds.
+ * Backs the org key routes' scope check and their picker (pages/api/organizations/[id]/api-keys).
+ */
+export async function resolveApiKeyScopeAccessForOrganization(organizationId: string): Promise<ApiKeyScopeAccess> {
+  return resolveAccess({ isAdmin: false, tags: [] }, () => getOrganizationEntitlements(organizationId));
 }
 
 async function resolveAccess(

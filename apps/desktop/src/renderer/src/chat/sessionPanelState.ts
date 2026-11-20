@@ -10,19 +10,37 @@ export type SessionPanelSectionId = (typeof SESSION_PANEL_SECTIONS)[number];
 
 /** The docked card's width, in px. */
 export const SESSION_PANEL_WIDTH = 280;
-/** Gap between the card and the edges of the thread it floats over, in px. */
+/** Gap between the card and the edges of its reserved space, in px. */
 export const SESSION_PANEL_INSET = 12;
+export const SESSION_PANEL_SPACE = SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET;
 
 /**
- * Whether the docked card fits beside the reading column without covering any of its text.
+ * How the panel sits in the thread region, by the region's width (not the window's, so the sidebar,
+ * the browser pane and split views all count):
+ * - `beside`: the free margin right of the centered reading column holds the card, so it floats
+ *   there and nothing moves when it opens.
+ * - `push`: no such margin, but the region fits the panel's rail and a full reading column, so the
+ *   column shifts left to make room.
+ * - `overlay`: too narrow for both; the card opens over the thread with a scrim, from the header button.
  *
- * The column is centred and capped at CONTENT_MAX_WIDTH, so what is free on its right is half of
- * whatever the pane has beyond that, plus the column's own padding. Below this the card folds into
- * its header button and opens as a popover instead.
+ * Without a centered column (the orchestrator's stage and dock fill the region) there is no margin
+ * to float in, so a wide region pushes. A width not yet measured counts as wide.
  */
-export function panelFitsBesideThread(columnWidth: number): boolean {
-  const freeOnRight = (columnWidth - CONTENT_MAX_WIDTH) / 2 + COLUMN_PADDING;
-  return freeOnRight >= SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET;
+export type SessionPanelLayout = 'beside' | 'push' | 'overlay';
+
+/** The narrowest region whose centered column leaves the card its margin, padding included. */
+export const SESSION_PANEL_BESIDE_MIN_WIDTH = CONTENT_MAX_WIDTH + 2 * (SESSION_PANEL_SPACE - COLUMN_PADDING);
+/** The narrowest region that fits the panel's rail beside a full reading column. */
+export const SESSION_PANEL_PUSH_MIN_WIDTH = CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE;
+
+export function sessionPanelLayout(
+  regionWidth: number | null,
+  { centeredColumn }: { centeredColumn: boolean }
+): SessionPanelLayout {
+  const width = regionWidth ?? Number.POSITIVE_INFINITY;
+  if (centeredColumn && width >= SESSION_PANEL_BESIDE_MIN_WIDTH) return 'beside';
+  if (width >= SESSION_PANEL_PUSH_MIN_WIDTH) return 'push';
+  return 'overlay';
 }
 
 /**

@@ -1,8 +1,8 @@
 import { dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 // One `$group` over the caller's own rows; the cap only matters for an account with a very large
 // file count, where a slow answer is worse than a failed one the UI can retry.

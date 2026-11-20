@@ -149,6 +149,7 @@ const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
     } else if (githubOauth === 'error' && error) {
       toastShownRef.current = true;
       const errorMessages: Record<string, string> = {
+        access_denied: 'GitHub authorization was cancelled.',
         missing_code: 'Authorization code missing',
         missing_state: 'State parameter missing',
         invalid_state: 'Invalid or expired authorization',

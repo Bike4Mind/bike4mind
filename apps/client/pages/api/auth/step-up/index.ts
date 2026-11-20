@@ -5,7 +5,7 @@ import type { IUserDocument } from '@bike4mind/common';
 import { authSessionService, mfaService } from '@bike4mind/services';
 import { authSessionRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { sendFailedMfaAttempt, sendIfLockedOut } from '@server/auth/mfaLockout';
 import {
   asPasskeyError,

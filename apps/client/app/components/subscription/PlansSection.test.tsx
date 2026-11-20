@@ -4,11 +4,12 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { PlansSection } from './PlansSection';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 /**
  * The plans section is where the delinquent row reaches the plan card: it filters the raw
@@ -25,6 +26,7 @@ const cancelMutate = vi.fn();
 const subscribeMutate = vi.fn();
 const changeMutate = vi.fn();
 const portalMutate = vi.fn();
+const trackUpsell = vi.fn();
 const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
@@ -43,6 +45,8 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
 }));
 
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell: (...args: unknown[]) => trackUpsell(...args) }));
+
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () => ({
     data: [
@@ -56,6 +60,16 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
 }));
 
+const payInvoice = vi.fn();
+vi.mock('@client/app/components/subscription/usePayFailedInvoice', () => ({
+  usePayFailedInvoice: () => ({
+    pay: (...args: unknown[]) => payInvoice(...args),
+    isPending: false,
+    isPaid: false,
+    declineMessage: null,
+  }),
+}));
+
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: USER_ID } }),
 }));
@@ -65,6 +79,9 @@ let settingValues: Record<string, unknown> = {};
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => settingValues[key] ?? false,
   useConfig: () => ({ data: { seedStageName: 'production' } }),
+  useSettingsFromServer: () => ({
+    data: Object.entries(settingValues).map(([settingName, settingValue]) => ({ settingName, settingValue })),
+  }),
 }));
 
 vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
@@ -245,11 +262,25 @@ describe('PlansSection', () => {
     subscribeMutate.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
+    payInvoice.mockReset();
+    trackUpsell.mockReset();
     sessionStorage.clear();
   });
 
+  it('includes Questmaster on both visible paid plans without changing hidden plans', async () => {
+    renderSection();
+
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    for (const plan of SUBSCRIPTION_PLANS.filter(plan => plan.hidden)) {
+      expect(plan.features).not.toContain('Questmaster included');
+      expect(screen.getByTestId('plan-card')).not.toHaveTextContent(plan.name);
+    }
+  });
+
   it('says every account starts with free credits rather than claiming there is no free tier', () => {
-    settingValues = { defaultFreeCredits: 5000 };
+    settingValues = { signupGrantInitialCredits: 5000 };
     renderSection();
 
     expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
@@ -259,7 +290,7 @@ describe('PlansSection', () => {
   });
 
   it('makes no starter-credits claim when sign-ups are granted nothing', () => {
-    settingValues = { defaultFreeCredits: 0 };
+    settingValues = { signupGrantInitialCredits: 0 };
     renderSection();
 
     expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
@@ -345,6 +376,26 @@ describe('PlansSection', () => {
     expect(cancelMutate).toHaveBeenCalledWith(PRICE_ID);
   });
 
+  it('reports the click and tags the checkout when Subscribe is pressed', async () => {
+    renderSection();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: 'Subscribe to Professional' }));
+
+    expect(trackUpsell).toHaveBeenCalledWith('click', { surface: 'billing_plans', plan: 'Professional' });
+    expect(subscribeMutate.mock.calls[0][0]).toMatchObject({ priceId: PRICE_ID, surface: 'billing_plans' });
+  });
+
+  it('does not report a click for Cancel', async () => {
+    subscriptions = [subRow()];
+    renderSection();
+
+    await userEvent
+      .setup({ delay: null })
+      .click(screen.getByRole('button', { name: 'Cancel Professional subscription' }));
+
+    expect(trackUpsell).not.toHaveBeenCalled();
+  });
+
   it('offers Subscribe, not Change, when the only plan the user holds is delinquent', () => {
     // A grandfathered/legacy price: the delinquent row is on a different price than the
     // one plan the modal renders. Change would 400 on the server's active-only lookup.
@@ -364,6 +415,7 @@ describe('PlansSection', () => {
       </TestWrapper>
     );
     await userEvent.click(screen.getByRole('button', { name: 'Change subscription to Professional' }));
+    expect(trackUpsell).toHaveBeenCalledWith('click', { surface: 'billing_plans', plan: 'Professional' });
     expect(onSubscriptionChanged).not.toHaveBeenCalled();
     const options = changeMutate.mock.calls[0][1] as { onSuccess: () => void };
     options.onSuccess();
@@ -474,6 +526,37 @@ describe('PlansSection', () => {
       renderSection();
 
       expect(manageButton()).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Pay now', () => {
+    const payNowButton = () => screen.queryByTestId('plan-card-pay-now-btn');
+
+    it.each(['past_due', 'unpaid', 'incomplete'] as const)('pays the open invoice of a %s plan', async status => {
+      subscriptions = [subRow({ status, source: SubscriptionSource.Stripe })];
+
+      renderSection();
+
+      await userEvent.setup({ delay: null }).click(payNowButton()!);
+      expect(payInvoice).toHaveBeenCalledWith('sub_1');
+    });
+
+    it('is not offered on a plan in good standing', () => {
+      subscriptions = [subRow({ status: 'active' })];
+
+      renderSection();
+
+      expect(payNowButton()).not.toBeInTheDocument();
+    });
+
+    it('is not offered on an admin-granted plan, even a delinquent one', () => {
+      subscriptions = [
+        subRow({ status: 'past_due', subscriptionId: 'admin_grant_x', source: SubscriptionSource.AdminGrant }),
+      ];
+
+      renderSection();
+
+      expect(payNowButton()).not.toBeInTheDocument();
     });
   });
 });

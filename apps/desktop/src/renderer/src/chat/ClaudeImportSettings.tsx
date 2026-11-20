@@ -74,7 +74,8 @@ export function claudeImportSummary(state: ClaudeImportState | null): string {
     ? `Claude Code sync on, ${state.code.counts.imported} imported`
     : 'Claude Code sync off';
   const chats = state.chat.lastImport ? `, ${state.chat.lastImport.counts.found} chats in last export` : '';
-  return `${code}${chats}`;
+  const web = state.web.settings.enabled ? `, web sync on, ${state.web.counts.imported} imported` : '';
+  return `${code}${chats}${web}`;
 }
 
 function when(iso: string | null): string {
@@ -94,7 +95,11 @@ function Count({ label, value, testId }: { label: string; value: number; testId:
   );
 }
 
-const KIND_LABEL: Record<ClaudeImportKind, string> = { 'claude-code': 'Claude Code', 'claude-chat': 'Claude chat' };
+const KIND_LABEL: Record<ClaudeImportKind, string> = {
+  'claude-code': 'Claude Code',
+  'claude-chat': 'Claude chat',
+  'b4m-web': 'Bike4Mind web',
+};
 
 /**
  * Settings > Import from Claude. Every path is picked in a native dialog in main; this screen
@@ -105,11 +110,14 @@ export function ClaudeImportSettings({
   onState,
   loadError,
   onRetry,
+  focus,
 }: {
   state: ClaudeImportState | null;
   onState: (state: ClaudeImportState) => void;
   loadError: string | null;
   onRetry: () => void;
+  /** The source to scroll into view once loaded, when opened from a sidebar sync hint. */
+  focus?: ClaudeImportKind;
 }) {
   const api = claudeImportApi();
   const [inline, setInline] = useImportedInline();
@@ -138,6 +146,14 @@ export function ClaudeImportSettings({
     },
     [onState]
   );
+  const sectionRefs = useRef<Partial<Record<ClaudeImportKind, HTMLDivElement | null>>>({});
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!loaded || !focus || focused.current) return;
+    focused.current = true;
+    sectionRefs.current[focus]?.scrollIntoView?.({ block: 'start' });
+  }, [loaded, focus]);
+
   // Two quick clicks would each build on the selection drawn before either reply arrived.
   const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
 
@@ -166,7 +182,7 @@ export function ClaudeImportSettings({
     );
   }
 
-  const { code, chat } = state;
+  const { code, chat, web } = state;
   const enabled = code.settings.enabled;
   const projects = code.settings.projects;
   const selected = new Set(projects === 'all' ? [] : projects);
@@ -205,8 +221,18 @@ export function ClaudeImportSettings({
         </Alert>
       )}
 
-      <Stack spacing={1.25} data-testid="claude-import-code-section">
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['claude-code'] = node;
+        }}
+        data-testid="claude-import-code-section"
+      >
         <Typography level="title-sm">Claude Code sessions</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-code-explainer">
+          Mirrors your Claude Code sessions here, read-only: Claude Code&apos;s files are never changed. Continue one
+          here and it stops syncing.
+        </Typography>
         <Switch
           size="sm"
           checked={enabled}
@@ -353,8 +379,18 @@ export function ClaudeImportSettings({
 
       <Divider />
 
-      <Stack spacing={1.25} data-testid="claude-import-chat-section">
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['claude-chat'] = node;
+        }}
+        data-testid="claude-import-chat-section"
+      >
         <Typography level="title-sm">Claude chats</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-chat-explainer">
+          Copies the chats in your claude.ai export, read-only: your claude.ai account is never changed. A chat you
+          continue here is your own copy.
+        </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           claude.ai has no way for other apps to read your chats, so they come from your data export: in claude.ai open
           Settings, then Privacy, then Export data, and pick the .zip it emails you (or the conversations.json inside
@@ -435,6 +471,69 @@ export function ClaudeImportSettings({
 
       <Divider />
 
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['b4m-web'] = node;
+        }}
+        data-testid="claude-import-web-section"
+      >
+        <Typography level="title-sm">Bike4Mind web conversations</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-web-explainer">
+          Mirrors your Bike4Mind web notebooks here, read-only: nothing on the web is changed. Continue one here and it
+          stops syncing.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={web.settings.enabled}
+          disabled={!state.signedIn}
+          onChange={event => void run(() => api.setWebSettings({ enabled: event.target.checked }))}
+          endDecorator="Keep in sync"
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: {
+              'aria-label': 'Keep Bike4Mind web conversations in sync',
+              'data-testid': 'claude-import-web-enable-switch',
+            },
+          }}
+        />
+        <Typography level="body-xs" textColor="text.tertiary">
+          Your notebooks on Bike4Mind web, for the account you are signed in with, synced when you sign in, when you
+          come back to this app, and when you press Sync now. Prompts and replies come over; agent steps, images and
+          files stay on the web. A conversation you continue here becomes your own copy and stops syncing.
+        </Typography>
+        <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} data-testid="claude-import-web-counts">
+          <Count label="found" value={web.counts.found} testId="claude-import-web-found-text" />
+          <Count label="imported" value={web.counts.imported} testId="claude-import-web-imported-text" />
+          <Count label="skipped" value={web.counts.skipped} testId="claude-import-web-skipped-text" />
+          <Count label="failed" value={web.counts.failed} testId="claude-import-web-failed-text" />
+          <Count label="continued here" value={web.forked} testId="claude-import-web-forked-text" />
+        </Stack>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Button
+            size="sm"
+            variant="outlined"
+            loading={web.running}
+            disabled={!state.signedIn || !web.settings.enabled}
+            onClick={() => void run(() => api.syncWeb())}
+            data-testid="claude-import-web-sync-btn"
+          >
+            Sync now
+          </Button>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="claude-import-web-last-sync-text">
+            Last sync: {when(web.lastSyncAt)}
+            {web.lastSyncMs !== null ? ` (${(web.lastSyncMs / 1000).toFixed(1)}s)` : ''}
+          </Typography>
+        </Stack>
+        {web.error && (
+          <Typography level="body-xs" color="danger" data-testid="claude-import-web-error-text">
+            {web.error}
+          </Typography>
+        )}
+      </Stack>
+
+      <Divider />
+
       <Stack spacing={1.25}>
         <Switch
           size="sm"
@@ -447,7 +546,7 @@ export function ClaudeImportSettings({
         <Typography level="body-xs" textColor="text.tertiary">
           Off collects them in their own &quot;Imported from Claude&quot; section of the sidebar instead.
         </Typography>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Button
             size="sm"
             variant="plain"
@@ -468,6 +567,16 @@ export function ClaudeImportSettings({
           >
             Remove imported Claude chats
           </Button>
+          <Button
+            size="sm"
+            variant="plain"
+            color="danger"
+            disabled={!state.signedIn}
+            onClick={() => setConfirming('b4m-web')}
+            data-testid="claude-import-web-remove-btn"
+          >
+            Remove imported web conversations
+          </Button>
         </Stack>
       </Stack>
 
@@ -475,8 +584,11 @@ export function ClaudeImportSettings({
         <ModalDialog size="sm" role="alertdialog" data-testid="claude-import-remove-dialog">
           <DialogTitle>Remove imported {confirming ? KIND_LABEL[confirming] : ''} sessions?</DialogTitle>
           <DialogContent>
-            This deletes this app&apos;s copies only. Your files in Claude are not touched, and sessions you continued
-            here are kept.{confirming === 'claude-code' ? ' Sync is turned off so they are not imported again.' : ''}
+            This deletes this app&apos;s copies only. The originals are not touched, and sessions you continued here are
+            kept.
+            {confirming === 'claude-code' || confirming === 'b4m-web'
+              ? ' Sync is turned off so they are not imported again.'
+              : ''}
           </DialogContent>
           <DialogActions>
             <Button

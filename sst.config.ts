@@ -73,6 +73,9 @@ export default $config({
     const ALWAYS_EXTERNAL = ['isolated-vm', '@huggingface/transformers', 'onnxruntime-node', 'playwright-core'];
     // SST rejects top-level imports in sst.config.ts, so load the helper at run() time.
     const { resolveDefaultLogging } = await import('@bike4mind/infra');
+    // Runs ahead of every Function's handler module so raw console output is redacted like Logger output.
+    const { consoleRedactionBanner } = await import('./infra/consoleRedactionBanner');
+    const CONSOLE_REDACTION_BANNER = consoleRedactionBanner($cli.paths.root);
     $transform(sst.aws.Function, args => {
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
@@ -80,7 +83,8 @@ export default $config({
         for (const dep of ALWAYS_EXTERNAL) {
           if (!external.includes(dep)) external.push(dep);
         }
-        return { ...nodejs, esbuild: { ...esbuild, external } };
+        const banner = nodejs?.banner ? `${CONSOLE_REDACTION_BANNER}\n${nodejs.banner}` : CONSOLE_REDACTION_BANNER;
+        return { ...nodejs, banner, esbuild: { ...esbuild, external } };
       });
       // Default log retention where a Function sets none (SST's own default is "1 month").
       // dev and every other non-production stage deliberately get 1 week, so this is a
@@ -124,6 +128,7 @@ export default $config({
       vpc,
       vpcId,
       mcpHandler,
+      remoteMcpHandler,
       cliToolHandler,
       router,
       web,
@@ -140,6 +145,10 @@ export default $config({
       cluster,
       resolvedVpcId,
       PRODUCTION_STAGES,
+      wafReadPermissions,
+      wafWebAclArn,
+      contributedQueues,
+      dlqAlarmTopic,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -160,6 +169,10 @@ export default $config({
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
       slackErrorWebhookUrl: secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+      // The same WAF log read grant the web function gets, and the web ACL link (undefined on a
+      // stage without WAF), for overlay functions that read the WAF logs.
+      wafReadPermissions,
+      wafWebAclArn,
     });
 
     // Bob premium infra. Same generated-glue pattern as the overlays above: a no-op when the
@@ -197,7 +210,9 @@ export default $config({
     // overlay pattern. Retry-exhaustion failures are still alarmed to Slack via the
     // retained tavern-heartbeat DLQ alarm (infra/dlqAlarms.ts).
     const { contributeInfra: contributeTavernInfra } = await import('./infra/premium-generated/tavern-infra.generated');
-    contributeTavernInfra({
+    // A variable, not an inline literal: an overlay whose params type does not declare eventBus yet
+    // would reject the extra key on a fresh object literal (excess-property check).
+    const tavernInfraContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
@@ -209,7 +224,9 @@ export default $config({
       routePrefix,
       appFilesBucket,
       isSharedRouterConsumer,
-    });
+      eventBus,
+    };
+    contributeTavernInfra(tavernInfraContext);
 
     // OptiHashi premium infra: compute alarm topics, MetricAlarms, run-poller cron.
     // Handler path uses generated stub (server/premium-generated/qworkRunPoller.ts) so
@@ -240,6 +257,22 @@ export default $config({
         : {}),
     });
 
+    // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
+    // Also handed the shared bus, the package-declared queue pairs (infra/queues.ts) and the alarm
+    // topic, so a package can subscribe consumers and attach rules and alarms from its own infra.
+    // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
+    const { contributeInfra: contributeSentinelInfra } =
+      await import('./infra/premium-generated/sentinel-infra.generated');
+    const infrastructureContext = {
+      lambdaVpc,
+      allSecrets,
+      defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
+      eventBus,
+      contributedQueues,
+      alarmTopic: dlqAlarmTopic,
+    };
+    contributeSentinelInfra(infrastructureContext);
+
     return {
       appName: $app.name,
       stage: $app.stage,
@@ -259,6 +292,7 @@ export default $config({
       slackExportQueue: slackExportQueue.url,
       githubWebhookQueue: githubWebhookQueue.url,
       mcpHandler: mcpHandler.name,
+      remoteMcpHandler: remoteMcpHandler.name,
       cliToolHandler: cliToolHandler.name,
       websocket: websocketApi.url,
       websocketEndpoint: websocketApi.managementEndpoint,

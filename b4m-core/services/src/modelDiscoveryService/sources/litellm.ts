@@ -151,9 +151,9 @@ const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * litellm's `deprecation_date` is often in the FUTURE - it is the announced
  * date, not a state. A future date therefore claims NO status: litellm does not
  * know what the model is today, and 'active' here would walk a model the catalog
- * holds as deprecated back into every picker. A past one is what makes it
- * deprecated. Either way a provider's own lifecycle feed outranks this, because
- * providers are merged first.
+ * holds as deprecated back into every picker. A past one proposes deprecation.
+ * planLifecycleSignals withholds unconfirmed sunsets and date-only announcements
+ * for operator review rather than letting an aggregator schedule a picker hide.
  */
 function lifecycleOf(entry: LiteLlmEntry, at: Date): DiscoveredPatch['lifecycle'] | undefined {
   const date = typeof entry.deprecation_date === 'string' ? entry.deprecation_date.trim() : '';

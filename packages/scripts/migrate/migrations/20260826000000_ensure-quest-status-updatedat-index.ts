@@ -13,9 +13,9 @@ import { type MigrationFile } from './index';
  * 20260820000000_ensure-lakeaccessevent-questid-index.
  *
  * Migration rather than autoIndex is load-bearing here, not just tidy. This index is dense - both
- * fields exist on every quest - and prod runs DocumentDB, where an index build runs in the
- * foreground holding a collection lock (see 20260529000000_datalake-org-scoped-slug-index). On a
- * collection this size that stall belongs in a migration window, not on a request path.
+ * fields exist on every quest - so the build scans the whole collection, and autoIndex builds are
+ * fire-and-forget (a failure is silent). On a collection this size that scan belongs in a migration
+ * window, not on a request path.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the
  * schema declares, so it also backfills any of this model's other declared indexes an environment

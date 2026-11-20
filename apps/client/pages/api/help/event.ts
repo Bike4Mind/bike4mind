@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -13,7 +13,7 @@ const HelpEventSchema = z.object({
   chatQuestion: z.string().max(2000).optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ recordsActivity: false })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 500 : 200,

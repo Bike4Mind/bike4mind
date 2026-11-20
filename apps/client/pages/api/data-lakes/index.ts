@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -20,12 +20,13 @@ import {
   dataLakeResponseSchema,
 } from '@bike4mind/common';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { respond } from '@server/utils/respond';
 import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeListRetrievalScope';
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
@@ -112,6 +113,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Scope to the caller's active account-switcher org (sent in the body), authorization-
     // validated against their memberships first - never trusted as-is. Undefined -> personal.
     const organizationId = await resolveActiveOrg(req, params.organizationId);
+    await assertLakePlanAllowed(req, organizationId);
 
     const dataLake = await dataLakeService.createDataLake(
       userId,

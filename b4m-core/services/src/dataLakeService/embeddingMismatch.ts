@@ -317,7 +317,7 @@ export function resolveMajorityEmbeddingModel(
   for (const file of files) {
     const label = file.embeddingModel?.trim();
     // An unrecognized label is treated as unlabeled rather than tallied. Letting a corrupt value
-    // win the vote would hand it to createEmbeddingService, which throws on an unknown provider,
+    // win the vote would hand it to createBoundEmbeddingModel, which throws on an unknown provider,
     // and the callers swallow that into an empty result: the silent partial this module removes.
     const model = label && isSupportedEmbeddingModel(label) ? label : fallbackModel;
     tally.set(model, (tally.get(model) ?? 0) + 1);

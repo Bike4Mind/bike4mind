@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
 export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
@@ -97,6 +98,7 @@ const ArtifactSchema = new Schema(
     },
     organizationId: {
       type: String,
+      immutable: true,
     },
     visibility: {
       type: String,
@@ -196,8 +198,8 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 ArtifactSchema.index({ sourceQuestId: 1 });
 // Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
 // (scanned in reverse for newest first).
-// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description
@@ -260,15 +262,18 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Artifact =
+ArtifactSchema.plugin(organizationContentPolicyPlugin);
+
+export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 
 // Repository implementation
-export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
-  // Add shareable property required by interface
-  public shareable: any = {}; // Placeholder for IShareableStaticMethods
+// Fields the public artifact list and search return; content and sharing state are never loaded.
+const PUBLIC_ARTIFACT_LIST_FIELDS =
+  'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt';
 
+export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   constructor(model: Model<IArtifactDocument>) {
     super(model);
   }
@@ -310,22 +315,47 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     );
   }
 
+  /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */
+  async reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }> {
+    const { organizationId, userId } = scope;
+    if (!organizationId || !userId || !recipientId || userId === recipientId) {
+      throw new Error('Artifact reassignment requires an organization and two distinct users');
+    }
+    const query = this.model.updateMany(
+      { organizationId, userId, deletedAt: null },
+      {
+        $set: { userId: recipientId },
+        $pull: {
+          'permissions.canRead': userId,
+          'permissions.canWrite': userId,
+          'permissions.canDelete': userId,
+        },
+      }
+    );
+    if (this._txn) query.session(this._txn);
+    return query.exec();
+  }
+
   /**
-   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
-   * the by-id read. Content and sharing fields are not loaded.
+   * One newest-first page of `conditions`, bounded before `beforeId` when given. Shared by the public
+   * list and search so their cursor handling, projection and hasMore rule cannot drift apart.
    */
-  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
-    const conditions: Record<string, unknown> = { userId, deletedAt: null };
+  private async pageBeforeId(
+    conditions: Record<string, unknown>,
+    { beforeId, limit }: { beforeId?: string; limit: number }
+  ) {
+    const bounded = { ...conditions };
     if (beforeId !== undefined) {
       if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
-      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+      bounded._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
     }
 
     const result = await this.model
-      .find(conditions)
-      .select(
-        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
-      )
+      .find(bounded)
+      .select(PUBLIC_ARTIFACT_LIST_FIELDS)
       .sort({ _id: -1 })
       .limit(limit + 1)
       .lean()
@@ -333,6 +363,32 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
 
     const hasMore = result.length > limit;
     return { data: result.slice(0, limit), hasMore };
+  }
+
+  /**
+   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
+   * the by-id read. Content and sharing fields are not loaded.
+   */
+  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
+    return this.pageBeforeId({ userId, deletedAt: null }, { beforeId, limit });
+  }
+
+  /**
+   * One newest-first page of the live artifacts a user owns that match a text search, for the public
+   * search. Pages are keyset on `_id` like listOwnedBeforeId, so they never overlap. Unlike
+   * listOwnedBeforeId, a `$text` query cannot use the {userId, deletedAt, _id} index for the sort. The text
+   * index is global, not compounded with userId, so each page matches every user's hits for the term before
+   * the owner, deleted and `_id` filters trim them: cost grows with the whole collection.
+   */
+  async searchOwnedBeforeId(
+    userId: string,
+    searchTerm: string,
+    { type, beforeId, limit }: { type?: string; beforeId?: string; limit: number }
+  ) {
+    return this.pageBeforeId(
+      { userId, deletedAt: null, $text: { $search: searchTerm }, ...(type !== undefined && { type }) },
+      { beforeId, limit }
+    );
   }
 
   // Implement artifact-specific methods

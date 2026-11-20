@@ -1,8 +1,16 @@
 import React from 'react';
 import { Box, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import Alert from '@mui/joy/Alert';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useTheme } from '@mui/joy/styles';
 import { ResponsiveLine } from '@nivo/line';
-import { type SpendData, type SpendKpi, type SpendKpiFormat } from '@bike4mind/common';
+import {
+  SPEND_ACCOUNT_FLAG_THRESHOLDS,
+  type SpendAccountFlag,
+  type SpendData,
+  type SpendKpi,
+  type SpendKpiFormat,
+} from '@bike4mind/common';
 
 // Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
 const ResponsiveLineChart = ResponsiveLine as any;
@@ -34,6 +42,36 @@ const formatKpiValue = (value: number, format: SpendKpiFormat): string => {
       return String(value);
   }
 };
+
+const T = SPEND_ACCOUNT_FLAG_THRESHOLDS;
+
+/** Chip label and the limit it stands for, in the order the server emits flags. */
+const FLAG_INFO: Record<SpendAccountFlag, { label: string; limit: string }> = {
+  dailyCost: { label: 'Cost/day', limit: `over ${formatKpiValue(T.dailyCostUsd, 'currency')}/day on average` },
+  errorRate: { label: 'Errors', limit: `error rate over ${formatKpiValue(T.errorRate, 'percent')}` },
+  p95Latency: { label: 'p95', limit: `p95 latency over ${T.p95LatencyMs / 1000}s` },
+};
+
+const FLAG_RULES = `Flagged for ${Object.values(FLAG_INFO)
+  .map(f => f.limit)
+  .join(', ')}. Error rate and latency need at least ${T.minRequests} requests.`;
+
+const FlagBanner: React.FC<{ flaggedCount: number }> = ({ flaggedCount }) => (
+  <Alert
+    color="warning"
+    variant="soft"
+    startDecorator={<WarningAmberIcon />}
+    sx={{ mb: 2 }}
+    data-testid="spend-account-flag-banner"
+  >
+    <Box>
+      <Typography level="title-sm">
+        {flaggedCount.toLocaleString('en-US')} {flaggedCount === 1 ? 'account is' : 'accounts are'} over a limit
+      </Typography>
+      <Typography level="body-xs">{FLAG_RULES}</Typography>
+    </Box>
+  </Alert>
+);
 
 /** Percent change vs the prior period; null when there is no prior baseline. */
 const computeDelta = (value: number, priorValue: number): number | null => {
@@ -117,6 +155,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
   // The by-account table is capped server-side; data.activeAccounts is the true
   // distinct count, so surface "top N of M" when the list is partial.
   const accountsTruncated = data.byAccount.length < data.activeAccounts;
+  const flaggedCount = data.byAccount.filter(row => row.flags.length > 0).length;
 
   const lineData = [
     {
@@ -156,6 +195,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
             accounts by spend.
           </Typography>
         )}
+        {flaggedCount > 0 && <FlagBanner flaggedCount={flaggedCount} />}
         {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
         <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
           <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
@@ -166,16 +206,39 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
                 <th style={{ textAlign: 'right' }}>Requests</th>
                 <th style={{ textAlign: 'right' }}>Credits</th>
                 <th style={{ textAlign: 'right' }}>Cost / Req</th>
+                <th style={{ textAlign: 'right' }}>Error Rate</th>
+                <th style={{ textAlign: 'right' }}>p95</th>
               </tr>
             </thead>
             <tbody>
               {data.byAccount.map(row => (
-                <tr key={row.accountId}>
-                  <td>{row.accountName}</td>
+                <tr key={row.accountId} data-testid={`spend-account-row-${row.accountId}`}>
+                  <td>
+                    <Stack direction="row" spacing={0.5} alignItems="center" useFlexGap flexWrap="wrap">
+                      <span>{row.accountName}</span>
+                      {row.flags.map(flag => (
+                        <Chip
+                          key={flag}
+                          size="sm"
+                          variant="soft"
+                          color="warning"
+                          title={`Flagged: ${FLAG_INFO[flag].limit}`}
+                          data-testid={`spend-account-flag-${flag}`}
+                        >
+                          {FLAG_INFO[flag].label}
+                        </Chip>
+                      ))}
+                    </Stack>
+                  </td>
                   <td style={{ textAlign: 'right' }}>{formatKpiValue(row.estCost, 'currency')}</td>
                   <td style={{ textAlign: 'right' }}>{row.requests.toLocaleString('en-US')}</td>
                   <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
                   <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
+                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.errorRate, 'percent')}</td>
+                  {/* 0 means no event carried latencyMs, not an instant response. */}
+                  <td style={{ textAlign: 'right' }} data-testid={`spend-account-p95-${row.accountId}`}>
+                    {row.p95LatencyMs > 0 ? formatKpiValue(row.p95LatencyMs, 'ms') : '--'}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -7,7 +7,9 @@ const { mockBaseScope, mockFindSession, mockAdmission } = vi.hoisted(() => ({
   mockAdmission: vi.fn(),
 }));
 
-vi.mock('./resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockBaseScope }));
+vi.mock('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope', () => ({
+  resolveRetrievalLakeScope: mockBaseScope,
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},

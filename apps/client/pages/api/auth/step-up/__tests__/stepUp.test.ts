@@ -29,9 +29,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publishEmail } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publishEmail } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ buildEmailLogoImg: () => '' }));
 
 /** In-memory AuthSession store with the repository's filter semantics (see AuthSessionModel). */
@@ -133,7 +133,9 @@ vi.mock('@bike4mind/services', async () => {
       OTC_CODE_LENGTH: actual.userService.OTC_CODE_LENGTH,
     },
     mfaService: {
-      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
+      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+        !!user.mfa?.totpEnabled || !!user.mfa?.passkeyEnabled,
+      userHasTotpConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) =>
         !!user.mfa?.lockedUntil && new Date(user.mfa.lockedUntil) > new Date(),
       getLockoutTimeRemaining: () => 15,

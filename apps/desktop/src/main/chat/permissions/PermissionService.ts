@@ -10,7 +10,14 @@ import {
 } from '@shared/permissions';
 import type { ClaudeCodeFile, ClaudeCodeSettings } from './ClaudeCodeSettings';
 import type { PermissionRuleStore } from './PermissionRuleStore';
-import { type CompiledRule, PermissionRuleSet, type RuleSource, compileRule, parseRule } from './rules';
+import {
+  type CompiledRule,
+  PermissionRuleSet,
+  type ProtectedRoots,
+  type RuleSource,
+  compileRule,
+  parseRule,
+} from './rules';
 
 export interface PermissionScopeKey {
   /** The folder the user picked for the session's project; desktop project rules are keyed on it. */
@@ -26,14 +33,21 @@ export interface PermissionServiceOptions {
   isTrusted(directory: string): Promise<boolean>;
   home: string;
   /** Folders whose contents no allow rule may cover: the app's own data and Claude Code's settings. */
-  protectedRoots: readonly string[];
+  protectedRoots: ProtectedRoots;
+  /** Protected folders not resolvable yet; while any remain, no allow rule applies. */
+  unresolvedProtected?: () => readonly string[];
+  /** The main checkout of a git worktree, or null for any other folder; project allowances are kept under it. */
+  mainCheckoutOf?: (directory: string) => Promise<string | null>;
   logger: { warn(message: string): void };
 }
 
-const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: 'Desktop rules' };
+export const DESKTOP_USER_RULES_LABEL = 'Desktop rules';
+export const DESKTOP_PROJECT_RULES_LABEL = 'Desktop project rules';
+
+const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: DESKTOP_USER_RULES_LABEL };
 
 function desktopProject(directory: string): RuleSource {
-  return { id: `desktop-project:${directory}`, label: 'Desktop project rules', path: directory };
+  return { id: `desktop-project:${directory}`, label: DESKTOP_PROJECT_RULES_LABEL, path: directory };
 }
 
 function views(lists: PermissionRuleLists, native: boolean): PermissionRuleView[] {
@@ -143,8 +157,38 @@ export class PermissionService {
     this.invalidate();
   }
 
+  /**
+   * The card's "Allow in this project", with prefix rules main derived from the call. Saved under the
+   * project's main checkout, so every worktree of the repository and every session in it shares them.
+   */
+  async rememberProjectAllows(project: string, rules: readonly string[]): Promise<void> {
+    const valid = rules.filter(rule => parseRule(rule, { native: true }).ok);
+    if (valid.length === 0) return;
+    await this.options.store.addProjectAllows(await this.projectRoot(project), valid);
+    this.invalidate();
+  }
+
+  /** Where a project's allowances are kept: its main checkout when the folder is a git worktree. */
+  async projectRoot(project: string): Promise<string> {
+    const directory = resolve(project);
+    const main = await this.options.mainCheckoutOf?.(directory).catch(() => null);
+    return main ? resolve(main) : directory;
+  }
+
+  async revokeAllow(scope: PermissionScope, rule: string): Promise<boolean> {
+    const stored = await this.options.store.read();
+    const lists =
+      scope.kind === 'user'
+        ? stored.user
+        : (stored.projects[resolve(scope.directory)] ?? { allow: [], ask: [], deny: [] });
+    if (!lists.allow.includes(rule)) return false;
+    await this.options.store.setLists(scope, { ...lists, allow: lists.allow.filter(entry => entry !== rule) });
+    this.invalidate();
+    return true;
+  }
+
   private async compile(scope: PermissionScopeKey): Promise<PermissionRuleSet> {
-    const { home, store, claudeCode, protectedRoots } = this.options;
+    const { home, store, claudeCode, protectedRoots, unresolvedProtected } = this.options;
     const stored = await store.read();
     const project = scope.project ? resolve(scope.project) : null;
     const working = scope.workingDirectory ? resolve(scope.workingDirectory) : null;
@@ -183,8 +227,10 @@ export class PermissionService {
       }
     }
     if (project && stored.projects[project]) add(stored.projects[project], desktopProject(project), true, project);
+    const root = project ? await this.projectRoot(project) : null;
+    if (root && root !== project && stored.projects[root]) add(stored.projects[root], desktopProject(root), true, project);
     add(stored.user, DESKTOP_USER, true, home);
-    return new PermissionRuleSet(rules, protectedRoots);
+    return new PermissionRuleSet(rules, protectedRoots, unresolvedProtected);
   }
 
   private warnOnce(source: RuleSource, text: string, reason: string): void {

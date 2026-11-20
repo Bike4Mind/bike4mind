@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 const { mockPlanByPriceId } = vi.hoisted(() => ({ mockPlanByPriceId: vi.fn() }));
 
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
+  getEntitlingPlanByPriceId: mockPlanByPriceId,
+}));
 
 const { resolveCallerPlan } = await import('./resolveCallerPlan');
 

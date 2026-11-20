@@ -54,7 +54,7 @@ describe('AnthropicBackend with no catalog record', () => {
     expect(captured[0]).toMatchObject({ temperature: 0.3, top_k: 40 });
   });
 
-  it.each([ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_5_5_HAIKU])(
+  it.each([ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_5_5_SONNET, ChatModels.CLAUDE_5_5_HAIKU])(
     'omits every sampling param for listed adaptive-surface model %s',
     async model => {
       const { backend, captured } = buildBackend();

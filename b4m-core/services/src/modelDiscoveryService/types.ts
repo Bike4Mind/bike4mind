@@ -112,7 +112,9 @@ export interface DiscoveredPrice extends DiscoveredRates {
 /**
  * How strong the evidence behind a `lifecycle` claim is (sec 5.10). 'typed' is a
  * field a feed publishes as data; 'docs' is a value scraped out of a rendered
- * page. Only 'typed' may hide a model on its own.
+ * page. Only 'typed' may hide a model on its own; a provider's own 'docs' sunset
+ * needs a typed date for the model that matches one of its own dates, and is written only once
+ * a successor resolves.
  */
 export type LifecycleEvidence = 'typed' | 'docs';
 
@@ -388,6 +390,27 @@ export interface PriceOverride {
   detail: string;
 }
 
+/**
+ * A trusted source publishes a long-context ladder that the flat row discovery
+ * plans (or already holds) cannot bill: prompts past a reachable bracket settle
+ * at the base rate. Not a PriceFlag, on purpose: the row IS written (or stands
+ * unchanged), and this recurs every run until an operator reprices the row as a
+ * ladder - a flag would keep the PriceFlagged alarm stuck in ALARM and drown out
+ * the band-exceeded notifications it exists for. Discovery never writes the
+ * upper tier itself: with no tiered row in force there is no baseline to band it
+ * against.
+ */
+export interface LongContextGap {
+  modelId: string;
+  /** The trusted source whose ladder the row does not carry. */
+  source: string;
+  /** The flat rate the row bills every prompt at, per MTok. */
+  base: { inputPerMTok: number; outputPerMTok: number };
+  /** The published brackets a prompt can reach under the flat row, per MTok. */
+  brackets: Array<{ aboveTokens: number; inputPerMTok: number; outputPerMTok: number }>;
+  detail: string;
+}
+
 /** Why a usable observation produced neither a row nor a flag. */
 export type PriceSkipReason = 'unknown-model' | 'operator-owned' | 'tiered-pricing' | 'untrusted' | 'unchanged';
 
@@ -466,6 +489,10 @@ export interface ModelDiscoveryMetrics {
   ModelsDiscovered: number;
   ModelsPromoted: number;
   ModelsBlockedByDispatch: number;
+  /**
+   * Sunsets of models a user could have picked. A model that never left 'discovered' still
+   * appears in the run's `changes.deprecated`, but not here: this count drives an alarm.
+   */
   ModelsDeprecated: number;
   /** Rows actually appended, so report mode reports a plan and counts zero. */
   PriceRowsAppended: number;
@@ -503,6 +530,8 @@ export interface ModelDiscoveryRunResult {
     flags: PriceFlag[];
     /** Rows written over a source that disagreed; a subset of `rows` by model. */
     overrides: PriceOverride[];
+    /** Flat rows a trusted source publishes a reachable ladder for; written or not, never flagged. */
+    longContextGaps: LongContextGap[];
   };
   /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
   lifecycle: {
@@ -560,6 +589,11 @@ export interface ModelDiscoveryAdapters {
    * same targets, which is what the multi-run convergence already did.
    */
   refreshCatalogView?: () => void;
+  /**
+   * Called once by a write-mode run whose writes can change what a model picker lists (see
+   * modelListImpact.ts), before the run document is finalized. A throw is logged, never fatal.
+   */
+  onModelListChanged?: () => Promise<void>;
   logger?: DiscoveryLogger;
   env?: DiscoveryEnv;
 }

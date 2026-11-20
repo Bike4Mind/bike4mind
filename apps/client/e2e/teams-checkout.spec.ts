@@ -3,6 +3,8 @@ import type { Page, Response } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
 import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
+import { payButton } from './helpers/stripe-pay-button';
+import { wafBypassHeaders } from './helpers/waf-bypass';
 import type { TeamsPage } from './pages/TeamsPage';
 
 /**
@@ -62,7 +64,8 @@ async function startCheckout(page: Page, teamsPage: TeamsPage, teamName: string)
   let body = '';
   await page.route(SUBSCRIBE_ROUTE, async route => {
     if (route.request().method() !== 'POST') return route.fallback();
-    const fetched = await route.fetch();
+    // This handler fulfills, so installWafBypass's handler never runs for the POST: add its header here.
+    const fetched = await route.fetch({ headers: { ...route.request().headers(), ...wafBypassHeaders() } });
     body = await fetched.text();
     await route.fulfill({ response: fetched, body });
   });
@@ -142,7 +145,7 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     });
 
     await test.step('the hosted checkout page renders with a pay button', async () => {
-      await expect(page.getByTestId('hosted-payment-submit-button')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      await expect(await payButton(page)).toBeVisible({ timeout: TIMEOUTS.ACTION });
     });
 
     await test.step('the total matches the modal, in US dollars', async () => {
@@ -179,13 +182,16 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     expect(sessionUrl).toContain('cs_test_');
 
     await test.step('pay with the 4242 test card', async () => {
-      await page.locator('#cardNumber').fill('4242424242424242');
-      await page.locator('#cardExpiry').fill('12 / 34');
-      await page.locator('#cardCvc').fill('123');
-      await page.locator('#billingName').fill('E2E Teams');
-      const postal = page.locator('#billingPostalCode');
+      // The card fields have never been driven; they sit in Stripe's Elements frames now, so these
+      // selectors are a best guess until the paid test is run with STRIPE_CHECKOUT_PAY=true.
+      const form = page.frameLocator('iframe[src*="elements-inner"]').first();
+      await form.locator('#cardNumber').fill('4242424242424242');
+      await form.locator('#cardExpiry').fill('12 / 34');
+      await form.locator('#cardCvc').fill('123');
+      await form.locator('#billingName').fill('E2E Teams');
+      const postal = form.locator('#billingPostalCode');
       if (await postal.isVisible().catch(() => false)) await postal.fill('94103');
-      await page.getByTestId('hosted-payment-submit-button').click();
+      await (await payButton(page)).click();
       await page.waitForURL(`${teamsUrl(baseURL)}**`, { timeout: TIMEOUTS.ACTION * 2 });
     });
 
@@ -199,7 +205,8 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
       await expect(page.getByTestId('subscription-status-card')).toContainText('Team Plan', {
         timeout: TIMEOUTS.VISIBLE,
       });
-      await expect(page.getByTestId('seats-utilization-card')).toContainText(`/ ${seats}`);
+      await teamsPage.openTab('Members');
+      await expect(page.getByTestId('organization-members-seats-count')).toContainText(`of ${seats} seats used`);
     });
   });
 });

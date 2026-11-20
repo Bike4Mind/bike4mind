@@ -1,3 +1,4 @@
+import { type EmbeddingRuntime } from '@bike4mind/utils/embeddingProviders';
 import {
   IChatHistoryItemDocument,
   ISessionDocument,
@@ -7,7 +8,7 @@ import {
   detectAgentMentions,
   buildAgentPersonaPrompt,
 } from '@bike4mind/common';
-import { EmbeddingFactory } from '@bike4mind/utils';
+
 import { IAgent } from '@bike4mind/common';
 import { ChatCompletionFeature, ChatCompletionContext } from '../ChatCompletionFeatures';
 import { z } from 'zod';
@@ -130,7 +131,7 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument & { _agentsToProcess?: IAgent[] },
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {

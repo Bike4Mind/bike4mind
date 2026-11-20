@@ -2,11 +2,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   VISIT_COOKIE,
+  VISIT_PENDING_COOKIE,
   VISIT_TTL_SECONDS,
   isProbableBot,
   mintVisitId,
   readVisitId,
+  readVisitPending,
   visitCookieHeader,
+  visitPendingCookieHeader,
 } from './visitSession';
 
 describe('mintVisitId', () => {
@@ -96,5 +99,30 @@ describe('isProbableBot', () => {
   it('treats a missing or blank user-agent as non-human, because browsers always send one', () => {
     expect(isProbableBot(undefined)).toBe(true);
     expect(isProbableBot('   ')).toBe(true);
+  });
+});
+
+describe('the pending mark', () => {
+  it('marks a held visit for the same sliding window as the visit cookie, hidden from scripts', () => {
+    const header = visitPendingCookieHeader(true, { secure: true });
+    expect(header).toContain(`${VISIT_PENDING_COOKIE}=1`);
+    expect(header).toContain(`Max-Age=${VISIT_TTL_SECONDS}`);
+    expect(header).toContain('HttpOnly');
+    expect(header).toContain('SameSite=Lax');
+    expect(header).toContain('Secure');
+    expect(readVisitPending(header.split(';')[0])).toBe(true);
+  });
+
+  it('expires the mark once the visit is recorded', () => {
+    const header = visitPendingCookieHeader(false, { secure: false });
+    expect(header).toContain('Max-Age=0');
+    expect(header).not.toContain('Secure');
+    expect(readVisitPending(header.split(';')[0])).toBe(false);
+  });
+
+  it('reads only the value this server writes', () => {
+    expect(readVisitPending(undefined)).toBe(false);
+    expect(readVisitPending(`${VISIT_PENDING_COOKIE}=true`)).toBe(false);
+    expect(readVisitPending(`other=1; ${VISIT_PENDING_COOKIE}=1`)).toBe(true);
   });
 });

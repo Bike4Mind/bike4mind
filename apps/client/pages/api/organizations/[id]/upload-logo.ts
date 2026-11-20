@@ -5,9 +5,11 @@ import { Organization } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
@@ -35,9 +37,11 @@ const handler = baseApi().post(
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
 
+    let retiredLogoDeleted = false;
     const result = await withTransaction(async session => {
       if (organization.logo) {
         await storage.delete(organization.logo.path);
+        retiredLogoDeleted = true;
         await AppFile.findByIdAndDelete(organization.logo.id).session(session);
         await Organization.updateOne({ _id: orgId }, { $unset: { logoFileId: 1 } }).session(session);
       }
@@ -70,6 +74,19 @@ const handler = baseApi().post(
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
       return { url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl), fileId: file.id, fileKey };
+    }).finally(async () => {
+      // The old bytes are deleted inside the transaction and a rollback does not restore them, so
+      // invalidate whenever the delete ran, committed or not.
+      const retiredCdnPath = retiredLogoDeleted && organization.logo ? appFileCdnPath(organization.logo.path) : null;
+      if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'org-logo', logger: req.logger });
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'org.logo.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'replaced the team logo',
+      changes: [{ field: 'logoFileId', before: organization.logo?.id ?? null, after: result.fileId }],
     });
 
     return res.json(result);

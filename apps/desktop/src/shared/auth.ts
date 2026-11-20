@@ -47,6 +47,7 @@ export interface PendingApproval {
   /** Shown in-app so the user can type it if the browser did not open. */
   userCode: string;
   verificationUri: string;
+  /** The page the browser opens: the code-filled link, or verificationUri when the server sent none. */
   verificationUriComplete: string;
   expiresAt: string;
   /** False when shell.openExternal failed; the in-app code and URI are then the only route. */

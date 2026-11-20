@@ -1,62 +1,35 @@
-import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { InviteEvents, InviteType } from '@bike4mind/common';
+import { createDocumentInvite, createInviteBodySchema } from '@server/managers/createDocumentInvite';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
-  FabFile,
   Group,
-  Session,
-  withTransaction,
-  Project,
+  spaceRepository,
   fabFileRepository,
   sessionRepository,
   userRepository,
   organizationRepository,
   projectRepository,
   inviteRepository,
-  Organization,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveInviteType } from '@server/utils/inviteRouteType';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ProjectEvents } from '@bike4mind/common';
-import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
-
-// Audit-only lookup: a failure here must not fail an invite that is already committed.
-const lookUpGroupOrganizationId = async (
-  req: { logger?: { error: (message: string, meta?: Record<string, unknown>) => void } },
-  groupId: string
-): Promise<string | undefined> => {
-  try {
-    return (await Group.findById(groupId))?.organizationId;
-  } catch (error) {
-    req.logger?.error('[ADMIN_AUDIT_GROUP_LOOKUP_FAILED]', { groupId, error });
-    return undefined;
-  }
-};
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 interface IParams {
   type?: string;
   id?: string;
 }
 
-// z.enum(Permission) produces Permission[] so the service type is satisfied.
-const createInviteBodySchema = z.object({
-  permissions: z.array(z.enum(Permission)),
-  recipients: z.string().array().optional(),
-  description: z.string().optional(),
-  // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
-  // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
-  expiresAt: z.preprocess(
-    v => (v === null ? undefined : v),
-    z.coerce.date().min(new Date(), 'expiresAt must be in the future').optional()
-  ),
-  available: z.number().optional(),
-});
+// Space invites have their own routes, which enforce the EnableSpaces flag and the manager check.
+const refuseSpace = (type: InviteType) => {
+  if (type === InviteType.Space) throw new BadRequestError('Manage space invites at /api/spaces/:id/invites');
+};
 
 const handler = baseApi()
   /**
@@ -74,6 +47,7 @@ const handler = baseApi()
       if (!inviteType) {
         return res.status(400).json({ message: 'Invalid type' });
       }
+      refuseSpace(inviteType);
       // An id that is not an ObjectId names no document, so this route answers the 404 itself
       // rather than letting the lookup cast and raise a CastError. After the type check, so a
       // bad type still reports the bad type.
@@ -93,6 +67,7 @@ const handler = baseApi()
             projects: projectRepository,
             organizations: organizationRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );
@@ -107,6 +82,7 @@ const handler = baseApi()
    * - Creates a new invitation.  If one or more email addresses given, will also send email(s) to the given addresses.
    */
   .post(
+    outboundActionGate(),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>, IParams>(async (req, res) => {
       const { type: urlPathType, id } = req.query;
       if (!urlPathType || !id) {
@@ -114,108 +90,17 @@ const handler = baseApi()
       }
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
+      refuseSpace(inviteType);
+      // Project invites have their own route (pages/api/projects/[id]/invites.ts), which shadows the
+      // `projects` alias here. Only the raw `Project` value reaches this handler, and creating one
+      // here would skip that route's API-key scope checks and its typed-address budget.
+      if (inviteType === InviteType.Project) {
+        throw new BadRequestError('Create project invites at /api/projects/:id/invites');
+      }
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
-      const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
-      const created = await withTransaction(() => {
-        return sharingService.createInvite(
-          req.user,
-          // id and type come last so path params are always authoritative over any body field.
-          { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type: inviteType },
-          {
-            db: {
-              invites: inviteRepository,
-              users: userRepository,
-              fabFiles: fabFileRepository,
-              sessions: sessionRepository,
-              projects: projectRepository,
-              organizations: organizationRepository,
-              groups: Group,
-            },
-          }
-        );
-      });
-
-      // Log invite creation event
-      await logEvent(
-        {
-          userId: req.user.id,
-          type: InviteEvents.CREATE_INVITE,
-          metadata: { id: created.id, totalInvites: created.recipients?.pending?.length ?? 0 },
-        },
-        { ability: req.ability }
-      );
-
-      // Group invites carry a membership grant, so they get the same audit trail as the members
-      // route's org.group_member.assigned entry. Best-effort, never fails the write.
-      if (inviteType === InviteType.Group) {
-        const organizationId = await lookUpGroupOrganizationId(req, id);
-        await recordAdminActionFromRequest(req, {
-          action: 'org.invite.created',
-          actorScope: 'organization',
-          // Without a known organization the entry is kept, keyed by the group, rather than dropped.
-          target: organizationId
-            ? { kind: 'organization', id: organizationId, displayName: organizationId }
-            : { kind: 'system', id, displayName: 'Group' },
-          summary: 'created a group invite',
-          details: {
-            groupId: id,
-            inviteId: created.id,
-            recipientCount: created.recipients?.pending?.length ?? 0,
-          },
-        });
-      }
-
-      // If this is a project invite, also log ADD_MEMBER event
-      if (inviteType === InviteType.Project) {
-        const project = await Project.findById(id);
-        if (project) {
-          await Promise.all(
-            (created.recipients?.pending || []).map(async (recipientId: string) =>
-              logEvent(
-                {
-                  userId: req.user.id,
-                  type: ProjectEvents.ADD_MEMBER,
-                  metadata: {
-                    projectId: id,
-                    projectName: project.name,
-                    memberId: recipientId,
-                    memberRole: (restBody.permissions || []).join(','),
-                  },
-                },
-                { ability: req.ability }
-              )
-            )
-          );
-        }
-      }
-
-      // Send email notifications to recipients
-      const pendingRecipients = created.recipients?.pending || [];
-      if (pendingRecipients.length > 0) {
-        const inviteLink = generateInviteLink(created);
-        const documentName = await getDocumentName(inviteType, id);
-        const typeName = getInviteTypeName(inviteType);
-        const brand = process.env.APP_NAME || '';
-        const sharerName = req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`;
-        const sharerEmail = req.user.email || '';
-
-        // Send notifications asynchronously - don't block the response
-        sendInviteNotificationEmails(
-          pendingRecipients,
-          sharerName,
-          sharerEmail,
-          documentName,
-          typeName,
-          inviteLink,
-          restBody.description
-        ).catch(error => {
-          req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
-        });
-      }
-
-      const [view] = await toSharerInviteViews([created], req.user);
-      return res.json({ ...view, link: generateInviteLink(created) });
+      const body = createInviteBodySchema.parse(req.body);
+      return res.json(await createDocumentInvite(req, { type: inviteType, id, body }));
     })
   )
   /**
@@ -233,6 +118,7 @@ const handler = baseApi()
       if (!id) throw new BadRequestError('Invalid cancel invite request');
       const inviteType = resolveInviteType(type);
       if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
+      refuseSpace(inviteType);
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
       const { email, userId } = (req.body ?? {}) as { email?: string; userId?: string };
 
@@ -248,6 +134,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             projects: projectRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );
@@ -264,44 +151,6 @@ const handler = baseApi()
       return res.json(await toSharerInviteViews(invites, req.user));
     })
   );
-
-/**
- * The share URL. Addressed by the invite's bearer TOKEN, never its `_id`: the id is only partially
- * random and is disclosed by every surface that lists invites, so using it as the link secret let
- * anyone who saw one guess its neighbours. Falls back to the id for a legacy tokenless invite, which
- * `resolveRedeemableInvite` still admits until it expires.
- */
-export const generateInviteLink = (invite: { id: string; token?: string }) => {
-  return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
-};
-
-// Helper to get document name for email
-const getDocumentName = async (type: InviteType, id: string): Promise<string> => {
-  switch (type) {
-    case InviteType.FabFile: {
-      const file = await FabFile.findById(id);
-      return file?.fileName || 'a file';
-    }
-    case InviteType.Session: {
-      const session = await Session.findById(id);
-      return session?.name || 'a notebook';
-    }
-    case InviteType.Project: {
-      const project = await Project.findById(id);
-      return project?.name || 'a project';
-    }
-    case InviteType.Organization: {
-      const org = await Organization.findById(id);
-      return org?.name || 'an organization';
-    }
-    case InviteType.Group: {
-      const group = await Group.findById(id);
-      return group?.name || 'a group';
-    }
-    default:
-      return 'content';
-  }
-};
 
 export const config = {
   api: {

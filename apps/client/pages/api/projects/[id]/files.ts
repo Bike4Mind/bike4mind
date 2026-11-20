@@ -1,11 +1,5 @@
 import { z } from 'zod';
-import {
-  withTransaction,
-  projectRepository,
-  fabFileRepository,
-  userRepository,
-  inviteRepository,
-} from '@bike4mind/database';
+import { projectRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -14,9 +8,11 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { addFilesToProject, removeFilesFromProject } from '@server/projects/projectContentMutations';
+import { respond } from '@server/utils/respond';
+import { fabFileListResponseSchema, projectResponseSchema } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 
 const addFileIdsBodySchema = z.object({
   fileIds: z.array(z.string()).min(1),
@@ -44,10 +40,11 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             users: userRepository,
           },
           storage: getFilesStorage(),
+          contentUrl: fileContentUrl,
         }
       );
 
-      return res.json(files);
+      return respond(res, fabFileListResponseSchema, files);
     })
   )
   .post(
@@ -56,41 +53,13 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { fileIds } = addFileIdsBodySchema.parse(req.body);
 
-      const project = await withTransaction(() =>
-        projectService.addFiles(
-          req.user,
-          {
-            projectId: id,
-            fileIds: fileIds as [string, ...string[]],
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-            },
-          }
-        )
+      const project = await addFilesToProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        fileIds as [string, ...string[]]
       );
 
-      await Promise.all(
-        fileIds.map((fileId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.ADD_FILE,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                contentId: fileId,
-                contentType: 'file',
-              },
-            },
-            { ability: req.ability }
-          )
-        )
-      );
-
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   )
   .delete(
@@ -99,43 +68,13 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { fileIds } = removeFileIdsBodySchema.parse(req.body);
 
-      const project = await withTransaction(() =>
-        projectService.removeFiles(
-          req.user.id,
-          {
-            projectId: id,
-            fileIds,
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-              users: userRepository,
-              invites: inviteRepository,
-            },
-          }
-        )
+      const project = await removeFilesFromProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        fileIds
       );
 
-      await Promise.all(
-        fileIds.map((fileId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.REMOVE_FILE,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                contentId: fileId,
-                contentType: 'file',
-              },
-            },
-            { ability: req.ability }
-          )
-        )
-      );
-
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

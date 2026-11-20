@@ -1,0 +1,149 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import {
+  ApiKeyScope,
+  USER_TIMELINE_TYPES,
+  MODERATION_PAGE_READ,
+  missingAdminPermissionMessage,
+} from '@bike4mind/common';
+import { decodeAuditCursor, encodeAuditCursor } from '@server/utils/adminAuditQuery';
+
+const mocks = vi.hoisted(() => ({ findById: vi.fn(), listUserTimeline: vi.fn() }));
+
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
+vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) } }));
+vi.mock('@server/utils/userTimeline', () => ({
+  listUserTimeline: (...a: unknown[]) => mocks.listUserTimeline(...a),
+}));
+
+import handler from '../timeline';
+
+const USER_ID = 'b'.repeat(24);
+const CREATED_AT = new Date('2026-10-01T00:00:00.000Z');
+const ENTRY_ID = 'c'.repeat(24);
+
+const call = (query: Record<string, string | string[]> = {}, user: unknown = { id: 'admin1', isAdmin: true }) => {
+  const { req, res } = createMocks({ method: 'GET', query: { userId: USER_ID, ...query } });
+  if (user) (req as Record<string, unknown>).user = user;
+  return { req, res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.findById.mockResolvedValue({
+    id: USER_ID,
+    name: 'Ada',
+    email: 'ada@example.com',
+    isAdmin: false,
+    createdAt: CREATED_AT,
+    currentCredits: 120,
+    signupMeta: { ip: '203.0.113.9' },
+  });
+  mocks.listUserTimeline.mockResolvedValue({ entries: [], nextCursor: null });
+});
+
+describe('GET /api/admin/users/[userId]/timeline', () => {
+  it('declares requiredScopes [ApiKeyScope.ADMIN] and MODERATION_PAGE_READ for GET', () => {
+    const config = (handler as unknown as { _config?: { requiredScopes?: string[]; adminPermissions?: unknown } })
+      ._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    expect(config?.adminPermissions).toEqual({ GET: MODERATION_PAGE_READ });
+  });
+
+  it('refuses a delegate without a moderation read permission with 403 before reading anything', async () => {
+    const delegate = { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(call({}, delegate).promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: missingAdminPermissionMessage(MODERATION_PAGE_READ),
+    });
+    expect(mocks.findById).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const { res, promise } = call({}, { id: 'u2', isAdmin: false, adminPermissions: [permission] });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a malformed user id, an unknown type, a bad date and an inverted range with 400', async () => {
+    await expect(call({ userId: 'nope' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    await expect(call({ types: 'signin,chat' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    await expect(call({ from: '2026-10-01' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      call({ from: '2026-10-02T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' }).promise
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(call({ cursor: 'garbage' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.listUserTimeline).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a missing user', async () => {
+    mocks.findById.mockResolvedValue(null);
+    await expect(call().promise).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('queries every source by default with the default page size', async () => {
+    const { res, promise } = call();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.listUserTimeline).toHaveBeenCalledWith(
+      {
+        id: USER_ID,
+        name: 'Ada',
+        email: 'ada@example.com',
+        isAdmin: false,
+        account: {
+          createdAt: CREATED_AT,
+          currentCredits: 120,
+          email: 'ada@example.com',
+          signupMeta: { ip: '203.0.113.9' },
+          signupGrantHeldReason: undefined,
+        },
+      },
+      { types: [...USER_TIMELINE_TYPES], range: { from: undefined, to: undefined }, limit: 50, cursor: undefined }
+    );
+  });
+
+  it('passes types, range, a capped limit and the decoded cursor through', async () => {
+    const cursor = { occurredAt: new Date('2026-10-20T10:00:00.000Z'), id: ENTRY_ID };
+    await call({
+      types: 'admin,signin,admin',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-31T23:59:59.999Z',
+      limit: '500',
+      cursor: encodeAuditCursor(cursor),
+    }).promise;
+
+    expect(mocks.listUserTimeline).toHaveBeenCalledWith(expect.anything(), {
+      types: ['admin', 'signin'],
+      range: { from: new Date('2026-10-01T00:00:00.000Z'), to: new Date('2026-10-31T23:59:59.999Z') },
+      limit: 100,
+      cursor,
+    });
+  });
+
+  it('encodes the next cursor', async () => {
+    const next = { occurredAt: new Date('2026-10-19T08:00:00.000Z'), id: ENTRY_ID };
+    mocks.listUserTimeline.mockResolvedValue({ entries: [], nextCursor: next });
+    const { res, promise } = call();
+    await promise;
+
+    const body = res._getJSONData() as { nextCursor: string };
+    expect(decodeAuditCursor(body.nextCursor)).toEqual(next);
+  });
+
+  it('validates and forwards the API-key filter without changing the target user', async () => {
+    await expect(call({ types: 'api_request', apiKeyId: 'bad' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.listUserTimeline).not.toHaveBeenCalled();
+    const apiKeyId = 'd'.repeat(24);
+    await call({ types: 'api_request', apiKeyId: apiKeyId.toUpperCase() }).promise;
+    expect(mocks.listUserTimeline).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_ID }),
+      expect.objectContaining({ types: ['api_request'], apiKeyId })
+    );
+  });
+});

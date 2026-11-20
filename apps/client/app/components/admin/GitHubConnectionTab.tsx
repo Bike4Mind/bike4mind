@@ -405,7 +405,7 @@ const GitHubConnectionTab: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Stack direction="row" alignItems="center" spacing={1.5}>

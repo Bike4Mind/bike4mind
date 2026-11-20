@@ -11,14 +11,14 @@ import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { sendToClient } from '@server/websocket/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
-import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   ChatModels,
   isImageServeable,
@@ -629,7 +629,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const requester = userId ? await userRepository.findById(userId) : null;
     const summary =
-      requester && !isAiAccessRevoked(requester) ? await generateSummary(markdown, plan.goal, logger, userId) : null;
+      requester && !aiAccessDeniedMessage(requester)
+        ? await generateSummary(markdown, plan.goal, logger, userId)
+        : null;
     if (summary) {
       logger.info('Executive summary generated successfully');
     } else {

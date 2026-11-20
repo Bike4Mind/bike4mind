@@ -1,11 +1,16 @@
 import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
-import { OperationsModelService } from '@client/services/operationsModelService';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
+import {
+  DEFAULT_OPERATIONS_SPEECH_MODEL,
+  DEFAULT_OPERATIONS_TEXT_MODEL,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
+import { DEFAULT_OPERATIONS_IMAGE_MODEL } from '@bike4mind/server-utils/utils/modelResolvers';
 import { z } from 'zod';
-import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ, SpeechToTextModels } from '@bike4mind/common';
 
 const UpdateOperationsModelSchema = z.object({
   modelId: z.string(),
@@ -13,22 +18,20 @@ const UpdateOperationsModelSchema = z.object({
   speechModelId: z.string(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const config = await OperationsModelService.getOperationsModelConfig();
 
       if (!config) {
         // Return default config
         return res.json({
-          modelId: 'gpt-4o-mini',
-          imageModelId: 'flux-pro',
-          speechModelId: 'whisper-1',
+          modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
+          imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+          speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
         });
       }
 
@@ -41,11 +44,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .put(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
+    // Ahead of the try, whose catch answers every error with a 500.
+    requireFullAdmin(req);
     try {
       const config = UpdateOperationsModelSchema.parse(req.body);
 

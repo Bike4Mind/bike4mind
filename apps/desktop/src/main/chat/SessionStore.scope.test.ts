@@ -50,6 +50,49 @@ describe('SessionStore scoping', () => {
     expect(await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).toEqual([`${id}.json`]);
   });
 
+  it('refuses a folder removal queued under a different account', async () => {
+    at(scope(LOCAL, ALICE));
+    const created = await store.create();
+    await store.addGrantedDirectory(created.id, '/alice/private');
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    expect(await store.removeContextDirectory(created.id, '/alice/private', expectedScope)).toBeNull();
+    at(scope(LOCAL, ALICE));
+    expect((await store.get(created.id))?.grantedDirectories).toEqual(['/alice/private']);
+  });
+
+  it.each(['chat', 'code'] as const)('refuses a %s folder grant queued under another account', async mode => {
+    at(scope(LOCAL, ALICE));
+    const created = await store.create(undefined, {
+      mode,
+      ...(mode === 'code'
+        ? {
+            project: {
+              directory: '/project',
+              name: 'project',
+              workingDirectory: '/project',
+              branch: 'main',
+              workspace: false,
+              contextDirectories: [],
+            },
+          }
+        : {}),
+    });
+    const original = await store.get(created.id);
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    await store.create();
+    await writeFile(join(root, sessionScopeKey(scope(LOCAL, BOB)), `${created.id}.json`), JSON.stringify(original));
+    const grant =
+      mode === 'code'
+        ? store.addContextDirectory(created.id, '/alice/private', expectedScope)
+        : store.addGrantedDirectory(created.id, '/alice/private', expectedScope);
+    expect(await grant).toBeNull();
+    const unchanged = await store.get(created.id);
+    expect(unchanged?.grantedDirectories).toBeUndefined();
+    expect(unchanged?.project?.contextDirectories ?? []).toEqual([]);
+  });
+
   it('shows the other environment nothing, and gives it all back on the way home', async () => {
     at(scope(LOCAL, ALICE));
     const local = await store.create();

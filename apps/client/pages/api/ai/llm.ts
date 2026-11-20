@@ -1,4 +1,4 @@
-import { userRepository } from '@bike4mind/database';
+import { spendFreezeRepository, usageEventRepository, userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   LLMApiRequestBody,
@@ -6,21 +6,32 @@ import {
   PROMPT_TEXT_MAX,
   UnprocessableEntityError,
   redactSessionForClient,
+  chatMessageResponseSchema,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
-import { getOrCreateSession } from '@server/managers/sessionManager';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
-import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemPromptResolver';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
+import { sessionWillInjectAuthoredPrompt } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
-import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
+import { readVisitId } from '@server/analytics/visitSession';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -39,8 +50,8 @@ const isStringArray = (value: unknown): value is string[] =>
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .use(
     rateLimit({
-      // More permissive rate limiting in development
-      limit: process.env.NODE_ENV === 'development' ? 100 : 10, // 100 req/min in dev vs 10 in prod
+      // Per-user tier limit (admins/developers and the dev server bypass); 0 blocks.
+      limit: req => resolveUserRateLimitPerMin(req.user, req),
       windowMs: 60 * 1000,
     })
   )
@@ -86,6 +97,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // null = personal account, undefined = fall back to the caller's own org. An org-billed
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
+
+    assertAiAccessAllowed(req.user);
+    // Refuse a frozen or capped turn here, rather than letting the quest worker settle it. The freeze
+    // goes first so a frozen caller is not told to wait for the daily reset.
+    await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, effectiveOrgId ?? null), {
+      db: { spendFreezes: spendFreezeRepository },
+    });
+    await checkFreeTierDailySpendCap({
+      user: req.user,
+      req,
+      billingOrganizationId: effectiveOrgId,
+      usageEventRepository,
+      logger: req.logger,
+    });
+    // The turn is queued and finishes elsewhere, so only the token quota applies here.
+    await admitRequestCompletion(req, { holdSlot: false });
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,
@@ -135,17 +162,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // scope gaps always win.
     const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
 
+    const turnAuth = requestTurnAuth(req);
     const quest = await chatCompletion.invoke({
       body: {
         ...invokeParams,
         sessionId,
         organizationId: effectiveOrgId,
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
+        // Platform connectors are switched on in the composer only; an API-key turn gets none.
+        ...(req.apiKeyInfo ? { enabledPlatformMcpConnections: undefined } : {}),
       },
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
-      ...requestTurnAuth(req),
+      ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
+      visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)
@@ -165,7 +199,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Redact server-owned systemPromptText AFTER it has been read above (the base-identity
     // gate) and after the engine has been invoked. Shallow copy - never mutate
     // the in-memory session, which is shared with engine reads.
-    return res.json({ quest, session: redactSessionForClient(session) });
+    return res.json({ quest: chatMessageResponseSchema.parse(quest), session: redactSessionForClient(session) });
   });
 
 export default handler;

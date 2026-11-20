@@ -39,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: repos.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: repos.toAccessContext }));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
   dataLakeRepository: { findById: repos.findById, findBySlug: repos.findBySlug, update: repos.updateLake },

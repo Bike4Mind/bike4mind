@@ -5,6 +5,14 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 
 const mutate = vi.fn();
+const mutateAsync = vi.fn();
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 // Read at render time, so a test can put the mutation into its rejected state.
 let updateError: unknown;
 // Read at render time, so a test can simulate the save round-trip still being in flight.
@@ -16,13 +24,14 @@ let updatePending = false;
 let floorWarning: string | undefined;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useFloorAboveMeasuredWarning: (key: string) => (key === 'forcedRetrievalMinSimilarityPct' ? floorWarning : undefined),
-  useUpdateSettings: () => ({ mutate, isPending: updatePending, error: updateError }),
+  useUpdateSettings: () => ({ mutate, mutateAsync, isPending: updatePending, error: updateError }),
   useScopedSettingOverrides: () => ({ data: [] }),
   useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
   useClearScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
 }));
 
 import AdminSettingInputField from './AdminSettingInputField';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -43,6 +52,234 @@ const input = () => screen.getByTestId('admin-setting-anthropicDemoKey-input') a
 // Qualified by testid: an unqualified getByRole('button') breaks with a confusing
 // "multiple elements" error the moment another button lands in this card.
 const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save-btn');
+
+describe('staged settings fields', () => {
+  it('does not stage a focused mask and discards plaintext without a write', () => {
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.anthropicDemoKey} index={0} defaultValue={maskedValue} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    fireEvent.focus(input());
+    expect(input()).toHaveValue('');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    fireEvent.change(input(), { target: { value: 'synthetic-secret' } });
+    expect(input()).toHaveAttribute('type', 'password');
+    expect(screen.queryByTestId('admin-setting-anthropicDemoKey-save-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    fireEvent.blur(input());
+    expect(input()).toHaveValue(maskedValue);
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('saves through SaveBar on Ctrl+S from a staged input', async () => {
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({ settingValue: 200 });
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    const field = screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input');
+    fireEvent.change(field, { target: { value: '200' } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 's', ctrlKey: true });
+    });
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: 200 });
+  });
+});
+
+describe('AdminSettingInputField save shortcut boundaries', () => {
+  beforeEach(() => {
+    mutate.mockReset();
+    updateError = undefined;
+    updatePending = false;
+  });
+
+  it('does not save the platform value from a scoped override control', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={settingsMap.EnforceLakeAdmission} index={0} defaultValue={false} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('admin-setting-EnforceLakeAdmission-switch'));
+    fireEvent.change(screen.getByTestId('scoped-override-EnforceLakeAdmission-scope-id-input'), {
+      target: { value: 'organization-1' },
+    });
+    const platformSave = screen.getByTestId('admin-setting-EnforceLakeAdmission-save-btn');
+    expect(platformSave).toBeEnabled();
+    fireEvent.keyDown(screen.getByTestId('scoped-override-EnforceLakeAdmission-set-btn'), {
+      key: 's',
+      ctrlKey: true,
+    });
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.keyDown(platformSave, { key: 's', ctrlKey: true });
+    expect(mutate).toHaveBeenCalledExactlyOnceWith({ key: 'EnforceLakeAdmission', value: true }, expect.anything());
+  });
+});
+
+// pricePerCredit and teamPlanMinSeats are tagged changesCustomerPrice; modelDiscoveryPriceBandPct
+// is not, and is the control for every "only the tagged ones" assertion below.
+describe('AdminSettingInputField money-affecting setting', () => {
+  beforeEach(() => {
+    mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({ settingValue: 60 });
+    updateError = undefined;
+    updatePending = false;
+  });
+
+  const renderPrice = (defaultValue: number = 50) =>
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={defaultValue} />
+      </TestWrapper>
+    );
+
+  const priceInput = () => screen.getByTestId('admin-setting-pricePerCredit-input');
+  const priceSave = () => screen.getByTestId('admin-setting-pricePerCredit-save-btn');
+
+  it('badges the field so an admin can see it moves a customer bill', () => {
+    renderPrice();
+    expect(screen.getByTestId('admin-setting-pricePerCredit-money-badge')).toHaveTextContent('Changes customer price');
+  });
+
+  it('leaves a setting that does not change a bill unbadged', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('admin-setting-modelDiscoveryPriceBandPct-money-badge')).toBeNull();
+  });
+
+  it('asks before writing, instead of saving the price on one click', () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.click(priceSave());
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-setting-money-dialog')).toBeInTheDocument();
+  });
+
+  it('shows the value being replaced and the one replacing it', () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.click(priceSave());
+    const change = screen.getByTestId('admin-setting-money-dialog-change');
+    expect(change).toHaveTextContent('Price Per Credit changes from 50 ($50 per credit) to 60 ($60 per credit).');
+  });
+
+  it('writes once, with the confirmed value, once the admin confirms', () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.click(priceSave());
+    fireEvent.click(screen.getByTestId('admin-setting-money-confirm-btn'));
+    expect(mutate).toHaveBeenCalledExactlyOnceWith({ key: 'pricePerCredit', value: 60 }, expect.anything());
+    expect(screen.queryByTestId('admin-setting-money-dialog')).toBeNull();
+  });
+
+  it('writes nothing when the admin backs out', () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.click(priceSave());
+    fireEvent.click(screen.getByTestId('admin-setting-money-cancel-btn'));
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('admin-setting-money-dialog')).toBeNull();
+    // The edit survives the cancel, so backing out of the confirm is not also a discard.
+    expect(priceInput()).toHaveValue(60);
+  });
+
+  // The shortcut dispatches a click on the Save button, so it must land on the confirm and
+  // not on a write - the one path that would quietly bypass the dialog.
+  it('routes Cmd/Ctrl+S through the same confirmation', () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.keyDown(priceSave(), { key: 's', ctrlKey: true });
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-setting-money-dialog')).toBeInTheDocument();
+  });
+
+  it('renders a boolean price setting as on and off rather than true and false', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={settingsMap.billOperationalUsage} index={0} defaultValue={false} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('admin-setting-billOperationalUsage-switch'));
+    fireEvent.click(screen.getByTestId('admin-setting-billOperationalUsage-save-btn'));
+    expect(screen.getByTestId('admin-setting-money-dialog-change')).toHaveTextContent(
+      'Bill Operational Usage changes from off to on.'
+    );
+  });
+
+  // The staged path never reaches the per-field confirm above: the SaveBar commits it. Admin
+  // Settings and Growth and Pricing both mount the provider, so the batched warning is the only
+  // thing standing in front of a price change there.
+  it('warns through the SaveBar when the change is staged', async () => {
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={50} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    fireEvent.change(screen.getByTestId('admin-setting-pricePerCredit-input'), { target: { value: '60' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    });
+    expect(mutateAsync).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId('admin-settings-warning-dialog');
+    expect(dialog).toHaveTextContent(
+      'Price Per Credit changes what customers pay: 50 ($50 per credit) to 60 ($60 per credit).'
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('admin-settings-warning-save-btn'));
+    });
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'pricePerCredit', value: 60 });
+  });
+
+  it('quotes the value being saved, not the one before the last keystroke', async () => {
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={50} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    const field = screen.getByTestId('admin-setting-pricePerCredit-input');
+    fireEvent.change(field, { target: { value: '60' } });
+    fireEvent.change(field, { target: { value: '70' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    });
+    expect(screen.getByTestId('admin-settings-warning-dialog')).toHaveTextContent(
+      'Price Per Credit changes what customers pay: 50 ($50 per credit) to 70 ($70 per credit).'
+    );
+  });
+
+  it('does not stand in front of a staged setting that changes no bill', async () => {
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    fireEvent.change(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input'), {
+      target: { value: '60' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    });
+    expect(screen.queryByTestId('admin-settings-warning-dialog')).toBeNull();
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: 60 });
+  });
+});
 
 describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
@@ -182,6 +419,14 @@ describe('AdminSettingInputField number setting', () => {
 
     expect(bandHelperText()).toHaveTextContent(bandSetting.description);
     fireEvent.click(bandSaveButton());
+
+    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
+  });
+
+  it('saves a dirty value on Cmd/Ctrl+S from the focused card', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '200' } });
+    fireEvent.keyDown(screen.getByLabelText(`${bandSetting.name} settings editor`), { key: 's', ctrlKey: true });
 
     expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
   });
@@ -391,5 +636,24 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     renderField(settingsMap.modelDiscoveryPriceBandPct, 50);
 
     expect(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input')).not.toHaveAttribute('placeholder');
+  });
+});
+
+describe('AdminSettingInputField locked setting', () => {
+  it('disables a locked number setting and its Save, and shows why', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField
+          setting={bandSetting}
+          index={0}
+          defaultValue={50}
+          lockedNote="Only full administrators can change this setting."
+        />
+      </TestWrapper>
+    );
+
+    expect(bandInput()).toBeDisabled();
+    expect(bandSaveButton()).toBeDisabled();
+    expect(bandHelperText()).toHaveTextContent('Only full administrators can change this setting.');
   });
 });

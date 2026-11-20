@@ -1,6 +1,7 @@
+import { downloadPublishedIndex } from '@bike4mind/server-utils/services/publish/currentIndex';
 import { randomUUID } from 'node:crypto';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { buildThumbnailDocument } from '@server/services/publish/buildThumbnailDocument';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { buildThumbnailDocument, type DroppedAssets } from '@workers/services/publish/buildThumbnailDocument';
 import { PublishedArtifact, recordPublishedArtifactThumbnail } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -11,7 +12,7 @@ import {
   publishThumbnailKey,
   type PublishThumbnailJob,
 } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { invokeThumbnailRenderer, ThumbnailRendererError } from '@workers/media/invokeThumbnailRenderer';
 import {
   MAX_THUMBNAIL_DOCUMENT_BYTES,
@@ -41,6 +42,7 @@ interface ThumbnailArtifactLean {
   publicId: string;
   source: { kind: string };
   storageKeyPrefix?: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   manifest?: Array<{ path: string; mimeType: string }>;
   moderationStatus?: string;
@@ -67,7 +69,7 @@ export async function processPublishThumbnailJob(
   render: RenderThumbnail = invokeThumbnailRenderer
 ): Promise<PublishThumbnailOutcome> {
   const artifact = await PublishedArtifact.findOne({ publicId: job.publicId, deletedAt: null })
-    .select('publicId source storageKeyPrefix sha256Index manifest moderationStatus')
+    .select('publicId source storageKeyPrefix indexObjectPath sha256Index manifest moderationStatus')
     .lean<ThumbnailArtifactLean | null>();
   if (!artifact) return 'missing';
   if (artifact.source.kind !== 'bundle' || !artifact.storageKeyPrefix || artifact.moderationStatus === 'taken_down') {
@@ -80,13 +82,15 @@ export async function processPublishThumbnailJob(
   const document = await buildThumbnailDocument({
     versionId: job.versionId,
     manifest: artifact.manifest ?? [],
-    load: path => storage.download(`${prefix}${path}`),
+    load: path =>
+      path === 'index.html'
+        ? downloadPublishedIndex({ ...artifact, storageKeyPrefix: prefix }, storage)
+        : storage.download(`${prefix}${path}`),
     appOrigin: process.env.APP_URL || (PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''),
   });
   if (!document) return 'superseded';
-  if (document.droppedAssets.length) {
-    logger.info(`[publishThumbnail] ${job.publicId} rendering without ${document.droppedAssets.length} asset(s)`);
-  }
+  const dropped = describeDroppedAssets(document.droppedAssets);
+  if (dropped) logger.info(`[publishThumbnail] ${job.publicId} rendering without ${dropped}`);
 
   const documentBytes = Buffer.from(document.srcdoc, 'utf-8');
   if (documentBytes.length > MAX_THUMBNAIL_DOCUMENT_BYTES) {
@@ -136,6 +140,23 @@ export async function processPublishThumbnailJob(
     await deletePublishThumbnail(job.publicId, recorded.replacedKey, logger, () => storage);
   }
   return 'rendered';
+}
+
+/** Paths listed per reason in the log line; the count still covers all of them. */
+const LOGGED_PATHS_PER_REASON = 5;
+
+/**
+ * `N asset(s): missing 2 ["a.png","b.css"], oversized 1 ["big.png"]`, or undefined when nothing was
+ * dropped. Paths are author-chosen, so they are JSON-quoted to keep the log on one line.
+ */
+export function describeDroppedAssets(dropped: DroppedAssets): string | undefined {
+  const reasons = (['missing', 'oversized', 'failed'] as const).filter(reason => dropped[reason].length);
+  if (!reasons.length) return undefined;
+  const total = reasons.reduce((sum, reason) => sum + dropped[reason].length, 0);
+  const parts = reasons.map(
+    reason => `${reason} ${dropped[reason].length} ${JSON.stringify(dropped[reason].slice(0, LOGGED_PATHS_PER_REASON))}`
+  );
+  return `${total} asset(s): ${parts.join(', ')}`;
 }
 
 export const dispatch = dispatchWithLogger(async (event, _context, logger) => {

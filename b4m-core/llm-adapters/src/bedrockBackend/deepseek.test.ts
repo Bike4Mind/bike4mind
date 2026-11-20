@@ -97,7 +97,7 @@ describe('DeepSeekBedrockBackend streaming token reporting', () => {
         { role: 'assistant', content: 'ack' },
         { role: 'user', content: 'third' },
       ],
-      { stream: true, tools: [] } as Partial<ICompletionOptions>,
+      { stream: true, tools: [], omitIdentityReminder: true } as Partial<ICompletionOptions>,
       async () => {}
     );
 
@@ -127,7 +127,7 @@ describe('DeepSeekBedrockBackend streaming token reporting', () => {
     await backend.complete(
       ChatModels.DEEPSEEK_R1_BEDROCK,
       [{ role: 'system', content: 'Give a title to this session.' }],
-      { stream: true, tools: [] } as Partial<ICompletionOptions>,
+      { stream: true, tools: [], omitIdentityReminder: true } as Partial<ICompletionOptions>,
       async () => {}
     );
 

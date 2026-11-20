@@ -10,10 +10,10 @@ import {
 import { orgFeedbackItems } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { clampedIntParam } from '@server/utils/dateParam';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveReportWindow } from '@server/utils/orgFeedbackWindow';
 import { Request, Response } from 'express';
 import { z } from 'zod';

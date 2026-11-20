@@ -10,7 +10,6 @@ import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import type { AccessStore } from './tools/AccessStore';
 import type { ModelCatalog } from './ModelCatalog';
-import { LOCAL_MODEL_PREFIX } from './OllamaLocal';
 import type { CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
@@ -83,13 +82,15 @@ describe('ChatService', () => {
   });
 
   it('completes a local turn while signed out and declares no tools for a plain model', async () => {
-    const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+    const model = 'local:ollama:llama3.2';
     const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-chat-')), model);
     const localEvents: ChatStreamEvent[] = [];
     const local = {
       stream: vi.fn(async (request, emit) => {
         expect(request.tools).toEqual([]);
-        expect(String(request.messages[0].content)).not.toMatch(/call request_directory|web_search|ask_user/);
+        expect(String(request.messages[0].content)).not.toMatch(
+          /call request_directory|web_search|ask_user|todo_write/
+        );
         emit({ type: 'content', text: 'Offline answer', stopReason: 'end_turn' });
       }),
     };
@@ -114,36 +115,42 @@ describe('ChatService', () => {
     expect((await offline.getSession(id))?.messages.at(-1)?.content).toBe('Offline answer');
   });
 
-  it('keeps a local session on its local model when the cached catalog lacks it', async () => {
-    const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
-    const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-reconcile-')), model);
-    const localEvents: ChatStreamEvent[] = [];
-    const local = {
-      stream: vi.fn(async (_request, emit) => emit({ type: 'content', text: 'ok', stopReason: 'end_turn' })),
-    };
-    const hosted = [{ id: 'hosted-model', name: 'Hosted', backend: 'anthropic', supportsTools: true }];
-    const service = new ChatService({
-      store: localStore,
-      access: { list: async () => [] } as unknown as AccessStore,
-      models: { list: async () => ({ models: hosted }), cached: () => hosted } as unknown as ModelCatalog,
-      local: local as never,
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => null,
-      getEnvironmentUrl: () => '',
-      emit: event => localEvents.push(event),
-    });
-    const { id } = await service.createSession();
-    await localStore.setModel(id, model);
-    await service.send(id, 'still local');
-    await waitFor(localEvents, 'done');
-    expect(local.stream).toHaveBeenCalledWith(expect.objectContaining({ model }), expect.anything(), expect.anything());
-    expect((await service.getSession(id))?.model).toBe(model);
-  });
+  it.each(['local:ollama:llama3.2', 'local:lmstudio:some-model'])(
+    'keeps a local session on %s when the cached catalog lacks it',
+    async model => {
+      const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-reconcile-')), model);
+      const localEvents: ChatStreamEvent[] = [];
+      const local = {
+        stream: vi.fn(async (_request, emit) => emit({ type: 'content', text: 'ok', stopReason: 'end_turn' })),
+      };
+      const hosted = [{ id: 'hosted-model', name: 'Hosted', backend: 'anthropic', supportsTools: true }];
+      const service = new ChatService({
+        store: localStore,
+        access: { list: async () => [] } as unknown as AccessStore,
+        models: { list: async () => ({ models: hosted }), cached: () => hosted } as unknown as ModelCatalog,
+        local: local as never,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => '',
+        emit: event => localEvents.push(event),
+      });
+      const { id } = await service.createSession();
+      await localStore.setModel(id, model);
+      await service.send(id, 'still local');
+      await waitFor(localEvents, 'done');
+      expect(local.stream).toHaveBeenCalledWith(
+        expect.objectContaining({ model }),
+        expect.anything(),
+        expect.anything()
+      );
+      expect((await service.getSession(id))?.model).toBe(model);
+    }
+  );
 
   it.each([false, true])(
     'keeps local naming, suggestions, compaction and Continue on device (signed in: %s)',
     async signedIn => {
-      const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+      const model = 'local:ollama:llama3.2';
       const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-privacy-')), model);
       const localEvents: ChatStreamEvent[] = [];
       const option = { id: model, name: 'Local', supportsTools: false };
@@ -410,13 +417,16 @@ describe('ChatService', () => {
     expect(preamble.content).toMatch(/NO access/);
     expect(preamble.content).toMatch(/never invent a file name/i);
     expect(preamble.content).toMatch(/call request_directory/);
-    // Only the tools that read no files survive the missing grant: the server-side web tools, the
-    // question, and the request for a folder, which is how the conversation gets one.
+    expect(preamble.content).toMatch(/Keep one with todo_write/);
+    // Only the tools that read no files survive the missing grant: the plan, the server-side web
+    // tools, the question, the request for a folder, which is how the conversation gets one, and the loop.
     expect(post.mock.calls[0][1].options.tools).toEqual([
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'todo_write' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_search' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_fetch' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'ask_user' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'request_directory' }) }),
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'loop' }) }),
     ]);
   });
 

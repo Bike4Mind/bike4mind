@@ -80,3 +80,31 @@ describe('SuccessorCostPanel', () => {
     expect(screen.queryByTestId('successor-cost-panel')).not.toBeInTheDocument();
   });
 });
+
+describe('successor cost status tones', () => {
+  it('reads a cheaper successor as good, a dearer one as bad and an unpriced one as warn', () => {
+    const tone = (successorId: string) => {
+      const { unmount } = renderWith(
+        <SuccessorCostChip modelId="grok-3-mini" successorId={successorId} rates={RATES} />
+      );
+      const value = screen.getByTestId('successor-cost-chip-grok-3-mini').getAttribute('data-tone');
+      unmount();
+      return value;
+    };
+    expect(tone('grok-4.5-cheap')).toBe('good');
+    expect(tone('grok-4.5')).toBe('bad');
+    expect(tone('unpriced')).toBe('warn');
+
+    renderWith(<SuccessorCostPanel modelId="grok-3-mini" successorId="grok-4.5" rates={RATES} />);
+    expect(screen.getByTestId('successor-cost-panel-verdict')).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('draws the accept-dialog panel on the subtle admin surface with muted meta text', () => {
+    renderWith(<SuccessorCostPanel modelId="grok-3-mini" successorId="unpriced" rates={RATES} />);
+
+    const panel = screen.getByTestId('successor-cost-panel');
+    expect(panel).toHaveStyle({ backgroundColor: 'var(--joy-palette-admin-surfaceSubtle)' });
+    expect(screen.getByText('grok-3-mini to unpriced')).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
+    expect(screen.getByText(/cannot be checked/)).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
+  });
+});

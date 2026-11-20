@@ -190,15 +190,20 @@ describe('ChatService usage reporting', () => {
     return id;
   }
 
-  it('marks the system message and only the last message, in every round', async () => {
+  it('marks the shared half of the system prompt and only the last message, in every round', async () => {
     await runTwoRoundTurn();
 
-    expect(markers(0)).toEqual([true, true]);
-    expect(wireOf(0).messages[0].role).toBe('system');
+    // The system prompt goes as two blocks: what sessions share, then the per-session lines.
+    expect(markers(0)).toEqual([true, undefined, true]);
+    expect(
+      wireOf(0)
+        .messages.slice(0, 2)
+        .map(message => message.role)
+    ).toEqual(['system', 'system']);
     // Round 2 adds an assistant tool_use and a user tool_result: the old breakpoint on the
     // prompt is gone and the new one sits on the tool_result message.
-    expect(markers(1)).toEqual([true, undefined, undefined, true]);
-    expect(wireOf(1).messages[3].role).toBe('user');
+    expect(markers(1)).toEqual([true, undefined, undefined, undefined, true]);
+    expect(wireOf(1).messages[4].role).toBe('user');
   });
 
   it('sends no markers on a backend that would reject the flag', async () => {
@@ -218,6 +223,11 @@ describe('ChatService usage reporting', () => {
     const id = await runTwoRoundTurn();
     const reply = (await store.get(id))?.messages.at(-1);
 
+    expect(reply?.contextSnapshot).toMatchObject({ model: 'test-model', inputTokens: 4950 });
+    expect(reply?.contextSnapshot?.overhead.some(slice => slice.id === 'system-tools')).toBe(true);
+    const done = events.find(event => event.type === 'done');
+    expect(done && 'contextSnapshot' in done ? done.contextSnapshot : null).toEqual(reply?.contextSnapshot);
+
     expect(reply?.rounds?.map(round => round.usage)).toEqual([
       { inputTokens: 900, cacheCreationInputTokens: 4000, outputTokens: 100, creditsUsed: 5, usdCost: 0.05 },
       { inputTokens: 50, cacheReadInputTokens: 4900, outputTokens: 40, creditsUsed: 2, usdCost: 0.02 },
@@ -234,8 +244,53 @@ describe('ChatService usage reporting', () => {
     await service.send(id, 'and again?');
     await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
     expect(JSON.stringify(wireOf(2).messages.slice(1))).not.toMatch(
-      /"(usage|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
+      /"(usage|contextSnapshot|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
     );
+  });
+
+  it('stamps each reply with the model its requests went to, and keeps it off the wire', async () => {
+    const id = await runTwoRoundTurn();
+    expect((await store.get(id))?.messages.at(-1)?.model).toBe('test-model');
+
+    await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+    await service.send(id, 'and again?');
+    await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
+    expect(JSON.stringify(wireOf(2).messages.slice(1))).not.toContain('"model"');
+    streams[2].write(frame({ type: 'content', text: 'sure.' }));
+    streams[2].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+      timeout: 3000,
+      interval: 5,
+    });
+
+    const replies = (await store.get(id))?.messages.filter(message => message.role === 'assistant');
+    expect(replies?.map(reply => reply.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+  });
+
+  it('keeps the request model when the session switches models mid-reply', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'hello');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+
+    streams[0].write(frame({ type: 'content', text: 'hi' }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+
+    expect((await store.get(id))?.messages.at(-1)?.model).toBe('test-model');
+  });
+
+  it('stamps the model on a reply that failed', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'hello');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'error', message: 'insufficient credits' }));
+    await vi.waitUntil(() => events.some(event => event.type === 'error'), { timeout: 3000, interval: 5 });
+
+    expect((await store.get(id))?.messages.at(-1)).toMatchObject({
+      error: 'insufficient credits',
+      model: 'test-model',
+    });
   });
 
   it('records the explore sub-loop usage on the tool call', async () => {
@@ -262,5 +317,25 @@ describe('ChatService usage reporting', () => {
 
     const call = (await store.get(id))?.messages.at(-1)?.toolCalls?.[0];
     expect(call?.detail?.usage).toEqual({ inputTokens: 300, cacheReadInputTokens: 10 });
+  });
+
+  it('keeps the last measured snapshot when a later tool round fails', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'read files');
+    await vi.waitUntil(() => streams.length === 1);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_1', name: 'glob_files', arguments: '{"pattern":"*"}' }],
+        usage: { inputTokens: 50, cacheReadInputTokens: 4900 },
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2);
+    streams[1].destroy(new Error('connection lost'));
+    const failed = await vi.waitUntil(() => events.find(event => event.type === 'error'));
+    const reply = (await store.get(id))?.messages.at(-1);
+    expect(reply?.contextSnapshot?.inputTokens).toBe(4950);
+    expect(failed?.type === 'error' && failed.contextSnapshot).toEqual(reply?.contextSnapshot);
   });
 });

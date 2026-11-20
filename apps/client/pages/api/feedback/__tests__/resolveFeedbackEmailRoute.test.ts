@@ -6,15 +6,20 @@ import { describe, it, expect, vi } from 'vitest';
  * production recipient list (that fallback is the exact stage-leak bug this resolver closes).
  */
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chain: any = { get: () => chain, post: () => chain };
+  const chain: any = { use: () => chain, get: () => chain, post: () => chain };
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: {}, User: {}, adminSettingsRepository: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: (key: string, settings: Record<string, string>) => settings[key],

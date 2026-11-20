@@ -19,12 +19,14 @@ vi.mock('@tanstack/react-router', () => ({
 const BASE = 'https://github.com/Bike4Mind/desktop-releases';
 const DMG_URL = `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-arm64.dmg`;
 const APPIMAGE_URL = `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-x64.AppImage`;
+const EXE_URL = `${BASE}/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-setup.exe`;
 const RELEASE = {
   tag_name: 'desktop-v0.42.0',
   html_url: `${BASE}/releases/tag/desktop-v0.42.0`,
   assets: [
     { name: 'Bike4Mind-0.42.0-arm64.dmg', browser_download_url: DMG_URL },
     { name: 'Bike4Mind-0.42.0-x64.AppImage', browser_download_url: APPIMAGE_URL },
+    { name: 'Bike4Mind-0.42.0-setup.exe', browser_download_url: EXE_URL },
   ],
 };
 
@@ -122,18 +124,56 @@ describe('DesktopDownloadPage', () => {
     expect(screen.getByTestId('desktop-download-platform-mac-arm64')).toBeInTheDocument();
   });
 
-  it('tells Windows users there is no build yet instead of offering a download', async () => {
+  it('leads Windows with the setup.exe and the SmartScreen note, without an install command', async () => {
     setUserAgent(UA.windows);
     renderPage();
 
     const primary = screen.getByTestId('desktop-download-primary');
     expect(primary).toHaveAttribute('data-platform', 'windows');
-    expect(within(primary).getByTestId('desktop-download-unavailable')).toHaveTextContent('no Windows build yet');
-    expect(within(primary).getAllByText(/no Windows build yet/)).toHaveLength(1);
+    expect(within(primary).getByText('Windows (x64 and ARM)')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(primary).getByTestId('desktop-download-exe-link')).toHaveAttribute('href', EXE_URL)
+    );
+    expect(within(primary).getByTestId('desktop-download-smartscreen-note')).toHaveTextContent('Run anyway');
     expect(within(primary).queryByTestId('desktop-download-command')).not.toBeInTheDocument();
-    expect(within(primary).queryByRole('link')).not.toBeInTheDocument();
+    expect(within(primary).queryByTestId('desktop-download-unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('desktop-download-gatekeeper-note')).not.toBeInTheDocument();
     expect(screen.queryByTestId('desktop-download-platform-windows')).not.toBeInTheDocument();
+  });
+
+  it('lists Windows with a download link on the other platforms of a Mac', async () => {
+    setUserAgent(UA.mac);
+    renderPage();
+
+    const row = screen.getByTestId('desktop-download-platform-windows');
+    expect(row).toHaveTextContent('Windows (x64 and ARM)');
+    expect(row).not.toHaveTextContent('Not available yet');
+    await waitFor(() => expect(within(row).getByRole('link')).toHaveAttribute('href', EXE_URL));
+  });
+
+  it('links Windows to the release page when the release has no exe asset', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...RELEASE, assets: RELEASE.assets.filter(asset => !asset.name.endsWith('.exe')) }),
+    });
+    setUserAgent(UA.windows);
+    renderPage();
+
     await waitFor(() => expect(screen.getByTestId('desktop-download-version')).toHaveTextContent('Version 0.42.0'));
+    const exe = screen.getByTestId('desktop-download-exe-link');
+    expect(exe).toHaveAttribute('href', RELEASE.html_url);
+    expect(exe).toHaveTextContent('Get the .exe on GitHub');
+  });
+
+  it('falls back to the releases page for Windows when the API is unreachable', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    setUserAgent(UA.windows);
+    const { queryClient } = renderPage();
+
+    await waitFor(() => expect(queryClient.getQueryState(DESKTOP_RELEASE_QUERY_KEY)?.status).toBe('error'));
+    const exe = screen.getByTestId('desktop-download-exe-link');
+    expect(exe).toHaveAttribute('href', DESKTOP_RELEASES_PAGE_URL);
+    expect(exe).toHaveTextContent('Get the .exe on GitHub');
   });
 
   it.each([

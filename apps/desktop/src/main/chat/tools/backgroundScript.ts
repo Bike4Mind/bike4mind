@@ -6,6 +6,11 @@
  */
 export const PARENT_WATCH_FD = 3;
 
+/** Where the watch pipe sits in the spawn's stdio array; see `wrapWithParentWatchdog`. */
+export function parentWatchStdioIndex(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 0 : PARENT_WATCH_FD;
+}
+
 /**
  * Wrap a user command so its process group dies with this app, whatever kills the app.
  *
@@ -38,8 +43,10 @@ export const PARENT_WATCH_FD = 3;
  * This is lifecycle, not security. The command is arbitrary approved bash and can of course
  * dismantle the guard; the approval gate is what confines it.
  */
-export function wrapWithParentWatchdog(command: string): string {
+export function wrapWithParentWatchdog(command: string, platform: NodeJS.Platform = process.platform): string {
   return [
+    // Windows hands a child only its stdio handles, so there the pipe arrives as stdin and moves to fd 3.
+    ...(platform === 'win32' ? [`exec ${PARENT_WATCH_FD}<&0 0</dev/null`] : []),
     `{ IFS= read -r _ <&${PARENT_WATCH_FD}; kill -TERM 0; } >/dev/null 2>&1 &`,
     '__b4m_guard=$!',
     `exec ${PARENT_WATCH_FD}<&-`,

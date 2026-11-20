@@ -1,22 +1,21 @@
 import React, { useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { IFabFileDocument, ISessionDocument, KnowledgeType, isImageAttachment } from '@bike4mind/common';
+import { IFabFileDocument, ISessionDocument, isImageAttachment } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
 import { generateSmartFileName } from '@client/app/utils/generateSmartFileName';
-import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { detectContentType } from '@client/app/utils/contentTypes';
 import { LexicalChatInputRef } from '@client/app/components/Session/LexicalChatInput';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import {
+  ComposerUploadContext,
+  uploadComposerFile,
+} from '@client/app/components/Session/SessionBottom/uploadComposerFile';
 
-interface UseChatPasteDeps {
+interface UseChatPasteDeps extends ComposerUploadContext {
   currentSession: ISessionDocument | null;
-  currentSessionId: string | null;
   chatHistory: { prompt: string }[];
   chatInputValue: string;
   setChatInputValue: (value: string) => void;
-  setWorkBenchFiles: (sessionId: string, updater: (prev: IFabFileDocument[]) => IFabFileDocument[]) => void;
-  setCurrentSession: (session: ISessionDocument) => void;
-  queryClient: QueryClient;
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
 }
 
@@ -44,42 +43,19 @@ function addToFileBrowserCache(queryClient: QueryClient, fabFile: IFabFileDocume
 }
 
 /**
- * Insert a file tag into the Lexical editor, with fallback to string concatenation.
+ * Upload a pasted file through the same pipeline as dropped/picked files, so it gets a
+ * composer thumbnail, moderation state and attach scope.
  */
-function insertFileTag(
-  fileTag: string,
-  lexicalInputRef: React.RefObject<LexicalChatInputRef | null>,
-  chatInputValue: string,
-  setChatInputValue: (value: string) => void
-) {
-  if (lexicalInputRef.current) {
-    try {
-      lexicalInputRef.current.insertContent(fileTag);
-    } catch (error) {
-      console.error('Failed to insert file tag:', error);
-      toast.error('Failed to add file reference to input');
-      const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${fileTag}` : fileTag;
-      setChatInputValue(newValue);
-    }
-  } else {
-    const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${fileTag}` : fileTag;
-    setChatInputValue(newValue);
-  }
-}
-
-/**
- * Add a fab file to the workbench and update the session's knowledgeIds.
- */
-function addFileToWorkbench(
-  fabFile: IFabFileDocument,
-  deps: Pick<UseChatPasteDeps, 'currentSessionId' | 'currentSession' | 'setWorkBenchFiles' | 'setCurrentSession'>
-) {
-  console.log('FabFile created with name:', fabFile.fileName);
-  deps.setWorkBenchFiles(deps.currentSessionId ?? '', prev => [...prev, fabFile]);
-
-  if (deps.currentSessionId && deps.currentSession) {
-    const updatedKnowledgeIds = [...(deps.currentSession.knowledgeIds || []), fabFile.id];
-    deps.setCurrentSession({ ...deps.currentSession, knowledgeIds: updatedKnowledgeIds });
+async function uploadPastedFile(file: File, fileName: Promise<string>, deps: UseChatPasteDeps) {
+  const { queryClient } = deps;
+  try {
+    // The tile goes up before the smart name (an LLM round trip) resolves, so the paste shows at once
+    // and the pending upload blocks sending in the meantime.
+    const fabFile = await uploadComposerFile(file, deps, { fileName });
+    addToFileBrowserCache(queryClient, fabFile);
+  } catch {
+    // The failure is shown on the file's tile (uploadComposerFile marks it errored).
+    queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
   }
 }
 
@@ -95,17 +71,8 @@ export function useChatPaste(deps: UseChatPasteDeps) {
   depsRef.current = deps;
 
   return useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement> | ClipboardEvent): Promise<boolean> => {
-    const {
-      currentSession,
-      currentSessionId,
-      chatHistory,
-      chatInputValue,
-      setChatInputValue,
-      setWorkBenchFiles,
-      setCurrentSession,
-      queryClient,
-      lexicalInputRef,
-    } = depsRef.current;
+    const latest = depsRef.current;
+    const { currentSession, chatHistory, chatInputValue, setChatInputValue, lexicalInputRef } = latest;
 
     const clipboardData = e.clipboardData;
     if (!clipboardData) return false;
@@ -118,40 +85,11 @@ export function useChatPaste(deps: UseChatPasteDeps) {
         e.preventDefault();
         const file = item.getAsFile();
         if (file) {
-          const loadingToast = toast.loading('Uploading image...');
-
-          const smartFileName = await generateSmartFileName('', 'image', {
+          const smartFileName = generateSmartFileName('', 'image', {
             hasSession: !!currentSession,
             chatHistory,
           });
-          console.log('Generated smart filename for image:', smartFileName);
-          const renamedFile = new File([file], smartFileName, { type: file.type });
-
-          try {
-            const fabFile = await createFabFileOnServerWithUpload(
-              {
-                type: KnowledgeType.FILE,
-                fileName: renamedFile.name,
-                mimeType: renamedFile.type,
-                fileSize: renamedFile.size,
-              },
-              renamedFile
-            );
-
-            addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
-            addToFileBrowserCache(queryClient, fabFile);
-
-            toast.dismiss(loadingToast);
-            toast.success('Image uploaded successfully');
-
-            const fileTag = `[[${fabFile.fileName}]]`;
-            insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
-          } catch (error) {
-            queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-            console.error('Failed to upload pasted image:', error);
-            toast.dismiss(loadingToast);
-            toast.error('Failed to upload image');
-          }
+          await uploadPastedFile(file, smartFileName, latest);
           return true;
         }
       }
@@ -170,39 +108,9 @@ export function useChatPaste(deps: UseChatPasteDeps) {
     if (lines.length > 30) {
       e.preventDefault();
 
-      const loadingToast = toast.loading(`Uploading ${lines.length} lines of text as file...`);
-
-      const smartFileName = await generateSmartFileName(pastedContent, 'text');
-      console.log('Generated smart filename for text:', smartFileName);
-
-      const blob = new Blob([pastedContent], { type: 'text/plain' });
-      const file = new File([blob], smartFileName, { type: 'text/plain' });
-
-      try {
-        const fabFile = await createFabFileOnServerWithUpload(
-          {
-            type: KnowledgeType.FILE,
-            fileName: file.name,
-            mimeType: 'text/plain',
-            fileSize: file.size,
-          },
-          file
-        );
-
-        addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
-        addToFileBrowserCache(queryClient, fabFile);
-
-        toast.dismiss(loadingToast);
-        toast.success(`Large text (${lines.length} lines) uploaded as file`);
-
-        const fileTag = `[[${fabFile.fileName}]]`;
-        insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
-      } catch (error) {
-        queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-        console.error('Failed to upload pasted text as file:', error);
-        toast.dismiss(loadingToast);
-        toast.error('Failed to upload text as file');
-      }
+      const smartFileName = generateSmartFileName(pastedContent, 'text');
+      const file = new File([pastedContent], 'pasted-text.txt', { type: 'text/plain' });
+      await uploadPastedFile(file, smartFileName, latest);
       return true;
     }
 

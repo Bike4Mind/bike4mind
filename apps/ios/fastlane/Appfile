@@ -1,0 +1,4 @@
+# Placeholders only: nothing here is a secret. The real values arrive through the environment when
+# the `beta` lane runs (see the Fastfile).
+app_identifier("com.bike4mind.app")
+team_id(ENV["IOS_TEAM_ID"]) if ENV["IOS_TEAM_ID"]

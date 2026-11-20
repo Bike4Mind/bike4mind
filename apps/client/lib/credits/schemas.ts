@@ -3,6 +3,10 @@ import { CreditPackageId, TransactionType } from './types';
 
 const baseTransactionSchema = z.object({
   transactionType: z.enum(TransactionType),
+  // Embedded checkout cannot navigate to external payment-provider sites.
+  allowRedirects: z.boolean().optional(),
+  // Required true while requireCheckoutTermsConsent is on; see server/integrations/stripe/termsConsent.ts.
+  acceptedTerms: z.boolean().optional(),
 });
 export const perCreditSchema = baseTransactionSchema.extend({
   transactionType: z.literal(TransactionType.PerCredit),

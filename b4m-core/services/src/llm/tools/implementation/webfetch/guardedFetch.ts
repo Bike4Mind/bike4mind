@@ -1,4 +1,4 @@
-import { resolveAndVetUrl } from './ssrfGuard';
+import { refuseFetch, resolveAndVetUrl } from './ssrfGuard';
 
 /**
  * SSRF-guarded fetch for direct server-side requests against a user/model-supplied origin.
@@ -22,9 +22,7 @@ export async function guardedFetch(url: string, init: RequestInit = {}): Promise
   }
 
   const vetted = await resolveAndVetUrl(target);
-  if (!vetted.safe) {
-    throw new Error(`Refusing to fetch ${url}: ${vetted.reason}`);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   let fetchUrl = url;
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };

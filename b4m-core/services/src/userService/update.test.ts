@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenError } from '@bike4mind/utils';
 import {
   updateUser,
   applyBaseUserUpdates,
@@ -341,6 +342,15 @@ describe('applyBaseUserUpdates - preferences merge', () => {
     expect(result.preferences?.language).toBe('en');
   });
 
+  it('keeps other push categories when a partial pushNotifications object is written', () => {
+    const result = applyBaseUserUpdates(
+      makeUser({ ...storedPreferences, pushNotifications: { agent_failed: false, chat_completed: false } }),
+      { preferences: { pushNotifications: { chat_completed: true } } }
+    );
+
+    expect(result.preferences?.pushNotifications).toEqual({ agent_failed: false, chat_completed: true });
+  });
+
   it('produces the same result as a replace when the caller sends the full object', () => {
     const fullObject = { ...storedPreferences, showDebug: false };
 
@@ -489,6 +499,32 @@ describe('updateUser', () => {
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
     expect(persisted).not.toHaveProperty('tags');
     expect(persisted.name).toBe('Renamed');
+  });
+
+  it('refuses to rename a test persona, which would put it beyond the persona-key delete', async () => {
+    const user = {
+      id: 'user-persona',
+      username: 'persona-alpha-1234567890',
+      name: 'Persona alpha',
+      email: 'alpha@personas.example.com',
+      isPersona: true,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+    } as unknown as IUserDocument;
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn(),
+      existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
+    };
+    await expect(
+      updateUser('user-persona', { username: 'qauser' }, { db: { users: mockUserRepository as never } })
+    ).rejects.toThrow(ForbiddenError);
+    expect(mockUserRepository.update).not.toHaveBeenCalled();
+
+    await updateUser('user-persona', { name: 'Still alpha' }, { db: { users: mockUserRepository as never } });
+    expect(mockUserRepository.update).toHaveBeenCalled();
   });
 
   it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {

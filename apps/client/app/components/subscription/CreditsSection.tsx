@@ -9,6 +9,9 @@ import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
+import { canViewOrgUsage, OrganizationTabs } from '@client/app/routes/organizations/orgTabAccess';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import PaymentButton from '../Credits/PaymentButton';
 import { formatPlanPrice, pricePerThousandCredits, sharedPackRate } from './billingFormat';
@@ -28,14 +31,19 @@ interface CreditsSectionProps {
 }
 
 type PurchaseTransaction = Extract<ICreditTransaction, { type: 'purchase' }>;
+type SubscriptionTransaction = Extract<ICreditTransaction, { type: 'subscription' }>;
+type HistoryTransaction = PurchaseTransaction | SubscriptionTransaction;
 
 const isPurchase = (transaction: ICreditTransaction): transaction is PurchaseTransaction =>
   transaction.type === 'purchase';
 
+const isHistoryEntry = (transaction: ICreditTransaction): transaction is HistoryTransaction =>
+  isPurchase(transaction) || transaction.type === 'subscription';
+
 const statusColor = (status: PurchaseTransaction['status']) =>
   status === 'completed' ? 'success' : status === 'pending' ? 'warning' : 'danger';
 
-/** One-time credit packs and the purchase history, for the Billing modal. */
+/** One-time credit packs plus the purchase and plan-credit history, for the Billing modal. */
 export const CreditsSection = ({
   transactions,
   transactionsLoading,
@@ -60,7 +68,25 @@ export const CreditsSection = ({
   const { selectedAccount } = useSelectedAccount();
   // Organization credits are bought by the org, so packs only show for the personal account.
   const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
-  const purchases = transactions.filter(isPurchase);
+  const { currentUser } = useUser();
+  const { data: organizations } = useGetUserOrganizations(currentUser?.id);
+  // A team account's usage lives on the org page, which only owners and platform admins may see
+  // (orgTabAccess.ts); everyone else, or an org not loaded yet, keeps personal usage.
+  const usageOrg =
+    selectedAccount && !selectedAccount.personal
+      ? organizations?.find(org => org.id === selectedAccount.id)
+      : undefined;
+  const openUsage = () => {
+    onClose();
+    if (usageOrg && canViewOrgUsage(currentUser, usageOrg)) {
+      void navigate({ to: '/organizations/$id', params: { id: usageOrg.id }, search: { tab: OrganizationTabs.Usage } });
+    } else {
+      void navigate({ to: '/profile', search: { tab: 'usage' } });
+    }
+  };
+  const historyEntries = transactions
+    .filter(isHistoryEntry)
+    .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -232,19 +258,16 @@ export const CreditsSection = ({
       <Box component="section" aria-labelledby={historyHeadingId}>
         <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, mb: 1 }}>
           <Typography id={historyHeadingId} level="title-sm" sx={{ fontWeight: 600 }}>
-            {t('credits_modal.history_title')}
+            {t('credits_modal.activity_title', 'Purchases and plan credits')}
           </Typography>
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {t('credits_modal.history_usage_hint', 'This lists purchases only.')}{' '}
+            {t('credits_modal.activity_usage_hint', 'This lists purchases and plan credits only.')}{' '}
             <Link
               component="button"
               type="button"
               level="body-xs"
               data-testid="credits-modal-see-usage-link"
-              onClick={() => {
-                onClose();
-                void navigate({ to: '/profile', search: { tab: 'usage' } });
-              }}
+              onClick={openUsage}
             >
               {t('credits_modal.see_usage', 'See usage')}
             </Link>
@@ -257,11 +280,12 @@ export const CreditsSection = ({
                 <Skeleton variant="text" level="body-sm" sx={{ width: `${70 - i * 12}%` }} />
               </Box>
             ))
-          ) : purchases.length > 0 ? (
-            purchases.map((transaction, i) => (
+          ) : historyEntries.length > 0 ? (
+            historyEntries.map((transaction, i) => (
               <Box
                 key={transaction.id}
                 className="credits-modal-transaction-item"
+                data-testid="credits-history-row"
                 sx={{
                   display: 'grid',
                   gridTemplateColumns: { xs: '1fr auto', sm: 'minmax(0, 1.3fr) minmax(0, 1fr) 80px 96px' },
@@ -284,13 +308,20 @@ export const CreditsSection = ({
                   level="body-sm"
                   sx={{ fontVariantNumeric: 'tabular-nums', textAlign: { xs: 'right', sm: 'left' } }}
                 >
-                  ${(transaction.amount / 100).toFixed(2)}
+                  {isPurchase(transaction)
+                    ? `$${(transaction.amount / 100).toFixed(2)}`
+                    : t('credits_modal.plan_credits_label', 'Plan credits')}
                 </Typography>
                 <Box sx={{ textAlign: 'right', gridColumn: { xs: '1 / -1', sm: 'auto' } }}>
-                  {/* Status is CreditTransactionStatus ('completed' | 'pending' | 'failed') from
-                      b4m-core/common/src/types/entities/CreditTransactionTypes.ts. */}
-                  <Chip size="sm" variant="soft" color={statusColor(transaction.status)}>
-                    {transaction.status === 'completed'
+                  {/* Status is CreditPurchaseStatus ('completed' | 'pending' | 'failed') from
+                      b4m-core/common/src/types/entities/CreditTransactionTypes.ts. A plan-credit row
+                      has no status: it only exists once the grant landed. */}
+                  <Chip
+                    size="sm"
+                    variant="soft"
+                    color={isPurchase(transaction) ? statusColor(transaction.status) : 'success'}
+                  >
+                    {!isPurchase(transaction) || transaction.status === 'completed'
                       ? t('credits_modal.status.completed')
                       : transaction.status === 'pending'
                         ? t('credits_modal.status.pending')

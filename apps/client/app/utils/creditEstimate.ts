@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import { sentMaxTokensFor, reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
 import { computeDefaultMaxTokens } from './aiSettingsUtils';
+import { thinkingForSend } from './thinkingPayload';
 
 // ~4.3 chars per cl100k token measured on the blocks below; 4 rounds the overhead up, never down.
 const CHARS_PER_TOKEN = 4;
@@ -82,7 +83,7 @@ export function preflightAnswerCredits(
 ): number | null {
   if (model.freeToRun) return 0;
   if (!model.pricing || Object.keys(model.pricing).length === 0) return null;
-  const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
+  const sentMaxTokens = sentMaxTokensFor(model, thinkingForSend(thinking, model), maxTokens);
   const outputTokens = reservationOutputTokens(
     sentMaxTokens,
     sentMaxTokens > maxTokens || reasonsWithinOutputBudget(model)
@@ -122,7 +123,7 @@ export function findAffordableModelOffer(
         (inputTokens / tokenEstimateMultiplier(selected.id)) * tokenEstimateMultiplier(model.id)
       );
       const maxTokens = computeDefaultMaxTokens(model);
-      const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
+      const sentMaxTokens = sentMaxTokensFor(model, thinkingForSend(thinking, model), maxTokens);
       const fitsContext =
         candidateInputTokens + sentMaxTokens + CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= model.contextWindow;
       return {

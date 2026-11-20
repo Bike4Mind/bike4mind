@@ -1,10 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
-import { ForbiddenError, BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
+import { BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { agentOpsModelRejection } from '@client/app/utils/agentOpsModels';
 import { modelCatalogListingOptions } from '@client/server/utils/modelCatalogOptions';
 
@@ -41,12 +42,11 @@ async function fetchSelectableModels() {
   return getAvailableModels(buildApiKeyTable(coreKeys), modelCatalogListingOptions());
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const settings = await agentOpsSettingsRepository.getSettings();
 
     if (!settings) {
@@ -68,10 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     res.json(settings);
   })
   .put<Request<{}, {}, CreateUpdateSettingsRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { generationLlmModel, rateLimitSeconds, isEnabled } = req.body;
 
     // Only a change of pin is worth a live catalog fan-out: validating on every save would let a
@@ -101,13 +97,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     if (isEnabled !== undefined) updateData.isEnabled = isEnabled;
 
     const updatedSettings = await agentOpsSettingsRepository.createOrUpdateSettings(updateData);
+
+    const changes = (['generationLlmModel', 'rateLimitSeconds', 'isEnabled'] as const)
+      .filter(field => updateData[field] !== undefined && updateData[field] !== current?.[field])
+      .map(field => ({ field, before: current?.[field] ?? null, after: updateData[field] }));
+    if (changes.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.updated',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: 'updated Agent Ops settings',
+        changes,
+      });
+    }
+
     res.json(updatedSettings);
   })
   .post<Request<{}, {}, AddVersionRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { metaPrompt, description } = req.body;
 
     if (!metaPrompt || !metaPrompt.trim()) {
@@ -134,13 +139,27 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const updatedSettings = await agentOpsSettingsRepository.addMetaPromptVersion(
       metaPrompt.trim(),
-      description?.trim() || '',
-      req.user!.id
+      req.user!.id,
+      description?.trim() || ''
     );
+
+    const addedVersion = updatedSettings.currentVersionNumber;
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.version_added',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: `added Agent Ops meta-prompt version ${addedVersion}`,
+      details: { version: addedVersion },
+    });
 
     // Auto-activate the first version
     if (updatedSettings.versions.length === 1) {
       const activatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(1);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.version_activated',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: 'activated Agent Ops meta-prompt version 1 (first version, activated automatically)',
+        details: { version: 1, automatic: true },
+      });
       return res.json(activatedSettings);
     }
 

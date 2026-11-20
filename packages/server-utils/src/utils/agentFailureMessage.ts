@@ -1,3 +1,5 @@
+import { MODEL_DECLINED_MESSAGE } from '@bike4mind/common';
+
 /**
  * Map a raw execution error to a user-facing failure message. We must not leak internal details,
  * but a blanket "Agent execution failed" leaves users stuck on actionable causes like
@@ -6,9 +8,15 @@
  *
  * Numeric HTTP status codes are matched on word boundaries so an unrelated error whose text merely
  * contains the digits (a port number, a byte count, a model id) is not misclassified.
+ *
+ * `error` is the thrown value when the caller still has it; a stored message is matched on its text alone.
  */
-export function toUserFacingFailureMessage(errorMessage: string): string {
+export function toUserFacingFailureMessage(errorMessage: string, error?: unknown): string {
   const lower = errorMessage.toLowerCase();
+  // SafetyRefusalError (llm-adapters), matched by name; the phrase covers a stored message and other copies.
+  if ((error instanceof Error && error.name === 'SafetyRefusalError') || lower.includes('safety classifier refusal')) {
+    return MODEL_DECLINED_MESSAGE;
+  }
   if (/\b402\b/.test(lower) || lower.includes('payment required') || lower.includes('insufficient credit')) {
     return 'Agent execution failed: the provider reported a billing/quota issue (402). Check that the account behind this model has active billing and is verified for it, or try a different model.';
   }

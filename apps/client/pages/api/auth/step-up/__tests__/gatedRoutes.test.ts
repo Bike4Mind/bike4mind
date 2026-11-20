@@ -68,11 +68,14 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Middleware) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: h.passThrough }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: h.passThrough }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: h.passThrough }));
+vi.mock('@server/utils/recipientSendLimits', () => ({
+  reserveRecipientSendBudget: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@server/auth/trustedDevice', () => ({ clearTrustedDeviceCookie: vi.fn() }));
 vi.mock('@server/auth/issueSession', () => ({ issueBrowserSession: vi.fn() }));
 
@@ -94,10 +97,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
 }));
 // parseAdminActionReason and isSameUserId stay real; the audit writes need a database, so they are stubbed.
-vi.mock('@server/utils/adminAudit', async importOriginal => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
-    ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+    ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
     recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
     denySelfAdminAction: vi.fn(async () => {
       throw new ForbiddenError('Admins cannot perform this action on their own account.');
@@ -114,7 +117,8 @@ vi.mock('@bike4mind/services', () => ({
     regenerateBackupCodes: h.regenerateBackupCodes,
     startPasskeyRegistration: h.startPasskeyRegistration,
     resolvePasskeyRelyingParty: () => ({ rpID: 'app.example.com', rpName: 'Example', origin: 'https://x' }),
-    userHasMFAConfigured: () => true,
+    userHasMFAConfigured: (user?: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
   },
   userService: { revokeUserSessions: vi.fn(), requestEmailChange: h.requestEmailChange },
 }));
@@ -289,6 +293,47 @@ describe('POST /api/auth/mfa/passkey/register-options', () => {
     const res = await call(registerOptionsRoute, { body: {} });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ challenge: 'c' });
+  });
+
+  // Sign-in enrollment of a first factor skips step-up as setup does; adding a passkey to an
+  // account that already has a factor never does, since a fresh session alone (trusted device,
+  // IdP sign-in) has not presented that factor.
+  const freshSession = () =>
+    h.findBySid.mockResolvedValue({
+      sid: 'sid-1',
+      userId: 'user-1',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      stepUpAt: null,
+      createdAt: new Date(),
+      createdVia: 'oauth',
+    });
+
+  it.each([
+    ['an authenticator app', { totpEnabled: true }],
+    ['a passkey', { totpEnabled: false, passkeyEnabled: true }],
+  ])('still requires step-up on a fresh session for a user who already has %s', async (_label, mfa) => {
+    freshSession();
+    h.user.mfa = mfa as typeof h.user.mfa;
+    const res = await call(registerOptionsRoute, {});
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ code: 'step_up_required' });
+    expect(h.startPasskeyRegistration).not.toHaveBeenCalled();
+  });
+
+  it('skips step-up on a fresh session for a user with no factor yet', async () => {
+    freshSession();
+    h.user.mfa = undefined;
+    const res = await call(registerOptionsRoute, {});
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.startPasskeyRegistration).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips step-up for an mfaPending token whose user has no factor yet', async () => {
+    h.user.mfa = undefined;
+    const res = await call(registerOptionsRoute, { user: { id: USER.id, mfaPending: true } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.findBySid).not.toHaveBeenCalled();
   });
 });
 

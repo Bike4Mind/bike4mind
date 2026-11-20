@@ -5,6 +5,7 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useBeginGitHubLakeCreate } from '@client/app/hooks/data/githubLakeCreate';
 import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 import { getServerErrorField } from '@client/app/utils/error';
+import { lakeEntitlementRefusalMessage } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import GitHubSyncedFilesDisclosure from './GitHubSyncedFilesDisclosure';
 
 export const GITHUB_READ_ONLY_PROMISE = 'We can read code, never write, push, or open PRs';
@@ -31,10 +32,13 @@ export default function GitHubCreatePanel({
   onBack: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  // A lake-cap or plan refusal: retrying cannot clear it, so no Try again button.
+  const [errorIsFinal, setErrorIsFinal] = useState(false);
   const begin = useBeginGitHubLakeCreate();
 
   const handleContinue = () => {
     setError(null);
+    setErrorIsFinal(false);
     begin.mutate(organizationId, {
       onSuccess: ({ dataLakeId, authorizeUrl }) => {
         try {
@@ -47,7 +51,11 @@ export default function GitHubCreatePanel({
         }
         window.location.assign(authorizeUrl);
       },
-      onError: (e: unknown) => setError(getServerErrorField(e) || GENERIC_FAILURE_MESSAGE),
+      onError: (e: unknown) => {
+        const refusal = lakeEntitlementRefusalMessage(e);
+        setErrorIsFinal(Boolean(refusal));
+        setError(refusal ?? (getServerErrorField(e) || GENERIC_FAILURE_MESSAGE));
+      },
     });
   };
 
@@ -72,17 +80,19 @@ export default function GitHubCreatePanel({
         <Alert color="danger" variant="soft" data-testid="github-create-error">
           <Stack gap={1}>
             <Typography level="body-sm">{error}</Typography>
-            <Button
-              size="sm"
-              color="danger"
-              variant="soft"
-              data-testid="github-create-retry-btn"
-              loading={begin.isPending}
-              onClick={handleContinue}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Try again
-            </Button>
+            {!errorIsFinal && (
+              <Button
+                size="sm"
+                color="danger"
+                variant="soft"
+                data-testid="github-create-retry-btn"
+                loading={begin.isPending}
+                onClick={handleContinue}
+                sx={{ alignSelf: 'flex-start' }}
+              >
+                Try again
+              </Button>
+            )}
           </Stack>
         </Alert>
       )}

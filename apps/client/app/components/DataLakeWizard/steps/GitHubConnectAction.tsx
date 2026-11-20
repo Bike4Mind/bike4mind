@@ -295,6 +295,14 @@ export default function GitHubConnectAction({
               >
                 Disconnecting permanently deletes the {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'}{' '}
                 this repository synced into the data lake.
+                {connection.isLastInstallationBinding && (
+                  <>
+                    {' '}
+                    This is the last lake connected to the GitHub App on {connection.accountLogin}. Disconnecting also
+                    uninstalls the App from that account. To reconnect, the account owner (an organization owner for an
+                    org) must reinstall it on GitHub.
+                  </>
+                )}
               </Typography>
               <Button
                 data-testid="github-disconnect-confirm-btn"

@@ -9,6 +9,7 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -17,7 +18,10 @@ import {
   noteOrThrow,
   toAdminReleaseNote,
 } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
-import { canAdministerReleaseNotes, isReleaseNotesWriteOnlyKey } from '@server/releaseNotes/releaseNotesWriteOnlyKey';
+import {
+  assertCanAdministerReleaseNotes,
+  isReleaseNotesWriteOnlyKey,
+} from '@server/releaseNotes/releaseNotesWriteOnlyKey';
 
 const EditSchema = z
   .object({
@@ -35,9 +39,7 @@ const api = baseApi({ requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NO
 const handler = api.patch(async (req, res) => {
   // The job key holds release-notes:write and no admin scope, so apiKeyAuth withholds the owner's admin
   // role on req.user; the narrow form that key gets is enforced below.
-  if (!canAdministerReleaseNotes(req)) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
+  assertCanAdministerReleaseNotes(req);
 
   const { id } = req.query;
   if (!isValidObjectId(id)) throw new BadRequestError('Invalid release note id');
@@ -87,7 +89,14 @@ const handler = api.patch(async (req, res) => {
       items: items.map((item, i) => ({ ...item, text: clean(`items.${i}.text`, item.text) })),
     }),
   });
-  return res.json(toAdminReleaseNote(noteOrThrow(result)));
+  const note = noteOrThrow(result);
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.release_note.updated',
+    target: { kind: 'settings', id, displayName: `release note ${note.releaseTag}` },
+    summary: `edited release note ${note.releaseTag}`,
+    details: { releaseTag: note.releaseTag, fields: definedKeys(parsed.data) },
+  });
+  return res.json(toAdminReleaseNote(note));
 });
 
 export const config = {

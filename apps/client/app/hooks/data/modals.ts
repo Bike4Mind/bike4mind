@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { useRef } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
+import { isMfaEnrollmentRequired } from '@client/app/utils/mfaEnrollmentInterceptor';
 
 const getErrorStatus = (error: unknown): number | undefined =>
   isAxiosError(error) ? error.response?.status : undefined;
@@ -32,8 +33,9 @@ export function useGetModals(options?: UseGetModalsOptions) {
         // interceptor (token refresh -> redirect to /login with its own
         // session_expired toast). Surfacing a "notifications" error here would
         // just flash misleading noise for the instant before the page unloads
-        // to the login screen. Only toast for genuine failures (5xx, network).
-        if (getErrorStatus(error) !== 401 && !hasShownError.current) {
+        // to the login screen. An MFA-enrollment 403 is likewise owned by MFAEnforcementWrapper.
+        // Only toast for genuine failures (5xx, network).
+        if (getErrorStatus(error) !== 401 && !isMfaEnrollmentRequired(error) && !hasShownError.current) {
           // Only show error toast once to avoid spam
           console.error('Failed to fetch modals:', error);
           toast.error('Unable to load notifications. Please refresh the page.');
@@ -46,8 +48,10 @@ export function useGetModals(options?: UseGetModalsOptions) {
     refetchOnMount: true, // Default (respects staleTime)
     // Don't retry auth failures: the interceptor already performs one
     // refresh+retry, so re-running the query on a 401 only burns exponential
-    // backoff before the inevitable redirect. Retry other failures up to 3x.
-    retry: (failureCount, error) => getErrorStatus(error) !== 401 && failureCount < 3,
+    // backoff before the inevitable redirect, and an MFA-enrollment 403 holds
+    // until the user enrolls. Retry other failures up to 3x.
+    retry: (failureCount, error) =>
+      getErrorStatus(error) !== 401 && !isMfaEnrollmentRequired(error) && failureCount < 3,
     retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
   });
 

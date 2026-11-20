@@ -11,6 +11,13 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./Composer', () => ({
+  Composer: ({ onSend }: { onSend: (text: string) => void }) => (
+    <button data-testid="test-send" onClick={() => onSend('First prompt')}>
+      Send
+    </button>
+  ),
+}));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,
@@ -75,13 +82,15 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
-        listSessions: async () => [OPEN],
+        defaultsForNewSession: async () => ({ model: 'test-model', approvalMode: 'auto', reasoningEffort: 'default' }),
+        listSessions: async () => (createSession.mock.calls.length ? [FRESH, OPEN] : [OPEN]),
         getSession: async (id: string) =>
           ({ ...(id === FRESH.id ? FRESH : OPEN), messages: [] }) as unknown as ChatSession,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
         createSession,
+        sendMessage: async () => ({ ok: true, messageId: 'first' }),
       }),
       sidebar: quietBridge({ getSections: async () => work }),
     },
@@ -132,12 +141,15 @@ async function mount() {
 }
 
 describe("starting a new session from a section's header", () => {
-  it('asks main for the section and opens the new row', async () => {
+  it('keeps the section draft out of the sidebar until the first send', async () => {
     await mount();
 
     await act(async () => el('sidebar-section-new-btn').click());
     await act(async () => undefined);
 
+    expect(createSession).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="chat-session-title-text"]')?.textContent).not.toBe('Fresh thread');
+    await act(async () => el('test-send').click());
     expect(createSession).toHaveBeenCalledWith({ sectionId: 'work' });
     expect(el('chat-session-title').textContent).toBe('Fresh thread');
     expect(inSection('work', 'chat-session-title-text').textContent).toBe('Fresh thread');
@@ -149,6 +161,8 @@ describe("starting a new session from a section's header", () => {
 
     await act(async () => el('sidebar-section-new-btn').click());
     await act(async () => undefined);
+    expect(createSession).not.toHaveBeenCalled();
+    await act(async () => el('test-send').click());
 
     expect(el('chat-section-error').textContent).toBe('Could not put the new session in its section.');
   });

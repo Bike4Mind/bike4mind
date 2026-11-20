@@ -6,12 +6,16 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
+import { z } from 'zod';
 import {
   makeContributedBooleanSetting,
   makeContributedNumberSetting,
+  makeContributedObjectSetting,
   makeContributedStringSetting,
+  NESTED_SECRET_PLACEHOLDER,
   registerContributedSettings,
 } from '@bike4mind/common';
+import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { getContributedSettingValue } from '@bike4mind/utils';
 import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
@@ -24,6 +28,9 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
+    use() {
+      return this;
+    },
     put: (handler: (...a: unknown[]) => unknown) => handler,
     get: (handler: (...a: unknown[]) => unknown) => handler,
   }),
@@ -37,7 +44,9 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   withTransaction: (fn: () => unknown) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
@@ -70,7 +79,22 @@ registerContributedSettings([
     defaultValue: undefined,
     isSensitive: true,
   }),
+  makeContributedObjectSetting({
+    key: 'extensionTargets',
+    name: 'Extension targets',
+    description: 'x',
+    schema: z.object({
+      targets: z.array(z.object({ id: z.string(), label: z.string().default(''), token: z.string().default('') })),
+    }),
+    nestedSecrets: [{ arrayKey: 'targets', identityFields: ['id'], secretFields: ['token'] }],
+  }),
 ]);
+
+type Targets = { targets: Array<{ id: string; label: string; token: string }> };
+const storedTargets = async () => {
+  const raw = await mongoose.connection.collection('adminsettings').findOne({ settingName: 'extensionTargets' });
+  return (raw?.settingValue as Targets).targets;
+};
 
 const put = async (key: string, value: unknown) => {
   const json = vi.fn((x: unknown) => x);
@@ -124,6 +148,44 @@ describe('settings/update with contributed settings (real Mongo)', () => {
     expect((await adminSettingsRepository.findBySettingName('extensionToken'))?.settingValue).toBe(
       'plain-secret-value-1234'
     );
+  });
+
+  it('encrypts a nested secret field at rest and answers with it masked', async () => {
+    const json = await put('extensionTargets', {
+      targets: [
+        { id: 'a', token: 'plain-token-a' },
+        { id: 'b', token: '' },
+      ],
+    });
+
+    const [a, b] = await storedTargets();
+    expect(a.token).not.toBe('plain-token-a');
+    expect(decryptSecret(a.token, 'a'.repeat(64))).toBe('plain-token-a');
+    expect(b.token).toBe('');
+
+    const answered = json.mock.calls[0][0] as { settingValue: Targets };
+    expect(answered.settingValue.targets.map(t => t.token)).toEqual([NESTED_SECRET_PLACEHOLDER, '']);
+    expect(JSON.stringify(answered)).not.toContain(a.token);
+
+    const listed = (await fetchAll()).find(s => s.settingName === 'extensionTargets');
+    expect((listed?.settingValue as Targets).targets.map(t => t.token)).toEqual([NESTED_SECRET_PLACEHOLDER, '']);
+  });
+
+  it('keeps the stored secret of the same item when the mask comes back, whatever the order', async () => {
+    const [before] = await storedTargets();
+    await put('extensionTargets', {
+      targets: [
+        { id: 'c', token: 'plain-token-c' },
+        { id: 'a', label: 'renamed', token: NESTED_SECRET_PLACEHOLDER },
+        { id: 'd', token: NESTED_SECRET_PLACEHOLDER },
+      ],
+    });
+
+    const [c, a, d] = await storedTargets();
+    expect(a).toEqual({ id: 'a', label: 'renamed', token: before.token });
+    expect(decryptSecret(c.token, 'a'.repeat(64))).toBe('plain-token-c');
+    // A mask with nothing stored behind it clears the field rather than storing the mask.
+    expect(d.token).toBe('');
   });
 
   it('validates a contributed value with its own schema', async () => {

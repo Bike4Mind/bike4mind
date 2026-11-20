@@ -1,33 +1,37 @@
 import * as React from 'react';
-import {
-  Box,
-  Button,
-  Chip,
-  IconButton,
-  LinearProgress,
-  Link,
-  Option,
-  Select,
-  Sheet,
-  Table,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, IconButton, Link, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import BlockIcon from '@mui/icons-material/Block';
-import RestoreIcon from '@mui/icons-material/Restore';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import { AdminPermissionAction } from './shared/MissingPermission';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  Fact,
+  RelativeTime,
+  SegmentedControl,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
 /**
- * Admin moderation queue for published `/p/...` pages. Lists artifacts
- * by moderation status (reported pages first), surfaces report counts, and lets
- * an admin take a page down (soft-delete) or restore it. The takedown is the
- * same soft-delete the serve route already 404s on, so a removed page is
- * immediately unreachable.
+ * Admin moderation queue for published `/p/...` pages. Lists artifacts by moderation status
+ * (reported pages first), shows report counts, and lets an admin take a page down (soft-delete)
+ * or restore it. The takedown is the same soft-delete the serve route already 404s on, so a
+ * removed page is immediately unreachable.
  */
 
 type ModerationStatusFilter = 'reported' | 'active' | 'taken_down' | 'all';
+type ModerationStatus = 'active' | 'reported' | 'taken_down';
 
 interface AdminArtifact {
   publicId: string;
@@ -37,7 +41,7 @@ interface AdminArtifact {
   title: string;
   visibility: string;
   ownerId: string;
-  moderationStatus: 'active' | 'reported' | 'taken_down';
+  moderationStatus?: ModerationStatus;
   reportCount: number;
   takedownReason?: string | null;
   size?: { totalBytes: number; fileCount: number };
@@ -55,17 +59,17 @@ interface ArtifactReport {
 }
 
 const STATUS_OPTIONS: { value: ModerationStatusFilter; label: string }[] = [
-  { value: 'reported', label: 'Reported (needs review)' },
+  { value: 'reported', label: 'Reported' },
   { value: 'active', label: 'Active' },
   { value: 'taken_down', label: 'Taken down' },
   { value: 'all', label: 'All' },
 ];
 
-function statusColor(s: AdminArtifact['moderationStatus']): 'danger' | 'warning' | 'neutral' {
-  if (s === 'taken_down') return 'neutral';
-  if (s === 'reported') return 'warning';
-  return 'neutral';
-}
+const STATUS_CHIP: Record<ModerationStatus, { tone: AdminStatusTone; label: string }> = {
+  reported: { tone: 'warn', label: 'Reported' },
+  active: { tone: 'good', label: 'Active' },
+  taken_down: { tone: 'neutral', label: 'Taken down' },
+};
 
 const TIER_PREFIX: Record<string, string> = { user: 'u', project: 'pj', organization: 'o' };
 
@@ -76,245 +80,427 @@ function publicPagePath(a: AdminArtifact): string {
   return `/p/${TIER_PREFIX[a.tier] ?? 'u'}/${a.scopeId}/${a.slug}`;
 }
 
-const PAGE_SIZE = 50;
+const LIST_KEY = 'admin-published-artifacts';
+
+/** A 404 (already taken down) or 409 (slug re-published) will not succeed on retry, so show the server's reason. */
+function writeFailureMessage(err: unknown, fallback: string): string {
+  if (!isAxiosError<{ error?: string }>(err)) return fallback;
+  const status = err.response?.status;
+  return (status === 404 || status === 409) && err.response?.data?.error ? err.response.data.error : fallback;
+}
+
+const OpenPageButton: React.FC<{ artifact: AdminArtifact }> = ({ artifact }) => (
+  <Tooltip title="Open the public page">
+    <IconButton
+      size="sm"
+      variant="plain"
+      component={Link}
+      href={publicPagePath(artifact)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Open ${artifact.title || 'page'} in a new tab`}
+      data-testid={`admin-published-open-${artifact.publicId}`}
+    >
+      <OpenInNewIcon />
+    </IconButton>
+  </Tooltip>
+);
 
 const PublishedArtifactsTab: React.FC = () => {
   const [status, setStatus] = React.useState<ModerationStatusFilter>('reported');
-  const [page, setPage] = React.useState(0);
-  const [expanded, setExpanded] = React.useState<string | null>(null);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(50);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [confirm, setConfirm] = React.useState<'takedown' | 'restore' | null>(null);
   const queryClient = useQueryClient();
 
-  const listKey = ['admin-published-artifacts', status, page] as const;
-  const { data, isLoading } = useQuery({
-    queryKey: listKey,
+  const { data, isPending, isError, isFetching, isPlaceholderData, refetch } = useQuery({
+    queryKey: [LIST_KEY, status, page, pageSize],
     queryFn: async () => {
       const { data } = await api.get<{ artifacts: AdminArtifact[]; total: number }>(
-        `/api/admin/published-artifacts?status=${status}&limit=${PAGE_SIZE}&skip=${page * PAGE_SIZE}`
+        `/api/admin/published-artifacts?status=${status}&limit=${pageSize}&skip=${(page - 1) * pageSize}`
       );
       return data;
     },
-  });
-
-  const takedown = useMutation({
-    mutationFn: async (publicId: string) => {
-      const reason = window.prompt('Reason for takedown (optional):') ?? undefined;
-      await api.post(`/api/admin/published-artifacts/${publicId}/takedown`, { reason });
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-published-artifacts'] }),
-  });
-
-  const restore = useMutation({
-    mutationFn: async (publicId: string) => {
-      await api.delete(`/api/admin/published-artifacts/${publicId}/takedown`);
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-published-artifacts'] }),
+    placeholderData: keepPreviousData,
   });
 
   const artifacts = data?.artifacts ?? [];
+  // Kept while a takedown refetch drops the row from the current filter, so the dialogs stay open.
+  const [selected, setSelected] = React.useState<AdminArtifact | null>(null);
+  const listed = artifacts.find(a => a.publicId === selectedId);
+  if (listed && listed !== selected) setSelected(listed);
+
+  const total = data?.total ?? 0;
+  // Server paging is not clamped by DataTable, so a takedown that empties the last page would strand it.
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (data && !isPlaceholderData && page > lastPage) setPage(lastPage);
+
+  const onWriteSuccess = () => queryClient.invalidateQueries({ queryKey: [LIST_KEY] });
+
+  const takedown = useMutation({
+    mutationFn: (vars: { publicId: string; reason: string }) =>
+      api.post(`/api/admin/published-artifacts/${vars.publicId}/takedown`, { reason: vars.reason }),
+    onSuccess: onWriteSuccess,
+  });
+
+  const restore = useMutation({
+    mutationFn: (publicId: string) => api.delete(`/api/admin/published-artifacts/${publicId}/takedown`),
+    onSuccess: onWriteSuccess,
+  });
+
+  const closeAll = () => {
+    setConfirm(null);
+    setSelectedId(null);
+    setSelected(null);
+  };
+
+  const confirmTakedown = async (reason: string) => {
+    if (!selected) return;
+    try {
+      await takedown.mutateAsync({ publicId: selected.publicId, reason });
+      toast.success('Page taken down');
+      closeAll();
+    } catch (err) {
+      toast.error(writeFailureMessage(err, 'The page could not be taken down. Try again.'));
+    }
+  };
+
+  const confirmRestore = async () => {
+    if (!selected) return;
+    try {
+      await restore.mutateAsync(selected.publicId);
+      toast.success('Page restored');
+      closeAll();
+    } catch (err) {
+      toast.error(writeFailureMessage(err, 'The page could not be restored. Try again.'));
+    }
+  };
+
+  const columns: DataColumn<AdminArtifact>[] = [
+    {
+      id: 'title',
+      label: 'Page',
+      render: a => (
+        <Stack gap={0.25} sx={{ minWidth: 0 }}>
+          <Typography level="body-sm" noWrap title={a.title} sx={{ color: 'admin.ink', fontWeight: 500 }}>
+            {a.title || 'Untitled'}
+          </Typography>
+          <Typography
+            level="body-xs"
+            noWrap
+            sx={{ color: 'admin.inkMuted', fontFamily: 'code' }}
+            title={publicPagePath(a)}
+          >
+            {publicPagePath(a)}
+          </Typography>
+        </Stack>
+      ),
+    },
+    {
+      id: 'kind',
+      label: 'Kind',
+      width: '7rem',
+      render: a => a.source?.kind ?? '-',
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '9rem',
+      render: a => (
+        <StatusChip
+          tone={STATUS_CHIP[a.moderationStatus ?? 'active'].tone}
+          label={STATUS_CHIP[a.moderationStatus ?? 'active'].label}
+          data-testid={`admin-published-status-${a.publicId}`}
+        />
+      ),
+    },
+    {
+      id: 'reports',
+      label: 'Reports',
+      width: '6rem',
+      numeric: true,
+      render: a => (
+        <Box
+          component="span"
+          sx={{ color: a.reportCount > 0 ? 'admin.ink' : 'admin.inkMuted' }}
+          data-testid={`admin-published-reportcount-${a.publicId}`}
+        >
+          {a.reportCount.toLocaleString()}
+        </Box>
+      ),
+    },
+    {
+      id: 'published',
+      label: 'Published',
+      width: '9rem',
+      render: a => (a.publishedAt ? <RelativeTime at={a.publishedAt} /> : '-'),
+    },
+  ];
 
   return (
-    <Box data-testid="admin-published-pages">
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-        <Typography level="h4">Published Pages</Typography>
-        <Select
-          size="sm"
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-published-pages">
+      <AdminPageHeader
+        title="Published pages"
+        count={data ? total : undefined}
+        description="Pages published under /p/. Reported pages need review; a takedown makes the page unreachable at once."
+      />
+
+      <Box>
+        <SegmentedControl
+          options={STATUS_OPTIONS}
           value={status}
-          onChange={(_, v) => {
-            if (v) {
-              setStatus(v);
-              setPage(0); // a new filter resets to the first page
-            }
+          onChange={value => {
+            setStatus(value);
+            setPage(1);
           }}
-          sx={{ minWidth: 220 }}
+          aria-label="Moderation status"
           data-testid="admin-published-pages-status"
-        >
-          {STATUS_OPTIONS.map(o => (
-            <Option key={o.value} value={o.value}>
-              {o.label}
-            </Option>
-          ))}
-        </Select>
-        <Typography level="body-sm" sx={{ opacity: 0.7 }}>
-          {data ? `${data.total} page${data.total === 1 ? '' : 's'}` : ''}
-        </Typography>
-        {data && data.total > PAGE_SIZE && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
-            <Button
-              size="sm"
-              variant="outlined"
-              disabled={page === 0}
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              data-testid="admin-published-prev"
-            >
-              Prev
-            </Button>
-            <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, data.total)} of {data.total}
-            </Typography>
-            <Button
-              size="sm"
-              variant="outlined"
-              disabled={(page + 1) * PAGE_SIZE >= data.total}
-              onClick={() => setPage(p => p + 1)}
-              data-testid="admin-published-next"
-            >
-              Next
-            </Button>
-          </Box>
-        )}
+        />
       </Box>
 
-      {isLoading && <LinearProgress sx={{ mb: 2 }} />}
+      <Box sx={{ position: 'relative' }}>
+        <UpdatingBar active={isFetching && !isPending} placement="overlay" testId="admin-published-pages-updating" />
+        <DataTable
+          label="Published pages"
+          testId="admin-published-pages-table"
+          rows={isPlaceholderData ? [] : artifacts}
+          columns={columns}
+          getRowId={a => a.publicId}
+          rowTestId={a => `admin-published-row-${a.publicId}`}
+          loading={isPending || isPlaceholderData}
+          error={isError && !data ? 'Published pages could not be loaded.' : undefined}
+          onRetry={() => void refetch()}
+          onRowActivate={a => setSelectedId(a.publicId)}
+          activeRowId={selectedId ?? undefined}
+          rowActions={a => (a.moderationStatus === 'taken_down' ? null : <OpenPageButton artifact={a} />)}
+          pagination={{
+            page,
+            pageSize,
+            total,
+            onPageChange: setPage,
+            onPageSizeChange: size => {
+              setPageSize(size);
+              setPage(1);
+            },
+          }}
+          minWidth="52rem"
+          maxHeight="none"
+          empty={
+            <EmptyState
+              title="No pages for this filter"
+              description={status === 'reported' ? 'Nothing is waiting for review.' : undefined}
+              action={
+                <Button variant="outlined" onClick={() => void refetch()} data-testid="admin-published-refresh-btn">
+                  Refresh
+                </Button>
+              }
+            />
+          }
+        />
+      </Box>
 
-      <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-        <Table size="sm" stickyHeader hoverRow>
-          <thead>
-            <tr>
-              <th style={{ width: 70 }}>Reports</th>
-              <th>Title</th>
-              <th style={{ width: 90 }}>Kind</th>
-              <th style={{ width: 110 }}>Status</th>
-              <th style={{ width: 90 }}>Open</th>
-              <th style={{ width: 200 }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {artifacts.map(a => (
-              <React.Fragment key={a.publicId}>
-                <tr data-testid={`admin-published-row-${a.publicId}`}>
-                  <td>
-                    {a.reportCount > 0 ? (
-                      <Chip
-                        size="sm"
-                        color="warning"
-                        variant="soft"
-                        onClick={() => setExpanded(expanded === a.publicId ? null : a.publicId)}
-                        data-testid={`admin-published-reportcount-${a.publicId}`}
-                      >
-                        {a.reportCount}
-                      </Chip>
-                    ) : (
-                      <Typography level="body-xs" sx={{ opacity: 0.5 }}>
-                        0
-                      </Typography>
-                    )}
-                  </td>
-                  <td>
-                    <Typography level="body-sm" noWrap title={a.title}>
-                      {a.title}
-                    </Typography>
-                    <Typography level="body-xs" sx={{ opacity: 0.6 }} noWrap>
-                      {a.tier}/{a.scopeId}/{a.slug}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-xs">{a.source?.kind ?? '—'}</Typography>
-                  </td>
-                  <td>
-                    <Chip size="sm" variant="soft" color={statusColor(a.moderationStatus)}>
-                      {a.moderationStatus}
-                    </Chip>
-                  </td>
-                  <td>
-                    {a.moderationStatus !== 'taken_down' && (
-                      <Tooltip title="Open the public page">
-                        <IconButton
-                          size="sm"
-                          component={Link}
-                          href={publicPagePath(a)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <OpenInNewIcon />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </td>
-                  <td>
-                    {a.moderationStatus === 'taken_down' ? (
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        color="neutral"
-                        startDecorator={<RestoreIcon />}
-                        loading={restore.isPending}
-                        onClick={() => restore.mutate(a.publicId)}
-                        data-testid={`admin-published-restore-${a.publicId}`}
-                      >
-                        Restore
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        color="danger"
-                        startDecorator={<BlockIcon />}
-                        loading={takedown.isPending}
-                        onClick={() => takedown.mutate(a.publicId)}
-                        data-testid={`admin-published-takedown-${a.publicId}`}
-                      >
-                        Take down
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-                {expanded === a.publicId && <ReportsRow publicId={a.publicId} />}
-              </React.Fragment>
-            ))}
-            {!isLoading && artifacts.length === 0 && (
-              <tr>
-                <td colSpan={6}>
-                  <Typography level="body-sm" sx={{ p: 2, textAlign: 'center', opacity: 0.6 }}>
-                    No pages for this filter.
-                  </Typography>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </Table>
-      </Sheet>
-    </Box>
+      {selected && (
+        <AdminDialog
+          open={selectedId !== null && confirm === null}
+          onClose={closeAll}
+          title={selected.title || 'Untitled'}
+          width={640}
+          data-testid="admin-published-detail"
+        >
+          <PageDetail
+            artifact={selected}
+            onTakedown={() => setConfirm('takedown')}
+            onRestore={() => setConfirm('restore')}
+          />
+        </AdminDialog>
+      )}
+
+      <ActionDialog
+        open={confirm === 'takedown'}
+        onClose={() => setConfirm(null)}
+        title="Take down page"
+        description={
+          selected && (
+            <>
+              <strong>{selected.title || 'Untitled'}</strong> stops being served at once and its open reports are
+              resolved. You can restore it later.
+            </>
+          )
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.publishedPageTakedown}
+        confirmLabel="Take down page"
+        tone="danger"
+        pending={takedown.isPending}
+        onConfirm={confirmTakedown}
+        data-testid="admin-published-takedown-dialog"
+      />
+
+      <ActionDialog
+        open={confirm === 'restore'}
+        onClose={() => setConfirm(null)}
+        title="Restore page"
+        description={
+          selected && (
+            <>
+              <strong>{selected.title || 'Untitled'}</strong> is served again at its public URL.
+            </>
+          )
+        }
+        // The restore route records the admin but takes no reason field.
+        reasonPresets={ADMIN_REASON_PRESETS.publishedPageRestore}
+        reasonAudited={false}
+        confirmLabel="Restore page"
+        pending={restore.isPending}
+        onConfirm={confirmRestore}
+        data-testid="admin-published-restore-dialog"
+      />
+    </Stack>
   );
 };
 
-/** Inline expansion showing the individual abuse reports for one page. */
-const ReportsRow: React.FC<{ publicId: string }> = ({ publicId }) => {
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin-published-reports', publicId],
+/** The details of one page and its individual abuse reports, with the moderation commands. */
+const PageDetail: React.FC<{ artifact: AdminArtifact; onTakedown: () => void; onRestore: () => void }> = ({
+  artifact,
+  onTakedown,
+  onRestore,
+}) => {
+  const { data, isPending, isError } = useQuery({
+    queryKey: ['admin-published-reports', artifact.publicId],
     queryFn: async () => {
       const { data } = await api.get<{ reports: ArtifactReport[] }>(
-        `/api/admin/published-artifacts/${publicId}/reports`
+        `/api/admin/published-artifacts/${artifact.publicId}/reports`
       );
       return data;
     },
   });
+  const reports = data?.reports ?? [];
+  const takenDown = artifact.moderationStatus === 'taken_down';
+
   return (
-    <tr>
-      <td colSpan={6} style={{ background: 'var(--joy-palette-background-level1)' }}>
-        {isLoading ? (
-          <LinearProgress sx={{ m: 1 }} />
-        ) : (
-          <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {(data?.reports ?? []).map((r, i) => (
-              <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'baseline' }}>
-                <Chip size="sm" variant="outlined" color="warning">
-                  {r.reason}
-                </Chip>
-                <Typography level="body-xs" sx={{ opacity: 0.6 }}>
-                  {new Date(r.createdAt).toLocaleString()}
-                </Typography>
-                {r.details && <Typography level="body-sm">{r.details}</Typography>}
-              </Box>
-            ))}
-            {(data?.reports ?? []).length === 0 && (
-              <Typography level="body-sm" sx={{ opacity: 0.6 }}>
-                No report details.
-              </Typography>
-            )}
+    <Stack gap={2}>
+      <Box
+        component="dl"
+        sx={{
+          m: 0,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(120px, 30%) 1fr',
+          columnGap: 1.5,
+          rowGap: 1,
+          fontSize: 14,
+          '& dt': { color: 'admin.inkMuted' },
+          '& dd': { m: 0, minWidth: 0, overflowWrap: 'anywhere', color: 'admin.ink' },
+        }}
+      >
+        <Fact label="Status">
+          <StatusChip
+            tone={STATUS_CHIP[artifact.moderationStatus ?? 'active'].tone}
+            label={STATUS_CHIP[artifact.moderationStatus ?? 'active'].label}
+          />
+        </Fact>
+        <Fact label="URL">
+          <Box component="span" sx={{ fontFamily: 'code', fontSize: 12 }}>
+            {publicPagePath(artifact)}
           </Box>
+        </Fact>
+        <Fact label="Kind">{artifact.source?.kind}</Fact>
+        <Fact label="Owner">
+          <Box component="span" sx={{ fontFamily: 'code', fontSize: 12 }}>
+            {artifact.ownerId}
+          </Box>
+        </Fact>
+        <Fact label="Published">{artifact.publishedAt && <RelativeTime at={artifact.publishedAt} />}</Fact>
+        {takenDown && <Fact label="Takedown reason">{artifact.takedownReason}</Fact>}
+      </Box>
+
+      <Stack gap={1}>
+        <Typography level="title-sm" component="h3" sx={{ color: 'admin.ink' }}>
+          Reports ({artifact.reportCount.toLocaleString()})
+        </Typography>
+        {isPending ? (
+          <Skeleton variant="text" data-testid="admin-published-reports-loading" />
+        ) : isError ? (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Reports could not be loaded.
+          </Typography>
+        ) : reports.length === 0 ? (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            No report details.
+          </Typography>
+        ) : (
+          <Stack
+            component="ul"
+            sx={{
+              m: 0,
+              p: 0,
+              listStyle: 'none',
+              '& > li + li': { borderTop: '1px solid', borderColor: 'admin.border' },
+            }}
+            data-testid="admin-published-reports"
+          >
+            {reports.map((r, i) => (
+              <Stack key={i} component="li" gap={0.5} sx={{ py: 1 }}>
+                <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+                  <StatusChip tone="warn" label={r.reason} />
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                    <RelativeTime at={r.createdAt} />
+                  </Typography>
+                </Stack>
+                {r.details && (
+                  <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+                    {r.details}
+                  </Typography>
+                )}
+              </Stack>
+            ))}
+          </Stack>
         )}
-      </td>
-    </tr>
+      </Stack>
+
+      <Stack direction="row" gap={1} justifyContent="flex-end" flexWrap="wrap">
+        {!takenDown && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            component="a"
+            href={publicPagePath(artifact)}
+            target="_blank"
+            rel="noopener noreferrer"
+            startDecorator={<OpenInNewIcon />}
+          >
+            Open page
+          </Button>
+        )}
+        <AdminPermissionAction requirement="users:moderate">
+          {missing =>
+            takenDown ? (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                disabled={missing}
+                onClick={onRestore}
+                data-testid={`admin-published-restore-${artifact.publicId}`}
+              >
+                Restore
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="danger"
+                disabled={missing}
+                onClick={onTakedown}
+                data-testid={`admin-published-takedown-${artifact.publicId}`}
+              >
+                Take down
+              </Button>
+            )
+          }
+        </AdminPermissionAction>
+      </Stack>
+    </Stack>
   );
 };
 

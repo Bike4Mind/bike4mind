@@ -1,13 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
+  USER_SECRET_FIELDS,
+} from '@bike4mind/common';
 import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
   questCollectionName: 'quests',
+  sessionCollectionName: 'sessions',
   organizationCollectionName: 'organizations',
   inviteCollectionName: 'invites',
   ...overrides,
 });
+
+const memberOrganizationLimits = {
+  stripeCustomerId: false,
+  signupGrantUnlockCount: false,
+  signupInviteBonusCount: false,
+  billingContact: false,
+  ...Object.fromEntries(ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS.map(field => [field, false])),
+  'userDetails.usedCredits': false,
+  'userDetails.maxCredits': false,
+  'userDetails.lastCreditUsedAt': false,
+  'userDetails.periodStart': false,
+  'userDetails.email': false,
+};
 
 describe('resolveFieldLimits', () => {
   it('excludes every owner-only promptMeta path for the quests collection', () => {
@@ -19,6 +39,10 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
@@ -54,9 +78,82 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
   });
 
-  it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
+  it('excludes REST server-owned session fields and the creating key for every viewer', () => {
+    const expected = {
+      ...Object.fromEntries(SERVER_OWNED_SESSION_FIELDS.map(field => [field, false])),
+      'origin.apiKeyId': false,
+    };
+    expect(resolveFieldLimits('sessions', opts())).toEqual(expected);
+    expect(resolveFieldLimits('sessions', opts({ isQuestOwner: true }))).toEqual(expected);
+    expect(resolveFieldLimits('sessions_v2', opts({ sessionCollectionName: 'sessions_v2' }))).toEqual(expected);
+  });
+
+  it('refuses session filters that probe excluded fields while allowing display fields', () => {
+    const limits = resolveFieldLimits('sessions', opts());
+    expect(findWithheldFilterPaths({ 'origin.apiKeyId': { $exists: true } }, limits)).toEqual(['origin.apiKeyId']);
+    expect(findWithheldFilterPaths({ systemPromptText: 'x' }, limits)).toEqual(['systemPromptText']);
+    expect(findWithheldFilterPaths({ 'origin.channel': 'api' }, limits)).toEqual([]);
+  });
+
+  it('excludes password/stripeCustomerId/resetPasswordToken/throttle/riskSignals for the users collection', () => {
     const limits = resolveFieldLimits('users', opts());
-    expect(limits).toEqual({ password: false, stripeCustomerId: false, resetPasswordToken: false });
+    expect(limits).toEqual({
+      password: false,
+      freeQuestStartId: false,
+      'signupGrant.blocked': false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+      riskScore: false,
+      riskEvidence: false,
+      riskReviewAutoApproval: false,
+      riskReviewReopenedAt: false,
+      paymentRiskEventAt: false,
+      riskReviewAutoCheckedAt: false,
+      throttle: false,
+      riskSignals: false,
+      signupLanding: false,
+    });
+  });
+
+  it('withholds every abuse-evidence field the REST self-view drops', () => {
+    // Abuse evidence describes the account to admins; a new one must be added to both lists.
+    const abuseEvidence = [
+      'signupGrantAssessment',
+      'riskScore',
+      'riskEvidence',
+      'throttle',
+      'riskSignals',
+      'signupLanding',
+    ] as const;
+    const limits = resolveFieldLimits('users', opts());
+    for (const field of abuseEvidence) {
+      expect(USER_SECRET_FIELDS).toContain(field);
+      expect(limits).toHaveProperty(field, false);
+    }
+  });
+
+  it('refuses a users subscription filter that probes throttle or riskSignals', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'throttle.tier': 'shadow' }, limits)).toEqual(['throttle.tier']);
+    expect(findWithheldFilterPaths({ $or: [{ riskSignals: { $exists: true } }] }, limits)).toEqual(['riskSignals']);
+  });
+
+  it('withholds only the admin block of signupGrant, not the whole sub-document the credits UI reads', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(limits).toMatchObject({ 'signupGrant.blocked': false });
+    expect(limits).not.toHaveProperty('signupGrant');
+  });
+
+  it('refuses a users subscription filter that probes the signup grant block', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked': { $exists: true } }, limits)).toEqual([
+      'signupGrant.blocked',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked.at': { $gt: new Date(0) } }, limits)).toEqual([
+      'signupGrant.blocked.at',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.heldReason': 'budget_exhausted' }, limits)).toEqual([]);
   });
 
   it('returns undefined for a collection with no configured limits', () => {
@@ -86,14 +183,55 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
-  it('excludes stripeCustomerId and billingContact for a non-admin organizations subscriber', () => {
-    expect(resolveFieldLimits('organizations', opts())).toEqual({
+  it('limits a non-privileged organizations subscriber to the member view', () => {
+    expect(resolveFieldLimits('organizations', opts())).toEqual(memberOrganizationLimits);
+  });
+
+  it('withholds administrator-only settings such as systemPrompt from a member subscriber', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(limits).toMatchObject({ systemPrompt: false, sharingPolicy: false, budgetAlerts: false });
+    expect(findWithheldFilterPaths({ systemPrompt: { $regex: 'a' } }, limits)).toEqual(['systemPrompt']);
+    expect(limits).not.toHaveProperty('currentCredits');
+    expect(limits).not.toHaveProperty('adminUserIds');
+  });
+
+  it('keeps credit details for a verified owner or manager on a single-org subscription', () => {
+    expect(resolveFieldLimits('organizations', opts({ isPrivilegedOrgSubscriber: true }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
+  });
+
+  it('rejects filters probing withheld member credit paths', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(findWithheldFilterPaths({ userDetails: { $elemMatch: { usedCredits: { $gt: 0 } } } }, limits)).toEqual([
+      'userDetails',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.maxCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.maxCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.name': 'Ada' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.usedCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.0.usedCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.name': 'Ada' }, limits)).toEqual([]);
+  });
+
+  it('withholds member emails from a member subscriber, as a field and as a filter path', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(limits).toMatchObject({ 'userDetails.email': false });
+    expect(limits).not.toHaveProperty(['userDetails.name']);
+    expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual(['userDetails.email']);
+    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual(['userDetails.0.email']);
   });
 
   it('still excludes stripeCustomerId for a platform admin, who keeps billingContact', () => {
@@ -101,14 +239,15 @@ describe('resolveFieldLimits', () => {
     // is privileged. Owners are NOT privileged here - see the projection note in the source.
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
     });
   });
 
   it('uses the passed-in organization collection name rather than a hardcoded literal', () => {
-    expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
-      stripeCustomerId: false,
-      billingContact: false,
-    });
+    expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual(
+      memberOrganizationLimits
+    );
   });
 
   it('drops invite recipients and the bearer token for a non-admin', () => {

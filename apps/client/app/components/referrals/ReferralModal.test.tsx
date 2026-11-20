@@ -28,7 +28,16 @@ vi.mock('@client/app/utils/regInviteAPICalls', () => ({
   submitUserInvitation,
   updateRegInvites: vi.fn(),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+const { useGetReferralSummary } = vi.hoisted(() => ({ useGetReferralSummary: vi.fn() }));
+vi.mock('@client/app/hooks/data/referralSummary', () => ({ useGetReferralSummary }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key,
+    i18n: { language: 'en-US' },
+  }),
+  Trans: ({ i18nKey, values }: { i18nKey: string; values?: { credits?: string } }) =>
+    `${i18nKey} ${values?.credits ?? ''}`,
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { useUser } from '@client/app/contexts/UserContext';
@@ -50,6 +59,7 @@ const renderModal = (inviteType?: ReferralInviteType) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useGetReferralSummary.mockReturnValue({ data: undefined });
   useReferralModal.setState({ isOpen: false });
   useUser.setState({ currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 2 } });
 });
@@ -109,4 +119,89 @@ it('decrements the local quota in userInvitation mode without going below zero',
   await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('0'));
   expect(screen.getByTestId('referral-submit-button')).toBeDisabled();
   queryClient.clear();
+});
+
+it('shows the inviter summary once the program is on', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: true,
+      invited: 4,
+      active: 3,
+      subscribed: 1,
+      creditsEarned: 7000,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-summary-invited')).toHaveTextContent('4');
+  expect(screen.getByTestId('referral-summary-active')).toHaveTextContent('3');
+  expect(screen.getByTestId('referral-summary-subscribed')).toHaveTextContent('1');
+  expect(screen.getByTestId('referral-summary-credits')).toHaveTextContent('7,000');
+  queryClient.clear();
+});
+
+it("shows the inviter's non-zero rewards and no invitee credit amount", () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: true,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-modal-reward-first-answer')).toHaveTextContent(
+    'referral.reward_first_answer 1,000'
+  );
+  expect(screen.queryByTestId('referral-modal-reward-first-payment')).toBeNull();
+  expect(screen.getByTestId('referral-modal-reward-second-payment')).toHaveTextContent(
+    'referral.reward_second_payment 2,500'
+  );
+  expect(screen.queryByText(/Invited person gets/)).toBeNull();
+  queryClient.clear();
+});
+
+it('hides the inviter summary while the program is off', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: false,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.queryByTestId('referral-summary')).toBeNull();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
+  queryClient.clear();
+});
+
+it('skips the reward lines when a cached summary predates the rewards field', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: { enabled: true, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [] },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-summary')).toBeInTheDocument();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
+  queryClient.clear();
+});
+
+it('only asks for the summary while the modal is open', () => {
+  renderModal();
+  expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });
 });

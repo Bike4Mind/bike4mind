@@ -6,7 +6,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
+
+const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -36,11 +39,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: m.record },
@@ -56,7 +59,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
@@ -69,10 +77,10 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   getEffectiveApiKeyByBackend: async () => 'sk-test',
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),
@@ -86,12 +94,14 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 
 const { default: handler } = await import('@pages/api/blog/generate-image-prompt');
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call() {
   const { req, res } = createMocks({
     method: 'POST',
     body: { content: 'A post about bikes.', title: 'Bikes', summary: '' },
   });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: testLogger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -116,10 +126,28 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it('charges a funded caller the priced usage once', async () => {
     const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
+    expect(testLogger.info).toHaveBeenCalledWith('Blog image prompt generated', { generatedPromptLength: 17 });
+    expect(JSON.stringify(testLogger.info.mock.calls)).not.toContain('A bicycle at dawn');
+    expect(testLogger.log).not.toHaveBeenCalled();
     expect(m.hold).toHaveBeenCalledBefore(m.complete);
     expect(m.record).toHaveBeenCalledOnce();
     expect(m.record).toHaveBeenCalledWith(
@@ -135,10 +163,13 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
   });
 
   it('refunds the hold when the provider throws', async () => {
-    m.complete.mockRejectedValue(new Error('provider down'));
+    const error = new Error('provider down');
+    m.complete.mockRejectedValue(error);
 
     const res = await call();
     expect(res._getStatusCode()).toBe(500);
+    expect(testLogger.error).toHaveBeenCalledWith('Blog image prompt generation failed', { error });
+    expect(testLogger.error).toHaveBeenCalledWith('Blog image prompt generation error', { error });
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
@@ -153,4 +184,14 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call()).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.complete).not.toHaveBeenCalled();
 });

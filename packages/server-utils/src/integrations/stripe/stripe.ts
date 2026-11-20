@@ -44,11 +44,23 @@ export enum CustomerType {
   Organization = 'Organization',
 }
 
-export async function createCustomer({ email, name, type }: { email: string; name: string; type: CustomerType }) {
+export async function createCustomer({
+  email,
+  name,
+  type,
+  metadata,
+}: {
+  email: string;
+  name: string;
+  type: CustomerType;
+  /** Extra keys for Radar rules (`::customer:key::`); `type` and `stage` always win. */
+  metadata?: Record<string, string>;
+}) {
   const customer = await getStripe().customers.create({
     email,
     name,
     metadata: {
+      ...metadata,
       type,
       stage: Config.STAGE,
     },

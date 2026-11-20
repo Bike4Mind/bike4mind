@@ -35,10 +35,10 @@ vi.mock('@bike4mind/services', async importOriginal => {
     },
   };
 });
-vi.mock('@server/files/generatedCopyStore', () => ({
+vi.mock('@bike4mind/server-utils/files/generatedCopyStore', () => ({
   getGeneratedCopyStore: () => ({
     storage: { delete: generatedDelete },
-    quests: { findSessionIdsByImage: async () => [] },
+    quests: { findSessionIdsByMedia: async () => [] },
   }),
 }));
 
@@ -48,8 +48,8 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: () => ({ ofType: () => ({ __deleteScope: true }) }),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({

@@ -4,19 +4,16 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recha
 import { useUsageBySource } from '../hooks/useUsageBySource';
 import { AnalyticsTermHelp } from './AnalyticsTermHelp';
 import { getUsageSourceHelp } from '../utils/usageSourceHelp';
+import { CHART_MUTED, adminChartSeries, chartLegendProps, chartPieProps, chartTooltipProps } from '../utils/chartTheme';
 
 // Stable colour-per-source so the chart's slice colours match the table rows
 // across renders (recharts colours-by-index would re-shuffle on data changes).
-const SOURCE_COLORS: Record<string, string> = {
-  web: '#0088FE',
-  cli: '#00C49F',
-  desktop: '#A05195',
-  agent: '#FFBB28',
-  api: '#FF8042',
-  system: '#8884D8',
-};
+const KNOWN_SOURCES = ['web', 'cli', 'desktop', 'agent', 'api', 'system'] as const;
+const SOURCE_COLORS: Record<string, string> = Object.fromEntries(
+  adminChartSeries(KNOWN_SOURCES.length).map((color, index) => [KNOWN_SOURCES[index], color])
+);
 
-const FALLBACK_COLOR = '#B0B0B0';
+const FALLBACK_COLOR = CHART_MUTED;
 
 const WINDOW_OPTIONS = [
   { label: 'Last 24 hours', value: 24 },
@@ -102,22 +99,28 @@ export const UsageBySourceCard: React.FC = () => {
             <Box sx={{ width: '100%', maxWidth: 320, height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={chartBuckets} dataKey="uniqueUsers" nameKey="label" cx="50%" cy="50%" outerRadius={90}>
+                  <Pie
+                    data={chartBuckets}
+                    dataKey="uniqueUsers"
+                    nameKey="label"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={90}
+                    {...chartPieProps}
+                  >
                     {buckets.map(b => (
                       <Cell key={b.source} fill={SOURCE_COLORS[b.source] ?? FALLBACK_COLOR} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    formatter={(value, name) => [`${value ?? 0} users`, String(name)]}
-                    contentStyle={{ fontSize: 12 }}
-                  />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} formatter={(value, name) => [`${value ?? 0} users`, String(name)]} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </Box>
 
             <Box sx={{ flex: 1, minWidth: 0, width: '100%', overflowX: 'auto' }} data-testid="usage-by-source-table">
-              <Table size="sm" stripe="odd" sx={{ minWidth: 600, '& th:first-of-type': { width: '35%' } }}>
+              {/* Below this the table scrolls inside its box instead of crushing its four columns. */}
+              <Table size="sm" stripe="odd" sx={{ minWidth: '28rem', '& th:first-of-type': { width: '35%' } }}>
                 <thead>
                   <tr>
                     <th>Source</th>
@@ -150,10 +153,12 @@ export const UsageBySourceCard: React.FC = () => {
                       <td>
                         <Stack direction="row" spacing={1} alignItems="center">
                           <Box
+                            data-testid={`usage-by-source-swatch-${b.source}`}
                             sx={{
                               width: 12,
                               height: 12,
                               borderRadius: 2,
+                              flexShrink: 0,
                               bgcolor: SOURCE_COLORS[b.source] ?? FALLBACK_COLOR,
                             }}
                           />

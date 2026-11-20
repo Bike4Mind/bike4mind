@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -33,10 +33,14 @@ import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergen
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
         put: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.PUT = fns[fns.length - 1]), chain),
         delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.DELETE = fns[fns.length - 1]), chain),
@@ -207,6 +211,57 @@ describe('PUT/DELETE /api/admin/scoped-settings (real service, repository and Mo
         .promise
     );
     expect(message).toContain('not settable at scope level');
+  });
+});
+
+describe('DefaultChunkSize change cooldown through the real route, cache and transaction', () => {
+  const address = { settingName: 'DefaultChunkSize', scopeLevel: 'owner', scopeId: 'user-1', ownerType: 'User' };
+  // Far under the driver's transient-transaction retry budget, which is what a refusal raised
+  // inside the transaction ran into.
+  const FAST_MS = 5_000;
+
+  // The atomic claim is enforced by the cache's unique key index, which the suite's dropDatabase
+  // removes along with the data.
+  beforeEach(async () => {
+    await mongoose.model('Cache').syncIndexes();
+  });
+
+  it('refuses a second change inside the cooldown with a prompt 400 and keeps the first value', async () => {
+    expect(await statusOf(call('PUT', { body: { ...address, value: 512 } }).promise)).toBe(200);
+
+    const startedAt = Date.now();
+    const refused = call('PUT', { body: { ...address, value: 256 } }).promise;
+    expect(await statusOf(refused)).toBe(400);
+    expect(Date.now() - startedAt).toBeLessThan(FAST_MS);
+    expect(await messageOf(call('PUT', { body: { ...address, value: 256 } }).promise)).toContain(
+      'can change at most once every'
+    );
+
+    const rows = await scopedSettingsRepository.find({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0].settingValue).toBe('512');
+    expect(await AdminAuditLogModel.countDocuments({ action: 'settings.admin_settings.updated' })).toBe(1);
+  });
+
+  it('refuses a clear inside the cooldown the same way', async () => {
+    await call('PUT', { body: { ...address, value: 512 } }).promise;
+
+    const startedAt = Date.now();
+    const query = { settingName: address.settingName, scopeLevel: address.scopeLevel, scopeId: address.scopeId };
+    expect(await statusOf(call('DELETE', { query }).promise)).toBe(400);
+    expect(Date.now() - startedAt).toBeLessThan(FAST_MS);
+    expect(await scopedSettingsRepository.find({})).toHaveLength(1);
+  });
+
+  it('lets exactly one of two concurrent first changes through, promptly', async () => {
+    const startedAt = Date.now();
+    const statuses = await Promise.all([
+      statusOf(call('PUT', { body: { ...address, value: 512 } }).promise),
+      statusOf(call('PUT', { body: { ...address, value: 256 } }).promise),
+    ]);
+    expect(Date.now() - startedAt).toBeLessThan(FAST_MS);
+    expect([...statuses].sort()).toEqual([200, 400]);
+    expect(await scopedSettingsRepository.find({})).toHaveLength(1);
   });
 });
 

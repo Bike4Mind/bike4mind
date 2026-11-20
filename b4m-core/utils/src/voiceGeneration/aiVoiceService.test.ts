@@ -36,13 +36,13 @@ describe('aiVoiceService factory', () => {
 describe('OpenAIVoiceService', () => {
   beforeEach(() => speechCreate.mockReset());
 
-  it('synthesizes with defaults (tts-1, alloy, mp3) and returns audio/mpeg bytes', async () => {
+  it('synthesizes with defaults (gpt-4o-mini-tts, alloy, mp3) and returns audio/mpeg bytes', async () => {
     speechCreate.mockResolvedValue({ arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer });
 
     const result = await aiVoiceService('openai', 'key', logger).synthesize('hello');
 
     expect(speechCreate).toHaveBeenCalledWith({
-      model: 'tts-1',
+      model: 'gpt-4o-mini-tts',
       voice: 'alloy',
       input: 'hello',
       response_format: 'mp3',
@@ -51,7 +51,7 @@ describe('OpenAIVoiceService', () => {
     expect(result.format).toBe('mp3');
     expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
     // Billing fields: resolved model + input char count.
-    expect(result.model).toBe('tts-1');
+    expect(result.model).toBe('gpt-4o-mini-tts');
     expect(result.characters).toBe('hello'.length);
   });
 
@@ -210,5 +210,66 @@ describe('ELEVENLABS_OUTPUT_FORMAT stays in sync with VOICE_VENDOR_SUPPORTED_FOR
   // here so drift fails a test instead of shipping a mislabeled/rejected format.
   it('has exactly the formats the API boundary advertises for elevenlabs', () => {
     expect(new Set(Object.keys(ELEVENLABS_OUTPUT_FORMAT))).toEqual(new Set(VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs));
+  });
+});
+
+describe('ElevenLabsVoiceService with timestamps', () => {
+  beforeEach(() => mockedPost.mockReset());
+
+  const timestamped = (alignment: unknown) => ({
+    data: { audio_base64: Buffer.from([1, 2, 3]).toString('base64'), alignment },
+  });
+
+  it('calls the with-timestamps endpoint and folds the alignment into word timings', async () => {
+    mockedPost.mockResolvedValue(
+      timestamped({
+        characters: ['H', 'i', ' ', 'y', 'o', 'u'],
+        character_start_times_seconds: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
+        character_end_times_seconds: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+      })
+    );
+
+    const result = await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('Hi you', {
+      voice: 'voice1',
+      withTimestamps: true,
+    });
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      'https://api.elevenlabs.io/v1/text-to-speech/voice1/with-timestamps',
+      { text: 'Hi you' },
+      expect.objectContaining({ responseType: 'json', params: { output_format: 'mp3_44100_128' } })
+    );
+    expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
+    expect(result.contentType).toBe('audio/mpeg');
+    expect(result.wordTimings).toEqual([
+      { text: 'Hi', startMs: 0, endMs: 200 },
+      { text: 'you', startMs: 300, endMs: 600 },
+    ]);
+  });
+
+  it('keeps the audio when the alignment is missing', async () => {
+    mockedPost.mockResolvedValue(timestamped(null));
+
+    const result = await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('Hi', { withTimestamps: true });
+
+    expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
+    expect(result).not.toHaveProperty('wordTimings');
+  });
+
+  it('keeps the audio when the alignment is malformed', async () => {
+    mockedPost.mockResolvedValue(timestamped({ characters: 'Hi' } as never));
+
+    const result = await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('Hi', { withTimestamps: true });
+
+    expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
+    expect(result).not.toHaveProperty('wordTimings');
+  });
+
+  it('fails loudly on a response without audio', async () => {
+    mockedPost.mockResolvedValue({ data: { detail: 'nope' } });
+
+    await expect(
+      aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('Hi', { withTimestamps: true })
+    ).rejects.toThrow(/unexpected with-timestamps response/);
   });
 });

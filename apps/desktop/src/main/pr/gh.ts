@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveUserPath } from '../chat/tools/userPath';
+import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
 
 /** A read is one GraphQL round trip; anything slower than this is a hung process, not a slow API. */
 const GH_TIMEOUT_MS = 30_000;
@@ -58,9 +58,11 @@ function firstLine(text: string): string {
  */
 export const runGh: GhRunner = async (args, options = {}) => {
   const path = await resolveUserPath();
+  const gh = await findOnPath('gh', path);
+  if (!gh) throw new GhError('missing', 'gh is not installed');
   return new Promise((resolve, reject) => {
     execFile(
-      'gh',
+      gh,
       [...args],
       {
         cwd: options.cwd,

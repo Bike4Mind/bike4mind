@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
-import { Resource } from 'sst';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import {
   User,
   Session,
@@ -53,10 +53,8 @@ const handler = baseApi({ auth: false }).delete(
       return res.status(403).json({ error: 'Cleanup endpoint is only available in development/preview' });
     }
 
-    // Guard 2: Require shared secret - read from SST secret (local/staging) or env var (preview deploys)
-    const secret = req.headers['x-e2e-cleanup-secret'];
-    const expectedSecret = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
-    if (!expectedSecret || expectedSecret === 'not-configured' || secret !== expectedSecret) {
+    // Guard 2: E2E secret header
+    if (!isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) {
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 

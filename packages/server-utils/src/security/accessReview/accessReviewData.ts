@@ -1,0 +1,512 @@
+import mongoose from 'mongoose';
+import { ApiKeyScope, ApiKeyStatus, adminPermissionSources, type AdminRole } from '@bike4mind/common';
+import {
+  AdminAuditLogModel,
+  AuthSessionModel,
+  CcBridgeDevice,
+  OAuthGrantModel,
+  OAuthRefreshTokenModel,
+  PasskeyCredentialModel,
+  SupportAccess,
+  adminRoleRepository,
+  TrustedDeviceModel,
+  User,
+  UserApiKey,
+  UserAuthAuditLogModel,
+} from '@bike4mind/database';
+import {
+  STALE_API_KEY_DAYS,
+  normalizeAccessReviewRoleIds,
+  formatAccessReviewSlackMessage,
+  reviewQuarter,
+  type AccessReviewAdmin,
+  type AccessReviewCounts,
+  type AccessReviewDelegation,
+  type AccessReviewRole,
+  type AccessReviewRoleMember,
+  type AccessReviewSnapshot,
+} from './accessReview';
+import { Logger } from '@bike4mind/observability';
+
+/** Reads for the quarterly access review. Read-only: every query is a find, count or $match/$group. */
+
+const MS_PER_DAY = 86_400_000;
+const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
+
+type Filter = Record<string, unknown>;
+
+interface AdminDoc {
+  _id: unknown;
+  email?: string | null;
+  username?: string | null;
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  adminRoleIds?: unknown[];
+  isBanned?: boolean;
+  deletedAt?: Date | null;
+  lastActiveAt?: Date | null;
+  mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean };
+}
+
+interface KeyDoc {
+  _id: unknown;
+  userId: string;
+  name: string;
+  scopes?: string[];
+  createdAt?: Date;
+  lastUsedAt?: Date | null;
+  expiresAt?: Date | null;
+}
+
+const iso = (date: Date | null | undefined): string | null => (date ? new Date(date).toISOString() : null);
+
+// Raw collections, so one helper serves every model and no schema hook rewrites the filter.
+const count = (collection: mongoose.Collection, filter: Filter) =>
+  collection.countDocuments(filter, { readPreference: 'secondaryPreferred' });
+
+async function countByUser(collection: mongoose.Collection, filter: Filter, userIds: string[]) {
+  const rows = await collection
+    .aggregate<{ _id: string; n: number }>(
+      [{ $match: { ...filter, userId: { $in: userIds } } }, { $group: { _id: '$userId', n: { $sum: 1 } } }],
+      { readPreference: 'secondaryPreferred' }
+    )
+    .toArray();
+  return new Map(rows.map(row => [row._id, row.n]));
+}
+
+// A permissions update counts only when it added a permission or role; one that only removed is no grant.
+const PER_USER_GRANT_MATCH = {
+  $or: [
+    { action: 'user.role.admin_granted' },
+    {
+      action: 'user.permissions.updated',
+      $or: [{ 'details.granted.0': { $exists: true } }, { 'details.rolesAdded.0': { $exists: true } }],
+    },
+  ],
+};
+
+async function latestByUser(
+  collection: mongoose.Collection,
+  match: Filter,
+  userField: string,
+  timeField: string
+): Promise<Map<string, Date>> {
+  const rows = await collection
+    .aggregate<{ _id: string; at: Date }>(
+      [{ $match: match }, { $group: { _id: `$${userField}`, at: { $max: `$${timeField}` } } }],
+      { readPreference: 'secondaryPreferred' }
+    )
+    .toArray();
+  return new Map(rows.map(row => [row._id, row.at]));
+}
+
+type GrantRow = {
+  _id: string;
+  at: Date;
+  actor: { userId?: string | null; name?: string; email?: string | null };
+};
+
+/** Newest per-user admin grant for each id. Admin role definition edits are not per-user grants. */
+async function latestGrants(adminIds: string[]): Promise<Map<string, GrantRow>> {
+  const rows = await AdminAuditLogModel.collection
+    .aggregate<GrantRow>(
+      [
+        { $match: { 'target.kind': 'user', 'target.id': { $in: adminIds }, ...PER_USER_GRANT_MATCH } },
+        { $sort: { occurredAt: -1 } },
+        { $group: { _id: '$target.id', at: { $first: '$occurredAt' }, actor: { $first: '$actor' } } },
+      ],
+      { readPreference: 'secondaryPreferred' }
+    )
+    .toArray();
+  return new Map(rows.map(row => [row._id, row]));
+}
+
+async function loadEmails(ids: string[]): Promise<Map<string, string | null>> {
+  const objectIds = ids.filter(id => OBJECT_ID_RE.test(id)).map(id => new mongoose.Types.ObjectId(id));
+  const docs = await User.find({ _id: { $in: objectIds } }, { email: 1 })
+    .read('secondaryPreferred')
+    .lean<Array<{ _id: unknown; email?: string | null }>>();
+  return new Map(docs.map(doc => [String(doc._id), doc.email ?? null]));
+}
+
+const accountStatus = (doc: AdminDoc): AccessReviewAdmin['status'] =>
+  doc.deletedAt ? 'deleted' : doc.isBanned ? 'banned' : 'active';
+
+export interface CollectAccessReviewOptions {
+  now?: Date;
+  /** List every active key rather than only admin-owned and admin-scoped ones. */
+  allApiKeys?: boolean;
+}
+
+/** Every account holding admin access: the full role, a direct permission, or an admin role. */
+export const ACCESS_REVIEW_ADMIN_FILTER = {
+  $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }, { 'adminRoleIds.0': { $exists: true } }],
+};
+
+type AdminRoleAccess = Pick<AccessReviewAdmin, 'permissions' | 'roles' | 'permissionSources'>;
+
+/**
+ * Each admin's held roles and effective permissions with their provenance (direct grants plus every
+ * role they hold that still exists), and the role catalog with its members. Every role holder
+ * matches ACCESS_REVIEW_ADMIN_FILTER, so the members come from `docs` with no further query.
+ */
+async function roleAccessOf(
+  docs: AdminDoc[],
+  adminIds: string[]
+): Promise<{ byDoc: Map<AdminDoc, AdminRoleAccess>; roles: AccessReviewRole[] }> {
+  const catalog = await adminRoleRepository.list();
+  const rolesById = new Map<string, AdminRole>(catalog.map(role => [role.id, role]));
+  const members = new Map<string, AccessReviewRoleMember[]>(catalog.map(role => [role.id, []]));
+  const roleOf = (id: string): AdminRole | undefined => (OBJECT_ID_RE.test(id) ? rolesById.get(id) : undefined);
+  const byDoc = new Map<AdminDoc, AdminRoleAccess>();
+  docs.forEach((doc, index) => {
+    const heldIds = normalizeAccessReviewRoleIds(doc.adminRoleIds ?? []);
+    const held = heldIds.flatMap(id => roleOf(id) ?? []);
+    for (const role of held) {
+      members.get(role.id)?.push({
+        userId: adminIds[index],
+        email: doc.email ?? null,
+        username: doc.username ?? null,
+        status: accountStatus(doc),
+      });
+    }
+    const permissionSources = adminPermissionSources(doc.adminPermissions ?? [], held);
+    byDoc.set(doc, {
+      permissions: permissionSources.map(source => source.permission),
+      permissionSources,
+      roles: heldIds.map(id => {
+        const role = roleOf(id);
+        return role ? { id, name: role.name, deleted: false } : { id, name: null, deleted: true };
+      }),
+    });
+  });
+  const roles = catalog.map(role => ({
+    id: role.id,
+    name: role.name,
+    description: role.description,
+    permissions: [...role.permissions],
+    members: members.get(role.id) ?? [],
+  }));
+  return { byDoc, roles };
+}
+
+const collections = () => ({
+  sessions: AuthSessionModel.collection,
+  trustedDevices: TrustedDeviceModel.collection,
+  passkeys: PasskeyCredentialModel.collection,
+  oauthGrants: OAuthGrantModel.collection,
+  oauthRefreshTokens: OAuthRefreshTokenModel.collection,
+  bridgeDevices: CcBridgeDevice.collection,
+  supportAccess: SupportAccess.collection,
+  apiKeys: UserApiKey.collection,
+});
+
+function accessFilters(now: Date) {
+  const sessions = {
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    $or: [{ impersonatedBy: { $in: [null, ''] } }, { impersonationExpiresAt: { $gt: now } }],
+  };
+  const liveKey = { status: ApiKeyStatus.ACTIVE, deletedAt: null };
+  const unexpired = { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] };
+  return {
+    sessions,
+    trustedDevices: { expiresAt: { $gt: now } },
+    passkeys: {},
+    oauthGrants: { revokedAt: null },
+    oauthRefreshTokens: { revokedAt: null, expiresAt: { $gt: now } },
+    bridgeDevices: { revokedAt: null },
+    impersonation: { ...sessions, impersonatedBy: { $nin: [null, ''] }, impersonationExpiresAt: { $gt: now } },
+    supportAccess: { endedAt: null, expiresAt: { $gt: now } },
+    liveKey,
+    unexpired,
+    activeKeys: { ...liveKey, ...unexpired },
+  };
+}
+
+type SupportAccessDoc = { sid: string; adminId: string; userId: string; startedAt: Date; expiresAt: Date };
+
+function liveSupportAccessPipeline(now: Date): mongoose.PipelineStage[] {
+  const filters = accessFilters(now);
+  return [
+    { $match: filters.supportAccess },
+    {
+      $lookup: {
+        from: AuthSessionModel.collection.name,
+        localField: 'sid',
+        foreignField: 'sid',
+        pipeline: [{ $match: filters.impersonation }, { $project: { _id: 0, sid: 1 } }],
+        as: 'liveSession',
+      },
+    },
+    { $match: { 'liveSession.0': { $exists: true } } },
+    { $project: { _id: 0, sid: 1, adminId: 1, userId: 1, startedAt: 1, expiresAt: 1 } },
+  ];
+}
+
+async function countLiveSupportAccess(now: Date): Promise<number> {
+  const rows = await SupportAccess.collection
+    .aggregate<{ count: number }>([...liveSupportAccessPipeline(now), { $count: 'count' }], {
+      readPreference: 'secondaryPreferred',
+    })
+    .toArray();
+  return rows[0]?.count ?? 0;
+}
+
+async function countAccess(now: Date, adminIds: string[], fullAdmins: number): Promise<AccessReviewCounts> {
+  const c = collections();
+  const f = accessFilters(now);
+  const staleCutoff = new Date(now.getTime() - STALE_API_KEY_DAYS * MS_PER_DAY);
+  const [
+    activeApiKeys,
+    adminScopedApiKeys,
+    adminOwnedApiKeys,
+    apiKeysWithoutExpiry,
+    staleApiKeys,
+    activeSessions,
+    impersonationSessions,
+    supportAccessGrants,
+    trustedDevices,
+    passkeys,
+    oauthGrants,
+    oauthRefreshTokens,
+    bridgeDevices,
+  ] = await Promise.all([
+    count(c.apiKeys, f.activeKeys),
+    count(c.apiKeys, { ...f.activeKeys, scopes: ApiKeyScope.ADMIN }),
+    count(c.apiKeys, { ...f.activeKeys, userId: { $in: adminIds } }),
+    count(c.apiKeys, { ...f.liveKey, expiresAt: null }),
+    count(c.apiKeys, {
+      ...f.liveKey,
+      $and: [
+        f.unexpired,
+        { $or: [{ lastUsedAt: { $lt: staleCutoff } }, { lastUsedAt: null, createdAt: { $lt: staleCutoff } }] },
+      ],
+    }),
+    count(c.sessions, f.sessions),
+    count(c.sessions, f.impersonation),
+    countLiveSupportAccess(now),
+    count(c.trustedDevices, f.trustedDevices),
+    count(c.passkeys, f.passkeys),
+    count(c.oauthGrants, f.oauthGrants),
+    count(c.oauthRefreshTokens, f.oauthRefreshTokens),
+    count(c.bridgeDevices, f.bridgeDevices),
+  ]);
+  return {
+    fullAdmins,
+    delegatedAdmins: adminIds.length - fullAdmins,
+    activeApiKeys,
+    adminScopedApiKeys,
+    adminOwnedApiKeys,
+    apiKeysWithoutExpiry,
+    staleApiKeys,
+    activeSessions,
+    impersonationSessions,
+    supportAccessGrants,
+    trustedDevices,
+    passkeys,
+    oauthGrants,
+    oauthRefreshTokens,
+    bridgeDevices,
+  };
+}
+
+/** Counts only: reads no email, username or key name, for callers that log or post the result. */
+export async function collectAccessReviewCounts(now: Date): Promise<AccessReviewCounts> {
+  const adminDocs = await User.find(ACCESS_REVIEW_ADMIN_FILTER, { isAdmin: 1 })
+    .read('secondaryPreferred')
+    .lean<Array<{ _id: unknown; isAdmin?: boolean }>>();
+  const fullAdmins = adminDocs.filter(doc => doc.isAdmin === true).length;
+  return countAccess(
+    now,
+    adminDocs.map(doc => String(doc._id)),
+    fullAdmins
+  );
+}
+
+export async function collectAccessReview(options: CollectAccessReviewOptions = {}): Promise<AccessReviewSnapshot> {
+  const { now = new Date(), allApiKeys = false } = options;
+  const c = collections();
+  const f = accessFilters(now);
+
+  const adminDocs = await User.find(ACCESS_REVIEW_ADMIN_FILTER, {
+    email: 1,
+    username: 1,
+    isAdmin: 1,
+    adminPermissions: 1,
+    adminRoleIds: 1,
+    isBanned: 1,
+    deletedAt: 1,
+    lastActiveAt: 1,
+    // Only the two flags: the mfa subdocument also holds the TOTP secret and backup codes.
+    'mfa.totpEnabled': 1,
+    'mfa.passkeyEnabled': 1,
+  })
+    .sort({ _id: 1 })
+    .read('secondaryPreferred')
+    .lean<AdminDoc[]>();
+  const adminIds = adminDocs.map(doc => String(doc._id));
+  const roleAccess = await roleAccessOf(adminDocs, adminIds);
+
+  const [
+    sessions,
+    trustedDevices,
+    passkeys,
+    oauthRefreshTokens,
+    bridgeDevices,
+    adminKeys,
+    lastAdminAction,
+    lastSignIn,
+    grants,
+  ] = await Promise.all([
+    countByUser(c.sessions, f.sessions, adminIds),
+    countByUser(c.trustedDevices, f.trustedDevices, adminIds),
+    countByUser(c.passkeys, f.passkeys, adminIds),
+    countByUser(c.oauthRefreshTokens, f.oauthRefreshTokens, adminIds),
+    countByUser(c.bridgeDevices, f.bridgeDevices, adminIds),
+    countByUser(c.apiKeys, f.activeKeys, adminIds),
+    latestByUser(
+      AdminAuditLogModel.collection,
+      { 'actor.kind': 'user', 'actor.userId': { $in: adminIds }, action: { $not: /\.denied$/ } },
+      'actor.userId',
+      'occurredAt'
+    ),
+    latestByUser(
+      UserAuthAuditLogModel.collection,
+      { userId: { $in: adminIds }, event: 'login_success' },
+      'userId',
+      'createdAt'
+    ),
+    latestGrants(adminIds),
+  ]);
+  const admins: AccessReviewAdmin[] = adminDocs.map((doc, index) => {
+    const id = adminIds[index];
+    const grant = grants.get(id);
+    return {
+      userId: id,
+      email: doc.email ?? null,
+      username: doc.username ?? null,
+      fullAdmin: doc.isAdmin === true,
+      permissions: roleAccess.byDoc.get(doc)?.permissions ?? [],
+      permissionSources: roleAccess.byDoc.get(doc)?.permissionSources ?? [],
+      directPermissions: [...(doc.adminPermissions ?? [])],
+      adminRoleIds: (doc.adminRoleIds ?? []).map(String),
+      roles: roleAccess.byDoc.get(doc)?.roles ?? [],
+      status: accountStatus(doc),
+      lastActiveAt: iso(doc.lastActiveAt),
+      lastAdminActionAt: iso(lastAdminAction.get(id)),
+      lastSignInAt: iso(lastSignIn.get(id)),
+      mfaEnabled: doc.mfa?.totpEnabled === true || doc.mfa?.passkeyEnabled === true,
+      grantedBy: grant
+        ? { userId: grant.actor.userId ?? null, name: grant.actor.name ?? 'Unknown', email: grant.actor.email ?? null }
+        : null,
+      grantedAt: iso(grant?.at),
+      activeSessions: sessions.get(id) ?? 0,
+      trustedDevices: trustedDevices.get(id) ?? 0,
+      passkeys: passkeys.get(id) ?? 0,
+      oauthRefreshTokens: oauthRefreshTokens.get(id) ?? 0,
+      bridgeDevices: bridgeDevices.get(id) ?? 0,
+      activeApiKeys: adminKeys.get(id) ?? 0,
+    };
+  });
+
+  // No limit: a review that silently drops rows is not a record.
+  const keyFilter = allApiKeys
+    ? f.activeKeys
+    : {
+        ...f.liveKey,
+        $and: [f.unexpired, { $or: [{ scopes: ApiKeyScope.ADMIN }, { userId: { $in: adminIds } }] }],
+      };
+  // Inclusion projection: the secret, hash, digest and prefix never leave the database.
+  const keyDocs = await UserApiKey.find(keyFilter, {
+    userId: 1,
+    name: 1,
+    scopes: 1,
+    createdAt: 1,
+    lastUsedAt: 1,
+    expiresAt: 1,
+  })
+    .sort({ createdAt: 1, _id: 1 })
+    .read('secondaryPreferred')
+    .lean<KeyDoc[]>();
+
+  const [supportDocs, impersonationDocs, counts] = await Promise.all([
+    c.supportAccess
+      .aggregate<SupportAccessDoc>([...liveSupportAccessPipeline(now), { $sort: { startedAt: 1 } }], {
+        readPreference: 'secondaryPreferred',
+      })
+      .toArray(),
+    AuthSessionModel.find(f.impersonation, {
+      sid: 1,
+      impersonatedBy: 1,
+      userId: 1,
+      createdAt: 1,
+      impersonationExpiresAt: 1,
+    })
+      .sort({ createdAt: 1 })
+      .read('secondaryPreferred')
+      .lean<
+        Array<{ sid: string; impersonatedBy: string; userId: string; createdAt?: Date; impersonationExpiresAt: Date }>
+      >(),
+    countAccess(now, adminIds, admins.filter(admin => admin.fullAdmin).length),
+  ]);
+
+  const emails = new Map(admins.map(admin => [admin.userId, admin.email]));
+  const unknownIds = [
+    ...keyDocs.map(doc => doc.userId),
+    ...supportDocs.map(doc => doc.adminId),
+    ...impersonationDocs.map(doc => doc.impersonatedBy),
+  ].filter(id => !emails.has(id));
+  for (const [id, email] of await loadEmails([...new Set(unknownIds)])) emails.set(id, email);
+  const emailOf = (id: string) => emails.get(id) ?? null;
+  const adminIdSet = new Set(adminIds);
+
+  const delegation = (sessionId: string, adminId: string, userId: string, startedAt?: Date, expiresAt?: Date) => ({
+    sessionId,
+    adminId,
+    adminEmail: emailOf(adminId),
+    userId,
+    startedAt: iso(startedAt),
+    expiresAt: iso(expiresAt),
+  });
+  const supportAccess: AccessReviewDelegation[] = supportDocs.map(doc =>
+    delegation(doc.sid, doc.adminId, doc.userId, doc.startedAt, doc.expiresAt)
+  );
+  const impersonation: AccessReviewDelegation[] = impersonationDocs.map(doc =>
+    delegation(doc.sid, doc.impersonatedBy, doc.userId, doc.createdAt, doc.impersonationExpiresAt)
+  );
+
+  return {
+    quarter: reviewQuarter(now),
+    generatedAt: now.toISOString(),
+    allApiKeysListed: allApiKeys,
+    counts,
+    admins,
+    roles: roleAccess.roles,
+    apiKeys: keyDocs.map(doc => ({
+      id: String(doc._id),
+      name: doc.name,
+      ownerId: doc.userId,
+      ownerEmail: emailOf(doc.userId),
+      ownerIsAdmin: adminIdSet.has(doc.userId),
+      scopes: doc.scopes ?? [],
+      createdAt: iso(doc.createdAt),
+      lastUsedAt: iso(doc.lastUsedAt),
+      expiresAt: iso(doc.expiresAt),
+    })),
+    supportAccess,
+    impersonation,
+  };
+}
+
+/**
+ * Counts access, logs the counts as structured metadata (the CloudWatch record of the quarter's starting
+ * point) and posts the reminder. The caller decides whether today is a reminder day.
+ */
+export async function sendAccessReviewReminder(now: Date, post: (text: string) => Promise<unknown>): Promise<string> {
+  const quarter = reviewQuarter(now);
+  const counts = await collectAccessReviewCounts(now);
+  Logger.info('access-review report', { report: 'access-review', quarter, generatedAt: now.toISOString(), counts });
+  await post(formatAccessReviewSlackMessage({ quarter, counts }));
+  return quarter;
+}

@@ -10,6 +10,8 @@ import { CONSENT_VENDORS, loadConsentVendors } from '@client/app/utils/consentVe
 import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
+import { releaseVisitBeacon } from '@client/app/utils/visitBeacon';
+import { beaconPage } from '@client/app/utils/pageBeacon';
 
 type Consent = 'granted' | 'denied';
 
@@ -61,6 +63,14 @@ function activateConsent(value: Consent) {
     clearAttributionCookies();
     clearTrackingCookies();
   }
+  // After the campaign flush or clear above, which decides the campaign this request carries.
+  releaseVisitBeacon();
+  // Then the page the visitor is on, unless the visit beacon just carried it: most often the login
+  // a signed-out landing redirects to, or the landing itself when the visit beacon went out
+  // without it (declined at load, or released on hide before this answer). Like
+  // recordPageOnGrant, so the visit does not appear to end on a page they have left. A no-op
+  // without a grant.
+  beaconPage();
 }
 
 /** Record the visitor's own decision, and apply it. */
@@ -152,7 +162,9 @@ export function CookieConsentBanner() {
         bottom: 0,
         left: 0,
         right: 0,
-        zIndex: 9999,
+        // Just under the modal layer: an open dialog covers the bar instead of the bar covering the
+        // dialog's bottom actions (a pay button on a phone). The bar is back once the dialog closes.
+        zIndex: theme => theme.zIndex.modal - 1,
         p: 2,
         bgcolor: 'background.surface',
         borderTop: '1px solid',

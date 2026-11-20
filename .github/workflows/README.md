@@ -72,7 +72,7 @@ Many workflows in this repository include a repository check (`github.repository
 The following workflows include repository checks and will not execute in forks:
 
 - ✅ **Security Scans** (`security-scan.yml`)
-- ✅ **Package Publishing** (`release.yaml`, `snapshot-publish.yaml`)
+- ✅ **Package Publishing** (`release.yaml`)
 - ✅ **Fork Sync Operations** (`fork-sync.yml`)
 
 ### For Fork Owners

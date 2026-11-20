@@ -16,16 +16,19 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const ALLOWLIST = new Set([
   'b4m-core/fab-pipeline/src/storage/createS3Client.ts',
   'apps/client/server/tools/modalImageHandler.ts',
-  'apps/client/server/security/cloudScan.ts',
+  'packages/server-utils/src/security/cloudScan.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/pages/api/files/presigned-url.ts',
   'apps/client/pages/api/app-files/serve/[...key].ts',
   'apps/client/server/transcribe/transcribe.ts',
   'apps/client/pages/api/slack/export/status/[jobId].ts',
   'b4m-core/services/src/speech/speechToTexService.ts',
+  'apps/workers/src/cron/providerUsagePoll.ts', // GET-only; fab-pipeline's index would pull Mongo into this no-database Lambda
   'packages/scripts/testEmailIngestLambda.ts',
   'packages/scripts/datalake/ingest-pdf-datalake.ts',
   'packages/scripts/src/uploadTavernIcons.ts',
+  // Test-only: re-signs past the door tests' client-s3 mock, which createS3Client would pick up; sets WHEN_REQUIRED itself
+  'apps/client/server/files/__tests__/presignPutForReal.ts',
 ]);
 
 // This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather

@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   // legacy report-only path, which is what they were written against.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', async () => {
   // Real redaction, stubbed gate: the point is the wiring between them.
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');

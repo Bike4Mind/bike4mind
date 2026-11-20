@@ -1,6 +1,6 @@
 import { isPublicPath } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
-import type { LoginErrorCode } from '@client/app/utils/loginErrorMessages';
+import type { LoginErrorCode } from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 import { ACCESS_TOKEN_STORAGE_KEY, type ExpiredSessionReason } from '@client/app/hooks/useAccessToken';
 
 // Maps the persisted expiredReason discriminator (useAccessToken store) to the /login

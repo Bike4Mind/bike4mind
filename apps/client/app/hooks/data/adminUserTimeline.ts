@@ -1,0 +1,151 @@
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { api } from '@client/app/contexts/ApiContext';
+import type {
+  UserDetectionLinks,
+  UserLinkedAccount,
+  UserSignIn,
+  UserSignInsPage,
+  UserSignupCluster,
+  UserTimelineEntry,
+  UserTimelinePage,
+  UserTimelineType,
+} from '@bike4mind/common';
+import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
+
+const TIMELINE_PAGE_SIZE = 30;
+const SIGN_IN_PAGE_SIZE = 50;
+
+type Wire<T> = Omit<T, 'at'> & { at: string | Date };
+type WireTimelineEntry = Wire<UserTimelineEntry> & { audit?: WireAuditEntry; firstAt?: string | Date };
+
+/** Dates arrive as ISO strings; audit-backed entries carry an audit row that needs the same revival. */
+export const reviveTimelineEntry = (entry: WireTimelineEntry): UserTimelineEntry =>
+  ({
+    ...entry,
+    at: new Date(entry.at),
+    ...(entry.firstAt ? { firstAt: new Date(entry.firstAt) } : {}),
+    ...(entry.audit ? { audit: reviveAuditEntry(entry.audit) } : {}),
+  }) as UserTimelineEntry;
+
+export type UserTimelineFilters = {
+  types: readonly UserTimelineType[];
+  /** Inclusive UTC calendar days, YYYY-MM-DD. */
+  from?: string;
+  to?: string;
+  apiKeyId?: string;
+};
+
+/** The day bounds as the endpoint's inclusive ISO instants. */
+export const timelineRangeParams = ({ from, to }: Pick<UserTimelineFilters, 'from' | 'to'>) => ({
+  ...(from ? { from: `${from}T00:00:00.000Z` } : {}),
+  ...(to ? { to: `${to}T23:59:59.999Z` } : {}),
+});
+
+export const useUserTimeline = (
+  userId: string,
+  filters: UserTimelineFilters,
+  options: { pageSize?: number; enabled?: boolean } = {}
+) => {
+  const { pageSize = TIMELINE_PAGE_SIZE, enabled = true } = options;
+  const types = [...filters.types].sort().join(',');
+  return useInfiniteQuery({
+    queryKey: [
+      'admin',
+      'users',
+      userId,
+      'timeline',
+      types,
+      filters.from ?? '',
+      filters.to ?? '',
+      pageSize,
+      filters.apiKeyId ?? '',
+    ],
+    queryFn: async ({ pageParam }): Promise<UserTimelinePage> => {
+      const params: Record<string, string> = { types, limit: String(pageSize), ...timelineRangeParams(filters) };
+      if (pageParam) params.cursor = pageParam;
+      if (filters.apiKeyId) params.apiKeyId = filters.apiKeyId;
+      const response = await api.get<{ entries: WireTimelineEntry[]; nextCursor: string | null }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/timeline`,
+        { params }
+      );
+      return { ...response.data, entries: response.data.entries.map(reviveTimelineEntry) };
+    },
+    getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
+    initialPageParam: undefined as string | undefined,
+    staleTime: 1000 * 30,
+    enabled: enabled && types !== '',
+  });
+};
+
+export const useUserSignIns = (userId: string) =>
+  useInfiniteQuery({
+    queryKey: ['admin', 'users', userId, 'sign-ins'],
+    queryFn: async ({ pageParam }): Promise<UserSignInsPage> => {
+      const params: Record<string, string> = { limit: String(SIGN_IN_PAGE_SIZE) };
+      if (pageParam) params.cursor = pageParam;
+      const response = await api.get<{ entries: Array<Wire<UserSignIn>>; nextCursor: string | null }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/sign-ins`,
+        { params }
+      );
+      return {
+        ...response.data,
+        entries: response.data.entries.map(entry => ({ ...entry, at: new Date(entry.at) })),
+      };
+    },
+    getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
+    initialPageParam: undefined as string | undefined,
+    staleTime: 1000 * 30,
+  });
+
+export const useUserLinkedAccounts = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'linked-accounts'],
+    queryFn: async (): Promise<UserLinkedAccount[]> =>
+      (await api.get<UserLinkedAccount[]>(`/api/admin/users/${encodeURIComponent(userId)}/linked-accounts`)).data,
+    staleTime: 1000 * 60,
+  });
+
+type WireDetectionLinks = {
+  detections: Array<Omit<UserDetectionLinks['detections'][number], 'detectedAt'> & { detectedAt: string }>;
+  accounts: Array<Omit<UserDetectionLinks['accounts'][number], 'signedUpAt'> & { signedUpAt: string | null }>;
+  truncated: boolean;
+};
+
+/** Accounts that cohort shadow detections name together with this user. */
+export const useUserDetectionLinks = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'detection-links'],
+    queryFn: async (): Promise<UserDetectionLinks> => {
+      const response = await api.get<WireDetectionLinks>(
+        `/api/admin/users/${encodeURIComponent(userId)}/detection-links`
+      );
+      return {
+        ...response.data,
+        detections: response.data.detections.map(item => ({ ...item, detectedAt: new Date(item.detectedAt) })),
+        accounts: response.data.accounts.map(account => ({
+          ...account,
+          signedUpAt: account.signedUpAt ? new Date(account.signedUpAt) : null,
+        })),
+      };
+    },
+    staleTime: 1000 * 60,
+  });
+
+type WireSignupCluster = Omit<UserSignupCluster, 'matches'> & {
+  matches: Array<Omit<UserSignupCluster['matches'][number], 'createdAt'> & { createdAt: string }>;
+};
+
+export const useUserSignupCluster = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'signup-cluster'],
+    queryFn: async (): Promise<UserSignupCluster> => {
+      const response = await api.get<WireSignupCluster>(
+        `/api/admin/users/${encodeURIComponent(userId)}/signup-cluster`
+      );
+      return {
+        ...response.data,
+        matches: response.data.matches.map(match => ({ ...match, createdAt: new Date(match.createdAt) })),
+      };
+    },
+    staleTime: 1000 * 60 * 5,
+  });

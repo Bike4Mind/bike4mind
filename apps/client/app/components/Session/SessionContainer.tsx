@@ -97,6 +97,10 @@ interface SessionLayoutProps {
   floatingChatHeaderActions?: React.ReactNode;
   /** Overrides the docked/floating chat header's default "AI Chat" label (e.g. /opti swaps in the Data Lakes toggle). */
   dockedChatTitle?: React.ReactNode;
+  /** Forwarded to FloatingChatWindow: its close button collapses to the pill instead of hiding the chat. */
+  floatingChatCloseToPill?: boolean;
+  /** Forwarded to FloatingChatWindow: offer the dock layouts. Off where the host clips a docked panel (e.g. /admin). */
+  floatingChatDockable?: boolean;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
   /** Show the conversation for reading only: no composer, no drop zone, no writing message actions. See SessionReadOnlyContext. */
@@ -200,7 +204,8 @@ const DropFilesOverlay: FC = () => (
       alignItems: 'center',
       backgroundColor: theme => theme.palette.session.overlayBackground,
       backdropFilter: 'blur(10px)',
-      zIndex: 110,
+      // Cover the cache hint (1200) inside this chat; menus remain above (1500).
+      zIndex: 1300,
       outline: '2px dashed',
       outlineColor: 'primary',
       outlineOffset: '-10px',
@@ -222,6 +227,8 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
   emptySessionSplash,
   floatingChatHeaderActions,
   dockedChatTitle,
+  floatingChatCloseToPill,
+  floatingChatDockable,
   onSessionCreated,
 }) => {
   const readOnly = useSessionReadOnly();
@@ -472,6 +479,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
         {isVerticalSplit && <ResizableSplitter />}
         <Box
           ref={chatContainerRef}
+          data-chat-overlay-root
           display="flex"
           sx={{
             transition: 'all 0.3s ease',
@@ -606,9 +614,15 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
 
         {/* Floating Chat Window - renders when layout is floatingChat */}
         {layout === 'floatingChat' && (
-          <FloatingChatWindow headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
+          <FloatingChatWindow
+            headerActions={floatingChatHeaderActions}
+            title={dockedChatTitle}
+            closeToPill={floatingChatCloseToPill}
+            dockable={floatingChatDockable}
+          >
             <Box
               ref={containerRef}
+              data-chat-overlay-root
               sx={{
                 width: '100%',
                 height: '100%',
@@ -624,9 +638,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                   off the input divider since the input has no top padding. */}
               {/* px aligns the message/status content with the input row (SessionBottom
                   pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
-              <Box
-                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}
-              >
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
@@ -635,7 +647,8 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                       position: 'relative',
                       flex: 1,
                       minHeight: 0,
-                      overflow: 'hidden',
+                      // The scroll button extends into the status line below this pane.
+                      overflow: 'visible',
                       display: 'flex',
                       flexDirection: 'column',
                     }}
@@ -667,8 +680,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                 sx={{
                   flexShrink: 0,
                   width: '100%',
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
+                  // The line sits on the composer box (SessionBottom), under the status line.
                   backgroundColor: 'background.body',
                 }}
               >
@@ -683,6 +695,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
           <DockedChatPanel headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
             <Box
               ref={containerRef}
+              data-chat-overlay-root
               sx={{
                 width: '100%',
                 height: '100%',
@@ -693,20 +706,19 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
               {...dropZoneHandlers}
             >
               {isDraggingOver && <DropFilesOverlay />}
-              {/* pb keeps the last message's action row from touching the input divider
-                  now that the docked input has no top padding of its own. */}
               {/* px aligns the message/status content with the input row (SessionBottom
-                  pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
+                  pads 16px) so nothing hugs the narrow docked/floating panel edges. minHeight,
+                  not overflow hidden: the scroll-to-bottom button (SessionMiddle) hangs below
+                  this pane into the status line and must stay visible. */}
               <Box
                 sx={{
                   flex: 1,
-                  overflow: 'hidden',
+                  minHeight: 0,
                   display: 'flex',
                   flexDirection: 'column',
                   pl: '16px',
                   // Narrower on the right: the message list's own scrollbar already sits there.
                   pr: '8px',
-                  pb: '24px',
                 }}
               >
                 {!currentSessionId ? (
@@ -723,8 +735,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                 sx={{
                   flexShrink: 0,
                   width: '100%',
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
+                  // The line sits on the composer box (SessionBottom), under the status line.
                   backgroundColor: 'background.body',
                 }}
               >

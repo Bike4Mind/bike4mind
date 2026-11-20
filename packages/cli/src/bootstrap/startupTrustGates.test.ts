@@ -4,7 +4,55 @@ import {
   hostInertNotice,
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
+  shouldShowEndpointPicker,
+  signInStart,
+  type EndpointPickerGateInput,
+  type SignInStartInput,
 } from './startupTrustGates.js';
+
+describe('shouldShowEndpointPicker', () => {
+  const baked: EndpointPickerGateInput = {
+    endpointSource: 'baked-default',
+    endpointChosen: false,
+    hasAuthTokens: false,
+  };
+
+  // An expired token still counts as signed in here: init() re-authenticates it rather than re-asking.
+  it.each<[string, EndpointPickerGateInput, boolean]>([
+    ['fresh install with a default', baked, true],
+    ['signed in (valid or expired token)', { ...baked, hasAuthTokens: true }, false],
+    ['marker set, e.g. after logout or a flag/command choice', { ...baked, endpointChosen: true }, false],
+    ['saved customUrl', { ...baked, endpointSource: 'custom' }, false],
+    ['source-mode dev default', { ...baked, endpointSource: 'dev-default' }, false],
+  ])('%s', (_name, input, expected) => {
+    expect(shouldShowEndpointPicker(input)).toBe(expected);
+  });
+});
+
+describe('signInStart', () => {
+  const custom = { status: 'configured', url: 'https://api.example.test', source: 'custom' } as const;
+
+  it.each<[string, SignInStartInput, 'endpoint-picker' | 'login']>([
+    [
+      'no endpoint resolves',
+      { endpoint: { status: 'unconfigured' }, endpointChosen: false, hasAuthTokens: false },
+      'endpoint-picker',
+    ],
+    [
+      'first run on a baked default',
+      { endpoint: { ...custom, source: 'baked-default' }, endpointChosen: false, hasAuthTokens: false },
+      'endpoint-picker',
+    ],
+    [
+      'baked default already chosen',
+      { endpoint: { ...custom, source: 'baked-default' }, endpointChosen: true, hasAuthTokens: false },
+      'login',
+    ],
+    ['saved customUrl', { endpoint: custom, endpointChosen: false, hasAuthTokens: false }, 'login'],
+  ])('%s', (_name, input, expected) => {
+    expect(signInStart(input)).toBe(expected);
+  });
+});
 
 describe('isHostLaunchWithQueuedPrompt', () => {
   it('is false with no initial prompt, whatever host flags are set', () => {

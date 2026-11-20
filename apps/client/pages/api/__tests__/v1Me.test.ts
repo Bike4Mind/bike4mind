@@ -41,7 +41,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getUserEntitlements: mockEntitlements,
   toEntitlementUser: (user: {
     id: string;
@@ -58,8 +58,12 @@ vi.mock('@server/entitlements', () => ({
   }),
 }));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ getRequestActiveSubscriptions: mockFindActive }));
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
+  getRequestActiveSubscriptions: mockFindActive,
+}));
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
+  getEntitlingPlanByPriceId: mockPlanByPriceId,
+}));
 
 const { default: handler } = await import('@pages/api/v1/me');
 

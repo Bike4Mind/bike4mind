@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Modal,
   ModalDialog,
@@ -14,16 +14,23 @@ import {
 } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
-import { ISessionDocument } from '@bike4mind/common';
+import { MAX_BULK_ITEMS, type ISessionDocument } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
-import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import { api } from '@client/app/contexts/ApiContext';
+import { useJobStatus } from '@client/app/hooks/useJobStatus';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import type { CombinedSessionDocument } from './types';
+
+type BulkTagResponse = {
+  okCount: number;
+  results: { id: string; ok: boolean; session?: ISessionDocument }[];
+};
 
 interface TagModalProps {
   open: boolean;
   /** Close without clearing selection - mirrors the backdrop-dismiss behaviour. */
   onClose: () => void;
+  /** Must already be narrowed to visible sessions: the count shown and the ids sent both come from it. */
   selectedItems: Set<string>;
   combinedSessions: CombinedSessionDocument[];
   /** Called after tags are successfully applied so the parent can clear the selection. */
@@ -32,14 +39,73 @@ interface TagModalProps {
 
 /**
  * "Manage Tags" bulk-action modal. Owns its own manual-tag input state (nothing else in the
- * sidebar reads it). Applies manual tag chips when present, otherwise triggers server-side tag
- * generation, then invalidates the session caches and asks the parent to clear the selection.
+ * sidebar reads it). Applies manual tag chips when present, otherwise queues server-side tag
+ * generation, one bulk request per MAX_BULK_ITEMS sessions, then asks the parent to clear the selection.
  */
 const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: TagModalProps) => {
+  const applyingTags = useRef(false);
+  const [isApplying, setIsApplying] = useState(false);
   const [manualTags, setManualTags] = useState('');
   const [tagChips, setTagChips] = useState<string[]>([]);
   const queryClient = useQueryClient();
-  const updateSession = useUpdateSession();
+  const { startJob } = useJobStatus();
+
+  const applyTags = async () => {
+    const ids = combinedSessions.filter(s => selectedItems.has(s.id)).map(s => s.id);
+    if (ids.length === 0) return;
+    if (applyingTags.current) return;
+    applyingTags.current = true;
+    setIsApplying(true);
+    const addMode = tagChips.length > 0;
+    const plural = (n: number) => `${n} item${n > 1 ? 's' : ''}`;
+    let okCount = 0;
+    let failure: unknown;
+
+    try {
+      for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
+        const sessionIds = ids.slice(i, i + MAX_BULK_ITEMS);
+        let data: BulkTagResponse;
+        try {
+          ({ data } = await api.post<BulkTagResponse>(
+            '/api/sessions/bulk',
+            addMode ? { action: 'addTags', sessionIds, tags: tagChips } : { action: 'generateTags', sessionIds }
+          ));
+        } catch (error) {
+          failure = error;
+          break;
+        }
+        okCount += data.okCount;
+        for (const result of data.results) {
+          if (!result.ok) continue;
+          if (result.session) queryClient.setQueryData(['sessions', result.id], result.session);
+          if (!addMode) startJob(result.id, 'generateTags');
+        }
+      }
+
+      // Nothing committed: keep the modal open so the user can retry.
+      if (failure && okCount === 0) {
+        toast.error(getInsufficientCreditsMessage(failure) ?? 'Failed to manage tags');
+        return;
+      }
+
+      const done = addMode
+        ? `Added ${tagChips.length} tag${tagChips.length > 1 ? 's' : ''} to`
+        : 'Started generating tags for';
+      if (okCount === ids.length) toast.success(`${done} ${plural(ids.length)}`);
+      else toast.warning(`${done} ${okCount} of ${ids.length} items`);
+      // Earlier chunks are already applied (and billed), so close rather than invite a retry of them.
+      if (failure) toast.error(getInsufficientCreditsMessage(failure) ?? 'Failed to manage the remaining tags');
+
+      onClose();
+      onTagged();
+      setManualTags('');
+      setTagChips([]);
+    } finally {
+      applyingTags.current = false;
+      setIsApplying(false);
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    }
+  };
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -118,70 +184,7 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
           >
             Cancel
           </Button>
-          <Button
-            onClick={async () => {
-              const itemsToTag = Array.from(selectedItems);
-              const sessions = combinedSessions.filter(s => itemsToTag.includes(s.id));
-
-              try {
-                // If manual tags are provided, use them. Otherwise generate.
-                if (tagChips.length > 0) {
-                  // Apply manual tags to each session
-                  for (const session of sessions) {
-                    // Fetch the full session data to ensure we have all fields
-                    const fullSessionData = queryClient.getQueryData<ISessionDocument>(['sessions', session.id]);
-                    const existingTags = fullSessionData?.tags || session.tags || [];
-
-                    // Convert string tags to proper tag objects with strength
-                    const newTagObjects = tagChips
-                      .filter(tag => !existingTags.some(t => t.name === tag))
-                      .map(tag => ({ name: tag, strength: 1 }));
-                    const newTags = [...existingTags, ...newTagObjects];
-
-                    // Update with full session data
-                    const sessionToUpdate = fullSessionData || session;
-                    const updatedSession = await updateSession.mutateAsync({
-                      ...sessionToUpdate,
-                      tags: newTags,
-                    });
-
-                    // Update the cache directly with the returned session
-                    if (updatedSession) {
-                      queryClient.setQueryData(['sessions', session.id], updatedSession);
-                    }
-
-                    // Invalidate specific session query as well
-                    queryClient.invalidateQueries({ queryKey: ['sessions', session.id] });
-                  }
-
-                  // Invalidate all session queries to refresh the list
-                  await queryClient.invalidateQueries({ queryKey: ['sessions'] });
-                  await queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
-
-                  // Small delay to ensure cache updates propagate
-                  await new Promise(resolve => setTimeout(resolve, 100));
-
-                  toast.success(
-                    `Added ${tagChips.length} tag${tagChips.length > 1 ? 's' : ''} to ${sessions.length} item${sessions.length > 1 ? 's' : ''}`
-                  );
-                } else {
-                  // Generate tags for each session
-                  for (const session of sessions) {
-                    await api.post(`/api/sessions/${session.id}/tags/generate`);
-                  }
-                  queryClient.invalidateQueries({ queryKey: ['sessions'] });
-                  toast.success(`Generated tags for ${sessions.length} item${sessions.length > 1 ? 's' : ''}`);
-                }
-
-                onClose();
-                onTagged();
-                setManualTags('');
-                setTagChips([]);
-              } catch (error) {
-                toast.error('Failed to manage tags');
-              }
-            }}
-          >
+          <Button data-testid="tag-modal-apply-btn" disabled={isApplying} loading={isApplying} onClick={applyTags}>
             {tagChips.length > 0 ? 'Add Tags' : 'Generate Tags'}
           </Button>
         </DialogActions>

@@ -23,6 +23,9 @@ const {
   mockProcess,
   mockWriteStaticCompletion,
   mockInvokeOptions,
+  mockOptionsFindUser,
+  mockSseChunk,
+  processState,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -32,6 +35,9 @@ const {
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
   mockInvokeOptions: vi.fn(),
+  mockOptionsFindUser: vi.fn(),
+  mockSseChunk: vi.fn(),
+  processState: { terminalError: undefined as Error | undefined, options: undefined as unknown },
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -39,8 +45,8 @@ const {
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -54,11 +60,11 @@ vi.mock('@server/voice/voiceSessionToken', () => ({
   verifyVoiceSessionToken: (...args: unknown[]) => mockVerifyVoiceSessionToken(...args),
 }));
 
-vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
 
 // The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
 const mockBuildVideoToolConfig = vi.fn();
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getVideoJobDeps: () => ({ deps: 'availability' }),
   getCreateVideoJobDeps: () => ({ deps: 'create' }),
 }));
@@ -66,8 +72,13 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+const mockAudioToolJobs = { createSpeechJob: vi.fn() };
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  buildAudioToolJobs: () => mockAudioToolJobs,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
 }));
 
@@ -105,6 +116,10 @@ vi.mock('@bike4mind/services/llm', () => ({
     invoke = (...args: unknown[]) => mockInvoke(...args);
   },
   ChatCompletionProcess: class {
+    constructor(options: unknown) {
+      processState.options = options;
+    }
+    terminalError = processState.terminalError;
     process = (...args: unknown[]) => mockProcess(...args);
   },
 }));
@@ -112,15 +127,19 @@ vi.mock('@bike4mind/services/llm', () => ({
 vi.mock('@bike4mind/voice', () => ({
   buildClientToolPassthrough: () => ({}),
   currentTurnUserMessage: () => 'hello there',
-  diffAccumulated: () => '',
+  diffAccumulated: (sent: string, visible: string) => visible.slice(sent.length),
   extractSystemPrompt: () => '',
   emitInitialBuffer: () => {},
-  openAiSseChunk: () => 'chunk',
+  openAiSseChunk: (...args: unknown[]) => {
+    mockSseChunk(...args);
+    return 'chunk';
+  },
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
   writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
 }));
 
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 import handler from '../completions';
 import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
@@ -168,6 +187,7 @@ function primeSuccessfulTurn() {
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
   mockProcess.mockResolvedValue(undefined);
+  processState.terminalError = undefined;
 }
 
 describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
@@ -182,6 +202,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
     const expected = ['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'];
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
     expect((mockProcess.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
+  });
+
+  // A fixed budget reads as a caller choice, so the model-aware default never applies and a
+  // reasoning model spends the whole 4096 thinking.
+  it('sends no fixed max_tokens, so the budget is sized per model', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    type Body = { body: { params: Record<string, unknown> } };
+    for (const call of [mockInvoke.mock.calls[0][0], mockProcess.mock.calls[0][0]] as Body[]) {
+      expect(call.body.params).not.toHaveProperty('max_tokens');
+    }
   });
 
   // Speech streams from the raw reply, so a choices block would be read aloud.
@@ -226,6 +257,89 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
+  it("forwards the token's key billing owner type to invoke() and the process() body", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: 'Organization',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ apiKeyBillingOwnerType: 'Organization' }));
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body).toEqual(
+      expect.objectContaining({ apiKeyBillingOwnerType: 'Organization' })
+    );
+  });
+
+  // process() checks the freeze against the org the turn reserves against, so the proxy must not send
+  // a separate freeze org: the turn's `organizationId` is the one value both read.
+  it("bills and freeze-checks the turn against the token's home org, with no separate freeze org", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: 'home-org',
+      reasoningModelId: 'test-model',
+      authOrigin: 'session',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    const processBody = (mockProcess.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+    expect(processBody.organizationId).toBe('home-org');
+    expect(processBody).not.toHaveProperty('spendFreezeOrganizationId');
+    expect((mockInvoke.mock.calls[0][0] as { body: { organizationId?: string } }).body.organizationId).toBe('home-org');
+  });
+
+  it('leaves the billing owner type unset for a token minted without it', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as { apiKeyBillingOwnerType?: string }).apiKeyBillingOwnerType).toBeUndefined();
+  });
+
+  it("hands the token's key to the QuestMaster completion meter", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: 'Organization',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    const { createCompletionMeter: createMeter } = processState.options as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
+    expect(createCompletionMeter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'QuestMaster planning',
+      expect.objectContaining({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization' })
+    );
+  });
+
   it('forwards a session origin and no key id for a token minted by a signed-in session', async () => {
     await handler(makeReq() as never, makeRes() as never);
 
@@ -261,6 +375,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - owner admin role', () 
 
   it('keeps the admin role when the token carries no such claim', async () => {
     expect((await turnWith(undefined)).isAdmin).toBe(true);
+  });
+
+  it.each([
+    ['withholds', true, false],
+    ['keeps', undefined, true],
+  ])('%s the admin role from a tool that re-reads the owner by id', async (_, adminRoleWithheld, expected) => {
+    await turnWith(adminRoleWithheld);
+    const { users } = (mockInvokeOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } })
+      .db;
+    mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+    expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
   });
 });
 
@@ -318,6 +443,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
       expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
     );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - audio generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // sharedToolBuilder hides audio_generation from a host that wires no job functions.
+  it('hands ChatCompletionProcess the audio job functions', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(processState.options).toMatchObject({ audioToolJobs: mockAudioToolJobs });
   });
 });
 
@@ -503,5 +639,57 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     await handler(makeReq() as never, { ...makeRes(), status } as never);
 
     expect402(status);
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - settled budget error', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it('speaks the settled reply before closing, rather than going silent', async () => {
+    processState.terminalError = new Error('budget');
+    mockInvoke.mockResolvedValue({ id: 'quest-1', replies: ['Out of room.'], reply: 'Out of room.' });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockSseChunk).toHaveBeenCalledWith(expect.objectContaining({ contentDelta: 'Out of room.' }));
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - pipeline failure logging', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it('logs the error with flat name, message and cause strings so an alert does not print [object Object]', async () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    mockInvoke.mockRejectedValue(new TypeError('fetch failed', { cause }));
+    const req = makeReq();
+
+    await handler(req as never, makeRes() as never);
+
+    expect(req.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorName: 'TypeError',
+        errorMessage: 'fetch failed',
+        errorCause: 'ECONNRESET: read ECONNRESET',
+      }),
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
+  });
+
+  it('logs a free-tier daily cap refusal at warn, not error', async () => {
+    mockInvoke.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const req = makeReq();
+
+    await handler(req as never, makeRes() as never);
+
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorName: 'TooManyRequestsError' }),
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 });

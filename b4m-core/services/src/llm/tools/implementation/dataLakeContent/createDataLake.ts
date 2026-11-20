@@ -12,10 +12,12 @@ import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPref
 import { buildToolAccessContext, toolAuditPrincipal } from '../../helpers/toolAccessContext';
 import {
   DATA_LAKES_DISABLED_MESSAGE,
+  LAKE_PLAN_REQUIRED_TOOL_MESSAGE,
   NOT_AVAILABLE_MESSAGE,
   createLakeAdapters,
   dataLakesEnabled,
   describeFailure,
+  lakePlanBlocksToolCreate,
 } from './adapters';
 
 const TOOL_NAME = 'create_data_lake';
@@ -78,6 +80,7 @@ export const createDataLakeTool: ToolDefinition = {
 
       try {
         if (!(await dataLakesEnabled(context.db))) return DATA_LAKES_DISABLED_MESSAGE;
+        if (await lakePlanBlocksToolCreate(context.db, context.user)) return LAKE_PLAN_REQUIRED_TOOL_MESSAGE;
 
         const organizationId = context.organizationId;
         if (organizationId) {

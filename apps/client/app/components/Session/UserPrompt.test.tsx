@@ -22,7 +22,11 @@ vi.mock('@client/app/hooks/useContentTruncation', () => ({
   }),
 }));
 vi.mock('./CodeBlockHeader', () => ({
-  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  default: ({ children, code }: { children: React.ReactNode; code: string }) => (
+    <div data-testid="code-block-header" data-code={code}>
+      {children}
+    </div>
+  ),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -64,4 +68,14 @@ it('still renders text and fenced code', () => {
   render(ui('hello world\n\n```ts\nconst a = 1;\n```'));
   expect(screen.getByText('hello world')).toBeInTheDocument();
   expect(screen.getByTestId('highlighted-code')).toHaveTextContent('const a = 1;');
+  expect(screen.getByTestId('code-block-header')).toHaveAttribute('data-code', 'const a = 1;\n');
+});
+
+it('draws empty fences as empty code blocks, not the word undefined', () => {
+  const { container } = render(ui('```\n```\n\n```ts\n```'));
+  const blocks = screen.getAllByTestId('highlighted-code');
+  expect(blocks).toHaveLength(2);
+  blocks.forEach(block => expect(block).toBeEmptyDOMElement());
+  screen.getAllByTestId('code-block-header').forEach(header => expect(header).toHaveAttribute('data-code', ''));
+  expect(container.textContent).not.toContain('undefined');
 });

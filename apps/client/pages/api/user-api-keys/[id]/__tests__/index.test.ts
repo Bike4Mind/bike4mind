@@ -72,7 +72,7 @@ const userApiKeyRepository = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) and the owner-doc lookups are
@@ -80,7 +80,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 // the route - a caller's isAdmin no longer bypasses, only the resolved owner's
 // plan counts (#891).
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements }));
 const userRepository = vi.hoisted(() => ({ findById: vi.fn() }));
 // Rebinding an embed key validates the target agent; default to an owned one.
 const agentRepository = vi.hoisted(() => ({

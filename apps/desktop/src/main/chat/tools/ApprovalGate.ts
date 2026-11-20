@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { basename, sep } from 'node:path';
+import { sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
-import type { ApprovalAlways } from './types';
+import type { ApprovalAlways, ApprovalPart } from './types';
 
 /** The `optionId` of a question answer that was closed rather than skipped. */
 export const QUESTION_CANCELLED = 'cancelled';
@@ -23,8 +23,6 @@ interface PendingApproval {
   sessionId: string;
   /** See ApprovalRequestOptions.recheck. */
   recheck?: () => Promise<ChatApprovalAnswer | null>;
-  /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
-  remember: boolean;
   /** See ApprovalRequestOptions.question. */
   question: boolean;
   settle(answer: ChatApprovalAnswer, settledBy: ApprovalSettledBy): void;
@@ -41,11 +39,6 @@ interface PendingApproval {
 export interface StandingApproval {
   optionId?: string;
   value?: string;
-  /**
-   * Answered on a card that already said the reply had read untrusted content, so the user
-   * consented knowing that, and a later tainted call with the same key need not ask again.
-   */
-  overTaint?: true;
 }
 
 /** The key a standing approval is filed under: the call, plus which way it was allowed. */
@@ -65,36 +58,28 @@ export function patternMatches(pattern: string, command: string): boolean {
   return new RegExp(`^${source}$`, 's').test(command);
 }
 
-const TOOLCHAIN_EXECUTABLES = new Set(['vitest', 'jest', 'tsc', 'eslint', 'prettier', 'turbo']);
-const PACKAGE_RUNNERS = new Set(['pnpm', 'npm', 'yarn', 'bun']);
-const EXEC_SUBCOMMANDS = new Set(['exec', 'x', 'dlx']);
-const SCRIPT_SUBCOMMANDS = new Set(['run', 'run-script', 'task']);
-
 /**
- * A prefix must bind more than a runner or interpreter before its wildcard. Counting words
- * alone mistakes `pnpm exec -- *` and `pnpm exec node *` for a narrower permission than `node *`.
- * Keep their exact-call approval, but ask again when a later tainted call changes the payload.
+ * Whether remembered `patterns` (see ApprovalGate.allowedPatterns) cover one sub-command. Never one the
+ * scan could not normalise, nor one asked for a reason the pattern was not allowed over.
  */
-function hasBoundedTaintPrefix(pattern: string): boolean {
-  const prefix = pattern.endsWith(' *') ? pattern.slice(0, -2).split(' ') : [];
-  if (prefix.length < 2) return false;
-  const [program, subcommand, target] = prefix.map(word => word.replace(/['"]/g, ''));
-  if (PACKAGE_RUNNERS.has(program) || program === 'deno') {
-    if (EXEC_SUBCOMMANDS.has(subcommand)) {
-      // A package executor needs a fixed tool. Arbitrary interpreters (including unknown ones)
-      // are exact-call approvals; their next argument can select a completely different script.
-      return target !== undefined && TOOLCHAIN_EXECUTABLES.has(target);
-    }
-    if (SCRIPT_SUBCOMMANDS.has(subcommand)) return target !== undefined && !target.startsWith('-');
-    // Bare package tasks may also resolve to binaries. Only known development task names get
-    // prefix replay; an unknown task still retains the exact-call answer.
-    return /(^|[:._/-])(test|tests|spec|unit|e2e|integration|typecheck|types|tsc|lint|eslint|stylelint|format|fmt|prettier|build|compile|check|verify|validate|coverage|vitest|jest)($|[:._/-])/.test(
-      subcommand
-    );
-  }
-  const last = basename(prefix[prefix.length - 1].replace(/['"]/g, ''));
-  return last !== '' && !last.startsWith('-') && !EXEC_SUBCOMMANDS.has(last) && !SCRIPT_SUBCOMMANDS.has(last);
+export function partAllowed(
+  patterns: readonly AllowedPattern[],
+  part: Pick<ApprovalPart, 'text' | 'coverable' | 'ask'>
+): boolean {
+  if (!part.coverable) return false;
+  const kinds = part.ask?.kinds ?? [];
+  return patterns.some(
+    ({ pattern, askedOver }) => kinds.every(kind => askedOver.has(kind)) && patternMatches(pattern, part.text)
+  );
 }
+
+/** A remembered shell pattern, and the reasons to ask (see PartAskKind) the card it was allowed on gave for it. */
+export interface AllowedPattern {
+  pattern: string;
+  askedOver: ReadonlySet<string>;
+}
+
+const NOTHING_ASKED: ReadonlySet<string> = new Set();
 
 function withinDirectory(directory: string, candidate: string): boolean {
   return candidate === directory || candidate.startsWith(directory.endsWith(sep) ? directory : directory + sep);
@@ -102,8 +87,8 @@ function withinDirectory(directory: string, candidate: string): boolean {
 
 interface StandingShell {
   patterns: Set<string>;
-  /** The patterns answered on a card that said the reply had read untrusted content. */
-  overTaint: Set<string>;
+  /** Pattern -> the reasons its part asked on the card it was allowed on. */
+  askedOver: Map<string, Set<string>>;
   directories: Set<string>;
 }
 
@@ -114,17 +99,18 @@ export interface ApprovalRequestOptions {
    * Whether an 'always' answer may be recorded as a standing approval. False on an
    * irreversible tool, where a single click must never cover a later, different call.
    */
-  remember?: boolean;
+  /** A callback rechecks whether consent may be retained when the user actually answers. */
+  remember?: boolean | (() => boolean);
   /**
    * On a card that offers a choice, which of its options may be recorded as standing. An answer
    * naming any other option is honoured for this call and forgotten - that is what stops a
    * redirect, which is an instruction about one call, from ever becoming a policy.
    */
   rememberable?: readonly string[];
+  /** The card asked about only some of the call's parts: an 'always' keeps their patterns, never the whole call. */
+  partial?: boolean;
   /** A question card, which a new message closes via cancelQuestions rather than leaving live. */
   question?: boolean;
-  /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
-  tainted?: boolean;
   /**
    * Whether a standing answer or rule given since the card was shown now covers this call: the
    * answer to settle it with, or null to keep asking. Run by settleCovered after another card's
@@ -161,8 +147,11 @@ export class ApprovalGate {
   /** sessionId -> standing key -> the answer to replay. In memory only, by design. */
   private readonly standing = new Map<string, Map<string, StandingApproval>>();
 
-  /** sessionId -> the shell patterns and directories the user said "always" to. */
-  private readonly standingShell = new Map<string, StandingShell>();
+  /** sessionId -> exact approval key -> the shell patterns and directories it allowed. */
+  private readonly standingShell = new Map<string, Map<string, StandingShell>>();
+
+  /** sessionId -> the session that spawned it; see setParent. */
+  private readonly parents = new Map<string, string>();
 
   constructor(private readonly listener?: ApprovalGateListener) {}
 
@@ -183,29 +172,73 @@ export class ApprovalGate {
     return null;
   }
 
+  revoke(sessionId: string, key: string): boolean {
+    const keys = this.standing.get(sessionId);
+    if (!keys) return false;
+    let removed = keys.delete(key);
+    for (const stored of keys.keys()) {
+      if (stored.startsWith(`${key}#`)) {
+        keys.delete(stored);
+        removed = true;
+      }
+    }
+    return (this.standingShell.get(sessionId)?.delete(key) ?? false) || removed;
+  }
+
   /**
-   * Whether every sub-command of this script has been allowed before. Over a tainted reply only
-   * patterns answered over taint count, never an unbounded runner pattern such as `node *` or
-   * `pnpm exec -- *`, and never an inline or stdin script.
+   * Whether every sub-command of this script has been allowed before, here or in a session that spawned
+   * this one.
    */
-  coversCommands(sessionId: string, always: ApprovalAlways, tainted = false): boolean {
-    const standing = this.standingShell.get(sessionId);
-    if (!standing || always.commands.length === 0) return false;
-    const own = [...(tainted ? standing.overTaint : standing.patterns)]
-      .filter(entry => entry.startsWith(`${always.namespace}\x00`))
-      .map(entry => entry.slice(always.namespace.length + 1));
-    return always.commands.every(
-      ({ text, coverable, opaque }) =>
-        coverable && !(tainted && opaque) && own.some(pattern => patternMatches(pattern, text))
-    );
+  coversCommands(sessionId: string, always: ApprovalAlways): boolean {
+    if (always.commands.length === 0) return false;
+    const own = this.allowedPatterns(sessionId, always.namespace);
+    return own.length > 0 && always.commands.every(command => partAllowed(own, command));
+  }
+
+  /**
+   * A spawned session runs what the sessions that started it allowed in their chats. Set at each turn's start
+   * rather than read from disk: a parent can hold an allowance only after running a turn in this process.
+   */
+  setParent(sessionId: string, parentId: string | undefined): void {
+    if (parentId && parentId !== sessionId) this.parents.set(sessionId, parentId);
+    else this.parents.delete(sessionId);
+  }
+
+  /** This session and the ones that spawned it, nearest first. */
+  private lineage(sessionId: string): string[] {
+    const chain = [sessionId];
+    for (let parent = this.parents.get(sessionId); parent && !chain.includes(parent);) {
+      chain.push(parent);
+      parent = this.parents.get(parent);
+    }
+    return chain;
+  }
+
+  /** The shell patterns "Allow in this chat" gave for one tool, in this session or one that spawned it. */
+  allowedPatterns(sessionId: string, namespace: string): AllowedPattern[] {
+    const prefix = `${namespace}\x00`;
+    const patterns: AllowedPattern[] = [];
+    for (const id of this.lineage(sessionId)) {
+      for (const entry of this.standingShell.get(id)?.values() ?? []) {
+        for (const stored of entry.patterns) {
+          if (!stored.startsWith(prefix)) continue;
+          patterns.push({
+            pattern: stored.slice(prefix.length),
+            askedOver: entry.askedOver.get(stored) ?? NOTHING_ASKED,
+          });
+        }
+      }
+    }
+    return patterns;
   }
 
   /** The directories among these that the user has not said "always" to. */
   uncoveredDirectories(sessionId: string, directories: readonly string[]): string[] {
-    const standing = this.standingShell.get(sessionId);
-    return directories.filter(
-      directory => !standing || ![...standing.directories].some(allowed => withinDirectory(allowed, directory))
+    if (directories.length === 0) return [];
+    const allowedDirectories = this.lineage(sessionId).flatMap(id =>
+      [...(this.standingShell.get(id)?.values() ?? [])].flatMap(entry => [...entry.directories])
     );
+    return directories.filter(directory => !allowedDirectories.some(allowed => withinDirectory(allowed, directory)));
   }
 
   /**
@@ -220,7 +253,7 @@ export class ApprovalGate {
     options: ApprovalRequestOptions = {}
   ): Promise<ApprovalSettlement> {
     const approvalId = randomUUID();
-    const remember = options.remember !== false;
+    const remember = () => (typeof options.remember === 'function' ? options.remember() : options.remember !== false);
 
     return new Promise<ApprovalSettlement>(resolve => {
       let done = false;
@@ -237,12 +270,15 @@ export class ApprovalGate {
         // decision still stands, it just is not remembered. Same for an option the caller did
         // not list as rememberable - see ApprovalRequestOptions.rememberable.
         const keep =
-          remember &&
+          remember() &&
+          !options.always?.ungranted?.length &&
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
-          if (options.always) this.rememberShell(sessionId, options.always, options.tainted === true);
+          if (!options.partial) {
+            this.remember(sessionId, standingKey(key, answer.optionId), answer);
+          }
+          if (options.always) this.rememberShell(sessionId, key, options.always);
         }
         if (announced) this.listener?.settled(sessionId);
         resolve({
@@ -257,7 +293,6 @@ export class ApprovalGate {
 
       this.pending.set(approvalId, {
         sessionId,
-        remember,
         question: options.question === true,
         settle,
         ...(options.recheck ? { recheck: options.recheck } : {}),
@@ -312,6 +347,7 @@ export class ApprovalGate {
   forgetSession(sessionId: string): void {
     this.standing.delete(sessionId);
     this.standingShell.delete(sessionId);
+    this.parents.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
         entry.settle({ decision: 'deny' }, 'conversation-deleted');
@@ -325,29 +361,35 @@ export class ApprovalGate {
     this.pending.clear();
     this.standing.clear();
     this.standingShell.clear();
+    this.parents.clear();
   }
 
-  private rememberShell(sessionId: string, always: ApprovalAlways, overTaint: boolean): void {
-    const standing = this.standingShell.get(sessionId) ?? {
+  private rememberShell(sessionId: string, key: string, always: ApprovalAlways): void {
+    const byKey = this.standingShell.get(sessionId) ?? new Map<string, StandingShell>();
+    const standing = byKey.get(key) ?? {
       patterns: new Set(),
-      overTaint: new Set(),
+      askedOver: new Map(),
       directories: new Set(),
     };
-    for (const { pattern } of always.commands) {
+    for (const { pattern, ask } of always.commands) {
       const entry = `${always.namespace}\x00${pattern}`;
       standing.patterns.add(entry);
-      if (overTaint && hasBoundedTaintPrefix(pattern)) standing.overTaint.add(entry);
+      if (ask) {
+        const over = standing.askedOver.get(entry) ?? new Set<string>();
+        for (const kind of ask.kinds) over.add(kind);
+        standing.askedOver.set(entry, over);
+      }
     }
     for (const directory of always.directories) standing.directories.add(directory);
-    this.standingShell.set(sessionId, standing);
+    byKey.set(key, standing);
+    this.standingShell.set(sessionId, byKey);
   }
 
-  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer, overTaint: boolean): void {
+  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {
     const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
     keys.set(key, {
       ...(answer.optionId ? { optionId: answer.optionId } : {}),
       ...(answer.value === undefined ? {} : { value: answer.value }),
-      ...(overTaint || keys.get(key)?.overTaint ? { overTaint: true as const } : {}),
     });
     this.standing.set(sessionId, keys);
   }

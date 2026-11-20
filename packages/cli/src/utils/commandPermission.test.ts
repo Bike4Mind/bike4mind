@@ -135,6 +135,21 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
     expect(mockRun).not.toHaveBeenCalled();
   });
 
+  it('does not run a skill hook when its trusted permission completes after retirement', async () => {
+    let ended = false;
+    const manager = new PermissionManager(new ToolCatalog());
+    vi.spyOn(manager, 'needsPermission').mockImplementation(() => {
+      ended = true;
+      return false;
+    });
+    const tool = createSkillTool({
+      customCommandStore: storeWithHookedSkill(),
+      permission: { permissionManager: manager, promptFn: promptReturning('allow-once'), isCancelled: () => ended },
+    });
+    await expect(tool.toolFn({ skill: 'demo' })).rejects.toThrow(/Pre-invoke hook/);
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
   it('runs the pre-invoke hook shell command when allowed', async () => {
     const pm = new PermissionManager(new ToolCatalog());
     const tool = createSkillTool({
@@ -144,5 +159,47 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
     const result = await tool.toolFn({ skill: 'demo' });
     expect(mockRun).toHaveBeenCalledTimes(1);
     expect(String(result)).toContain('Skill Loaded');
+  });
+});
+
+describe('retired hook permissions', () => {
+  const hooks = [{ hooks: [{ type: 'command' as const, command: 'echo old-session' }] }];
+  const context = { session_id: 'old', agent_name: 'explore', cwd: '/tmp', hook_event_name: 'Stop' };
+
+  it('does not remember trust or run a hook after its permission answer outlives the session', async () => {
+    let resolve!: (value: { action: 'allow-session' }) => void;
+    const answer = new Promise<{ action: 'allow-session' }>(complete => {
+      resolve = complete;
+    });
+    let ended = false;
+    const manager = new PermissionManager(new ToolCatalog());
+    const prompt = vi.fn(async () => answer);
+    const running = executeHooks(hooks, context, {
+      permissionManager: manager,
+      promptFn: prompt,
+      isCancelled: () => ended,
+    });
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+    ended = true;
+    resolve({ action: 'allow-session' });
+    expect((await running).decision).toBe('deny');
+    expect(manager.isSessionTrusted('agent_hook:Stop')).toBe(false);
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('rechecks retirement at the shell invocation after session trust skipped the prompt', async () => {
+    let ended = false;
+    const manager = new PermissionManager(new ToolCatalog());
+    vi.spyOn(manager, 'needsPermission').mockImplementation(() => {
+      ended = true;
+      return false;
+    });
+    const result = await executeHooks(hooks, context, {
+      permissionManager: manager,
+      promptFn: promptReturning('allow-once'),
+      isCancelled: () => ended,
+    });
+    expect(result.decision).toBe('deny');
+    expect(mockRun).not.toHaveBeenCalled();
   });
 });

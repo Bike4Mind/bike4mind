@@ -1,10 +1,9 @@
-import { fabFileRepository, projectRepository, withTransaction } from '@bike4mind/database';
-import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { addProjectSystemPrompts, removeProjectSystemPrompts } from '@server/projects/projectSharingMutations';
+import { respond } from '@server/utils/respond';
+import { projectResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ProjectFilesRequestBody } from '../../../../../types/api';
 
@@ -14,40 +13,13 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { fileIds } = req.body as ProjectFilesRequestBody;
 
-      const project = await withTransaction(() =>
-        projectService.addSystemPrompts(
-          req.user,
-          {
-            projectId: id,
-            fileIds,
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-            },
-          }
-        )
+      const project = await addProjectSystemPrompts(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        fileIds
       );
 
-      await Promise.all(
-        fileIds.map((fileId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.ADD_SYSTEM_PROMPT,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                promptId: fileId,
-              },
-            },
-            { ability: req.ability }
-          )
-        )
-      );
-
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   )
   .delete(
@@ -62,40 +34,13 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })
         throw new BadRequestError('fileIds must be a non-empty array of strings');
       }
 
-      const project = await withTransaction(() =>
-        projectService.removeSystemPrompts(
-          req.user,
-          {
-            projectId: id,
-            fileIds: ids,
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-            },
-          }
-        )
+      const project = await removeProjectSystemPrompts(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        ids
       );
 
-      await Promise.all(
-        ids.map(promptId =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.REMOVE_SYSTEM_PROMPT,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                promptId,
-              },
-            },
-            { ability: req.ability }
-          )
-        )
-      );
-
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

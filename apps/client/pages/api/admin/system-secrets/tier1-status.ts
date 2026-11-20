@@ -18,8 +18,7 @@
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -47,7 +46,8 @@ interface Tier1StatusResponse {
 }
 
 /**
- * Config carries the four boot secrets; the rest are read straight off Resource.
+ * MONGODB_URI comes from Config; the rest are read raw off Resource, since Config refuses or
+ * blanks a placeholder that this page must report as one.
  * Accessing an unlinked Resource property throws in the getter itself, so `?.`
  * cannot guard it - a stage that stops linking one of these would otherwise 500
  * the whole page instead of reporting that one secret as unset.
@@ -62,14 +62,11 @@ function readLinkedSecret(read: () => string | undefined): string | undefined {
 
 const SECRET_READERS: Record<string, () => string | undefined> = {
   MONGODB_URI: () => Config.MONGODB_URI,
-  SESSION_SECRET: () => Config.SESSION_SECRET,
-  JWT_SECRET: () => Config.JWT_SECRET,
-  SECRET_ENCRYPTION_KEY: () => Config.SECRET_ENCRYPTION_KEY,
+  SESSION_SECRET: () => readLinkedSecret(() => Resource.SESSION_SECRET.value),
+  JWT_SECRET: () => readLinkedSecret(() => Resource.JWT_SECRET.value),
+  SECRET_ENCRYPTION_KEY: () => readLinkedSecret(() => Resource.SECRET_ENCRYPTION_KEY.value),
   CHAT_COMPLETION_INTERNAL_SECRET: () => readLinkedSecret(() => Resource.CHAT_COMPLETION_INTERNAL_SECRET.value),
   SECOPS_ZAP_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_ZAP_INGEST_TOKEN.value),
-  SECOPS_CODE_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_CODE_INGEST_TOKEN.value),
-  SECOPS_PACKAGES_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_PACKAGES_INGEST_TOKEN.value),
-  SECOPS_SECRETS_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_SECRETS_INGEST_TOKEN.value),
   SECOPS_PROWLER_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_PROWLER_INGEST_TOKEN.value),
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: () =>
     readLinkedSecret(() => Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN.value),
@@ -84,29 +81,24 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
   }).map(({ isValid: _isValid, exposure: _exposure, ...info }) => info);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req, res) => {
+    try {
+      const stage = Config.STAGE;
+      const secrets = getTier1Status(stage);
+
+      const response: Tier1StatusResponse = {
+        stage,
+        secrets,
+      };
+
+      return res.json(response);
+    } catch (error) {
+      Logger.error('Error fetching Tier 1 secrets status:', error);
+      return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
     }
-
-    const stage = Config.STAGE;
-    const secrets = getTier1Status(stage);
-
-    const response: Tier1StatusResponse = {
-      stage,
-      secrets,
-    };
-
-    return res.json(response);
-  } catch (error) {
-    Logger.error('Error fetching Tier 1 secrets status:', error);
-    if (error instanceof ForbiddenError) {
-      return res.status(403).json({ error: error.message });
-    }
-    return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
   }
-});
+);
 
 export const config = {
   api: {

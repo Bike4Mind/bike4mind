@@ -16,6 +16,7 @@ import {
 } from '@bike4mind/memory';
 import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createKeyProvider } from './factCipher';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * The Mementos V2 WRITE seam.
@@ -181,7 +182,7 @@ export async function createLedgerAppendSession(params: {
         });
       }
     } catch (error) {
-      console.warn(
+      Logger.warn(
         `[Mementos V2] de-dup profile read failed; facts this run may store as duplicate beliefs: ${
           error instanceof Error ? error.message : String(error)
         }`

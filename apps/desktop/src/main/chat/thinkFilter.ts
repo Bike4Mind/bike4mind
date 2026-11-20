@@ -12,6 +12,9 @@ const CLOSE = '</think>';
  * @bike4mind/common's streamVisibility, which tracks nesting depth and treats a stray close as
  * text.
  *
+ * `startInReasoning` swaps in a different rule (see prefilledFilter): the first close ends the
+ * reasoning and later markers are reply text.
+ *
  * Markers can split across deltas, so a tail that could still become one is held back until
  * the next push (or `flush`) settles it.
  */
@@ -20,7 +23,14 @@ export interface ThinkSplit {
   reasoning: string;
 }
 
-export function createThinkFilter(): { push(text: string): ThinkSplit; flush(): ThinkSplit } {
+type ThinkFilter = { push(text: string): ThinkSplit; flush(): ThinkSplit };
+
+/**
+ * `startInReasoning`: the prompt already opened the block (a template that prefills `<think>`).
+ * Splits the way Ollama's own thinking parser does for such a prompt, see prefilledFilter.
+ */
+export function createThinkFilter({ startInReasoning = false }: { startInReasoning?: boolean } = {}): ThinkFilter {
+  if (startInReasoning) return prefilledFilter();
   let depth = 0;
   let pending = '';
 
@@ -63,6 +73,64 @@ export function createThinkFilter(): { push(text: string): ThinkSplit; flush(): 
       return drain(true);
     },
   };
+}
+
+/**
+ * Mirrors Ollama's thinking parser (thinking/parser.go) started inside the block: leading
+ * whitespace is dropped, reasoning runs verbatim to the first `</think>`, whitespace after it is
+ * dropped, and everything after that is reply text, later markers included.
+ */
+function prefilledFilter(): ThinkFilter {
+  let state: 'leading' | 'reasoning' | 'trailing' | 'reply' = 'leading';
+  let pending = '';
+
+  const drain = (final: boolean): ThinkSplit => {
+    let reasoning = '';
+    let text = '';
+    if (state === 'leading') {
+      pending = pending.trimStart();
+      if (pending) state = 'reasoning';
+    }
+    if (state === 'reasoning') {
+      const close = pending.indexOf(CLOSE);
+      if (close === -1) {
+        const keep = final ? 0 : closeOverlap(pending);
+        reasoning = pending.slice(0, pending.length - keep);
+        pending = pending.slice(pending.length - keep);
+        return { text, reasoning };
+      }
+      reasoning = pending.slice(0, close);
+      pending = pending.slice(close + CLOSE.length);
+      state = 'trailing';
+    }
+    if (state === 'trailing') {
+      pending = pending.trimStart();
+      if (pending) state = 'reply';
+    }
+    if (state === 'reply') {
+      text = pending;
+      pending = '';
+    }
+    return { text, reasoning };
+  };
+
+  return {
+    push(text) {
+      pending += text;
+      return drain(false);
+    },
+    flush() {
+      return drain(true);
+    },
+  };
+}
+
+/** How many trailing characters of `text` could still become `</think>`. */
+function closeOverlap(text: string): number {
+  for (let length = Math.min(CLOSE.length - 1, text.length); length > 0; length--) {
+    if (CLOSE.startsWith(text.slice(-length))) return length;
+  }
+  return 0;
 }
 
 /** How many trailing characters of `text` are the start of a marker. */

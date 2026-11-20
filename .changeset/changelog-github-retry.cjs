@@ -12,9 +12,9 @@
 // engineers repeatedly stop to investigate, and it skips the Release version
 // PR / npm publish until a clean re-run.
 //
-// Both the `release` and `snapshot-publish` workflows resolve their changelog
-// generator from `.changeset/config.json`, so wrapping it here is the single
-// place that hardens both.
+// The `release` workflow resolves its changelog generator from
+// `.changeset/config.json`, so wrapping it here is the single place that
+// hardens it.
 //
 // Strategy:
 //   1. Retry the underlying generator a few times with backoff. On a
@@ -30,7 +30,7 @@
 // Tolerate both module shapes: @changesets/changelog-github's CJS build exposes
 // the changelog object on `.default` (current, 0.7.x), but guard against a future
 // release that exports it directly on `module.exports` — otherwise this would be
-// `undefined` and every release/snapshot version step would hard-fail.
+// `undefined` and every release version step would hard-fail.
 const changelogGithubModule = require('@changesets/changelog-github');
 const githubChangelog = changelogGithubModule.default || changelogGithubModule;
 

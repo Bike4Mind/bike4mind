@@ -15,8 +15,9 @@ import type { Logger } from '@bike4mind/observability';
 /** Sentinel alias map, so "the seed export reaches the aggregators" is an identity check. */
 const MODEL_ID_ALIASES = { 'grok-3-fast': { litellm: 'xai/grok-3-fast-latest' } };
 
-const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials } = vi.hoisted(() => ({
+const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials, bumpModelListRevision } = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
+  bumpModelListRevision: vi.fn(async () => 'rev-1'),
   getDiscoveryCredentials: vi.fn(async (..._args: unknown[]) => ({})),
   createBedrockControlPlane: vi.fn(() => ({
     listFoundationModels: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: { find: vi.fn() },
 }));
 vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
+vi.mock('./modelListRevision', () => ({ bumpModelListRevision }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {
@@ -207,12 +209,15 @@ describe('bedrock wiring', () => {
 });
 
 describe('openai wiring', () => {
-  it('hands the source every id the catalog holds', async () => {
+  it('hands the source every id the catalog holds, and every static adapter id', async () => {
     buildModelDiscoveryAdapters(logger);
 
-    await expect(captured.openai!.knownModelIds!()).resolves.toEqual(
-      new Set(['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast'])
-    );
+    const known = (await captured.openai!.knownModelIds!()) as ReadonlySet<string>;
+    for (const id of ['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast']) {
+      expect(known.has(id)).toBe(true);
+    }
+    // The seed holds the dated snapshot, not its alias; without it the alias reads as new.
+    expect(known.has('gpt-4.1-2025-04-14')).toBe(true);
   });
 
   it('keeps the new-model docs leg off when the catalog read failed', async () => {
@@ -303,5 +308,16 @@ describe('credential wiring', () => {
 
     expect(getDiscoveryCredentials.mock.calls[0][2]).toEqual({ skipCache: true });
     expect(getDiscoveryCredentials.mock.calls[1][2]).toBeUndefined();
+  });
+});
+
+describe('model-list refresh wiring', () => {
+  it('bumps the shared model-list revision when a run reports a list change', async () => {
+    const { onModelListChanged } = buildModelDiscoveryAdapters(logger);
+
+    expect(bumpModelListRevision).not.toHaveBeenCalled();
+    await onModelListChanged!();
+
+    expect(bumpModelListRevision).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,29 +5,77 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  addProjectFiles: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/files',
+  },
+  addProjectSessions: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/sessions',
+  },
+  addProjectSystemPrompts: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/system-prompts',
+  },
+  approvePendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/approve',
+  },
+  bulkDeleteFiles: {
+    method: 'POST',
+    path: '/api/v1/files/bulk-delete',
+  },
   cancelMusicGeneration: {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
+  },
+  cancelSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions/{id}/cancel',
   },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
   },
+  chunkFile: {
+    method: 'POST',
+    path: '/api/v1/files/{id}/chunk',
+  },
   cloneSession: {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
+  },
+  composeBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs',
   },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
   },
+  createAgentFromContext: {
+    method: 'POST',
+    path: '/api/v1/agents/from-context',
+  },
   createArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts',
   },
+  createArtifactVersion: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/versions',
+  },
+  createAssistantInstruction: {
+    method: 'POST',
+    path: '/api/v1/assistant/instructions',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
+  },
+  createCompletionRun: {
+    method: 'POST',
+    path: '/api/v1/completion-runs',
   },
   createDecision: {
     method: 'POST',
@@ -49,9 +97,21 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects',
   },
+  createProjectInvite: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/invites',
+  },
+  createSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions',
+  },
   createSession: {
     method: 'POST',
     path: '/api/v1/sessions',
+  },
+  createSkill: {
+    method: 'POST',
+    path: '/api/v1/skills',
   },
   createTextRefinement: {
     method: 'POST',
@@ -81,9 +141,17 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}',
   },
+  deleteAssistantInstruction: {
+    method: 'DELETE',
+    path: '/api/v1/assistant/instructions/{id}',
+  },
   deleteFile: {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
+  },
+  deletePersona: {
+    method: 'DELETE',
+    path: '/api/v1/personas/{id}',
   },
   deleteProject: {
     method: 'DELETE',
@@ -93,6 +161,14 @@ export const operations = {
     method: 'DELETE',
     path: '/api/sessions/{id}',
   },
+  deleteSessionMessage: {
+    method: 'DELETE',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  denyPendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/deny',
+  },
   editImage: {
     method: 'POST',
     path: '/api/v1/image-edits',
@@ -101,9 +177,29 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/voice/sessions/{id}/end',
   },
+  enhanceAgentField: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/enhance-field',
+  },
   executeTool: {
     method: 'POST',
     path: '/api/ai/v1/tools',
+  },
+  fetchWebPage: {
+    method: 'POST',
+    path: '/api/v1/tools/web-fetch',
+  },
+  generateAgentAvatar: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-avatar',
+  },
+  generateAgentDescription: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-description',
+  },
+  generateAgentSystemPrompt: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-system-prompt',
   },
   generateImage: {
     method: 'POST',
@@ -133,6 +229,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getBrief: {
+    method: 'GET',
+    path: '/api/v1/briefs/{id}',
+  },
+  getClaudeBundleZip: {
+    method: 'GET',
+    path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
+  },
   getClaudeMarketplace: {
     method: 'GET',
     path: '/api/v1/skills/market/claude-marketplace.json',
@@ -141,9 +245,21 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/{id}/claude-plugin.zip',
   },
+  getClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config',
+  },
+  getCompletionRunUsage: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/usage',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
+  },
+  getCurrentWeather: {
+    method: 'POST',
+    path: '/api/v1/tools/weather',
   },
   getDataLake: {
     method: 'GET',
@@ -157,6 +273,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/{id}',
   },
+  getFileLineage: {
+    method: 'GET',
+    path: '/api/v1/files/{id}/lineage',
+  },
+  getFilesByIds: {
+    method: 'GET',
+    path: '/api/v1/files/by-ids',
+  },
   getMe: {
     method: 'GET',
     path: '/api/v1/me',
@@ -169,13 +293,33 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects/{id}',
   },
+  getPublicClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config/public',
+  },
   getQuest: {
     method: 'GET',
     path: '/api/v1/quests/{id}',
   },
+  getSceneComposition: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions/{id}',
+  },
   getSession: {
     method: 'GET',
     path: '/api/sessions/{id}',
+  },
+  getSessionMessage: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  getSkill: {
+    method: 'GET',
+    path: '/api/v1/skills/{id}',
+  },
+  getSkillMarketListing: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings/{id}',
   },
   getVideoGeneration: {
     method: 'GET',
@@ -185,9 +329,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new/media/{id}/{asset}',
   },
+  importSkillMarketListing: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings/{id}/import',
+  },
   listAgents: {
     method: 'GET',
     path: '/api/v1/agents',
+  },
+  listArtifactTypes: {
+    method: 'GET',
+    path: '/api/v1/artifacts/types',
   },
   listArtifactVersions: {
     method: 'GET',
@@ -197,6 +349,18 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts',
   },
+  listAssistantInstructions: {
+    method: 'GET',
+    path: '/api/v1/assistant/instructions',
+  },
+  listBriefs: {
+    method: 'GET',
+    path: '/api/v1/briefs',
+  },
+  listCreditTransactions: {
+    method: 'GET',
+    path: '/api/v1/credits/transactions',
+  },
   listDataLakes: {
     method: 'GET',
     path: '/api/v1/data-lakes',
@@ -205,9 +369,21 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/decision-models',
   },
+  listEmbeddingModels: {
+    method: 'GET',
+    path: '/api/v1/embedding-models',
+  },
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listHandoffDevices: {
+    method: 'GET',
+    path: '/api/v1/handoff-devices',
+  },
+  listImageModels: {
+    method: 'GET',
+    path: '/api/v1/image-models',
   },
   listModels: {
     method: 'GET',
@@ -221,6 +397,26 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/music-models',
   },
+  listMySkillMarketListings: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings/mine',
+  },
+  listMySkills: {
+    method: 'GET',
+    path: '/api/v1/skills/mine',
+  },
+  listProjectFiles: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/files',
+  },
+  listProjectInvites: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/invites',
+  },
+  listProjectSessions: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/sessions',
+  },
   listProjects: {
     method: 'GET',
     path: '/api/v1/projects',
@@ -229,9 +425,29 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
   },
+  listSceneCompositions: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions',
+  },
+  listSessionFiles: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/files',
+  },
+  listSessionQuests: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/quests',
+  },
   listSessions: {
     method: 'GET',
     path: '/api/v1/sessions',
+  },
+  listSkillMarketListings: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings',
+  },
+  listSkillMarketReviewQueue: {
+    method: 'GET',
+    path: '/api/v1/skills/market/review-queue',
   },
   listVideoGenerations: {
     method: 'GET',
@@ -249,25 +465,113 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new',
   },
+  mintPersona: {
+    method: 'POST',
+    path: '/api/v1/personas',
+  },
+  postSlackMessage: {
+    method: 'POST',
+    path: '/api/v1/slack/messages',
+  },
+  publishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/publish',
+  },
+  publishSkillMarketListing: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings',
+  },
+  registerPushToken: {
+    method: 'POST',
+    path: '/api/v1/push-tokens',
+  },
   removeDataLakeFile: {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
+  },
+  removeProjectFile: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/files/{file_id}',
+  },
+  removeProjectMember: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/members/{user_id}',
+  },
+  removeProjectSession: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/sessions/{session_id}',
+  },
+  removeProjectSystemPrompt: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
+  replyToBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
+  },
+  republishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/republish',
+  },
+  rescanSkillMarketVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  reviewSkillMarketVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/versions/{vid}/review',
+  },
+  searchArtifacts: {
+    method: 'GET',
+    path: '/api/v1/artifacts/search',
   },
   searchDataLake: {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/search',
   },
+  searchFiles: {
+    method: 'GET',
+    path: '/api/v1/files/search',
+  },
+  searchSessions: {
+    method: 'POST',
+    path: '/api/v1/sessions/semantic-search',
+  },
+  searchWeb: {
+    method: 'POST',
+    path: '/api/v1/tools/web-search',
+  },
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
+  },
+  sendSessionHandoff: {
+    method: 'POST',
+    path: '/api/v1/session-handoffs',
   },
   startAgentExecution: {
     method: 'POST',
     path: '/api/v1/agent-executions',
   },
+  submitSkillMarketListingVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings/{id}/versions',
+  },
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  transferAgentCredits: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/transfer-credits',
+  },
+  unpublishArtifact: {
+    method: 'DELETE',
+    path: '/api/v1/artifacts/{id}/publish',
+  },
+  unregisterPushToken: {
+    method: 'DELETE',
+    path: '/api/v1/push-tokens',
   },
   updateAgent: {
     method: 'PATCH',
@@ -285,8 +589,24 @@ export const operations = {
     method: 'PATCH',
     path: '/api/v1/projects/{id}',
   },
+  updateProjectSystemPrompt: {
+    method: 'PATCH',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
   updateSession: {
     method: 'PUT',
     path: '/api/sessions/{id}',
+  },
+  updateSessionMessage: {
+    method: 'PUT',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  updateSkill: {
+    method: 'PUT',
+    path: '/api/v1/skills/{id}',
+  },
+  withdrawSkillMarketListing: {
+    method: 'DELETE',
+    path: '/api/v1/skills/market/listings/{id}',
   },
 } as const;

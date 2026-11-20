@@ -13,6 +13,7 @@ const signedIn: AuthState = {
   hostedAvailable: true,
   storage: 'available',
   busy: 'idle',
+  user: { id: 'u1' },
 };
 
 describe('the Settings screen', () => {
@@ -28,7 +29,13 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="worktree-default"');
     expect(html).toContain('data-entry="local-history"');
+    expect(html).toContain('data-entry="local-data-export"');
+    expect(html).toContain('settings-export-local-btn');
+    expect(html).toContain('data-entry="local-context"');
+    expect(html).toContain('settings-local-context-select');
     expect(html).toContain('settings-clear-history-btn');
+    expect(html).toContain('data-entry="curated-list"');
+    expect(html).toContain('settings-curated-source-switch');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
@@ -40,6 +47,40 @@ describe('the Settings screen', () => {
     }
   });
 
+  it('groups each General setting once under a named section', () => {
+    const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
+    expect(groups).toHaveLength(5);
+    expect(html).not.toContain('data-testid="settings-group-other"');
+    const expected = [
+      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
+      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+      ['local-context', 'token-rate', 'curated-list'],
+      ['local-history', 'local-data-export'],
+      ['server', 'updates'],
+    ];
+    expected.forEach((entries, index) => {
+      for (const id of entries) {
+        expect(groups[index]).toContain(`data-entry="${id}"`);
+        expect(html.split(`data-entry="${id}"`)).toHaveLength(2);
+        expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
+      }
+    });
+  });
+
+  it('offers the notify scope next to the chime, agents only by default', () => {
+    expect(html).toContain('data-testid="settings-notify-scope-group"');
+    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(html).toContain('Agents only');
+    expect(html).toContain('All sessions');
+  });
+
+  it('keeps advanced worker settings behind an expandable disclosure', () => {
+    expect(html).toContain('<details');
+    expect(html).toContain('data-testid="settings-worker-models-details"');
+    expect(html).toContain('data-testid="orchestration-settings"');
+  });
+
   it('gives Permissions and Import a page each', () => {
     const permissions = page('permissions');
     expect(permissions).toContain('data-entry="permissions"');
@@ -49,7 +90,16 @@ describe('the Settings screen', () => {
     expect(imports).not.toContain('data-entry="appearance"');
   });
 
+  it('gives model servers their own page, which works signed out too', () => {
+    const servers = markup(<SettingsScreen auth={null} section="servers" onClose={() => {}} />);
+    expect(servers).toContain('data-entry="model-servers"');
+    expect(servers).toContain('data-testid="model-servers"');
+    expect(servers).not.toContain('data-entry="appearance"');
+    expect(isSettingsSection('servers')).toBe(true);
+  });
+
   it('only takes known page names from the route', () => {
+    expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
     expect(isSettingsSection('billing')).toBe(false);
     expect(isSettingsSection(undefined)).toBe(false);
@@ -61,12 +111,41 @@ describe('the Settings screen', () => {
     }
   });
 
+  it('keeps Billing outside Settings', () => {
+    expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+    expect(html).not.toContain('billing-loading');
+  });
+
+  it.each([null, { ...signedIn, status: 'signed-out' as const }, { ...signedIn, user: undefined }])(
+    'keeps Settings independent of account billing',
+    auth => {
+      const html = markup(<SettingsScreen auth={auth} onClose={() => {}} />);
+      expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+      expect(html).not.toContain('data-testid="settings-page-billing"');
+      expect(html).not.toContain('billing-loading');
+      expect(html).toContain('data-testid="settings-page-general"');
+    }
+  );
+
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');
   });
 
+  it('offers the auto-fix attempts setting', () => {
+    expect(html).toContain('data-entry="autofix-attempts"');
+    expect(html).toContain('data-testid="settings-autofix-attempts-select"');
+  });
+
   it('offers the worktree-by-default preference', () => {
     expect(html).toContain('data-testid="settings-worktree-default-switch"');
+  });
+
+  it('offers the orchestrator sound preference', () => {
+    expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
+  });
+
+  it('offers the self-hosted model speed preference', () => {
+    expect(html).toContain('data-testid="settings-token-rate-switch"');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {

@@ -39,9 +39,10 @@ runs:
     - name: Download Chromium
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      # Kill the whole group at the deadline; TERM can orphan resistant children.
+      # Ubuntu 26 defaults to uutils; use GNU timeout to kill the whole process group.
       # A no-op on a cache hit.
-      run: timeout --signal=KILL 5m npx playwright install chromium
+      run: |
+        "$(command -v gnutimeout || command -v timeout)" --signal=KILL 5m npx playwright install chromium
 
     - name: Install Chromium system dependencies
       shell: bash
@@ -57,7 +58,7 @@ runs:
         # sudo starts apt in its own pty session and the kill never reaches it:
         # apt kept downloading and upgrading libs under the running tests.
         rc=0
-        sudo env "PATH=$PATH" timeout --signal=KILL 5m npx playwright install-deps chromium || rc=$?
+        sudo env "PATH=$PATH" "$(command -v gnutimeout || command -v timeout)" --signal=KILL 5m npx playwright install-deps chromium || rc=$?
         if [ "$rc" -eq 0 ]; then
           exit 0
         fi
@@ -65,5 +66,5 @@ runs:
         echo "::warning::Playwright system dependency install failed (exit $rc); recovering package state before checking whether Chromium launches"
         # Finish interrupted package configuration before starting tests.
         # A failed or hung repair leaves the runner unsafe to reuse.
-        sudo timeout --signal=KILL 1m dpkg --configure -a
+        sudo "$(command -v gnutimeout || command -v timeout)" --signal=KILL 1m dpkg --configure -a
         node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"

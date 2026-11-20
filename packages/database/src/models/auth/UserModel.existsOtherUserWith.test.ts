@@ -58,3 +58,63 @@ describe('UserModel.existsOtherUserWithUsername', () => {
     expect(await userRepository.existsOtherUserWithUsername('Jose\u0301')).toBe(true);
   });
 });
+
+describe('UserModel.existsVerifiedUserOnEmailDomain', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const weekAgo = new Date(Date.now() - 7 * DAY_MS);
+  const verified = (email: string, overrides: Record<string, unknown> = {}) =>
+    User.collection.insertOne({
+      username: email,
+      name: email,
+      email,
+      emailVerified: true,
+      emailVerifiedAt: new Date(Date.now() - 8 * DAY_MS),
+      ...overrides,
+    });
+
+  it('matches a week-old verified user on the domain or a subdomain, case-insensitively', async () => {
+    await verified(' A@X.Acme.Example ');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(true);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('ACME.example', weekAgo)).toBe(true);
+  });
+
+  it('does not match a lookalike domain or a regex in the input', async () => {
+    await verified('a@notacme.example');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.exampl.', weekAgo)).toBe(false);
+  });
+
+  it('treats the dots of the domain literally', async () => {
+    await verified('someone@acmexco.uk');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.co.uk', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acmexco.uk', weekAgo)).toBe(true);
+  });
+
+  it('counts a legacy verified row with no verification date', async () => {
+    await verified('a@acme.example', { emailVerifiedAt: null });
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(true);
+  });
+
+  it('ignores users verified too recently, unverified, banned, system or deleted', async () => {
+    await verified('recent@acme.example', { emailVerifiedAt: new Date() });
+    await verified('unverified@acme.example', { emailVerified: false });
+    await verified('banned@acme.example', { isBanned: true });
+    await verified('system@acme.example', { isSystem: true });
+    await verified('deleted@acme.example', { deletedAt: new Date() });
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(false);
+  });
+
+  it('returns false for a blank domain, even when a stored email ends in a bare separator', async () => {
+    await verified('a@acme.example');
+    await verified('weird@');
+    await verified('x@host.');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('  ', weekAgo)).toBe(false);
+  });
+});

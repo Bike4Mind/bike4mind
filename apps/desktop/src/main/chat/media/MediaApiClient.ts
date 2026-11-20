@@ -1,12 +1,16 @@
 import type { Readable } from 'node:stream';
+import { z } from 'zod';
 import axios, { isAxiosError, type AxiosError } from 'axios';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { SessionChangedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
   FileResponseSchema,
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
+  ImageJobRequestSchema,
+  GENERATION_JOB_STATES,
+  type ImageJobRequest,
   type CreateFileUploadResponse,
   type CreateVideoGenerationBody,
   type FileResponse,
@@ -21,6 +25,15 @@ import {
 import type { ChatToolNotice } from '@shared/chat';
 import { parseMusicModels } from './musicModels';
 
+const studioImageJobSchema = z.object({
+  id: z.string(),
+  groupId: z.string().nullable(),
+  state: z.enum(GENERATION_JOB_STATES),
+  output: z.object({ fileId: z.string().nullable(), contentType: z.string(), bytes: z.number() }).nullable(),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+});
+export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
+
 /**
  * A generation failure worth saying something specific about.
  *
@@ -29,6 +42,8 @@ import { parseMusicModels } from './musicModels';
  * provider standing in for the one that was asked for. See ChatToolNotice.
  */
 export class MediaToolError extends Error {
+  code?: string;
+  requestNotStarted?: boolean;
   /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
   status?: number;
   /** How long the server asked this caller to wait, in ms, when a 429 carried a Retry-After. */
@@ -48,6 +63,7 @@ export interface GenerateImageRequest {
   prompt: string;
   model: string;
   size?: string;
+  prompt_resolution?: 'auto' | 'literal';
   /** Notebook to file the generation under; the server creates one when this is absent. */
   sessionId?: string;
   sessionName?: string;
@@ -114,6 +130,23 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  */
 export class MediaApiClient {
   constructor(private readonly api: AuthenticatedApiClient) {}
+
+  async createStudioImages(request: ImageJobRequest, count: number, key: string) {
+    const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
+    return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
+      await this.api.post<unknown>('/api/studio/image-jobs', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': key },
+      })
+    );
+  }
+
+  async listStudioImages(cursor?: string) {
+    const query = new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) });
+    return z
+      .object({ data: z.array(studioImageJobSchema), next_cursor: z.string().nullable() })
+      .parse(await this.api.get<unknown>(`/api/studio/image-jobs?${query}`, { timeout: TIMEOUT_MS.download }));
+  }
 
   /**
    * Queue an image generation. Returns the quest to poll, not an image: the route hands the
@@ -228,8 +261,9 @@ export class MediaApiClient {
     }
     try {
       const target = new URL(upload.upload_url, this.api.getAxiosInstance().defaults.baseURL ?? undefined);
+      // Create-only: upload_url names a freshly minted key, so the PUT must never overwrite one.
       await axios.put(target.toString(), bytes, {
-        headers: { 'Content-Type': mimeType },
+        headers: { 'Content-Type': mimeType, 'If-None-Match': '*' },
         timeout: TIMEOUT_MS.download,
         maxBodyLength: Infinity,
       });
@@ -450,18 +484,28 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (isAxiosError(error)) {
     const mapped = fromAxiosError(error, action);
     mapped.status = error.response?.status;
+    const body = z
+      .object({
+        code: z.string().max(100).optional().catch(undefined),
+        errorCode: z.string().max(100).optional().catch(undefined),
+        error: z.string().max(100).optional().catch(undefined),
+      })
+      .safeParse(error.response?.data);
+    if (body.success) mapped.code = body.data.code ?? body.data.errorCode ?? body.data.error;
     const retryAfterMs = parseRetryAfterMs(error.response?.headers['retry-after']);
     if (retryAfterMs !== undefined) mapped.retryAfterMs = retryAfterMs;
     return mapped;
   }
 
-  return new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  const mapped = new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  if (error instanceof SessionChangedError) mapped.requestNotStarted = error.beforeRequest;
+  return mapped;
 }
 
 function fromAxiosError(error: AxiosError, action: string): MediaToolError {
   const status = error.response?.status;
   const body = (error.response?.data ?? {}) as ApiErrorBody;
-  const detail = body.error || body.message;
+  const detail = body.message || body.error;
 
   if (body.errorCode === 'insufficient_credits') {
     return new MediaToolError(detail || 'There are not enough credits on this account to generate that.', {

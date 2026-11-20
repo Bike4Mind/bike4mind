@@ -1,0 +1,65 @@
+import { IResearchTask, IResearchTaskJobs } from '@bike4mind/common';
+import { sendToQueue } from './sqs';
+import { getSourceQueueUrl } from './dlqRegistry';
+import { sendToClient } from '../websocket/utils';
+import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
+
+export type DeepResearchIntoQuestJob = { questId: string; sessionId: string; userId: string; topic: string };
+
+class ResearchTaskJobs implements IResearchTaskJobs {
+  async process(id: string, userId: string): Promise<void> {
+    try {
+      await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+        action: 'process',
+        payload: {
+          id,
+          userId,
+        },
+      });
+      Logger.info(`[QUEUE_SUCCESS] Successfully queued research task ${id}`);
+    } catch (queueError) {
+      Logger.error(`[QUEUE_ERROR] Failed to queue research task ${id}`, { error: queueError });
+      throw queueError;
+    }
+  }
+  async processDiscoveredLinks(id: string, userId: string): Promise<void> {
+    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+      action: 'processDiscoveredLinks',
+      payload: {
+        id,
+        userId,
+      },
+    });
+  }
+
+  async downloadRelevantLinks(id: string, userId: string): Promise<void> {
+    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+      action: 'downloadRelevantLinks',
+      payload: {
+        id,
+        userId,
+      },
+    });
+  }
+
+  async deepResearchIntoQuest(job: DeepResearchIntoQuestJob): Promise<void> {
+    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), { action: 'deepResearchIntoQuest', payload: job });
+  }
+
+  async sendToClient(
+    researchTask: IResearchTask,
+    update: { status: string; currentStep: string; progress: number }
+  ): Promise<void> {
+    Logger.info('SENDING TO CLIENT');
+    await sendToClient(researchTask.userId, Resource.websocket.managementEndpoint, {
+      action: 'research_task_status_update',
+      status: update.status,
+      taskId: researchTask.id,
+      currentStep: update.currentStep,
+      progress: update.progress,
+    });
+  }
+}
+
+export const researchTaskJobs = new ResearchTaskJobs();

@@ -1,7 +1,8 @@
 import {
-  CACHE_READ_MULTIPLIER,
+  oneHourCacheWriteRate,
   pricingTierForTokens,
   resolveAppliedRates,
+  sumOneHourCacheWrites,
   type ModelInfo,
   type TurnUsage,
 } from './models';
@@ -18,11 +19,13 @@ export type UsagePriceStampBasis = {
   /** The tierBasisTokens of the getTextModelCost call; read when there are no turns. */
   tierBasisTokens?: number;
   /**
-   * The cost priced a local estimate rather than provider usage: cache reads fold into the input
-   * term at CACHE_READ_MULTIPLIER and cache writes are not billed at all. Rate the stamp the same
-   * way, or the stored rates would recompute to a charge that was never made.
+   * The cost priced a local estimate rather than provider usage: cache writes are not billed at
+   * all. Rate the stamp the same way, or the stored rates would recompute to a charge that was
+   * never made.
    */
   localEstimate?: boolean;
+  /** 1-hour cache writes of an aggregate basis; with turns, their own counts are summed instead. */
+  cacheWrite1hTokens?: number;
 };
 
 // Same whole-prompt basis getTurnsCost tiers each request on.
@@ -34,6 +37,7 @@ const turnEntry = (turn: TurnUsage, tierKey: number): IUsageEventTurn => ({
   outputTokens: turn.outputTokens,
   ...(turn.cacheReadInputTokens ? { cacheReadTokens: turn.cacheReadInputTokens } : {}),
   ...(turn.cacheCreationInputTokens ? { cacheWriteTokens: turn.cacheCreationInputTokens } : {}),
+  ...(turn.cacheWrite1hInputTokens ? { cacheWrite1hTokens: turn.cacheWrite1hInputTokens } : {}),
   tierKey,
 });
 
@@ -69,16 +73,22 @@ function stampFor(model: ModelInfo, basis: UsagePriceStampBasis): UsagePriceStam
     ? turns.reduce((largest, turn) => Math.max(largest, promptTokens(turn)), 0)
     : (basis.tierBasisTokens ?? 0);
   const resolved = resolveAppliedRates(model, tierBasisTokens);
-  const rates =
-    resolved && basis.localEstimate
-      ? { ...resolved, cacheRead: resolved.input * CACHE_READ_MULTIPLIER, cacheWrite: 0 }
-      : resolved;
+  const rates = resolved && basis.localEstimate ? { ...resolved, cacheWrite: 0 } : resolved;
 
   const stamp: UsagePriceStamp = {
     priceSource: model.priceSource ?? 'literal',
     ...(model.priceSource === 'catalog' && model.priceRowId ? { priceRowId: model.priceRowId } : {}),
     ...(rates ? { rates } : {}),
   };
+  const oneHourWrites = basis.localEstimate
+    ? 0
+    : turns.length
+      ? sumOneHourCacheWrites(turns)
+      : (basis.cacheWrite1hTokens ?? 0);
+  if (oneHourWrites > 0) {
+    stamp.cacheWrite1hTokens = oneHourWrites;
+    if (stamp.rates) stamp.rates = { ...stamp.rates, cacheWrite1h: oneHourCacheWriteRate(stamp.rates) };
+  }
   if (!rates || turns.length < 2) return stamp;
 
   const tierOf = (turn: TurnUsage): number => pricingTierForTokens(model, promptTokens(turn)) ?? rates.tierKey;
@@ -94,6 +104,7 @@ function stampFor(model: ModelInfo, basis: UsagePriceStampBasis): UsagePriceStam
       outputTokens: sum.outputTokens + turn.outputTokens,
       cacheReadInputTokens: (sum.cacheReadInputTokens ?? 0) + (turn.cacheReadInputTokens ?? 0),
       cacheCreationInputTokens: (sum.cacheCreationInputTokens ?? 0) + (turn.cacheCreationInputTokens ?? 0),
+      cacheWrite1hInputTokens: (sum.cacheWrite1hInputTokens ?? 0) + (turn.cacheWrite1hInputTokens ?? 0),
     }),
     { inputTokens: 0, outputTokens: 0 }
   );

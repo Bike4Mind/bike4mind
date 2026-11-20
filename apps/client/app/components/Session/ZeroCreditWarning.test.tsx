@@ -33,6 +33,12 @@ vi.mock('@client/app/hooks/useVisibleGears', () => ({
   },
 }));
 vi.mock('./CreditOfferActions', () => ({
+  CREDIT_OFFER_SURFACES: {
+    lowCreditsWarning: 'low_credits_warning',
+    outOfCreditsBanner: 'out_of_credits_banner',
+    affordableModelOffer: 'affordable_model_offer',
+  },
+  CREDIT_OFFER_TRIGGERS: { low: 'low_balance', out: 'insufficient_credits' },
   CreditOfferActions: () => <div data-testid="credit-offer-actions" />,
 }));
 

@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ post: (fn: unknown) => fn }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
@@ -16,19 +16,25 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockFindActiveByOwner = vi.fn();
 const mockSubUpdate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: (...args: unknown[]) => mockFindActiveByOwner(...args),
     update: (...args: unknown[]) => mockSubUpdate(...args),
   },
 }));
-vi.mock('@server/services/organizationService', () => ({ resolveSubscriptionSource: () => 'admin_grant' }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
+  resolveSubscriptionSource: () => 'admin_grant',
+}));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
+  return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };
+});
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { sendToClient } from '@server/websocket/utils';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';
 import handler from '../revoke';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -56,7 +62,11 @@ describe('POST /api/admin/organizations/[id]/revoke', () => {
       expect(transactionActive).toBe(true);
       throw new Error('audit down');
     });
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: {} });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'org-1' },
+      body: { reason: 'Billing correction' },
+    });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
 
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow('audit down');
@@ -65,12 +75,35 @@ describe('POST /api/admin/organizations/[id]/revoke', () => {
     expect(sendToClient).not.toHaveBeenCalled();
   });
 
+  it('returns 400 and revokes nothing when no reason is sent', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: {} });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: ADMIN_ACTION_REASON_MISSING_MESSAGE,
+    });
+
+    expect(mockSubUpdate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and revokes nothing for a too-short reason', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: { reason: 'abc' } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(mockSubUpdate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
   it('records org.revoked against the organization after cancelling the grant', async () => {
     vi.mocked(recordAdminActionFromRequest).mockImplementationOnce(async () => {
       expect(transactionActive).toBe(true);
       return null;
     });
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: { reason: 'contract ended' } });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: { reason: 'Contract ended' } });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
 
     await (handler as HandlerFn)(req, res);
@@ -81,7 +114,7 @@ describe('POST /api/admin/organizations/[id]/revoke', () => {
       expect.objectContaining({
         action: 'org.revoked',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme' }),
-        reason: 'contract ended',
+        reason: 'Contract ended',
       })
     );
     expect(mockSubUpdate.mock.invocationCallOrder[0]).toBeLessThan(

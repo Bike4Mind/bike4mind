@@ -14,7 +14,7 @@ import { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { connectDB, securityFindingRunRepository } from '@bike4mind/database';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
@@ -126,13 +126,17 @@ export const handler = async (event: RunnerEvent = {}, _context?: Context): Prom
     probeErrors: [],
   });
 
+  const ingestToken =
+    Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
+  const simulationToken = isUnconfiguredSecret(ingestToken) ? undefined : ingestToken;
+
   const probes = [
     { name: 'e2eExposure', run: () => e2eExposureProbe(targetUrl, stage) },
     { name: 'otcSendFlood', run: () => otcSendFloodProbe(targetUrl) },
     { name: 'refreshTokenSecurity', run: () => refreshTokenSecurityProbe(targetUrl) },
     { name: 'adminAuthz', run: () => adminAuthzProbe(targetUrl) },
     { name: 'openRedirect', run: () => openRedirectProbe(targetUrl) },
-    { name: 'ingestTokenSecurity', run: () => ingestTokenSecurityProbe(targetUrl) },
+    { name: 'ingestTokenSecurity', run: () => ingestTokenSecurityProbe(targetUrl, simulationToken) },
   ];
 
   const allFindings: AttackSimulationFinding[] = [];
@@ -165,10 +169,7 @@ export const handler = async (event: RunnerEvent = {}, _context?: Context): Prom
 
   const finishedAt = new Date();
 
-  const ingestToken =
-    Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
-
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     const message = 'Attack simulation ingest token is not configured.';
     await securityFindingRunRepository.failRun(runId, message);
     logger.error('attack-simulation-runner: ingest token missing', { runId });

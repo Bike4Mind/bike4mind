@@ -29,7 +29,7 @@ const ItemDetail: FC<{ organizationId: string; feedbackId: string }> = ({ organi
       {item.tags.length > 0 && <Typography level="body-sm">Tags {item.tags.join(', ')}</Typography>}
       {/* The report is metadata only by rule; verbatim stays behind the reporter's own read route. */}
       <Typography level="body-xs" data-testid="org-analysis-item-content-note">
-        {item.contentStored ? 'Text is on file, and is not shown here.' : 'Text is no longer on file.'}
+        {item.contentStored ? 'Text is on file, and is not shown here.' : 'No text on file.'}
       </Typography>
     </Stack>
   );

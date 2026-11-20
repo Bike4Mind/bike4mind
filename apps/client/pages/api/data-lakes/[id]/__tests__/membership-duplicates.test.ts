@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
   // A plain array, not a spy: the middleware is applied once when the module is imported, and
   // `vi.clearAllMocks()` in beforeEach would erase that call before any test could assert on it.
   featureFlags: [] as string[],
+  record: vi.fn(),
+  adminBypassLakeIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -43,23 +45,33 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
     return () => {};
   },
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
+    recordLakeAccessEvent: (
+      await import('../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
     assertLakeAccess: h.assertLakeAccess,
     assertLakeWritable: h.assertLakeWritable,
     resolveCanManageLake: h.resolveCanManageLake,
     loadMembershipRepairPlan: h.loadMembershipRepairPlan,
   },
 }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   lakeMembershipDecisionRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../membership-duplicates';
+import { describeLakeReadAudit } from '../../__tests__/lakeReadAuditCases';
 
 const invoke = (req: unknown, res: unknown) =>
   (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
@@ -83,6 +95,8 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.resolveCanManageLake.mockResolvedValue(true);
   h.loadMembershipRepairPlan.mockResolvedValue(PLAN);
+  h.record.mockResolvedValue(undefined);
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/[id]/membership-duplicates', () => {
@@ -131,5 +145,33 @@ describe('GET /api/data-lakes/[id]/membership-duplicates', () => {
 
   it('is gated on the data-lakes feature flag', () => {
     expect(h.featureFlags).toContain('EnableDataLakes');
+  });
+});
+
+const runWith = async (plan: unknown) => {
+  h.loadMembershipRepairPlan.mockResolvedValue(plan);
+  const res = makeRes();
+  await invoke(makeReq(), res);
+  return res.json.mock.calls.length > 0;
+};
+
+const planWithMembers = {
+  ...PLAN,
+  open: [{ ...PLAN.open[0], members: [{ fabFileId: 'a' }, { fabFileId: 'b' }] }],
+};
+
+describeLakeReadAudit({
+  surface: 'data-lake-membership-duplicates',
+  lakeId: 'lake1',
+  record: h.record,
+  bypass: h.adminBypassLakeIds,
+  run: () => runWith(planWithMembers),
+  runEmpty: () => runWith({ ...PLAN, open: [], openGroupCount: 0 }),
+});
+
+describe('membership-duplicates audit file ids', () => {
+  it('records the members of every open group', async () => {
+    await runWith(planWithMembers);
+    expect(h.record.mock.calls[0][0].fileIds).toEqual(['a', 'b']);
   });
 });

@@ -31,7 +31,7 @@ export type RecordBeliefResult = { recorded: true } | { recorded: false; reason:
  * How long the belief path waits for an embedding vector before writing the belief without one.
  *
  * The resolve route awaits this AFTER the ruling is already committed, inside a 60 s server Lambda
- * (`infra/web.ts`), and `OpenAIEmbeddingService` sets no timeout of its own. Unbounded, a stalled
+ * (`infra/web.ts`), and `OpenAIEmbeddingProvider` sets no timeout of its own. Unbounded, a stalled
  * provider means no response on a request whose durable write already succeeded - and the client's
  * retry then 400s on the double-resolve guard the route is at pains to avoid.
  *

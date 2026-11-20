@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const baseConnectDB = vi.fn();
 const setModelPriceRowsProvider = vi.fn();
 const setModelCatalogProvider = vi.fn();
+const setModelListRevisionProvider = vi.fn();
+const readModelListRevision = vi.fn();
 const priceRowsInForce = vi.fn();
 const catalogRowsInForce = vi.fn();
 const seedModelPrices = vi.fn();
@@ -14,7 +16,12 @@ const discoveryStateInit = vi.fn();
 const dataLakeInit = vi.fn();
 
 vi.mock('@bike4mind/db-core', () => ({ connectDB: baseConnectDB }));
-vi.mock('@bike4mind/llm-adapters', () => ({ setModelPriceRowsProvider, setModelCatalogProvider }));
+vi.mock('@bike4mind/llm-adapters', () => ({
+  setModelPriceRowsProvider,
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+}));
+vi.mock('./modelListRevision', () => ({ readModelListRevision }));
 vi.mock('./models/billing/ModelPriceModel', () => ({ modelPriceRepository: { rowsInForce: priceRowsInForce } }));
 vi.mock('./models/ai/ModelCatalogModel', () => ({
   modelCatalogRepository: { rowsInForce: catalogRowsInForce },
@@ -54,6 +61,8 @@ describe('priceCatalogBootstrap.connectDB', () => {
 
     expect(setModelCatalogProvider).toHaveBeenCalledTimes(1);
     expect(setModelPriceRowsProvider).toHaveBeenCalledTimes(1);
+    expect(setModelListRevisionProvider).toHaveBeenCalledTimes(1);
+    expect(setModelListRevisionProvider).toHaveBeenCalledWith(readModelListRevision);
     expect(seedModelCatalog).toHaveBeenCalledTimes(1);
     expect(seedModelPrices).toHaveBeenCalledTimes(1);
     expect(baseConnectDB).toHaveBeenCalledTimes(2);

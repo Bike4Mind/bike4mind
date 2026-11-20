@@ -23,6 +23,18 @@ const forSurface = (found: StaleModelReference[], surface: string) => found.filt
 afterEach(() => resetReplacedByOverlay());
 
 describe('checkStaleModelReferences', () => {
+  it('names configured pins missing from the live list, including hidden models without successors', () => {
+    expect(
+      forSurface(
+        run({ configuredModels: { primaryModel: 'sunset-1', missing: 'not-known', live: 'live-1', unset: '' } }),
+        'configured-model'
+      )
+    ).toEqual([
+      { surface: 'configured-model', key: 'missing', referencedId: 'not-known', problem: 'unknown' },
+      { surface: 'configured-model', key: 'primaryModel', referencedId: 'sunset-1', problem: 'deprecated' },
+    ]);
+  });
+
   it('reports nothing when every referenced id is live', () => {
     const found = run({ fallbackChains: { 'live-1': ['live-2'] }, defaultChain: ['live-2'] });
     expect(forSurface(found, 'fallback-chain')).toEqual([]);
@@ -145,6 +157,17 @@ describe('checkStaleModelReferences', () => {
 
       expect(found).toEqual([
         { surface: 'agent-model', key: 'analyst', referencedId: 'found-1', problem: 'not-invocable' },
+      ]);
+    });
+
+    it('classifies a listed but disabled model as not-invocable, since admission refuses it', () => {
+      const found = run({
+        models: [{ id: 'paused', disabled: true }],
+        configuredModels: { DefaultAPIModel: 'paused' },
+      });
+
+      expect(forSurface(found, 'configured-model')).toEqual([
+        { surface: 'configured-model', key: 'DefaultAPIModel', referencedId: 'paused', problem: 'not-invocable' },
       ]);
     });
 

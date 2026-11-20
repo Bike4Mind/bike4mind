@@ -11,11 +11,15 @@ import GeneratedFilterToggle, { withGeneratedFilter } from './GeneratedFilterTog
 interface FileBrowserFilterProps {
   value?: ISearchFabFilesParams;
   onChange?: (params: ISearchFabFilesParams) => void;
+  /** Hide the type select, for a browser locked to one type. */
+  hideType?: boolean;
+  /** Hide the Generated toggle, for a browser locked to one source. */
+  hideSource?: boolean;
 }
 
 const debounceFn = debounce((fn: () => void) => fn(), 500);
 
-const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
+const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange, hideType = false, hideSource = false }) => {
   const [search, setSearch] = useState(value?.search || '');
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -88,42 +92,46 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
           },
         })}
       />
-      <Select
-        className="file-browser-filter-type-select"
-        placeholder="File Type"
-        value={value?.filters?.type || 'all'}
-        onChange={(_, value) => handleFileTypeChange(value as string)}
-        indicator={<KeyboardArrowDownIcon sx={{ fontSize: 10 }} />}
-        sx={{
-          width: '150px',
-          // The search input absorbs a narrow row; shrinking this instead cuts the selected type to its arrow.
-          flexShrink: 0,
-          height: '32px',
-          minHeight: '32px',
-          paddingTop: 0,
-          paddingBottom: 0,
-          borderRadius: '6px',
-          boxShadow: 'none',
-          background: theme => theme.palette.neutral.solidBg,
-
-          // Override MUI defaults
-          '& .MuiSelect-root': {
+      {!hideType && (
+        <Select
+          className="file-browser-filter-type-select"
+          placeholder="File Type"
+          value={value?.filters?.type || 'all'}
+          onChange={(_, value) => handleFileTypeChange(value as string)}
+          indicator={<KeyboardArrowDownIcon sx={{ fontSize: 10 }} />}
+          sx={{
+            width: '150px',
+            // The search input absorbs a narrow row; shrinking this instead cuts the selected type to its arrow.
+            flexShrink: 0,
             height: '32px',
             minHeight: '32px',
-          },
-          // text style
-          color: 'text.primary',
-          fontSize: '14px',
-          fontWeight: '400',
-        }}
-      >
-        {FILE_TYPE_OPTIONS.map(option => (
-          <Option key={option.value} className="file-browser-filter-type-option" value={option.value}>
-            {option.label}
-          </Option>
-        ))}
-      </Select>
-      <GeneratedFilterToggle active={value?.filters?.generated === true} onChange={handleGeneratedChange} />
+            paddingTop: 0,
+            paddingBottom: 0,
+            borderRadius: '6px',
+            boxShadow: 'none',
+            background: theme => theme.palette.neutral.solidBg,
+
+            // Override MUI defaults
+            '& .MuiSelect-root': {
+              height: '32px',
+              minHeight: '32px',
+            },
+            // text style
+            color: 'text.primary',
+            fontSize: '14px',
+            fontWeight: '400',
+          }}
+        >
+          {FILE_TYPE_OPTIONS.map(option => (
+            <Option key={option.value} className="file-browser-filter-type-option" value={option.value}>
+              {option.label}
+            </Option>
+          ))}
+        </Select>
+      )}
+      {!hideSource && (
+        <GeneratedFilterToggle active={value?.filters?.generated === true} onChange={handleGeneratedChange} />
+      )}
     </Box>
   );
 };

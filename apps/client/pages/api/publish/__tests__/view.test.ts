@@ -32,7 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n(),
+}));
 vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_r: unknown, _s: unknown, n: () => void) => n(),
 }));
@@ -57,7 +59,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: (...a: unknown[]) =>
     mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
-vi.mock('@server/services/publish/publishGateToken', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({
   requestHasGateProof: (...a: unknown[]) => mocks.hasGateProof(...a),
 }));
 
@@ -184,6 +186,20 @@ describe('POST /api/publish/view - whose view counts', () => {
     expect(mocks.checkVisibility).not.toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(204);
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
+  });
+
+  // shareTokenFilter excludes revoked and expired entries (pinned against real Mongo in
+  // PublishedArtifactModel.shareToken.test.ts), so an expired link resolves no row.
+  it('404s an expired share link without counting a view', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    mocks.lean.mockReturnValue(null);
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'friend' });
+    await promise;
+
+    expect(mocks.findOne).toHaveBeenCalledWith({ __shareFilterFor: 'tok123', deletedAt: null });
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.updateOne).not.toHaveBeenCalled();
   });
 
   it('does not count a share-link viewer the share grant refuses', async () => {

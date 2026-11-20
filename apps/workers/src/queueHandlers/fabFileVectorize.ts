@@ -1,5 +1,19 @@
-import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
-import { getVector } from '@server/managers/fabFileManager';
+import { createHash } from 'node:crypto';
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
+import {
+  FabFileSourceType,
+  ModelBackend,
+  isTerminalCreditRefusal,
+  SupportedEmbeddingModelSchema,
+  usdToCredits,
+  usdToCreditsStochastic,
+} from '@bike4mind/common';
+import { getVector, getVectors } from '@bike4mind/server-utils/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -11,17 +25,16 @@ import {
   fabFileRepository,
   organizationRepository,
   scopedSettingsRepository,
+  spendFreezeRepository,
   usageEventRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import {
   ChunkSchema,
-  EmbeddingFactory,
-  resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError,
   isEmbeddingAuthError,
   EmbeddingSpaceConflictError,
@@ -35,21 +48,37 @@ import {
   dataLakeService,
   embeddingCacheService,
   fabFilesService,
+  fileEmbeddingService,
+  isOperationalBillingEnabled,
   recordOperationalUsage,
+  spendFreezeService,
 } from '@bike4mind/services';
+import type { Logger } from '@bike4mind/observability';
+import { reserveRequestCredits, type CreditReservation } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/dataLakes/dataLakeBatchProgress';
+} from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
-import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
+import {
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC,
+} from '@bike4mind/server-utils/utils/sqsDelivery';
+import { returnRecordForRedelivery } from '@bike4mind/server-utils/utils/sqsRedelivery';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@bike4mind/server-utils/queueHandlers/utils';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+
 import { Resource } from 'sst';
 
 const VectorizePayload = z.object({
@@ -64,6 +93,59 @@ const VectorizePayload = z.object({
   // => user work, which is never halted.
   ...provenancePayloadShape,
 });
+
+/**
+ * Redelivery delay for a rate-window denial that did not say when its window resets: one window.
+ * The floor currently dominates (windows are about a minute, below it), so this only matters if a
+ * window ever outlasts the floor.
+ */
+const RATE_DENIAL_FALLBACK_DELAY_MS = 60_000;
+/**
+ * Spread for that redelivery. The subscription runs up to its reserved concurrency in parallel, so
+ * a saturated window denies a herd at once; a window's worth of jitter keeps them from re-arriving
+ * together and saturating it again.
+ */
+const RATE_DENIAL_JITTER_SECONDS = 60;
+
+/**
+ * Seconds before a rate-denied delivery comes back: the window's reset, but never sooner than
+ * FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, so the queue's few deliveries still span as
+ * many rate windows as a thrown failure's did. Jitter is added on top by returnRecordForRedelivery.
+ * The floor currently dominates (rate windows are about a minute, below it), so the window reset
+ * only matters if a window ever outlasts the floor.
+ */
+export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefined): number {
+  const windowResetSeconds = Math.ceil((retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000);
+  return Math.max(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, windowResetSeconds);
+}
+
+/**
+ * Names one embedding job for the per-user window: the file, the model and the exact uncached
+ * texts. A redelivery of the same job reuses its reservation; a re-index of changed content or at
+ * another chunk size is new work and reserves again.
+ */
+function fileEmbeddingReservationId(fabFileId: string, embeddingModel: string, missTexts: readonly string[]): string {
+  const digest = createHash('sha256').update(missTexts.join('\u0000')).digest('hex');
+  return `${fabFileId}:${embeddingModel}:${digest}`;
+}
+
+/** Best-effort: a failed release must not mask the error that triggered it. */
+async function releaseFileEmbeddingWindow(
+  grant: fileEmbeddingService.FileEmbeddingWindowGrant | null,
+  cause: string,
+  logger: Logger
+): Promise<void> {
+  if (!grant) return;
+  try {
+    await grant.release();
+    logger.warn(`[fileEmbeddingWindow] released reservation after ${cause}`);
+  } catch (releaseErr) {
+    logger.warn(`[fileEmbeddingWindow] failed to release reservation after ${cause}: ${releaseErr}`);
+  }
+}
+
+const isFileEmbeddingLimitUnresolved = (err: unknown): boolean =>
+  err instanceof fileEmbeddingService.FileEmbeddingLimitResolutionError;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -212,7 +294,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // stage: a substitute would land this file where searches over the rest cannot reach it.
       if (await fabFileRepository.hasVectorizedFileInEmbeddingSpace(requestedEmbeddingModel)) {
         throw new EmbeddingAuthError(
-          getProviderFromModel(requestedEmbeddingModel),
+          embeddingBackendForModel(requestedEmbeddingModel),
           `No credential for ${requestedEmbeddingModel}, which files on this deployment are already ` +
             `embedded with; refusing to embed with the keyless ${embeddingModel}, which searches could not ` +
             `match against them. Restore the credential and re-index the file.`
@@ -249,16 +331,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new EmbeddingSpaceConflictError(embeddingModel, existingEmbeddingSpaces);
     }
 
-    const requiredProvider = getProviderFromModel(embeddingModel);
+    const requiredProvider = embeddingBackendForModel(embeddingModel);
 
-    const embeddingService = new EmbeddingFactory(embeddingConfig);
+    const embeddingService = buildEmbeddingRegistry(embeddingConfig);
 
-    const embeddingProvider = embeddingService.createEmbeddingService(embeddingModel);
+    const embeddingProvider = bindEmbeddingModel(embeddingService, embeddingModel);
 
     // Pre-flight: filter out chunks that exceed the model's context window.
     // These cannot be embedded and would cause the entire batch to fail.
     // Chunks stored before chunking fixes may have this issue.
-    const { contextWindow } = embeddingProvider.getModelInfo();
+    const contextWindow = embeddingProvider.maxInputTokens;
     const embeddableChunks = validChunks.filter(chunk => {
       if (chunk.tokenCount > contextWindow) {
         logger.warn(
@@ -302,6 +384,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const missTexts = cacheMisses.map(m => m.text);
       const missTokenCounts = cacheMisses.map(m => m.tokenCount);
 
+      // Ahead of every reservation, lake or not, billable or not: a freeze applies with credits off too.
+      // The refusal is a terminal credit refusal, so the failure path below fails the file and consumes the message.
+      await spendFreezeService.assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          { user, apiKeyInfo: existingFabFile.apiKeyId ? { keyId: existingFabFile.apiKeyId } : undefined },
+          user.organizationId ? String(user.organizationId) : null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+
       // COST GOVERNANCE GATE - data-lake work, resolved by MEMBERSHIP rather than by batchId
       // alone (see resolveIngestSpendScope for why those differ, and why the tag-joined members
       // a bulk rebuild selects used to slip past this entirely). This is the single point where a
@@ -312,7 +404,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Captured for the release-on-failure below: a reservation whose provider call never
       // succeeded must be given back, or provider blips permanently poison the lake's
       // LIFETIME meter (x3 under SQS redelivery, each attempt reserving again).
-      let grantedReservation: { estimatedMicroUsd: number; batchId?: string; dataLakeId?: string } | null = null;
+      let grantedReservation: {
+        estimatedMicroUsd: number;
+        batchId?: string;
+        dataLakeId?: string;
+        owner?: dataLakeService.LakeSpendOwner;
+      } | null = null;
       const spendScope = await dataLakeService.resolveIngestSpendScope(
         existingFabFile,
         { dataLakeBatches: dataLakeBatchRepository, dataLakes: dataLakeRepository },
@@ -324,7 +421,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
         // The gate resolves the lake's cost tier itself (#1675) - it needs the lake's ownership,
         // which only `dataLakeId` can reach, so passing the id is what enables the tier here.
-        await dataLakeService.enforceEmbeddingSpendGate({
+        const { owner } = await dataLakeService.enforceEmbeddingSpendGate({
           estimatedMicroUsd,
           estimatedTokens: missTokens,
           batchId: spendScope.batchId,
@@ -338,43 +435,84 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           logger,
           notify: makeDataLakeSpendNotifier(logger),
         });
-        grantedReservation = { estimatedMicroUsd, batchId: spendScope.batchId, dataLakeId: spendScope.dataLakeId };
+        grantedReservation = {
+          estimatedMicroUsd,
+          batchId: spendScope.batchId,
+          dataLakeId: spendScope.dataLakeId,
+          owner,
+        };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
+      }
+
+      // Work outside a data lake has no spend gate, so it is billed to the uploader under the
+      // operational billing policy, reserved up front so a holder who cannot cover it never embeds.
+      const missTokenTotal = missTokenCounts.reduce((sum, n) => sum + n, 0);
+      const missCostUsd = getEmbeddingModelCost(embeddingModel, missTokenTotal);
+      let creditReservation: CreditReservation | null = null;
+      let billingOrganization: Awaited<ReturnType<typeof organizationRepository.findById>> = null;
+      let fileWindowGrant: fileEmbeddingService.FileEmbeddingWindowGrant | null = null;
+      if (!spendScope) {
+        // Per-user window, reserved before any credit hold so a refused file is never charged.
+        // Released on every caught failure before the embed succeeds; a crash before release is
+        // covered by the reservation id, which a redelivery of the same job reuses.
+        fileWindowGrant = await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
+          userId,
+          reservationId: fileEmbeddingReservationId(fabFileId, embeddingModel, missTexts),
+          estimatedMicroUsd: Math.ceil(missCostUsd * 1_000_000),
+          estimatedTokens: missTokenTotal,
+          db: { adminSettings: adminSettingsRepository, cache: cacheRepository },
+          logger,
+        });
+        let billable = false;
+        try {
+          billingOrganization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+          billable =
+            missCostUsd > 0 &&
+            (await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger, {
+              user,
+              organization: billingOrganization,
+              activePlans: activePlanResolver,
+            }));
+        } catch (err) {
+          logger.warn('embedding-billing-check-retry', {
+            fabFileId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          await releaseFileEmbeddingWindow(fileWindowGrant, 'billing check failure', logger);
+          throw new Error('File indexing is temporarily unavailable. Re-index the file to try again.', { cause: err });
+        }
+        if (billable) {
+          try {
+            creditReservation = await reserveRequestCredits({
+              req: { user, logger },
+              requiredCredits: usdToCredits(missCostUsd),
+              enforceCredits: true,
+              featureLabel: 'file indexing',
+            });
+          } catch (err) {
+            await releaseFileEmbeddingWindow(fileWindowGrant, 'credit refusal', logger);
+            throw err;
+          }
+        }
       }
 
       let newVectors: number[][];
       try {
-        if (missTexts.length === 1) {
-          // Single chunk: use single embedding method
-          const vector = await getVector(embeddingProvider, missTexts[0]);
-          newVectors = [vector];
-        } else {
-          // Multiple chunks: use batch method
-          if (
-            'generateEmbeddingBatch' in embeddingProvider &&
-            typeof embeddingProvider.generateEmbeddingBatch === 'function'
-          ) {
-            newVectors = await (
-              embeddingProvider.generateEmbeddingBatch as (
-                texts: string[],
-                tokenCounts?: number[]
-              ) => Promise<number[][]>
-            )(missTexts, missTokenCounts);
-          } else {
-            // Fallback for providers without batch support
-            logger.log('Provider does not support batch embedding, falling back to individual calls');
-            newVectors = await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)));
-          }
-        }
+        if (missTexts.length === 1) newVectors = [await getVector(embeddingProvider, missTexts[0])];
+        else if (embeddingBackendForModel(embeddingModel) === ModelBackend.OpenAI)
+          newVectors = (await embeddingProvider.embed(missTexts)).vectors;
+        else newVectors = await getVectors(embeddingProvider, missTexts);
       } catch (providerErr) {
+        await creditReservation?.refund();
+        await releaseFileEmbeddingWindow(fileWindowGrant, 'provider failure', logger);
         // The provider call failed, so the reserved money was never spent: return it to the
-        // run and lake meters (the period window drains on its own). Scoped to EXACTLY the
+        // run, lake and owner meters (the platform period window drains on its own). Scoped to EXACTLY the
         // provider call - a failure after embeddings succeeded is real spend and stays
         // metered. Best-effort: a release failure must not mask the provider error, and a
         // hard crash before reaching here still leaks (which is why the per-lake meter also
         // has an admin reset).
         if (grantedReservation) {
-          const { estimatedMicroUsd, batchId, dataLakeId } = grantedReservation;
+          const { estimatedMicroUsd, batchId, dataLakeId, owner } = grantedReservation;
           try {
             // batchId is absent for a tag-joined member: there was no run meter to reserve
             // from, so there is none to give back either.
@@ -390,6 +528,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             );
           } catch (releaseErr) {
             logger.error(`[spendGate] failed to release reservation after provider failure: ${releaseErr}`);
+          } finally {
+            // Separate from the run/lake release so a throw there cannot strand the owner window.
+            // releaseOwnerEmbeddingSpend never throws.
+            if (owner) {
+              await dataLakeService.releaseOwnerEmbeddingSpend({
+                owner,
+                estimatedMicroUsd,
+                cache: cacheRepository,
+                logger,
+              });
+            }
           }
         }
         throw providerErr;
@@ -434,6 +583,40 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             logger,
           }
         ).catch(err => logger.warn(`[recordOperationalUsage] ingestion spend record failed: ${err}`));
+      } else {
+        // Past this point the embeddings are paid for, so neither write may fail the file.
+        const settledCredits = creditReservation
+          ? await creditReservation
+              .settle(usdToCreditsStochastic(missCostUsd), {
+                type: 'text_generation_usage',
+                sessionId: fabFileId,
+                questId: fabFileId,
+                model: embeddingModel,
+                inputTokens: missTokenTotal,
+                outputTokens: 0,
+                source: 'system',
+                ...(existingFabFile.apiKeyId ? { apiKeyId: existingFabFile.apiKeyId } : {}),
+              })
+              .catch(err => {
+                logger.error(`[fabFileVectorize] credit settlement failed for ${fabFileId}: ${err}`);
+                return 0;
+              })
+          : undefined;
+        await recordOperationalUsage(
+          {
+            requestId: fabFileId,
+            user,
+            organization: billingOrganization,
+            feature: 'embedding',
+            provider: requiredProvider,
+            model: embeddingModel,
+            inputTokens: missTokenTotal,
+            costUsd: missCostUsd,
+            source: 'system',
+            settledCredits,
+          },
+          { db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository }, logger }
+        ).catch(err => logger.warn(`[recordOperationalUsage] file indexing spend record failed: ${err}`));
       }
 
       await Promise.all(
@@ -558,7 +741,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       embeddedCharCount,
     } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId, contextWindow);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
-    if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
+    if (!fabFile) {
+      // Deleted while this message was running: nothing left to finalize, and a retry cannot succeed.
+      logger.log(`FabFile ${fabFileId} was deleted during vectorization, skipping`);
+      return;
+    }
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
@@ -695,13 +882,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the one action that does resolve it.
     const isAuthFailure = isEmbeddingAuthError(err);
     const isEmbeddingSpaceConflict = isEmbeddingSpaceConflictError(err);
-    const storedError = isEmbeddingSpaceConflict
-      ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
-      : isAuthFailure
-        ? existingFabFile.batchId
-          ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
-          : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
-        : errorMessage;
+    const storedError = isFileEmbeddingLimitUnresolved(err)
+      ? 'File indexing is temporarily unavailable. Re-index the file to try again.'
+      : isEmbeddingSpaceConflict
+        ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
+        : isAuthFailure
+          ? existingFabFile.batchId
+            ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+            : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+          : errorMessage;
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }
@@ -709,16 +898,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn(`Vectorization refused for ${fabFileId} (embedding space conflict): ${errorMessage}`);
     }
 
-    // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
+    // A non-retryable spend-gate denial (the lake gate, or the per-user file window, which
+    // cannot clear before its window closes) is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    const isTerminalSpendDenial = err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable;
+    // Insufficient credits, the free-tier daily cap and an AI-access refusal (a banned, suspended,
+    // dispute-held, deletion-pending, moderated or review-held account) are likewise terminal: files an
+    // account queued before an admin blocked it are still draining. Unrelated 403s still retry.
+    const isTerminalVectorizeDenial =
+      (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
+      err instanceof fileEmbeddingService.FileEmbeddingSpendDeniedError ||
+      isTerminalCreditRefusal(err) ||
+      isAiAccessRefusal(err);
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
     // 'failed' status untouched.
     if (
-      !isTerminalSpendDenial &&
+      !isTerminalVectorizeDenial &&
       (await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
         fabFileId,
         batchId: existingFabFile.batchId,
@@ -727,6 +924,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger,
       }))
     ) {
+      // A saturated rate window is expected back-pressure: hand the message back with a floored,
+      // jittered delay instead of throwing, so it retries quietly (the warn above) rather than
+      // paging, without spending the delivery budget any faster than a throw did. The final
+      // attempt still falls through to the failure accounting below, so a file that never gets a
+      // slot lands visibly failed, not stuck.
+      if (err instanceof dataLakeService.EmbeddingSpendDeniedError && err.retryable) {
+        return returnRecordForRedelivery(event, {
+          delaySeconds: rateDenialRedeliveryDelaySeconds(err.retryAfterMs),
+          jitterSeconds: RATE_DENIAL_JITTER_SECONDS,
+          logger,
+        });
+      }
       throw err; // Re-throw so SQS retries
     }
 
@@ -781,8 +990,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A terminal denial is fully accounted above - consume the message instead of
     // rethrowing, so a deliberately stopped pipeline does not shovel messages into the
     // DLQ and page whoever flipped the switch.
-    if (isTerminalSpendDenial) {
-      logger.warn(`Vectorization denied by spend gate for ${fabFileId}: ${errorMessage}`);
+    if (isTerminalVectorizeDenial) {
+      logger.warn(`Vectorization denied by spend gate, credit balance, or AI access for ${fabFileId}: ${errorMessage}`);
       return;
     }
     throw err; // Re-throw so SQS marks the message failed

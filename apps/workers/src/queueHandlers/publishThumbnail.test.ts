@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import sharp from 'sharp';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => h.storage,
 }));
-vi.mock('@server/services/publish/buildThumbnailDocument', () => ({
+vi.mock('@workers/services/publish/buildThumbnailDocument', () => ({
   buildThumbnailDocument: h.buildThumbnailDocument,
 }));
 // The renderer function itself: the orchestrator reaches it only through a synchronous invoke.
@@ -33,7 +33,12 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   },
 }));
 
-import { dispatch, processPublishThumbnailJob, THUMBNAIL_STAGING_PREFIX } from './publishThumbnail';
+import {
+  describeDroppedAssets,
+  dispatch,
+  processPublishThumbnailJob,
+  THUMBNAIL_STAGING_PREFIX,
+} from './publishThumbnail';
 import { ThumbnailRendererError } from '@workers/media/invokeThumbnailRenderer';
 import { MAX_THUMBNAIL_DOCUMENT_BYTES, MAX_THUMBNAIL_IMAGE_BYTES } from '@workers/media/thumbnailRendererContract';
 
@@ -71,7 +76,7 @@ beforeEach(async () => {
   h.buildThumbnailDocument.mockResolvedValue({
     srcdoc: '<h1>x</h1>',
     allowedScriptUrls: [SCRIPT_URL],
-    droppedAssets: [],
+    droppedAssets: { missing: [], oversized: [], failed: [] },
   });
   h.storage.upload.mockResolvedValue(undefined);
   h.storage.delete.mockResolvedValue(undefined);
@@ -154,7 +159,7 @@ describe('processPublishThumbnailJob', () => {
     h.buildThumbnailDocument.mockResolvedValue({
       srcdoc: 'x'.repeat(MAX_THUMBNAIL_DOCUMENT_BYTES + 1),
       allowedScriptUrls: [],
-      droppedAssets: [],
+      droppedAssets: { missing: [], oversized: [], failed: [] },
     });
     await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('too-large');
     expect(h.storage.upload).not.toHaveBeenCalled();
@@ -249,6 +254,33 @@ describe('processPublishThumbnailJob', () => {
     await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('superseded');
     expect(render).not.toHaveBeenCalled();
   });
+
+  it('logs the assets it renders without, by reason, and still renders', async () => {
+    h.buildThumbnailDocument.mockResolvedValue({
+      srcdoc: '<h1>x</h1>',
+      allowedScriptUrls: [],
+      droppedAssets: { missing: ['a.png', 'b.css'], oversized: [], failed: ['c.png'] },
+    });
+    render.mockResolvedValue(rendered(IMAGE));
+    await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('rendered');
+    expect(logger.info).toHaveBeenCalledWith(
+      '[publishThumbnail] pub1 rendering without 3 asset(s): missing 2 ["a.png","b.css"], failed 1 ["c.png"]'
+    );
+  });
+});
+
+describe('describeDroppedAssets', () => {
+  it('is undefined when nothing was dropped', () => {
+    expect(describeDroppedAssets({ missing: [], oversized: [], failed: [] })).toBeUndefined();
+  });
+
+  it('caps the listed paths per reason but counts all of them, and keeps the line single', () => {
+    const missing = ['1', '2', '3', '4', '5', '6'].map(n => `img/${n}.png`);
+    const line = describeDroppedAssets({ missing, oversized: ['big\nfile.png'], failed: [] });
+    expect(line).toBe(
+      '7 asset(s): missing 6 ["img/1.png","img/2.png","img/3.png","img/4.png","img/5.png"], oversized 1 ["big\\nfile.png"]'
+    );
+  });
 });
 
 describe('dispatch (end to end, renderer function mocked at the invoke)', () => {
@@ -321,4 +353,15 @@ describe('dispatch (end to end, renderer function mocked at the invoke)', () => 
     await expect(dispatch({ Records: [] } as never, {} as never, logger as never)).resolves.toBeUndefined();
     expect(h.findOne).not.toHaveBeenCalled();
   });
+});
+
+it('loads the current immutable index while retaining canonical asset paths', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  h.findOne.mockReturnValue(lean(bundleArtifact({ indexObjectPath })));
+  await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('rendered');
+  const input = h.buildThumbnailDocument.mock.calls[0][0];
+  await input.load('index.html');
+  await input.load('style.css');
+  expect(h.storage.download).toHaveBeenCalledWith(`user/owner1/my-slug/${indexObjectPath}`);
+  expect(h.storage.download).toHaveBeenCalledWith('user/owner1/my-slug/style.css');
 });

@@ -6,15 +6,21 @@ const h = vi.hoisted(() => ({
   stored: vi.fn(),
   update: vi.fn(),
   getModel: vi.fn(),
+  getConfig: vi.fn(),
   audit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (typeof middlewares)[number]) => (middlewares.push(fn), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((routes.GET = fn), chain),
         put: (fn: (req: unknown, res: unknown) => unknown) => ((routes.PUT = fn), chain),
       }
@@ -26,14 +32,16 @@ vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOne: () => ({ lean: () => h.stored() }) },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
+  DEFAULT_OPERATIONS_SPEECH_MODEL: 'whisper-1',
+  DEFAULT_OPERATIONS_TEXT_MODEL: 'gpt-5.6-luna',
   OperationsModelService: {
     updateOperationsModel: h.update,
     getOperationsModel: h.getModel,
-    getOperationsModelConfig: vi.fn(),
+    getOperationsModelConfig: h.getConfig,
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../operations-model';
 
@@ -87,5 +95,46 @@ describe('PUT /api/admin/operations-model admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.getModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/admin/operations-model', () => {
+  it('reports the shared defaults when no operations model is configured', async () => {
+    h.getConfig.mockResolvedValue(null);
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      modelId: 'gpt-5.6-luna',
+      imageModelId: 'flux-3-image-klein',
+      speechModelId: 'whisper-1',
+    });
+  });
+});
+
+describe('/api/admin/operations-model permission gate', () => {
+  it.each(['GET', 'PUT'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({ method, body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.getModel).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses PUT with 403 to a delegate holding settings:manage', async () => {
+    const { req, res } = createMocks({ method: 'PUT', body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(h.update).not.toHaveBeenCalled();
   });
 });

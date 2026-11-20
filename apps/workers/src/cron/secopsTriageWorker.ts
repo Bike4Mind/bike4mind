@@ -12,18 +12,39 @@
 import { SQSEvent, Context } from 'aws-lambda';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { AdminSettings, slackDevWorkspaceRepository } from '@bike4mind/database';
+import {
+  AdminSettings,
+  secopsTriageRunRepository,
+  slackDevWorkspaceRepository,
+  type RecordSecopsTriageRunInput,
+} from '@bike4mind/database';
 import { SecopsTriageConfigSchema, SECOPS_TRIAGE_SCAN_SOURCES } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { SlackClient } from '@bike4mind/slack';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
+import {
+  checkSecopsTriageRepo,
+  type SecopsTriageRepoIssue,
+} from '@bike4mind/server-utils/security/secopsTriageRepoCheck';
 import { createSecopsTriageService } from '@workers/services/secopsTriageService';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Resource } from 'sst';
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/SecOpsTriage';
 const SETTING_NAME = 'secopsTriageConfig';
+
+const REPO_ISSUE_TEXT: Record<SecopsTriageRepoIssue, string> = {
+  not_configured: 'no repository is set',
+  not_allowed: "the repository is not in the GitHub connection's allowed repositories",
+  not_found: 'the repository was not found',
+  public: 'the repository is public',
+  archived: 'the repository is archived',
+  issues_disabled: 'issues are disabled on the repository',
+};
+
+type RunOutcome = Omit<RecordSecopsTriageRunInput, 'stage' | 'scanSource' | 'findingCount' | 'startedAt'>;
 
 const SecopsTriagePayloadSchema = z.object({
   stage: z.string(),
@@ -50,6 +71,8 @@ const SecopsTriagePayloadSchema = z.object({
         .default([]),
     })
   ),
+  findingsComplete: z.boolean().default(true),
+  unverifiedFindingIds: z.array(z.string()).default([]),
 });
 
 async function getSlackBotToken(logger: Logger, workspaceId?: string): Promise<string | null> {
@@ -103,12 +126,38 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
     return;
   }
 
+  const runStartedAt = new Date();
+  // Never fatal: a run record is for the admin status view and must not change the outcome.
+  const recordRun = async (outcome: RunOutcome) => {
+    try {
+      await secopsTriageRunRepository.record({
+        stage,
+        scanSource: payload.scanSource,
+        findingCount: payload.findings.length,
+        startedAt: runStartedAt,
+        ...outcome,
+      });
+    } catch (error) {
+      logger.warn('[SECOPS-WORKER] Could not record the triage run (non-fatal)', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });
   const parseResult = SecopsTriageConfigSchema.safeParse(setting?.settingValue ?? {});
-  const config = parseResult.success ? parseResult.data : SecopsTriageConfigSchema.parse({});
+  if (!parseResult.success) {
+    logger.warn('[SECOPS-WORKER] SecOps Triage config is invalid - skipping', {
+      issues: parseResult.error.issues.map(issue => ({ path: issue.path.join('.'), message: issue.message })),
+    });
+    await recordRun({ status: 'skipped', reason: 'invalid_config', dryRun: false });
+    return;
+  }
+  const config = parseResult.data;
 
   if (!config.enabled) {
     logger.info('[SECOPS-WORKER] SecOps Triage disabled in config — skipping');
+    await recordRun({ status: 'skipped', reason: 'disabled', dryRun: config.dryRun });
     return;
   }
 
@@ -137,6 +186,7 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       { Stage: stage, ErrorType: 'NoGitHubConnection' },
       StandardUnit.Count
     );
+    await recordRun({ status: 'skipped', reason: 'no_github_connection', dryRun: config.dryRun });
     return;
   }
 
@@ -152,6 +202,37 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
   const startTime = Date.now();
 
   try {
+    // A repository that cannot take issues is a permanent configuration state, like a missing
+    // connection: skip without retrying. A failed lookup throws and is retried below.
+    const repoCheck = await checkSecopsTriageRepo(githubService, config.githubRepo);
+    if (!repoCheck.ok) {
+      logger.error('[SECOPS-WORKER] SecOps Triage repository cannot take issues - skipping (will not retry)', {
+        repo: config.githubRepo,
+        reason: repoCheck.reason,
+      });
+      await emitMetric(
+        CLOUDWATCH_NAMESPACE,
+        'TriageRunFailure',
+        1,
+        { Stage: stage, ErrorType: 'RepoNotWritable' },
+        StandardUnit.Count
+      );
+      if (config.slackChannelId && slackBotToken) {
+        try {
+          await new SlackClient(slackBotToken, logger).sendMessage({
+            channel: config.slackChannelId,
+            text: `SecOps triage skipped ${payload.scanSource} scan results on ${stage}: ${REPO_ISSUE_TEXT[repoCheck.reason]}. No GitHub issues were filed or updated.`,
+          });
+        } catch (slackError) {
+          logger.warn('[SECOPS-WORKER] Could not post the repository warning to Slack (non-fatal)', {
+            error: slackError instanceof Error ? slackError.message : String(slackError),
+          });
+        }
+      }
+      await recordRun({ status: 'skipped', reason: repoCheck.reason, dryRun: config.dryRun });
+      return;
+    }
+
     const result = await service.run(payload, githubService, config, slackBotToken ?? undefined);
     const duration = Date.now() - startTime;
 
@@ -160,7 +241,15 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       await Promise.all([
         emitMetric(CLOUDWATCH_NAMESPACE, 'IssuesCreated', result.issuesCreated, { Stage: stage }, StandardUnit.Count),
         emitMetric(CLOUDWATCH_NAMESPACE, 'IssuesUpdated', result.issuesUpdated, { Stage: stage }, StandardUnit.Count),
+        emitMetric(CLOUDWATCH_NAMESPACE, 'IssuesReopened', result.issuesReopened, { Stage: stage }, StandardUnit.Count),
         emitMetric(CLOUDWATCH_NAMESPACE, 'IssuesClosed', result.issuesClosed, { Stage: stage }, StandardUnit.Count),
+        emitMetric(
+          CLOUDWATCH_NAMESPACE,
+          'IssuesSuppressed',
+          result.issuesSuppressed,
+          { Stage: stage },
+          StandardUnit.Count
+        ),
         emitMetric(
           CLOUDWATCH_NAMESPACE,
           'IssuesDeduplicated',
@@ -178,6 +267,20 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       durationMs: duration,
       ...result,
     });
+    await recordRun({
+      status: 'completed',
+      dryRun: config.dryRun,
+      durationMs: duration,
+      counts: {
+        created: result.issuesCreated,
+        updated: result.issuesUpdated,
+        reopened: result.issuesReopened,
+        closed: result.issuesClosed,
+        suppressed: result.issuesSuppressed,
+        belowThreshold: result.skippedBelowThreshold,
+        overCap: result.skippedRateLimit,
+      },
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error('[SECOPS-WORKER] SecOps Triage failed', { error: errorMessage });
@@ -189,6 +292,12 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       { Stage: stage, ErrorType: 'RuntimeError' },
       StandardUnit.Count
     );
+    await recordRun({
+      status: 'failed',
+      dryRun: config.dryRun,
+      durationMs: Date.now() - startTime,
+      error: errorMessage,
+    });
 
     // Re-throw to trigger DLQ after retries exhausted
     throw error;

@@ -1,3 +1,4 @@
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import {
   appFilesBucket,
   fabFileBucket,
@@ -15,21 +16,55 @@ import {
   TEST_DECISION_PROVIDER_ENVIRONMENT,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
-import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction, cloudSecurityScanFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
 // round to break exactly that cycle).
-import { agentExecutor } from './agentExecutor';
-import { emailJobQueue, emailBatchQueue, emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
+import { agentExecutor, agentContinuationQueueSubscription } from './agentExecutor';
 import {
+  emailJobQueue,
+  emailBatchQueue,
+  emailBatchQueueDLQ,
+  emailJobQueueDLQ,
+  emailBatchQueueSubscription,
+  emailJobQueueSubscription,
+} from './emailMarketing';
+import {
+  emailParserQueueSubscription,
+  emailAnalyzerQueueSubscription,
   emailIngestionQueue,
   emailAnalysisQueue,
   emailIngestionQueueDLQ,
   emailAnalysisQueueDLQ,
 } from './emailIngestion';
-import { eventBus } from './eventBus';
+import {
+  eventBus,
+  telemetryAlertDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  emailSendSubscription,
+  pushEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
+import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
+import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
+import { mailStatusEnvironment } from './mailTransport';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -37,13 +72,18 @@ import {
   imageEditQueue,
   imageGenerationQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
+  generatedMediaPurgeQueue,
+  generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
@@ -52,6 +92,8 @@ import {
   dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueue,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -63,26 +105,28 @@ import {
   githubLakeRevokeQueue,
   githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   webhookDeliveryQueue,
   liveOpsTriageQueue,
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
+  fabFileModerationDLQ,
   fabFileVectorizeQueueDLQ,
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
@@ -104,91 +148,189 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueue,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
+  fabFileChunkQueueSubscription,
+  fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
+  imageGenerationQueueSubscription,
+  imageEditQueueSubscription,
+  generationJobQueueSubscription,
+  researchEngineQueueSubscription,
+  whatsNewGenerationQueueSubscription,
+  notebookCurationQueueSubscription,
+  agentProactiveMessageQueueSubscription,
+  slackExportQueueSubscription,
+  githubWebhookQueueSubscription,
+  webhookDeliveryQueueSubscription,
+  questExportQueueSubscription,
+  accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
+  publishThumbnailQueueSubscription,
+  dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
+  dataLakeResearchQueueSubscription,
+  lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
+  driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
+  liveOpsTriageQueueSubscription,
+  deepAgentWakeQueueSubscription,
+  sreFixQueueSubscription,
+  sreJobQueueSubscription,
+  secopsTriageQueueSubscription,
+  overwatchAnalyticsQueueSubscription,
+  optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
 import { searxngUrl } from './searxng';
-import {
-  router,
-  routerDistributionId,
-  cdnUrlForLambdaEnv,
-  appUrlForLambdaEnv,
-  originVerifySecret,
-} from './router';
-import { secrets } from './secrets';
+import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
+import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafWebAclArn } from './waf';
+import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
+
+// Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
+// in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
+// 80 minus its 9-character random suffix); past that it truncates the app name or drops it, and
+// the queue would fall outside the grant below. stageScopedQueueUrls fails the deploy in that case
+// instead of letting the longest-named queues lose access while the rest keep working.
+const stageQueuePrefix = `${$app.name}-${$app.stage}-`;
+const stageQueueArns = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${stageQueuePrefix}*`;
+const stageScopedQueueUrls = (urls: Record<string, $util.Output<string>>): Record<string, $util.Output<string>> =>
+  Object.fromEntries(
+    Object.entries(urls).map(([key, url]) => [
+      key,
+      url.apply(value => {
+        const name = value.slice(value.lastIndexOf('/') + 1);
+        if (!name.startsWith(stageQueuePrefix)) {
+          throw new Error(
+            `Queue ${name} (${key}) does not start with ${stageQueuePrefix}, so the web function's SQS grant ` +
+              'would not cover it. Shorten the app name or stage name so app + stage + queue name fit in 71 characters.'
+          );
+        }
+        return value;
+      }),
+    ])
+  );
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
-// time — no IAM statements generated, no env var size concerns. The wildcard SQS
-// permission already grants runtime access to all queues.
+// time: no IAM statements generated, no env var size concerns. The stage-scoped SQS
+// statement on the server function (stageQueueArns above) grants runtime access.
 const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
-    'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
-    'fab-file-chunk': fabFileChunkQueueDLQ.url,
-    'generation-callback': generationCallbackQueueDLQ.url,
-    'image-generation': imageGenerationDLQ.url,
-    'image-edit': imageEditDLQ.url,
-    'generation-job': generationJobDLQ.url,
-    'research-engine': researchEngineQueueDLQ.url,
-    'release-notes': whatsNewGenerationQueueDLQ.url,
-    'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
-    'notebook-curation': notebookCurationQueueDLQ.url,
-    'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
-    'slack-export': slackExportQueueDLQ.url,
-    'github-webhook': githubWebhookQueueDLQ.url,
-    'webhook-delivery': webhookDeliveryQueueDLQ.url,
-    'quest-export': questExportQueueDLQ.url,
-    'liveops-triage': liveOpsTriageQueueDLQ.url,
-    'email-ingestion': emailIngestionQueueDLQ.url,
-    'email-analysis': emailAnalysisQueueDLQ.url,
-    'email-batch': emailBatchQueueDLQ.url,
-    'email-job': emailJobQueueDLQ.url,
-    'tavern-heartbeat': tavernHeartbeatQueueDLQ.url,
-    'deep-agent-wake': deepAgentWakeQueueDLQ.url,
-    'sre-fix': sreFixQueueDLQ.url,
-    'sre-job': sreJobQueueDLQ.url,
-    'secops-triage': secopsTriageQueueDLQ.url,
-    'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
-    'agent-continuation': agentContinuationQueueDLQ.url,
-    'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
-    'bob-run': bobRunQueueDLQ.url,
-    'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
-    'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
-    'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
-    'data-lake-research': dataLakeResearchQueueDLQ.url,
-    'lake-memory': lakeMemoryQueueDLQ.url,
-    'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
-    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
-    'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
-    'github-lake-ingest': githubLakeIngestQueueDLQ.url,
-    'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
-    'publish-thumbnail': publishThumbnailQueueDLQ.url,
+    ...stageScopedQueueUrls({
+      // Contributed entries go first so a core key always wins.
+      ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'cloud-security-scan': cloudSecurityScanDeadLetter.queue.url,
+      'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
+      'fab-file-chunk': fabFileChunkQueueDLQ.url,
+      'generation-callback': generationCallbackQueueDLQ.url,
+      'image-generation': imageGenerationDLQ.url,
+      'image-edit': imageEditDLQ.url,
+      'generation-job': generationJobDLQ.url,
+      'render-job': renderJobDLQ.url,
+      'research-engine': researchEngineQueueDLQ.url,
+      'release-notes': whatsNewGenerationQueueDLQ.url,
+      'notebook-curation': notebookCurationQueueDLQ.url,
+      'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
+      'slack-export': slackExportQueueDLQ.url,
+      'github-webhook': githubWebhookQueueDLQ.url,
+      'webhook-delivery': webhookDeliveryQueueDLQ.url,
+      'quest-export': questExportQueueDLQ.url,
+      'account-data-export': accountDataExportQueueDLQ.url,
+      'account-erasure': accountErasureQueueDLQ.url,
+      'liveops-triage': liveOpsTriageQueueDLQ.url,
+      'email-ingestion': emailIngestionQueueDLQ.url,
+      'email-analysis': emailAnalysisQueueDLQ.url,
+      'email-batch': emailBatchQueueDLQ.url,
+      'email-job': emailJobQueueDLQ.url,
+      'tavern-heartbeat': tavernHeartbeatQueueDLQ.url,
+      'deep-agent-wake': deepAgentWakeQueueDLQ.url,
+      'sre-fix': sreFixQueueDLQ.url,
+      'sre-job': sreJobQueueDLQ.url,
+      'secops-triage': secopsTriageQueueDLQ.url,
+      'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
+      'agent-continuation': agentContinuationQueueDLQ.url,
+      'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
+      'bob-run': bobRunQueueDLQ.url,
+      'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
+      'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
+      'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+      'data-lake-research': dataLakeResearchQueueDLQ.url,
+      'lake-memory': lakeMemoryQueueDLQ.url,
+      'risk-evidence': riskEvidenceQueueDLQ.url,
+      'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
+      'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
+      'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
+      'github-lake-ingest': githubLakeIngestQueueDLQ.url,
+      'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
+      'publish-thumbnail': publishThumbnailQueueDLQ.url,
+      'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
+      'fab-file-moderation': fabFileModerationDLQ.url,
+      'telemetry-alert-rule': telemetryAlertDeadLetter.queue.url,
+      'session-enrichment': sessionEnrichmentDeadLetter.queue.url,
+      'billing-events': billingEventsDeadLetter.queue.url,
+      'email-events': emailEventsDeadLetter.queue.url,
+      'push-events': pushEventsDeadLetter.queue.url,
+      'notebook-events': notebookEventsDeadLetter.queue.url,
+      'completion-events': completionEventsDeadLetter.queue.url,
+      ...(youngAccountSpendAlertDeadLetter && {
+        'young-account-spend-alert': youngAccountSpendAlertDeadLetter.queue.url,
+      }),
+      ...(apiProbeDetectorDeadLetter && { 'api-probe-detector': apiProbeDetectorDeadLetter.queue.url }),
+      ...(imageModerationReviewSweepDeadLetter && {
+        'image-moderation-review-sweep': imageModerationReviewSweepDeadLetter.queue.url,
+      }),
+      ...(spendMonitorDeadLetter && { 'spend-monitor': spendMonitorDeadLetter.queue.url }),
+      ...(signupGrantHeldReleaseDeadLetter && {
+        'signup-grant-held-release': signupGrantHeldReleaseDeadLetter.queue.url,
+      }),
+      ...(revenueSnapshotDeadLetter && { 'revenue-snapshot': revenueSnapshotDeadLetter.queue.url }),
+      ...(subscriptionReconciliationDeadLetter && {
+        'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
+      }),
+      ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(dlqTriageSweepDeadLetter && { 'dlq-triage-sweep': dlqTriageSweepDeadLetter.queue.url }),
+      ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
+      ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
+      ...(sideAppHealthAlertsDLQ && { 'side-app-health-alerts': sideAppHealthAlertsDLQ.url }),
+    }),
+    // This raw AWS queue retains its existing provider-assigned physical name.
+    ...(dlqAlarmHandlerDlq && { 'alarm-handler': dlqAlarmHandlerDlq.url }),
   },
 });
 
 // Lambda function names exposed via sst.Linkable to avoid generating per-resource IAM
-// statements when the frontend only needs the function *name* for invocation. The wildcard
-// `lambda:InvokeFunction` permission below already grants runtime invocation access.
+// statements when the frontend only needs the function *name* for invocation. The
+// `lambda:InvokeFunction` statement below names exactly these functions; add a target here
+// and there together.
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    cloudSecurityScan: cloudSecurityScanFunction.name,
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
-    // QuestMaster v5 dispatches a node run from an API route
-    // (pages/api/quest-nodes/[id]/run -> runQuestNode). The WebSocket
-    // `agent_execute` handler reaches the same function through its own link;
-    // the frontend cannot, so the name is surfaced here rather than linking the
-    // whole function into the web app.
+    // The WebSocket `agent_execute` handler reaches the agent executor function
+    // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
+    // Admin "Send test email" asks the worker that delivers mail to run the test
+    // (packages/server-utils/src/utils/mailer/testEmail.ts).
+    emailSend: emailSendSubscription.nodes.function.apply(fn => fn.name),
   },
 });
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
-  properties: {
+  properties: stageScopedQueueUrls({
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
@@ -196,12 +338,14 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     generationJobQueue: generationJobQueue.url,
+    renderJobQueue: renderJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
     questExportQueue: questExportQueue.url,
-    whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
+    accountDataExportQueue: accountDataExportQueue.url,
+    accountErasureQueue: accountErasureQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
     notebookCurationQueue: notebookCurationQueue.url,
@@ -223,13 +367,15 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    riskEvidenceQueue: riskEvidenceQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
     publishThumbnailQueue: publishThumbnailQueue.url,
-  },
+    generatedMediaPurgeQueue: generatedMediaPurgeQueue.url,
+  }),
 });
 
 export const web = new sst.aws.Nextjs(
@@ -243,6 +389,8 @@ export const web = new sst.aws.Nextjs(
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
+    // The function URL keeps SST's default CORS, so it adds `Access-Control-Allow-Origin: *` to any
+    // request with an Origin; handlers must not add a second (apps/client/server/utils/allowOrigin.ts).
     server: {
       timeout: '60 seconds',
       runtime: 'nodejs24.x',
@@ -254,13 +402,14 @@ export const web = new sst.aws.Nextjs(
       memory: '2048 MB',
     },
     link: [
-      ...Object.values(secrets),
+      ...allSecrets,
       websocketApi,
       historyImportBucket,
       // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
       chatCompletion,
       imageProcessor,
       mcpHandler,
+      remoteMcpHandler,
       fabFileBucket,
       generatedImagesBucket,
       appFilesBucket,
@@ -276,7 +425,7 @@ export const web = new sst.aws.Nextjs(
       ...(wafWebAclArn ? [wafWebAclArn] : []),
       // SQS queue URLs passed via sst.Linkable to avoid IAM inline policy bloat.
       // Linkable stores properties in resource.enc without generating IAM statements.
-      // Wildcard SQS permission (below) already grants access to all queues.
+      // The stage-scoped SQS statement (below) grants access to all of them.
       dlqUrls,
       sourceQueueUrls,
       // Directly linked (not folded into sourceQueueUrls) so the cron reconciler's
@@ -301,6 +450,9 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
+      // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
+      // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
+      riskEvidenceQueue,
     ],
     permissions: [
       {
@@ -335,9 +487,22 @@ export const web = new sst.aws.Nextjs(
           'config:GetComplianceDetailsByConfigRule',
           'config:DescribeConfigurationRecorders',
           'config:DescribeDeliveryChannels',
-          'lambda:InvokeFunction',
         ],
         resources: ['*'],
+      },
+      {
+        // Invoked by name through the lambdaFunctionNames Linkable: admin "Run now" for the attack
+        // simulation and model discovery, QuestMaster node dispatch, and the admin test email. The other functions this
+        // Lambda invokes (mcpHandler, remoteMcpHandler, the two import-complete functions) are
+        // linked above and carry their own invoke grant.
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          attackSimulationFunction.arn,
+          modelDiscoveryFunction.arn,
+          cloudSecurityScanFunction.arn,
+          agentExecutor.arn,
+          emailSendSubscription.nodes.function.apply(fn => fn.arn),
+        ],
       },
       {
         actions: ['events:PutEvents'],
@@ -374,19 +539,32 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Explicit SQS permissions for GitHub webhook queue
-        // (not relying on SST implicit linking permissions)
-        actions: ['sqs:SendMessage'],
-        resources: [githubWebhookQueue.arn],
-      },
-      {
         // CloudWatch metrics for What's New modal sync and generation
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
       {
-        // SQS permissions for admin DLQ replay: receive from DLQs, send to source queues, get attributes
-        actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
+        // Admin DLQ replay (receive and delete from DLQs, hand back the messages a replay-by-ID
+        // search received but was not asked for, send to source queues, read depth) and the
+        // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues. One
+        // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
+        // size cap, which is why the queue URLs travel as Linkables in the first place.
+        // Pinned in infra/__tests__/webDlqReplayPermissions.test.ts.
+        actions: [
+          'sqs:ReceiveMessage',
+          'sqs:DeleteMessage',
+          'sqs:ChangeMessageVisibility',
+          'sqs:GetQueueAttributes',
+          'sqs:SendMessage',
+        ],
+        resources: [stageQueueArns, ...(dlqAlarmHandlerDlq ? [dlqAlarmHandlerDlq.arn] : [])],
+      },
+      {
+        // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
+        // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
+        actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },
       {
@@ -406,27 +584,19 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       {
-        // Read-only CloudWatch metrics access used by the WAF Traffic Overview panel.
-        // Scoped to AWS/WAFV2 namespace metrics only.
+        // Read-only CloudWatch metrics for the WAF Traffic panel and the incident view; neither action is resource-scopable.
         actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
         resources: ['*'],
       },
+      ...wafReadPermissions,
+      // Incident view: lists this stage's alarms by name prefix.
+      { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+      // Incident view: reads the router WebACL's rules and the size of each IP set they reference.
+      { actions: ['wafv2:GetWebACL'], resources: [wafQueryWebAclArn] },
       {
-        // Read-only WAF logging config discovery used by the WAF Logs Insights panels.
-        // Scoped to CloudFront-scope WebACLs in us-east-1 only, further restricted to
-        // bike4mind-api-protection-* WebACLs to enforce least privilege.
-        actions: ['wafv2:GetLoggingConfiguration'],
+        actions: ['wafv2:GetIPSet'],
         resources: [
-          $interpolate`arn:aws:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/webacl/bike4mind-api-protection-*`,
-        ],
-      },
-      {
-        // CloudWatch Logs Insights query permissions for WAF log analysis.
-        // Scoped to us-east-1 (CloudFront-scope WAF always logs to us-east-1) and
-        // bike4mind-specific log groups to enforce least privilege.
-        actions: ['logs:StartQuery', 'logs:GetQueryResults', 'logs:StopQuery'],
-        resources: [
-          $interpolate`arn:aws:logs:us-east-1:${aws.getCallerIdentityOutput().accountId}:log-group:aws-waf-logs-bike4mind-*`,
+          $interpolate`arn:${aws.getPartitionOutput().partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/ipset/*/*`,
         ],
       },
       ...providerFederation.permissions,
@@ -435,8 +605,11 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
+      IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
+      ...mailStatusEnvironment,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
+      BEDROCK_COHERE_EMBED_MODEL_ID: process.env.BEDROCK_COHERE_EMBED_MODEL_ID?.trim() || '',
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
       WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',
@@ -451,6 +624,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
+      // Set only when the attached ACL inserts the label headers (see resolveWafLabelForwarding).
+      ...(wafLabelForwarding ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
@@ -517,6 +692,14 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID
         ? { NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.GA_MEASUREMENT_ID }
         : {}),
+      // A second GA4 property the app also reports to: the marketing site's, so that one property
+      // holds the whole funnel from the ad click on the marketing site to sign_up and purchase
+      // here (getGaMeasurementIds in apps/client/app/utils/gaConsentBootstrap.ts). Same rules as
+      // GA_MEASUREMENT_ID: production only, account-tied, no brand fallback. It only rides
+      // alongside GA_MEASUREMENT_ID, which stays the one switch for GA.
+      ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID && process.env.GA_MARKETING_MEASUREMENT_ID
+        ? { NEXT_PUBLIC_GA_MARKETING_MEASUREMENT_ID: process.env.GA_MARKETING_MEASUREMENT_ID }
+        : {}),
       // Reddit ads pixel: production-only for the same reason as GA4 above, and account-tied with
       // no brand fallback (empty == pixel disabled). Consent-deferred loading + the signup
       // conversion event live in apps/client/app/utils/redditPixel.ts / signupConversion.ts.
@@ -572,3 +755,85 @@ export const web = new sst.aws.Nextjs(
   },
   { dependsOn: migratorInvocation ? [migratorInvocation] : [] }
 );
+
+// Admin DLQ "View logs" reads each consumer's LoggingConfig. Granted on the exact subscriber ARNs:
+// SST truncates or drops the app/stage prefix on long subscriber names, so no name pattern covers
+// them, and '*' would expose every function's env vars. A managed policy keeps the ARN list out
+// of the server role's inline policy size budget. Consumers subscribed outside core (premium
+// overlays) are not listed; their queues show no logs link.
+const dlqConsumerFunctionArns = [
+  fabFileChunkQueueSubscription,
+  fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
+  imageGenerationQueueSubscription,
+  imageEditQueueSubscription,
+  generationJobQueueSubscription,
+  researchEngineQueueSubscription,
+  whatsNewGenerationQueueSubscription,
+  notebookCurationQueueSubscription,
+  agentProactiveMessageQueueSubscription,
+  slackExportQueueSubscription,
+  githubWebhookQueueSubscription,
+  webhookDeliveryQueueSubscription,
+  questExportQueueSubscription,
+  accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
+  publishThumbnailQueueSubscription,
+  dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
+  dataLakeResearchQueueSubscription,
+  lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
+  driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
+  liveOpsTriageQueueSubscription,
+  deepAgentWakeQueueSubscription,
+  sreFixQueueSubscription,
+  sreJobQueueSubscription,
+  secopsTriageQueueSubscription,
+  overwatchAnalyticsQueueSubscription,
+  optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
+  emailBatchQueueSubscription,
+  emailJobQueueSubscription,
+  emailParserQueueSubscription,
+  emailAnalyzerQueueSubscription,
+  agentContinuationQueueSubscription,
+].map(subscription => subscription.nodes.function.arn);
+
+if (web.nodes.server) {
+  const dlqConsumerLogsPolicy = new aws.iam.Policy('WebDlqConsumerLogsPolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['lambda:GetFunctionConfiguration'], resources: dlqConsumerFunctionArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqConsumerLogsPolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqConsumerLogsPolicy.arn,
+  });
+  // The admin DLQ listing reads a scheduled job's rule (state, schedule) to tell when a later run superseded it.
+  // SST's prefixName (naming.ts) names a rule <app>-<stage>-<name>, truncating the app name (possibly to
+  // nothing) or dropping it on long names; one exact prefix per form keeps other stages' rules out.
+  const stageRulePrefixes = [
+    $app.stage,
+    ...Array.from({ length: $app.name.length + 1 }, (_, n) => `${$app.name.slice(0, n)}-${$app.stage}`),
+  ];
+  const stageRuleArns = stageRulePrefixes.map(
+    prefix =>
+      $interpolate`arn:${aws.getPartitionOutput().partition}:events:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:rule/${prefix}-*`
+  );
+  const dlqScheduleRulePolicy = new aws.iam.Policy('WebDlqScheduleRulePolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: stageRuleArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqScheduleRulePolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqScheduleRulePolicy.arn,
+  });
+}

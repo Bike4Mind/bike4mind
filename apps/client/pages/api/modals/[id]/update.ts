@@ -3,9 +3,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { createModalVideoSchema } from '@bike4mind/common';
+import { createModalVideoSchema, hasAdminPermission } from '@bike4mind/common';
+import { definedKeys } from '@bike4mind/server-utils/utils/adminAudit';
+import { modalAuditTitle, storableModalImageUrl } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
-import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
+import { cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
@@ -69,24 +73,44 @@ const handler = baseApi().put(
     if (!modal) throw new NotFoundError('Modal not found');
 
     if (updateData.imageUrl) {
-      updateData.imageUrl = await cacheExternalImage(updateData.imageUrl);
+      updateData.imageUrl = await storableModalImageUrl(updateData.imageUrl);
     }
 
     if (updateData.images && updateData.images.length > 0) {
       updateData.images = await cacheExternalImages(updateData.images);
     }
 
+    const before = modal.toObject() as unknown as Record<string, unknown>;
     const updatedModal = await ModalModel.findOneAndUpdate(
       { _id: id },
       { $set: updateData },
       { new: true, runValidators: true } // Return the updated modal and ensure schema validations are applied
     );
 
-    // Defense-in-depth: strip variants + generationMetadata from the response even
-    // though this endpoint is admin-only today. Insulates the invariant from future
-    // ability-rule changes.
-    const audienceKey = await viewerClassifier.classify({ isAdmin: req.user?.isAdmin ?? false } as never);
-    return res.json(extractVariantForViewer(updatedModal?.toObject() ?? {}, audienceKey));
+    if (!updatedModal) throw new NotFoundError('Modal not found');
+    await recordModalChanges(
+      req,
+      [
+        {
+          kind: 'updated',
+          id: String(updatedModal._id),
+          title: modalAuditTitle(updatedModal),
+          fields: definedKeys(updateData).filter(
+            key => JSON.stringify(updateData[key as keyof typeof updateData]) !== JSON.stringify(before[key])
+          ),
+        },
+      ],
+      'admin-modals'
+    );
+
+    // Defense-in-depth: strip variants + generationMetadata from the response even though
+    // only admins and settings:manage delegates reach this endpoint. Delegates are classified
+    // as admins so their response is not null for a modal with no customer variant.
+    const audienceKey = await viewerClassifier.classify({
+      isAdmin: hasAdminPermission(req.user, 'settings:manage'),
+    } as never);
+    const served = extractVariantForViewer(updatedModal.toObject(), audienceKey);
+    return res.json(served ? await withSignedModalImage(served) : served);
   })
 );
 

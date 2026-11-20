@@ -25,6 +25,14 @@ export interface IOverwatchRollupDoc {
   syntheticDau?: number;
   syntheticWau?: number;
   syntheticMau?: number;
+  /**
+   * The internal-account share of the same windows: users marked internal and not synthetic, so the
+   * synthetic, internal and remaining parts never overlap. Absent on a rollup computed before
+   * internal accounts were counted, which reads as "not split".
+   */
+  internalDau?: number;
+  internalWau?: number;
+  internalMau?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +51,9 @@ const OverwatchRollupSchema = new Schema<IOverwatchRollupDoc>(
     syntheticDau: { type: Number },
     syntheticWau: { type: Number },
     syntheticMau: { type: Number },
+    internalDau: { type: Number },
+    internalWau: { type: Number },
+    internalMau: { type: Number },
   },
   { timestamps: true }
 );

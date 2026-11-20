@@ -1,14 +1,31 @@
 import { execFile } from 'node:child_process';
-import { realpath, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
-import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { toWindowsPath, wslLocation } from '../../wsl/wslPath';
+import { hostRealpath } from '../tools/paths';
 
 const execFileAsync = promisify(execFile);
 
 /** Long enough for a cold `git fetch` on a large repo, short enough not to hang the dialog. */
 const GIT_TIMEOUT_MS = 20_000;
+
+/**
+ * `git worktree add` checks out every file of the repository, which on a large one under load
+ * (a dependency install running beside it) takes far longer than GIT_TIMEOUT_MS. Only the calls
+ * that check out a whole tree take this; see resolveWorkspace.
+ */
+export const WORKTREE_ADD_TIMEOUT_MS = 5 * 60_000;
+
+/** A git error shown to a person or a model is one readable sentence, not a stderr dump. */
+const MAX_GIT_MESSAGE_CHARS = 300;
+
+export type GitOptions = {
+  /** Overrides GIT_TIMEOUT_MS for this one call. */
+  timeoutMs?: number;
+};
 
 const MAX_GIT_OUTPUT_BYTES = 4_000_000;
 
@@ -22,12 +39,32 @@ const MAX_GIT_OUTPUT_BYTES = 4_000_000;
 export class GitError extends Error {
   constructor(
     readonly args: readonly string[],
-    stderr: string
+    stderr: string,
+    /** Set when git was killed for running past its timeout, in ms. */
+    readonly timedOutAfterMs?: number
   ) {
-    super(readableGitMessage(stderr) || `git ${args.join(' ')} failed`);
+    super(gitFailureMessage(args, stderr, timedOutAfterMs));
     this.name = 'GitError';
   }
 }
+
+function gitFailureMessage(args: readonly string[], stderr: string, timedOutAfterMs?: number): string {
+  if (timedOutAfterMs !== undefined) {
+    return `git ${args.slice(0, 2).join(' ')} timed out after ${formatDuration(timedOutAfterMs)}.`;
+  }
+  return readableGitMessage(stderr) || `git ${args.join(' ')} failed`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return ms < 1000 ? `${ms} ms` : `${Math.round(ms / 1000)} s`;
+}
+
+/**
+ * A line git redraws in place to show progress ("Updating files:  4% (616/15405)"). It carries no
+ * reason, and a killed checkout leaves hundreds of them in stderr.
+ */
+const PROGRESS_LINE = /^[A-Za-z][A-Za-z ]*:\s+\d{1,3}% \(\d+\/\d+\)/;
 
 /**
  * git's stderr as a sentence for the person reading the chip row: the `fatal:`/`error:` tags
@@ -35,17 +72,24 @@ export class GitError extends Error {
  * is not in. What git actually says is kept word for word.
  */
 export function readableGitMessage(stderr: string): string {
-  return stderr
-    .split('\n')
+  const message = stderr
+    .split(/\r\n|\r|\n/)
     .map(line => line.trim())
-    .filter(line => line && !/^hint:/i.test(line))
+    .filter(line => line && !/^hint:/i.test(line) && !PROGRESS_LINE.test(line))
     .map(line => line.replace(/^(fatal|error|warning):\s*/i, ''))
     .join(' ')
     .trim();
+  return message.length <= MAX_GIT_MESSAGE_CHARS ? message : `${message.slice(0, MAX_GIT_MESSAGE_CHARS - 3)}...`;
 }
 
-export function git(directory: string, args: readonly string[]): Promise<string> {
-  return runGit(directory, args, hostGitArgs(args));
+export function git(directory: string, args: readonly string[], options: GitOptions = {}): Promise<string> {
+  return runGit(directory, args, hostGitArgs(args, directory), options);
+}
+
+/** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */
+export function gitPath(directory: string, path: string, platform: NodeJS.Platform = process.platform): string {
+  const location = wslLocation(directory, platform);
+  return location ? toWindowsPath(location, path) : path;
 }
 
 /** For calls that reach a remote, which can run configured credential, ssh and askpass commands. */
@@ -53,17 +97,31 @@ function gitNetwork(directory: string, args: readonly string[]): Promise<string>
   return hostNetworkGitArgs(args, directory).then(full => runGit(directory, args, full));
 }
 
-async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
+async function runGit(
+  directory: string,
+  args: readonly string[],
+  fullArgs: readonly string[],
+  { timeoutMs = GIT_TIMEOUT_MS }: GitOptions = {}
+): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', [...fullArgs], {
-      cwd: directory,
-      timeout: GIT_TIMEOUT_MS,
+    const command = await gitCommand(directory, fullArgs);
+    if (!command) throw new Error('git is not installed');
+    const env = await gitCommandEnv(directory);
+    const { stdout } = await execFileAsync(command.file, command.args, {
+      cwd: command.cwd,
+      env,
+      timeout: timeoutMs,
+      windowsHide: true,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
     });
     return stdout;
   } catch (err) {
     const stderr = typeof (err as { stderr?: unknown }).stderr === 'string' ? (err as { stderr: string }).stderr : '';
-    throw new GitError(args, stderr || (err instanceof Error ? err.message : ''));
+    // execFile sets `killed` when it killed git itself: on the timeout, or on too much output.
+    const timedOut =
+      (err as { killed?: unknown }).killed === true &&
+      (err as { code?: unknown }).code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+    throw new GitError(args, stderr || (err instanceof Error ? err.message : ''), timedOut ? timeoutMs : undefined);
   }
 }
 
@@ -132,7 +190,7 @@ export async function branchExists(directory: string, branch: string): Promise<b
 export async function containerDirectory(directory: string): Promise<string> {
   const common = (await git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   if (!common) throw new GitError(['rev-parse', '--git-common-dir'], 'git named no common directory');
-  return dirname(common);
+  return dirname(gitPath(directory, common));
 }
 
 /**
@@ -216,8 +274,21 @@ export async function isGitDirectory(path: string): Promise<boolean> {
  * tools, and with core.bare unset in a shared config git lists it with a `branch` line, which
  * made it win a lookup for the branch the main worktree actually holds.
  */
+async function worktreeRecords(directory: string): Promise<PorcelainWorktree[]> {
+  return worktreeRecordsFrom(directory, await git(directory, ['worktree', 'list', '--porcelain']));
+}
+
+/** The records of a porcelain listing git printed in `directory`, their paths as this host reaches them. */
+export function worktreeRecordsFrom(
+  directory: string,
+  porcelain: string,
+  platform: NodeJS.Platform = process.platform
+): PorcelainWorktree[] {
+  return parseWorktreePorcelain(porcelain).map(entry => ({ ...entry, path: gitPath(directory, entry.path, platform) }));
+}
+
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const checkouts: WorktreeEntry[] = [];
   for (const { path, branch, bare } of entries) {
     if (bare || (await isGitDirectory(path))) continue;
@@ -235,7 +306,7 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
  * the main worktree - or the bare repo standing in for it - first.
  */
 export async function branchCheckouts(directory: string): Promise<Record<string, BranchCheckout>> {
-  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const entries = await worktreeRecords(directory);
   const own = await samePathAs(directory);
   const checkouts: [string, BranchCheckout][] = [];
   for (const [index, entry] of entries.entries()) {
@@ -254,7 +325,7 @@ export async function branchCheckouts(directory: string): Promise<Record<string,
 async function samePathAs(directory: string): Promise<(path: string) => boolean> {
   const names = new Set([resolve(directory)]);
   try {
-    names.add(await realpath(directory));
+    names.add(resolve(await hostRealpath(directory)));
   } catch {
     // Gone or unreadable: the plain resolve is all there is to match on.
   }
@@ -363,7 +434,7 @@ export async function defaultBaseBranch(directory: string): Promise<string> {
 /** How long one fetch of a base serves every branch cut from it; see fetchRemoteFor. */
 const FETCH_FRESH_MS = 2 * 60_000;
 
-const recentFetches = new Map<string, { at: number; done: Promise<void> }>();
+const recentFetches = new Map<string, { at: number; done: Promise<void>; verified: Promise<void> }>();
 
 /**
  * Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does.
@@ -373,28 +444,28 @@ const recentFetches = new Map<string, { at: number; done: Promise<void> }>();
  * ref begun within FETCH_FRESH_MS is shared rather than repeated, which is what lets the one
  * prefetchBase starts while a card is read or a first message typed be the one the cut uses.
  */
-export function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
+export function fetchRemoteFor(directory: string, baseRef: string, requireFresh = false): Promise<void> {
   const slash = baseRef.indexOf('/');
   if (slash <= 0) return Promise.resolve();
   const key = `${directory}\u0000${baseRef}`;
   const recent = recentFetches.get(key);
-  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return recent.done;
-  const done = gitNetwork(directory, [
+  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return requireFresh ? recent.verified : recent.done;
+  const verified = gitNetwork(directory, [
     'fetch',
     '--quiet',
     '--no-tags',
     baseRef.slice(0, slash),
-    `refs/heads/${baseRef.slice(slash + 1)}`,
+    `+refs/heads/${baseRef.slice(slash + 1)}:refs/remotes/${baseRef}`,
   ]).then(
     () => undefined,
-    // Offline, no such remote, or a base that only exists locally. Branching from the stale
-    // ref beats refusing to start.
-    () => {
-      if (recentFetches.get(key)?.done === done) recentFetches.delete(key);
+    error => {
+      if (recentFetches.get(key)?.verified === verified) recentFetches.delete(key);
+      throw error;
     }
   );
-  recentFetches.set(key, { at: Date.now(), done });
-  return done;
+  const done = verified.catch(() => undefined);
+  recentFetches.set(key, { at: Date.now(), done, verified });
+  return requireFresh ? verified : done;
 }
 
 /**

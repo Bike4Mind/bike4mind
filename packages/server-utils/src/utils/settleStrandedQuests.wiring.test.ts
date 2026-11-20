@@ -52,7 +52,6 @@ describe('every execution-terminating path settles its stranded quests', () => {
     expect(terminatingFiles).toEqual(
       expect.arrayContaining([
         'apps/client/pages/api/admin/agent-executions/cleanup.ts',
-        'apps/client/server/questmaster/v5/runQuestNode.ts',
         'apps/client/server/utils/startAgentExecution.ts',
         'apps/workers/src/cron/agentExecutionAbandonedSweep.ts',
       ])

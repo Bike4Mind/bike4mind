@@ -14,6 +14,8 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { SESSION_PANEL_SPACE_VAR } from './layout';
+import { SESSION_PANEL_SPACE } from './sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -64,6 +66,7 @@ const session = (id: string, over: Partial<ChatSessionSummary>): ChatSessionSumm
     id,
     title: id,
     mode: 'code',
+    model: 'test-model',
     messageCount: 0,
     createdAt: '2026-10-01T00:00:00.000Z',
     updatedAt: '2026-10-01T00:00:00.000Z',
@@ -90,6 +93,7 @@ function quietBridge(overrides: Record<string, unknown>) {
 /** What the bridge reports for the open session; reset in beforeEach. */
 let transcript: ChatMessage[] = [];
 let processes: BackgroundProcessInfo[] = [];
+let loop: import('@shared/loop').LoopState | null = null;
 let updateProject: () => Promise<unknown> = async () => ({ ok: true });
 let sendMessage: () => Promise<SendMessageResult>;
 
@@ -105,6 +109,7 @@ beforeEach(() => {
   window.localStorage.clear();
   transcript = [];
   processes = [];
+  loop = null;
   updateProject = async () => ({ ok: true });
   sendMessage = async () => ({ ok: true, messageId: 'm1' });
   Element.prototype.scrollIntoView = () => undefined;
@@ -129,11 +134,21 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      studio: quietBridge({
+        get: async (sessionId: string) => ({
+          sessionId,
+          revision: 'live',
+          available: true,
+          workspace: { workspaceId: 'family', rootSessionId: sessionId, assets: [], jobs: [] },
+          sessions: [],
+        }),
+      }),
       chat: quietBridge({
         listSessions: async () => SESSIONS,
         getSession: async (id: string) =>
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
+        getLoop: async () => loop,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
@@ -209,8 +224,60 @@ function deferSend() {
 }
 
 describe('the session panel in the shell', () => {
-  it('docks over the thread of a Code session with a folder, holding the chips the composer used to', async () => {
+  it('keeps a Chat loop in Background tasks, never above the input, across panel toggles', async () => {
     paneWidth(1600);
+    loop = {
+      sessionId: 'chatting',
+      prompt: 'Check the build',
+      intervalMs: 30_000,
+      phase: 'scheduled',
+      nextRunAt: Date.now() + 30_000,
+    };
+    await open('chatting', 'chat');
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(find('session-panel-section-environment')).toBeNull();
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(find('loop-status')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop scheduled');
+    expect(get('loop-header-stop-btn').tagName).toBe('BUTTON');
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    expect(find('loop-header-status')).toBeNull();
+  });
+
+  it('keeps a loop visible and stoppable on narrow panes and with Background tasks folded', async () => {
+    paneWidth(900);
+    loop = { sessionId: 'chatting', prompt: 'Check', intervalMs: 30_000, phase: 'waiting', nextRunAt: null };
+    const stop = vi.fn();
+    window.b4m.chat.loopCommand = stop;
+    await open('chatting', 'chat');
+    expect(find('session-panel')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop waiting');
+    await act(async () => get('loop-header-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('chatting', 'stop');
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('loop-header-stop-btn')).not.toBeNull();
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('loop-status')).not.toBeNull();
+  });
+
+  it('floats in the free margin of a wide pane without moving the conversation', async () => {
+    paneWidth(2400);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
+    await open('bound');
+
+    expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+  });
+
+  it('reserves a rail beside the thread when the pane has no free margin for it', async () => {
+    paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
@@ -218,6 +285,10 @@ describe('the session panel in the shell', () => {
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
     expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
     expect(find('session-chips-row')).toBeNull();
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe(
+      `${SESSION_PANEL_SPACE}px`
+    );
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
   });
 
   it('hides from the header button and remembers it', async () => {
@@ -229,6 +300,17 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('false');
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBe('0');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+
+    const thread = get('chat-thread');
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+    expect(get('chat-thread')).toBe(thread);
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
 
     act(() => root?.unmount());
     host?.remove();
@@ -236,19 +318,32 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
   });
 
-  it('folds into the header button on a narrow pane and opens as a popover that Escape shuts', async () => {
+  it('folds into the header button on a narrow pane and opens as an overlay that Escape shuts', async () => {
     paneWidth(900);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
     expect(find('session-panel')).toBeNull();
 
-    await act(async () => get('chat-toggle-session-panel-btn').click());
-    expect(get('session-panel').dataset.variant).toBe('popover');
+    const toggle = get('chat-toggle-session-panel-btn');
+    await act(async () => toggle.click());
+    expect(get('session-panel').dataset.variant).toBe('overlay');
+    expect(find('session-panel-scrim')).not.toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
 
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(find('session-panel')).toBeNull();
-    // A popover is transient: the docked preference is untouched.
+    expect(find('session-panel-scrim')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    // An overlay is transient: the docked preference is untouched.
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBeNull();
+
+    await act(async () => toggle.click());
+    await act(async () => get('session-panel-close-btn').click());
+    expect(find('session-panel')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('centers setup in an empty Code transcript without duplicating it above the composer', async () => {
@@ -423,6 +518,49 @@ function escapingAbsolutes(): HTMLElement[] {
 }
 
 describe('the shell layout', () => {
+  it('explains that a new draft needs a conversation without connecting Studio', async () => {
+    paneWidth(1600);
+    const studioApi = window.b4m.studio;
+    if (!studioApi) throw new Error('Missing Studio test bridge');
+    const getStudio = vi.spyOn(studioApi, 'get');
+    const createSession = vi.fn<typeof window.b4m.chat.createSession>();
+    window.b4m.chat.createSession = createSession;
+    await open('chatting', 'chat');
+    await act(async () => get('chat-new-session-btn').click());
+    await act(async () => undefined);
+    await act(async () => get('chat-panes-menu-btn').click());
+    await act(async () => get('chat-panes-menu-studio-item').click());
+    expect(get('studio-unavailable').textContent).toBe(
+      'Send a message to start a conversation, then open Studio to create media.'
+    );
+    for (const kind of ['image', 'video', 'music', 'speech', 'sound-effect']) {
+      const tile = get(`studio-create-${kind}-tile`) as HTMLButtonElement;
+      expect(tile.disabled).toBe(true);
+      expect(tile.title).toContain('Send a message to start a conversation');
+    }
+    expect(getStudio).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([600, 900, 1600])(
+    'opens and closes Studio from Panes at region width %s without remounting chat',
+    async width => {
+      paneWidth(width);
+      await open('bound');
+      const composer = get('chat-composer-input');
+      await act(async () => get('chat-panes-menu-btn').click());
+      await act(async () => get('chat-panes-menu-studio-item').click());
+      expect(get('studio-pane').dataset.variant).toBe(width >= 760 ? 'docked' : 'stacked');
+      expect(get('studio-pane').getAttribute('aria-modal')).toBeNull();
+      expect(find('studio-unavailable')).toBeNull();
+      expect(get('studio-pane').textContent).toContain('Your creations will appear here.');
+      expect(get('chat-composer-input')).toBe(composer);
+      await act(async () => get('studio-close-btn').click());
+      expect(find('studio-pane')).toBeNull();
+      expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
+    }
+  );
+
   it('pins the shell to the viewport so the window itself never scrolls', async () => {
     paneWidth(1600);
     await open('bound');

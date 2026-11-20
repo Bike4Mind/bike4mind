@@ -1,10 +1,30 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { ChatProject } from '@shared/chat';
+import type {
+  AppWorktree,
+  WorkspaceOwner,
+  WorktreeRemoval,
+  WorktreeState,
+  WorktreeSweepItem,
+} from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
-import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
+import {
+  branchExists,
+  containerDirectory,
+  currentBranch,
+  fetchRemoteFor,
+  git,
+  gitPath,
+  listWorktrees,
+  resolveBaseRef,
+  WORKTREE_ADD_TIMEOUT_MS,
+} from './git';
+import { gitArgumentPath } from '../../git/hostGitArgs';
+import { hostRealpath } from '../tools/paths';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -95,7 +115,7 @@ async function registeredAt(entries: readonly WorktreeEntry[], path: string): Pr
 
 async function canonical(path: string): Promise<string | null> {
   try {
-    return await realpath(path);
+    return await hostRealpath(path);
   } catch {
     return null;
   }
@@ -149,18 +169,32 @@ export function sessionBranchName(name?: string): string {
 /**
  * What to cut a new branch from, given the branch the user picked.
  *
- * Prefers the base's remote-tracking ref, but only once it is proven to contain the local one.
- * A long-lived local `main` drifts hundreds of commits behind `origin/main` without anyone
- * noticing, and a branch cut from it starts life needing a merge nobody asked for; the ancestor
- * check is what keeps that from costing unpushed work on a branch the user has been committing
- * to. With no base picked this falls back to resolveBaseRef, matching the default in the user's
- * `worktree` command. A base that is itself one of that fallback's answers (`origin/main`,
- * `HEAD`), as a spawned session carries when its parent is on no branch, comes out unchanged:
- * `origin/origin/main` never resolves, and `HEAD` is checked here because `origin/HEAD` might.
+ * Main-based tasks use verified upstream history, never local-only main commits. Local main
+ * stays untouched. Explicit feature bases retain unpushed work and best-effort offline fetches.
  */
 async function baseRefFor(directory: string, base: string): Promise<string> {
+  const selected = base || (await resolveBaseRef(directory));
+  const defaultMain = !base && selected === 'HEAD' && (await currentBranch(directory)) === 'main';
+  if (selected === 'main' || selected === 'origin/main' || defaultMain) {
+    const remotes = (await git(directory, ['remote'])).trim().split('\n');
+    if (remotes.includes('origin')) {
+      try {
+        await fetchRemoteFor(directory, 'origin/main', true);
+      } catch (err) {
+        // The app's sandboxed git can fail where the user's terminal git works (repo-scoped
+        // credential helpers and ssh commands are dropped, see hostGitArgs.ts), so name the fix.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not update origin/main, so this session cannot start from upstream main: ${reason}. ` +
+            'Check network access and credentials for this repository, or pick another base branch.'
+        );
+      }
+      await git(directory, ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+      return 'origin/main';
+    }
+  }
   if (!base || base === 'HEAD') {
-    const fallback = base || (await resolveBaseRef(directory));
+    const fallback = selected;
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }
@@ -245,7 +279,12 @@ export class SpareWorktrees {
     return this.serial(container, async () => {
       if (!(await isOwnedSpare(spare.path)) || !(await cleanDetachedWorktree(spare.path))) return false;
       try {
-        await git(projectDirectory, ['worktree', 'move', spare.path, path]);
+        await git(projectDirectory, [
+          'worktree',
+          'move',
+          gitArgumentPath(projectDirectory, spare.path),
+          gitArgumentPath(projectDirectory, path),
+        ]);
       } catch {
         await removeWorktree(projectDirectory, spare.path);
         return false;
@@ -306,8 +345,15 @@ export class SpareWorktrees {
     }
     try {
       const head = (await git(projectDirectory, ['rev-parse', '--verify', `${from}^{commit}`])).trim();
-      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, head]);
-      const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+      await git(projectDirectory, [
+        'worktree',
+        'add',
+        '--quiet',
+        '--detach',
+        gitArgumentPath(projectDirectory, path),
+        head,
+      ]);
+      const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
       await writeFile(join(gitDirectory, 'b4m-spare'), `bike4mind-spare:${head}\n`, 'utf8');
     } catch {
       return;
@@ -346,7 +392,7 @@ export class SpareWorktrees {
 
 async function isOwnedSpare(path: string): Promise<boolean> {
   try {
-    const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+    const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
     const head = (await git(path, ['rev-parse', 'HEAD'])).trim();
     return (await readFile(join(gitDirectory, 'b4m-spare'), 'utf8')) === `bike4mind-spare:${head}\n`;
   } catch {
@@ -369,10 +415,376 @@ async function cleanDetachedWorktree(path: string): Promise<boolean> {
 async function removeWorktree(projectDirectory: string, path: string): Promise<void> {
   try {
     if (!(await isOwnedSpare(path)) || !(await cleanDetachedWorktree(path))) return;
-    await git(projectDirectory, ['worktree', 'remove', path]);
+    await git(projectDirectory, ['worktree', 'remove', gitArgumentPath(projectDirectory, path)]);
   } catch {
     // Already gone, or held open; see above.
   }
+}
+
+type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
+
+type Inspection = { removal: InspectedWorktreeRemoval; state: WorktreeState };
+
+function containsPath(directory: string, path: string): boolean {
+  const within = relative(directory, path);
+  return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
+}
+
+/** Only a branch this app cut can have a removable worktree; a cheap gate before any sharing scan. */
+export function hasAppWorkspaceBranch(
+  project: ChatProject | undefined
+): project is ChatProject & { workspaceBranch: string } {
+  return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
+}
+
+/** The first conversation that uses this checkout, including folders granted as context. */
+async function ownerOf(
+  path: string,
+  branch: string,
+  container: string,
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<string | null> {
+  for (const owner of options.owners ?? []) {
+    for (const directory of owner.directories) {
+      const ownerPath = (await canonical(directory)) ?? resolve(directory);
+      if (containsPath(path, ownerPath)) return owner.title;
+    }
+  }
+  const allProjects = new Set([...projects, ...(options.owners ?? []).map(owner => owner.project)]);
+  for (const other of allProjects) {
+    if (!other) continue;
+    const title =
+      options.titles?.get(other) ??
+      options.owners?.find(owner => owner.project === other)?.title ??
+      'Another conversation';
+    for (const directory of [other.workingDirectory, other.directory, ...other.contextDirectories]) {
+      const ownerPath = (await canonical(directory)) ?? resolve(directory);
+      if (containsPath(path, ownerPath)) return title;
+    }
+    if (other.workspaceBranch !== branch && other.branch !== branch) continue;
+    // A matching branch name in another repository does not share this checkout.
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) return title;
+  }
+  return null;
+}
+
+/**
+ * Whether one app checkout can go: uncertainty always keeps it. `bases` are the branch names its
+ * commits may be proven preserved on when it has no upstream.
+ */
+async function inspectCheckout(input: {
+  path: string;
+  branch: string;
+  container: string;
+  entries: readonly WorktreeEntry[];
+  others: readonly (ChatProject | undefined)[];
+  bases: readonly string[];
+  options?: OrphanListOptions;
+}): Promise<Inspection> {
+  const { path, branch, container, entries, others, bases, options } = input;
+  const result = (reason: string | null, state: WorktreeState): Inspection => ({
+    removal: { path, branch, safe: reason === null, reason },
+    state,
+  });
+  for (const other of entries) {
+    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
+    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree', 'nested');
+  }
+  if (await ownerOf(path, branch, container, others, options)) return result('Used by another conversation', 'owned');
+  const held = options?.hold?.();
+  if (held) return result(held, 'owned');
+  // `git worktree remove` deletes ignored files too, so ignored local data (.env and the like) keeps
+  // the checkout. An ignored `node_modules` is the installer's regenerable output and does not.
+  const status = await git(path, ['status', '--porcelain', '--untracked-files=all', '--ignored=matching', '-z']);
+  if (status) {
+    const records = status.split('\0');
+    let count = 0;
+    for (let index = 0; index < records.length - 1; index++) {
+      const record = records[index];
+      if (!(record.startsWith('!! ') && /(^|\/)node_modules\/?$/.test(record.slice(3)))) count++;
+      if (/^[RC]|^.[RC]/.test(record)) index++;
+    }
+    if (count > 0) return result(`${count} uncommitted file${count === 1 ? '' : 's'}`, 'dirty');
+  }
+  const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
+  // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
+  // `-c branch.<name>.merge` only adds a second value rather than replacing it. So only the
+  // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
+  const references = upstream
+    ? [upstream]
+    : bases
+        .filter(base => base && base !== branch)
+        .flatMap(base => [`refs/heads/${base}`, `refs/remotes/origin/${base}`, `refs/remotes/${base}`]);
+  let localOnly: number | null = null;
+  for (const reference of references) {
+    try {
+      const count = Number((await git(path, ['rev-list', '--count', `${reference}..refs/heads/${branch}`])).trim());
+      if (count === 0) {
+        const clean = result(null, 'clean');
+        return { ...clean, removal: { ...clean.removal, preservedRef: reference } };
+      }
+      if (Number.isSafeInteger(count) && count > 0) localOnly = Math.min(localOnly ?? count, count);
+    } catch {
+      // A deleted upstream or base cannot prove that the commits were preserved.
+    }
+  }
+  return localOnly === null
+    ? result('Cannot verify the upstream or base branch', 'unverified')
+    : result(`${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`, 'unpushed');
+}
+
+/** The container's app root when it is genuinely the canonical `<container>/.b4m/worktrees`. */
+async function canonicalWorktreeRoot(directory: string): Promise<{ container: string; root: string } | null> {
+  const container = await containerDirectory(directory);
+  const root = await canonical(appWorktreeRoot(container));
+  if (!root || root !== appWorktreeRoot(await hostRealpath(container))) return null;
+  return { container, root };
+}
+
+/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+export async function inspectWorktreeRemoval(
+  project: ChatProject | undefined,
+  otherProjects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<InspectedWorktreeRemoval | null> {
+  if (!hasAppWorkspaceBranch(project)) return null;
+  const path = await canonical(project.workingDirectory);
+  if (!path) return null;
+  const location = await canonicalWorktreeRoot(project.directory);
+  if (!location) return null;
+  const { container, root } = location;
+  if (root === path || !containsPath(root, path)) return null;
+  const branch = project.workspaceBranch;
+  const entries = await listWorktrees(project.directory);
+  const entry = await registeredAt(entries, path);
+  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
+  const bases = project.branch ? [project.branch] : [];
+  return (await inspectCheckout({ path, branch, container, entries, others: otherProjects, bases, options })).removal;
+}
+
+const FALLBACK_BASES = ['main', 'master'];
+
+async function lastCommitOf(path: string): Promise<string | null> {
+  try {
+    return (await git(path, ['log', '-1', '--format=%cI'])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The repository's default branch first, then the usual names; a checkout with no upstream is judged against these. */
+async function orphanBases(directory: string): Promise<string[]> {
+  try {
+    const head = (await git(directory, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
+    const name = head.replace(/^origin\//, '');
+    if (name) return [name, ...FALLBACK_BASES.filter(base => base !== name)];
+  } catch {
+    // No origin/HEAD recorded; the usual names are all there is to go on.
+  }
+  return FALLBACK_BASES;
+}
+
+export type OrphanListOptions = {
+  /** All referenced folders, including grants held by conversations without a project. */
+  owners?: readonly WorkspaceOwner[];
+  /** The title of each project's conversation, which is what an owner is called. */
+  titles?: ReadonlyMap<ChatProject, string>;
+  /** Evaluated per checkout; a reason makes it unsafe, e.g. a workspace is still being cut. */
+  hold?: () => string | null;
+};
+
+type ListedWorktree = AppWorktree & { preservedRef: string | null };
+
+async function inspectAppWorktree(
+  location: { container: string; root: string },
+  entries: readonly WorktreeEntry[],
+  entry: WorktreeEntry,
+  path: string,
+  bases: readonly string[],
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions
+): Promise<ListedWorktree> {
+  const { container } = location;
+  const ownerName = await ownerOf(path, entry.branch ?? '', container, projects, options);
+  const lastCommit = await lastCommitOf(path);
+  if (!entry.branch?.startsWith(BRANCH_PREFIX)) {
+    return {
+      path,
+      branch: entry.branch ?? '',
+      safe: false,
+      reason: 'Not a branch this app created',
+      owner: ownerName,
+      lastCommit,
+      state: 'foreign',
+      preservedRef: null,
+    };
+  }
+  const held = options.hold?.() ?? null;
+  if (held) {
+    return {
+      path,
+      branch: entry.branch,
+      safe: false,
+      reason: held,
+      owner: ownerName,
+      lastCommit,
+      state: 'owned',
+      preservedRef: null,
+    };
+  }
+  const { removal, state } = await inspectCheckout({
+    path,
+    branch: entry.branch,
+    container,
+    entries,
+    others: projects,
+    bases,
+    options,
+  });
+  const unverified = removal.safe && !removal.preservedRef;
+  return {
+    path,
+    branch: removal.branch,
+    safe: removal.safe && !unverified,
+    reason: unverified ? 'No upstream, and no default branch to compare against' : removal.reason,
+    owner: ownerName,
+    lastCommit,
+    state: unverified ? 'unverified' : state,
+    preservedRef: removal.preservedRef ?? null,
+  };
+}
+
+/**
+ * Every checkout under the repository's app worktree root, with the conversation that uses it.
+ * Anything outside the root is never listed. Read-only: a hand-deleted folder simply is not listed,
+ * because `git worktree prune` would also drop registrations outside the root.
+ */
+export async function listAppWorktrees(
+  directory: string,
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<ListedWorktree[]> {
+  const location = await canonicalWorktreeRoot(directory);
+  if (!location) return [];
+  const entries = await listWorktrees(directory);
+  const bases = await orphanBases(directory);
+  const listed: ListedWorktree[] = [];
+  for (const entry of entries) {
+    const path = await canonical(entry.path);
+    if (!path || path === location.root || !containsPath(location.root, path)) continue;
+    try {
+      listed.push(await inspectAppWorktree(location, entries, entry, path, bases, projects, options));
+    } catch (error) {
+      listed.push({
+        path,
+        branch: entry.branch ?? '',
+        safe: false,
+        reason: `Could not inspect worktree: ${error instanceof Error ? error.message : String(error)}`,
+        owner: null,
+        lastCommit: null,
+        state: 'unverified',
+        preservedRef: null,
+      });
+    }
+  }
+  return listed;
+}
+
+export async function removeSessionWorktree(
+  project: ChatProject,
+  otherProjects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<void> {
+  const inspection = await inspectWorktreeRemoval(project, otherProjects, options);
+  if (!inspection?.safe || !inspection.preservedRef) {
+    throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+  }
+  const held = options.hold?.();
+  if (held) throw new Error(held);
+  await removeWorktreeAt(project.directory, inspection.path, inspection.branch, inspection.preservedRef);
+}
+
+/** Removes the checkout, then its branch with `-d` only, judged against the ref that proved it preserved. */
+async function removeWorktreeAt(directory: string, path: string, branch: string, preservedRef: string): Promise<void> {
+  await git(directory, ['worktree', 'remove', gitArgumentPath(directory, path)]);
+  try {
+    const upstream = (await git(directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
+    // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
+    // With one, the inspection already proved against that upstream, which is what `-d` checks.
+    // Command-local settings never persist.
+    const comparison = upstream
+      ? []
+      : ['-c', `branch.${branch}.remote=.`, '-c', `branch.${branch}.merge=${preservedRef}`];
+    await git(directory, [...comparison, 'branch', '-d', '--', branch]);
+  } catch (err) {
+    throw new Error(
+      `Worktree removed, but branch ${branch} was kept: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/** Re-inspects only the named checkout at call time, so one that became owned, dirty or unpushed since listing is skipped. */
+export async function removeOrphanWorktree(
+  directory: string,
+  path: string,
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<WorktreeSweepItem> {
+  let branch = '';
+  try {
+    const wanted = (await canonical(path)) ?? resolve(path);
+    const location = await canonicalWorktreeRoot(directory);
+    const entries = location ? await listWorktrees(directory) : [];
+    let entry: WorktreeEntry | null = null;
+    if (location && containsPath(location.root, wanted) && wanted !== location.root) {
+      entry = await registeredAt(entries, wanted);
+    }
+    if (!location || !entry) return { path, branch, status: 'skipped', message: 'No longer listed' };
+    branch = entry.branch ?? '';
+    const current = await inspectAppWorktree(
+      location,
+      entries,
+      entry,
+      wanted,
+      await orphanBases(directory),
+      projects,
+      options
+    );
+    const { preservedRef } = current;
+    if (!current.safe || !preservedRef) {
+      return {
+        path,
+        branch,
+        status: 'skipped',
+        message: current.reason ?? 'Cannot verify the upstream or base branch',
+      };
+    }
+    // Preparation can start during the inspection's Git awaits; check again at the deletion boundary.
+    const held = options.hold?.();
+    if (held) return { path, branch, status: 'skipped', message: held };
+    await removeWorktreeAt(directory, current.path, branch, preservedRef);
+    return { path, branch, status: 'removed', message: null };
+  } catch (err) {
+    return { path, branch, status: 'failed', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Removes every safe orphan; the rest are reported as skipped with their reason. */
+export async function sweepSafeOrphans(
+  directory: string,
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<WorktreeSweepItem[]> {
+  const results: WorktreeSweepItem[] = [];
+  for (const item of await listAppWorktrees(directory, projects, options)) {
+    results.push(
+      item.safe
+        ? await removeOrphanWorktree(directory, item.path, projects, options)
+        : { path: item.path, branch: item.branch, status: 'skipped', message: item.reason }
+    );
+  }
+  return results;
 }
 
 /**
@@ -453,7 +865,12 @@ export async function resolveWorkspace(
 
   if (await branchExists(projectDirectory, branch)) {
     timer?.lap('checks');
-    await git(projectDirectory, ['worktree', 'add', path, branch]);
+    await addWorktree(
+      projectDirectory,
+      path,
+      ['worktree', 'add', gitArgumentPath(projectDirectory, path), branch],
+      null
+    );
     timer?.lap('worktreeAdd');
     return { workingDirectory: path, branch, outcome: 'created' };
   }
@@ -465,8 +882,132 @@ export async function resolveWorkspace(
   const fromSpare = (await spares?.take(projectDirectory, container, branch, path, from)) ?? false;
   // --no-track for the reason the shell helper gives: a feature branch should not track the
   // base it forked from, or a later `git push` would aim at the wrong ref.
-  if (!fromSpare) await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+  if (!fromSpare) {
+    await addWorktree(
+      projectDirectory,
+      path,
+      ['worktree', 'add', '--no-track', '-b', branch, gitArgumentPath(projectDirectory, path), from],
+      branch
+    );
+  }
   timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
   spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };
 }
+
+/**
+ * Check out a new worktree at `path` (the host path), which did not exist before, or leave
+ * nothing behind. `args` carry the path as git sees it, via gitArgumentPath.
+ *
+ * A failed or timed-out add leaves a half-populated folder, a registration git has locked while
+ * it was initializing, and with `-b` the branch, and each of those makes the next attempt at the
+ * same branch fail. `createdBranch` is the branch this call creates.
+ *
+ * Nothing is cleaned when git refused because the path or branch already existed: then another
+ * writer made it between our checks and this add, and it is theirs. The caller has checked that
+ * `path` did not exist, so any other failure left only what this call made.
+ */
+async function addWorktree(
+  projectDirectory: string,
+  path: string,
+  args: readonly string[],
+  createdBranch: string | null
+): Promise<void> {
+  try {
+    await git(projectDirectory, args, { timeoutMs: WORKTREE_ADD_TIMEOUT_MS });
+  } catch (err) {
+    if (!(err instanceof Error && ALREADY_THERE.test(err.message))) {
+      await discardFailedWorktree(projectDirectory, path, createdBranch);
+    }
+    throw err;
+  }
+}
+
+/** git's refusals for a path or branch that something else holds. */
+const ALREADY_THERE = /already exists|already checked out|already used by worktree|is a missing but/i;
+
+async function discardFailedWorktree(
+  projectDirectory: string,
+  path: string,
+  createdBranch: string | null
+): Promise<void> {
+  // git takes the path as git itself sees it (a Linux path for a WSL project); the filesystem
+  // removal below takes the host path, as every other fs call here does.
+  const gitTarget = gitArgumentPath(projectDirectory, path);
+  // A killed add leaves its registration locked ("initializing"): one --force does not remove a
+  // locked worktree and prune skips it, which would leave the branch held.
+  await git(projectDirectory, ['worktree', 'unlock', gitTarget]).catch(() => undefined);
+  await git(projectDirectory, ['worktree', 'remove', '--force', '--force', gitTarget]).catch(() => undefined);
+  await rm(path, { recursive: true, force: true }).catch(() => undefined);
+  // Drops a registration whose folder is now gone, which would otherwise hold the branch.
+  await git(projectDirectory, ['worktree', 'prune']).catch(() => undefined);
+  if (createdBranch && (await branchExists(projectDirectory, createdBranch))) {
+    await git(projectDirectory, ['branch', '-D', createdBranch]).catch(() => undefined);
+  }
+}
+
+/**
+ * A branch name a spawn holds while its worktree is not cut yet. Only the holder of the token can
+ * give it back, so one spawn failing never frees a name another spawn is still cutting.
+ */
+export type BranchReservation = { readonly projectDirectory: string; readonly branch: string; readonly token: symbol };
+
+/**
+ * Reserved branch names per project directory, each with its holder's token. Without it two
+ * spawns started together with the same title both find the same name free, and the second would
+ * share the first one's tree through resolveWorkspace's existing-worktree return.
+ */
+const reservedBranches = new Map<string, Map<string, symbol>>();
+
+/** Hold `branch` for the caller, or null when another spawn holds it. */
+export function reserveBranchName(projectDirectory: string, branch: string): BranchReservation | null {
+  const reserved = reservedBranches.get(projectDirectory) ?? new Map<string, symbol>();
+  if (reserved.has(branch)) return null;
+  const token = Symbol(branch);
+  reserved.set(branch, token);
+  reservedBranches.set(projectDirectory, reserved);
+  return { projectDirectory, branch, token };
+}
+
+/** Give a name back. A no-op unless `reservation` is the one holding it. */
+export function releaseBranchName(reservation: BranchReservation): void {
+  const reserved = reservedBranches.get(reservation.projectDirectory);
+  if (!reserved || reserved.get(reservation.branch) !== reservation.token) return;
+  reserved.delete(reservation.branch);
+  if (reserved.size === 0) reservedBranches.delete(reservation.projectDirectory);
+}
+
+/**
+ * `wanted`, or the first of `wanted-2`, `wanted-3`... that no branch, no worktree and no other
+ * spawn holds, reserved for the caller, who releases it once the worktree is cut or abandoned.
+ *
+ * For a branch name the app picked itself (an Orchestrate spawn), where a leftover branch from an
+ * earlier attempt must not block the next one. Never for a name the user typed: that collision is
+ * theirs to see. Answers `wanted` unreserved when nothing free is found or git cannot be read,
+ * and the caller's own checks then refuse it with a reason.
+ */
+export async function unusedBranchName(
+  projectDirectory: string,
+  wanted: string
+): Promise<{ branch: string; reservation: BranchReservation | null }> {
+  try {
+    const worktrees = await listWorktrees(projectDirectory);
+    for (let attempt = 1; attempt <= MAX_BRANCH_NAME_ATTEMPTS; attempt++) {
+      const candidate = attempt === 1 ? wanted : `${wanted}-${attempt}`;
+      if (worktrees.some(entry => entry.branch === candidate)) continue;
+      // Taken before the await, so a parallel call cannot pick it in the gap.
+      const reservation = reserveBranchName(projectDirectory, candidate);
+      if (!reservation) continue;
+      if (await branchExists(projectDirectory, candidate)) {
+        releaseBranchName(reservation);
+        continue;
+      }
+      return { branch: candidate, reservation };
+    }
+  } catch {
+    // Unreadable: the caller's check reports it.
+  }
+  return { branch: wanted, reservation: null };
+}
+
+const MAX_BRANCH_NAME_ATTEMPTS = 20;

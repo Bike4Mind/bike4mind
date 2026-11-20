@@ -9,8 +9,8 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, Route> = {};
     const chain = Object.assign((req: unknown, res: unknown) => routes[(req as { method: string }).method](req, res), {
       get: (fn: Route) => ((routes.GET = fn), chain),
@@ -24,7 +24,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn() } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../slack-workspaces';
 
@@ -64,7 +64,13 @@ describe('PATCH /api/admin/slack-workspaces admin audit', () => {
   });
 
   it('fails the request when the audit write rejects', async () => {
-    h.deactivate.mockResolvedValue({ id: 'ws-1', name: 'Acme', slackTeamId: 'T1', slackAppId: 'A123', isActive: false });
+    h.deactivate.mockResolvedValue({
+      id: 'ws-1',
+      name: 'Acme',
+      slackTeamId: 'T1',
+      slackAppId: 'A123',
+      isActive: false,
+    });
     h.audit.mockRejectedValue(new Error('audit down'));
 
     await expect(deactivate()).rejects.toThrow('audit down');

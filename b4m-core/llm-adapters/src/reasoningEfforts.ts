@@ -2,12 +2,13 @@ import {
   CompletionReasoningEffortSchema,
   isClaudeModelId,
   ModelBackend,
-  REASONING_SUPPORTED_MODELS,
+  OPENAI_XHIGH_REASONING_EFFORT_MODELS,
   type ModelInfo,
   type ReasoningEffort,
 } from '@bike4mind/common';
 import { deepseekReasoningParams } from './deepseekParams';
 import { kimiReasoningParams } from './kimiParams';
+import { supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { planReasoningEffort } from './thinkingParams';
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = CompletionReasoningEffortSchema.options;
@@ -24,7 +25,7 @@ const UNBOUNDED_MAX_TOKENS = Number.MAX_SAFE_INTEGER;
 /**
  * The `options.reasoningEffort` levels the model's adapter acts on, in ascending order; empty when
  * the adapter ignores the option. Each level is asked of the same request shaper the adapter uses
- * (planReasoningEffort, kimiReasoningParams, deepseekReasoningParams, REASONING_SUPPORTED_MODELS),
+ * (planReasoningEffort, kimiReasoningParams, deepseekReasoningParams, supportsOpenAIReasoningEffort),
  * so a change there changes this answer too.
  *
  * `none` is listed only where it turns reasoning off. Kimi K3, DeepSeek and the adaptive Claude
@@ -34,7 +35,7 @@ const UNBOUNDED_MAX_TOKENS = Number.MAX_SAFE_INTEGER;
 export function reasoningEffortsFor(modelInfo: ModelInfo): ReasoningEffort[] {
   const { id } = modelInfo;
   if (modelInfo.backend === ModelBackend.OpenAI) {
-    return REASONING_SUPPORTED_MODELS.has(id) ? [...OPENAI_ACCEPTED_BY_ALL] : [];
+    return supportsOpenAIReasoningEffort(modelInfo, id) ? [...OPENAI_ACCEPTED_BY_ALL] : [];
   }
   if (isAnthropicServed(modelInfo)) return REASONING_EFFORTS.filter(effort => claudeHonours(modelInfo, effort));
   return REASONING_EFFORTS.filter(
@@ -59,4 +60,49 @@ function claudeHonours(modelInfo: ModelInfo, effort: ReasoningEffort): boolean {
   if (plan.kind === 'off') return true;
   // A legacy model only thinks when asked, so leaving the request alone is already "off".
   return plan.kind === 'default' && modelInfo.can_think === true && modelInfo.thinkingStyle !== 'adaptive';
+}
+
+/**
+ * The levels a chat user's stored Reasoning Effort preference can take on this model, lowest first;
+ * empty when chat never sends the preference to it. Non-Claude models get reasoningEffortsFor, plus
+ * `xhigh` on the OpenAI models known to take it (OPENAI_XHIGH_REASONING_EFFORT_MODELS, the list the
+ * chat selector offers it on). Claude gets it only on adaptive models, where effort is
+ * `output_config.effort`: on a legacy model any level would switch budgeted thinking on behind the
+ * chat's own Thinking toggle. `minimal` is dropped there because Anthropic runs it as `low`.
+ */
+export function chatReasoningEffortsFor(modelInfo: ModelInfo): ReasoningEffort[] {
+  const levels = reasoningEffortsFor(modelInfo);
+  if (!isClaudeModelId(modelInfo.id)) {
+    return levels.length > 0 && OPENAI_XHIGH_REASONING_EFFORT_MODELS.has(modelInfo.id) ? [...levels, 'xhigh'] : levels;
+  }
+  if (modelInfo.thinkingStyle !== 'adaptive') return [];
+  return levels.filter(effort => effort !== 'minimal');
+}
+
+/** The lowest of `levels` at or above `effort`, else the highest; undefined when `levels` is empty. */
+export function clampReasoningEffort(
+  effort: ReasoningEffort,
+  levels: readonly ReasoningEffort[]
+): ReasoningEffort | undefined {
+  const rank = REASONING_EFFORTS.indexOf(effort);
+  const acceptedLevels = REASONING_EFFORTS.filter(level => levels.includes(level));
+  return acceptedLevels.find(level => REASONING_EFFORTS.indexOf(level) >= rank) ?? acceptedLevels.at(-1);
+}
+
+/**
+ * The `reasoningEffort` one chat attempt sends for the user's explicit preference. Undefined leaves the
+ * adapter on its own precedence (complexity classifier, then the model default). The preference is
+ * shared across models, so it is clamped to chatReasoningEffortsFor: a `none` stored from a Claude
+ * model is raised, and an `xhigh` lowered, before openaiBackend forwards it verbatim to a model that
+ * rejects it. Claude is withheld when nothing is listed; another model that lists nothing ignores the
+ * option, so it keeps the preference.
+ */
+export function chatReasoningEffortFor(
+  modelInfo: ModelInfo,
+  explicit: ReasoningEffort | undefined
+): ReasoningEffort | undefined {
+  if (explicit === undefined) return undefined;
+  const levels = chatReasoningEffortsFor(modelInfo);
+  if (levels.length === 0 && !isClaudeModelId(modelInfo.id)) return explicit;
+  return clampReasoningEffort(explicit, levels);
 }

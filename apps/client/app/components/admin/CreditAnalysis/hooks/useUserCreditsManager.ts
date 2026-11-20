@@ -1,31 +1,30 @@
+import { ADMIN_PAGE_SIZES } from '../../shared/adminPagination';
 import { useState } from 'react';
 import { useGetUsers } from '@client/app/hooks/data/user';
+import { api } from '@client/app/contexts/ApiContext';
+import type { IGetUsersResponse } from '@client/app/utils/userAPICalls';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { useUpdateUserCredits } from './useUpdateUserCredits';
-import { NotificationState } from '../types';
 
 export function useUserCreditsManager(onRefresh?: () => void) {
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchValue } = useDebounceValue('');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState<number>(ADMIN_PAGE_SIZES[0]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [notification, setNotification] = useState<NotificationState>({
-    open: false,
-    message: '',
-    color: 'neutral',
-  });
 
   // Search + sort are pushed to the server so they span the full dataset, not just
   // the current page (issue #883). The API sorts/filters before $skip/$limit, so the
   // returned page is already globally ordered.
-  const allUsers = useGetUsers({
+  const params = {
     page: currentPage,
     limit: pageSize,
     search: debouncedSearch.trim() || undefined,
     sortField: 'currentCredits',
     sortOrder: sortDirection,
+  } as const;
+  // Propagate request failures so the table can show its retry state instead of an empty successful page.
+  const allUsers = useGetUsers(params, {
+    queryFn: async () => (await api.get<IGetUsersResponse>('/api/users', { params })).data,
   });
-  const updateUserCreditsMutation = useUpdateUserCredits();
 
   // A new search or sort produces a different result set, so return to page 1 rather
   // than stranding the user on a page index that may no longer exist.
@@ -39,42 +38,12 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     setCurrentPage(1);
   };
 
-  const toggleSortDirection = () => {
-    handleSortDirectionChange(sortDirection === 'asc' ? 'desc' : 'asc');
-  };
-
   const handleRefresh = () => {
     allUsers.refetch();
     onRefresh?.();
   };
 
   const users = allUsers.data?.users ?? [];
-
-  const handleCreditAdjustment = async (userId: string, adjustment: number, note: string) => {
-    try {
-      await updateUserCreditsMutation.mutateAsync({
-        userId,
-        // Send the signed adjustment, not a client-computed absolute. The server
-        // applies it atomically against the live balance, so interim spend is not
-        // refunded and the balance never goes negative.
-        creditDelta: adjustment,
-        // The admin's required "Reason for adjustment" - persisted on the audit record.
-        note: note.trim(),
-      });
-      setNotification({
-        open: true,
-        message: `Successfully ${adjustment > 0 ? 'added' : 'removed'} ${Math.abs(adjustment)} credits`,
-        color: 'success',
-      });
-      handleRefresh();
-    } catch (error) {
-      setNotification({
-        open: true,
-        message: 'Failed to update credits',
-        color: 'danger',
-      });
-    }
-  };
 
   // Reset to first page when page size changes
   const handlePageSizeChange = (size: number) => {
@@ -97,15 +66,8 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     setCurrentPage,
     totalPages,
     totalUsers,
-    notification,
-    setNotification,
     allUsers,
-    filteredAndSortedUsers: users,
-    paginatedUsers: users,
-    toggleSortDirection,
+    users,
     handleRefresh,
-    handleCreditAdjustment,
-    isLoading: allUsers.isLoading,
-    error: allUsers.error,
   };
 }

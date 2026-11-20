@@ -1,12 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { processDiscoveredLinks } from './processDiscoveredLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
-import { insufficientCreditsError, ResearchTaskType } from '@bike4mind/common';
-import axios from 'axios';
+import { ForbiddenError, insufficientCreditsError, ResearchTaskType } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
-
-vi.mock('axios');
-const mockedAxios = axios as any;
 
 vi.mock('./utils', () => ({
   createSendStatusUpdate: vi.fn(),
@@ -18,6 +15,7 @@ describe('processDiscoveredLinks', () => {
   let mockLLM: any;
   let mockJobs: any;
   let adapters: any;
+  let mockStorage: any;
   let mockResearchTask: any;
   let mockResearchData: any;
   let mockFabFile: any;
@@ -59,7 +57,9 @@ describe('processDiscoveredLinks', () => {
       },
     };
 
+    mockStorage = { download: vi.fn() };
     adapters = {
+      storage: mockStorage,
       db: mockDb,
       logger: mockLogger,
       llm: mockLLM,
@@ -95,7 +95,7 @@ describe('processDiscoveredLinks', () => {
 
     mockFabFile = {
       id: 'fab-file-id',
-      fileUrl: 'https://storage.example.com/file.md',
+      filePath: 'fab-files/file.md',
     };
 
     mockSendStatusUpdate = vi.fn().mockResolvedValue(undefined);
@@ -128,7 +128,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       await callback([mockLLMResponse]);
     });
@@ -140,7 +140,7 @@ describe('processDiscoveredLinks', () => {
     expect(mockDb.researchTasks.findById).toHaveBeenCalledWith('test-task-id');
     expect(mockDb.researchDatas.findByUrlAndUserId).toHaveBeenCalledWith('https://example.com', 'test-user-id');
     expect(mockDb.fabFiles.findById).toHaveBeenCalledWith('fab-file-id');
-    expect(mockedAxios.get).toHaveBeenCalledWith('https://storage.example.com/file.md');
+    expect(mockStorage.download).toHaveBeenCalledWith('fab-files/file.md');
     expect(mockLLM.complete).toHaveBeenCalled();
     expect(mockDb.researchTasks.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -201,7 +201,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(orgTask);
     mockDb.researchDatas.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       await callback([JSON.stringify([])]);
     });
@@ -263,16 +263,16 @@ describe('processDiscoveredLinks', () => {
     );
   });
 
-  it('should mark task as failed when fab file has no fileUrl', async () => {
+  it('should mark task as failed when fab file has no filePath', async () => {
     // Arrange
-    const fabFileWithoutUrl = {
+    const fabFileWithoutPath = {
       ...mockFabFile,
-      fileUrl: null,
+      filePath: null,
     };
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
-    mockDb.fabFiles.findById.mockResolvedValue(fabFileWithoutUrl);
+    mockDb.fabFiles.findById.mockResolvedValue(fabFileWithoutPath);
 
     // Act
     await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
@@ -292,7 +292,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockRejectedValue(new Error('Network error'));
+    mockStorage.download.mockRejectedValue(new Error('Network error'));
 
     // Act
     await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
@@ -315,7 +315,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       attemptCount++;
       if (attemptCount < 2) {
@@ -337,7 +337,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockStorage.download.mockResolvedValue(Buffer.from('# Content with links'));
     mockLLM.complete.mockRejectedValue(refusal);
 
     await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
@@ -354,6 +354,36 @@ describe('processDiscoveredLinks', () => {
     expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
   });
 
+  it('propagates an AI-access refusal without retrying or discarding pending links', async () => {
+    const refusal = new ForbiddenError(ACCOUNT_BANNED_MESSAGE);
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockStorage.download.mockResolvedValue(Buffer.from('# Content with links'));
+    mockLLM.complete.mockRejectedValue(refusal);
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(mockResearchTask.discoveredLinks.map((link: { status: string }) => link.status)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
+  });
+
+  it('retries an unrelated forbidden error like any other extraction failure', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockStorage.download.mockResolvedValue(Buffer.from('# Content with links'));
+    mockLLM.complete.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockLLM.complete.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it('does not advance to downloads when a concurrent batch is refused after another completes', async () => {
     const refusal = insufficientCreditsError('Credits exhausted after the first batch');
     mockResearchTask.discoveredLinks = Array.from({ length: 51 }, (_, index) => ({
@@ -364,7 +394,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockStorage.download.mockResolvedValue(Buffer.from('# Content with links'));
     mockLLM.complete.mockImplementationOnce(
       async (_model: unknown, _messages: unknown, _options: unknown, callback: (chunks: string[]) => Promise<void>) => {
         await callback([JSON.stringify([{ url: 'https://example.com/link1', text: 'First link' }])]);
@@ -401,7 +431,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockStorage.download.mockResolvedValue(Buffer.from('# Content with links'));
     mockLLM.complete.mockRejectedValue(refusal);
 
     await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
@@ -420,7 +450,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockRejectedValue(new Error('LLM processing failed'));
 
     // Act
@@ -463,7 +493,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       await callback([mockLLMResponse]);
     });
@@ -535,7 +565,7 @@ describe('processDiscoveredLinks', () => {
       .mockResolvedValueOnce(mockResearchData)
       .mockResolvedValueOnce(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       await callback([JSON.stringify([])]);
     });
@@ -564,7 +594,7 @@ describe('processDiscoveredLinks', () => {
     mockDb.researchTasks.findById.mockResolvedValue(taskWithManyLinks);
     mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-    mockedAxios.get.mockResolvedValue({ data: mockContent });
+    mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
       await callback([
         JSON.stringify([
@@ -608,7 +638,7 @@ describe('processDiscoveredLinks', () => {
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
       mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-      mockedAxios.get.mockResolvedValue({ data: mockContent });
+      mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
       mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
         await callback([mockLLMResponse]);
       });
@@ -647,7 +677,7 @@ describe('processDiscoveredLinks', () => {
       mockDb.researchTasks.findById.mockResolvedValue(taskWithMultipleBatches);
       mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
       mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-      mockedAxios.get.mockResolvedValue({ data: mockContent });
+      mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
       mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
         await callback([JSON.stringify([])]);
       });
@@ -686,7 +716,7 @@ describe('processDiscoveredLinks', () => {
       mockDb.researchTasks.findById.mockResolvedValue(taskWithMultipleBatches);
       mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
       mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-      mockedAxios.get.mockResolvedValue({ data: mockContent });
+      mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
       mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
         await callback([JSON.stringify([])]);
       });
@@ -712,7 +742,7 @@ describe('processDiscoveredLinks', () => {
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
       mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-      mockedAxios.get.mockResolvedValue({ data: mockContent });
+      mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
       mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
         await callback([JSON.stringify([])]);
       });
@@ -743,7 +773,7 @@ describe('processDiscoveredLinks', () => {
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
       mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
-      mockedAxios.get.mockResolvedValue({ data: mockContent });
+      mockStorage.download.mockResolvedValue(Buffer.from(mockContent));
       mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
         await callback([JSON.stringify([])]);
       });

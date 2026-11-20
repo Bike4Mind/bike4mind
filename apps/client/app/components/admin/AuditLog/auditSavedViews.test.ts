@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AuditLogFiltersSchema } from '@bike4mind/common';
-import { AUDIT_SAVED_VIEWS } from './auditSavedViews';
+import { AUDIT_SAVED_VIEWS, activeSavedViewKey } from './auditSavedViews';
 
 describe('AUDIT_SAVED_VIEWS', () => {
   it('keys are unique and every filter parses with AuditLogFiltersSchema', () => {
@@ -9,5 +9,14 @@ describe('AUDIT_SAVED_VIEWS', () => {
     for (const view of AUDIT_SAVED_VIEWS) {
       expect(AuditLogFiltersSchema.safeParse(view.filters).success).toBe(true);
     }
+  });
+});
+
+describe('activeSavedViewKey', () => {
+  it('matches only a view whose filters are exactly the current ones', () => {
+    expect(activeSavedViewKey({})).toBe('all');
+    expect(activeSavedViewKey({ category: 'credits' })).toBe('credits');
+    expect(activeSavedViewKey({ category: 'credits', verb: 'denied' })).toBeNull();
+    expect(activeSavedViewKey({ verb: 'denied' })).toBeNull();
   });
 });

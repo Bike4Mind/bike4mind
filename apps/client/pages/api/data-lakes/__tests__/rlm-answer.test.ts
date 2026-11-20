@@ -1,34 +1,49 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { ForbiddenError, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
+  mockAdmitRequestCompletion,
+  mockQuotaRelease,
   mockResolveAccessibleLakes,
   mockBuildDataLakeTools,
   mockGetEffectiveLLMApiKeys,
   mockAgentRun,
+  mockAgentCtor,
   mockReplSessionCtor,
   mockRecordReplSandboxUnavailable,
   meter,
 } = vi.hoisted(() => ({
+  mockAdmitRequestCompletion: vi.fn(),
+  mockQuotaRelease: vi.fn(),
   mockResolveAccessibleLakes: vi.fn(),
   mockBuildDataLakeTools: vi.fn(),
   mockGetEffectiveLLMApiKeys: vi.fn(),
   mockAgentRun: vi.fn(),
+  mockAgentCtor: vi.fn(),
   // Captures the options the route asks for. The executor it picks is the
   // whole security posture of this endpoint, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
   mockRecordReplSandboxUnavailable: vi.fn(),
   meter: {
     denied: new Set<string>(),
+    admissionArgs: vi.fn(),
     refund: vi.fn(),
     reserve: vi.fn(),
     settle: vi.fn(),
+    substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
     replCostUsd: 0,
+    replPromptTokens: 0,
+    replCompletionTokens: 0,
     // The agent's running totals, read by the route when agent.run throws.
     checkpoint: { totalInputTokens: 0, totalOutputTokens: 0 },
   },
 }));
+mockAdmitRequestCompletion.mockImplementation(async () => ({ release: mockQuotaRelease }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: mockAdmitRequestCompletion,
+}));
+
 meter.reserve.mockImplementation(async () => ({ reservedCredits: 10, refund: meter.refund }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -39,8 +54,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: unknown, _res: unknown) => undefined }));
-vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes: mockResolveAccessibleLakes }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown) => undefined,
+}));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
+  resolveAccessibleLakes: mockResolveAccessibleLakes,
+}));
 // The seam under test: whatever credential the route resolves lands here.
 vi.mock('@server/tavern/rlm/tools', () => ({ buildDataLakeTools: mockBuildDataLakeTools }));
 vi.mock('@server/tavern/rlm/dataLakeReplPrompts', () => ({ REPL_TOOL_SYSTEM_PROMPT: 'repl-prompt' }));
@@ -58,6 +79,9 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 }));
 vi.mock('@bike4mind/agents', () => ({
   ReActAgent: class {
+    constructor(context: unknown) {
+      mockAgentCtor(context);
+    }
     run = mockAgentRun;
     toCheckpoint = () => meter.checkpoint;
   },
@@ -66,7 +90,13 @@ vi.mock('@bike4mind/agents', () => ({
       mockReplSessionCtor(opts);
     }
     setTools = vi.fn();
-    getUsage = () => ({ executions: 0, subLlmCalls: 0, totalCostUsd: meter.replCostUsd });
+    getUsage = () => ({
+      executions: 0,
+      subLlmCalls: 0,
+      totalCostUsd: meter.replCostUsd,
+      promptTokens: meter.replPromptTokens,
+      completionTokens: meter.replCompletionTokens,
+    });
     dispose = vi.fn();
   },
   BudgetExceededError: class extends Error {},
@@ -75,17 +105,24 @@ vi.mock('@bike4mind/agents', () => ({
 }));
 
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
+  resolveThinkingVisibility: vi.fn(async () => 'none'),
+}));
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: async () => ({
-    admits: async (id: string) => !meter.denied.has(id),
-    assert: async (id: string) => {
-      if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async (...args: unknown[]) => {
+    meter.admissionArgs(...args);
+    return {
+      admits: async (id: string) => !meter.denied.has(id),
+      assert: async (id: string) => {
+        if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
   reserveCompletionCredits: (...args: unknown[]) => meter.reserve(...args),
-  completionUsd: (_model: unknown, u: { inputTokens?: number; outputTokens?: number }) =>
-    (u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002,
+  resolveShadowSubstitute: (...args: unknown[]) => meter.substitute(...args),
+  completionUsd: (model: { id: string }, u: { inputTokens?: number; outputTokens?: number }) =>
+    ((u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002) * (model.id === 'cheap' ? 0.1 : 1),
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => meter.settle(charge),
 }));
 
@@ -159,6 +196,13 @@ describe('POST /api/data-lakes/rlm-answer - in-REPL retrieval credential', () =>
 
     expect(res.statusCode).toBe(200);
     expect(forwardedHeaders()).toEqual({ 'x-api-key': 'b4m_caller_key' });
+  });
+
+  it("runs the agent at the caller's thinking visibility", async () => {
+    const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ thinkingVisibility: 'none' }));
   });
 
   it('fails closed when the request carries no forwardable credential', async () => {
@@ -270,8 +314,11 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    meter.substitute.mockResolvedValue(undefined);
     meter.denied.clear();
     meter.replCostUsd = 0.25;
+    meter.replPromptTokens = 0;
+    meter.replCompletionTokens = 0;
     meter.checkpoint = { totalInputTokens: 0, totalOutputTokens: 0 };
     mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
@@ -409,7 +456,121 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
       usd: 1000 * 0.001 + 300 * 0.002 + 0.25,
       inputTokens: 1000,
       outputTokens: 300,
+      costUsd: 1000 * 0.001 + 300 * 0.002 + 0.25,
+      executed: expect.objectContaining({ id: MODEL }),
+      cacheReadInputTokens: undefined,
+      cacheCreationInputTokens: undefined,
     });
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const cheap = {
+      id: 'cheap',
+      backend: 'openai',
+      type: 'text',
+      supportsTools: true,
+      pricing: { 200_000: { input: 3e-7, output: 15e-7 } },
+    };
+
+    it('runs an explicit body model on the tool-capable substitute and bills the requested model', async () => {
+      meter.substitute.mockResolvedValue(cheap);
+      const { getLlmByModel } = await import('@bike4mind/llm-adapters');
+
+      const res = await call({ authorization: 'Bearer t' }, { query: 'q', model: MODEL });
+
+      expect(res.statusCode).toBe(200);
+      expect(meter.substitute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: MODEL }),
+        expect.any(Array),
+        { requireTools: true }
+      );
+      expect(getLlmByModel).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: cheap }));
+      expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ model: 'cheap', modelIdentityId: MODEL }));
+      expect(meter.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: MODEL,
+          usd: expect.closeTo(1000 * 0.001 + 300 * 0.002 + 0.25, 12),
+          costUsd: expect.closeTo((1000 * 0.001 + 300 * 0.002) * 0.1 + 0.25, 12),
+          executed: cheap,
+        })
+      );
+      expect(res.body?.model).toBe(MODEL);
+    });
+
+    it('splits the root ceiling and keeps sub-LLM spend whole when no root usage is reported', async () => {
+      meter.substitute.mockResolvedValue(cheap);
+      mockAgentRun.mockResolvedValueOnce({
+        finalAnswer: 'ok',
+        steps: [],
+        completionInfo: { iterations: 1, toolCalls: 0, reachedMaxIterations: false },
+      });
+
+      await call({ authorization: 'Bearer t' });
+
+      const reservedUsd = meter.reserve.mock.calls[0][1] as number;
+      const charge = meter.settle.mock.calls[0][0];
+      expect(charge.usd).toBeCloseTo(reservedUsd - 5 + 0.25, 9);
+      expect(charge.costUsd).toBeCloseTo((reservedUsd - 5) * 0.1 + 0.25, 9);
+    });
+  });
+
+  it('runs the requested model when nothing is substituted', async () => {
+    const res = await call({ authorization: 'Bearer t' }, { query: 'q', model: MODEL });
+
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ model: MODEL }));
+    expect(mockAgentCtor.mock.calls[0][0]).not.toHaveProperty('modelIdentityId');
+    expect(res.body?.model).toBe(MODEL);
+  });
+
+  it.each(['success', 'failure'] as const)('records root cache and sub-LLM tokens after %s', async outcome => {
+    meter.replPromptTokens = 10_000;
+    meter.replCompletionTokens = 500;
+    const rootUsage = {
+      totalInputTokens: 1000,
+      totalOutputTokens: 300,
+      totalCacheReadTokens: 200,
+      totalCacheWriteTokens: 50,
+    };
+    if (outcome === 'failure') {
+      meter.checkpoint = rootUsage;
+      mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
+    } else {
+      mockAgentRun.mockResolvedValueOnce({ finalAnswer: 'ok', steps: [], completionInfo: rootUsage });
+    }
+
+    await call({ 'x-api-key': 'personal-key' });
+
+    expect(meter.settle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: 11_000,
+        outputTokens: 800,
+        cacheReadInputTokens: 200,
+        cacheCreationInputTokens: 50,
+      })
+    );
+  });
+
+  it('settles a substituted run that fails after reporting usage with the cost split', async () => {
+    meter.substitute.mockResolvedValue({
+      id: 'cheap',
+      backend: 'openai',
+      type: 'text',
+      supportsTools: true,
+      pricing: { 200_000: { input: 3e-7, output: 15e-7 } },
+    });
+    meter.checkpoint = { totalInputTokens: 1000, totalOutputTokens: 300 };
+    mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
+
+    await call({ authorization: 'Bearer t' });
+
+    expect(meter.settle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        usd: expect.closeTo(1000 * 0.001 + 300 * 0.002 + 0.25, 12),
+        costUsd: expect.closeTo((1000 * 0.001 + 300 * 0.002) * 0.1 + 0.25, 12),
+        executed: expect.objectContaining({ id: 'cheap' }),
+      })
+    );
   });
 
   it('settles the root turns that completed plus sub-LLM spend when the agent throws', async () => {
@@ -444,5 +605,98 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     expect(meter.refund).toHaveBeenCalledTimes(1);
     expect(meter.settle).not.toHaveBeenCalled();
     expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/rlm-answer - completion quotas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    meter.denied.clear();
+    mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
+    mockBuildDataLakeTools.mockReturnValue({});
+    mockAgentRun.mockResolvedValue({
+      finalAnswer: 'ok',
+      steps: [],
+      completionInfo: {
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+        totalInputTokens: 10,
+        totalOutputTokens: 1,
+      },
+    });
+  });
+
+  it('checks the request credential before any provider setup or credit reservation', async () => {
+    mockAdmitRequestCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Token quota exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+
+    await expect(call({ 'x-api-key': 'test-key' })).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 },
+    });
+    expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(meter.reserve).not.toHaveBeenCalled();
+    expect(mockAgentRun).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+  });
+
+  it("admits the model under the org-billed key's organization policy", async () => {
+    const { req, res } = makeReqRes({ 'x-api-key': 'test-key' });
+    const orgKeyRequest = {
+      ...req,
+      apiKeyInfo: { keyId: 'key-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
+    };
+    await (handler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(orgKeyRequest, res);
+    expect(meter.admissionArgs).toHaveBeenCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: 'org-1',
+    });
+  });
+
+  it('passes a JWT request to the credential-aware admission helper', async () => {
+    await call({ authorization: 'Bearer jwt' });
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'user-1' } }), {
+      holdSlot: true,
+    });
+    expect(mockAgentRun).toHaveBeenCalledOnce();
+  });
+
+  it('holds its slot until the agent and usage settlement finish', async () => {
+    const { req, res } = makeReqRes({ 'x-api-key': 'test-key' });
+    const apiKeyRequest = { ...req, apiKeyInfo: { keyId: 'key-1' } };
+    let finishRun: (result: unknown) => void = () => undefined;
+    mockAgentRun.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finishRun = resolve;
+        })
+    );
+    const pending = (handler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(
+      apiKeyRequest,
+      res
+    );
+    await vi.waitFor(() => expect(mockAgentRun).toHaveBeenCalled());
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(apiKeyRequest, { holdSlot: true });
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    finishRun({ finalAnswer: 'ok', steps: [], completionInfo: { iterations: 1, toolCalls: 0 } });
+    await pending;
+    expect(meter.settle).toHaveBeenCalledBefore(mockQuotaRelease);
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
+  });
+
+  it('releases its slot when provider setup throws', async () => {
+    mockGetEffectiveLLMApiKeys.mockRejectedValueOnce(new Error('provider settings unavailable'));
+    await expect(call({ 'x-api-key': 'test-key' })).rejects.toThrow('provider settings unavailable');
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
+  });
+
+  it('releases its slot after a failed agent run is settled', async () => {
+    mockAgentRun.mockRejectedValueOnce(new Error('provider unavailable'));
+    const response = await call({ 'x-api-key': 'test-key' });
+    expect(response.statusCode).toBe(500);
+    expect(meter.settle).toHaveBeenCalledBefore(mockQuotaRelease);
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
   });
 });

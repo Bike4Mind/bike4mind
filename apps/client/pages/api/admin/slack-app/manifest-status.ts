@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { compareManifests, extractBaseUrl } from '@bike4mind/slack';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
@@ -11,11 +11,10 @@ import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations
  * Admin-only endpoint.
  */
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const workspaceId = req.query.workspaceId as string;
   if (!workspaceId) {
     throw new BadRequestError('workspaceId query parameter is required');

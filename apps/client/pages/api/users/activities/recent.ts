@@ -2,6 +2,8 @@ import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { CounterLog } from '@bike4mind/database';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { respond } from '@server/utils/respond';
+import { recentActivityListResponseSchema } from '@bike4mind/common';
 
 const handler = baseApi().get(async (req, res) => {
   const coverage = req.query.coverage as 'all' | 'important' | undefined;
@@ -25,7 +27,7 @@ const handler = baseApi().get(async (req, res) => {
     }
   );
 
-  return res.json(activities);
+  return respond(res, recentActivityListResponseSchema, activities);
 });
 
 export const config = {

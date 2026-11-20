@@ -6,7 +6,9 @@ import { RouterProvider } from '@tanstack/react-router';
 import { publishScrollGutterWidth } from './chat/layout';
 import { router } from './router';
 import { desktopTheme } from './theme';
+import { WindowThemeSync } from './WindowThemeSync';
 import './scrollbars.css';
+import './viewport.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('renderer root element is missing from index.html');
@@ -18,6 +20,7 @@ createRoot(container).render(
   <StrictMode>
     <CssVarsProvider theme={desktopTheme} defaultMode="system">
       <CssBaseline />
+      <WindowThemeSync />
       <RouterProvider router={router} />
     </CssVarsProvider>
   </StrictMode>

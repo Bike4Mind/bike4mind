@@ -1,7 +1,11 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import type { RechartsArtifact } from '@bike4mind/common';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import RechartsRenderer from '@client/app/components/Charts/RechartsRenderer';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';

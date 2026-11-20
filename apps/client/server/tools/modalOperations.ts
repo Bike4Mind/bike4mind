@@ -1,7 +1,59 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ModalModel } from '@bike4mind/database/social';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ModalImageHandler } from './modalImageHandler';
 import { cacheExternalImage } from '@server/utils/cacheExternalImage';
+import { extractModalImageKey, resolveModalImageUrl, withSignedModalImage } from './modalImageUrls';
+
+export type ModalChange = {
+  kind: 'created' | 'updated' | 'deleted';
+  id: string;
+  title: string;
+  fields?: string[];
+};
+
+// Lets a route audit the modal writes that a tool or LLM-parsed query performed on its behalf.
+const modalChangeStore = new AsyncLocalStorage<ModalChange[]>();
+
+// If run throws, changes already made go to onThrow before the error propagates.
+// A nested call hides its changes from the outer collector.
+export async function collectModalChanges<T>(
+  run: () => Promise<T>,
+  onThrow?: (changes: ModalChange[]) => Promise<void>
+): Promise<{ result: T; changes: ModalChange[] }> {
+  const changes: ModalChange[] = [];
+  try {
+    const result = await modalChangeStore.run(changes, run);
+    return { result, changes };
+  } catch (error) {
+    if (changes.length > 0) await onThrow?.(changes);
+    throw error;
+  }
+}
+
+const MODAL_AUDIT_TITLE_MAX = 80;
+
+// Banners have no title, so the fallback is the full body text; cap it for the audit list view.
+export const modalAuditTitle = (modal: { title?: string | null; textMessage?: string | null }): string => {
+  const name = modal.title || modal.textMessage || 'Untitled';
+  return name.length > MODAL_AUDIT_TITLE_MAX ? `${name.slice(0, MODAL_AUDIT_TITLE_MAX - 3)}...` : name;
+};
+
+const noteModalChange = (
+  kind: ModalChange['kind'],
+  id: unknown,
+  modal: { title?: string | null; textMessage?: string | null }
+) => {
+  modalChangeStore.getStore()?.push({ kind, id: String(id), title: modalAuditTitle(modal) });
+};
+
+/** Normalizes a client-supplied image URL for storage: S3 images become a bare key, external URLs are cached. */
+export async function storableModalImageUrl(imageUrl: string): Promise<string> {
+  const key = extractModalImageKey(imageUrl);
+  if (key) return key;
+  if (!imageUrl.includes('amazonaws.com')) return cacheExternalImage(imageUrl);
+  return ModalImageHandler.processModalImageUrl(imageUrl);
+}
 
 // Modal operation functions that can be shared between server and API
 export async function createModal(params: any) {
@@ -35,22 +87,12 @@ export async function createModal(params: any) {
       },
     };
 
-    // Process image URL - cache external URLs to S3 or process S3 signed URLs
     if (modalData.imageUrl) {
-      const imageUrl = modalData.imageUrl;
-
-      // For external URLs (not S3), cache them to S3
-      if (!imageUrl.includes('amazonaws.com')) {
-        modalData.imageUrl = await cacheExternalImage(imageUrl);
-      }
-      // For S3 signed URLs, convert to permanent storage
-      else if (imageUrl.includes('X-Amz-Algorithm')) {
-        modalData.imageUrl = await ModalImageHandler.processModalImageUrl(imageUrl);
-      }
-      // Otherwise it's already a permanent S3 URL, keep as-is
+      modalData.imageUrl = await storableModalImageUrl(modalData.imageUrl);
     }
 
     const modal = await ModalModel.create(modalData);
+    noteModalChange('created', modal._id, modal);
 
     return {
       success: true,
@@ -60,7 +102,7 @@ export async function createModal(params: any) {
         title: modal.title || modal.textMessage,
         type: isBanner ? 'banner' : 'modal',
         enabled: modal.enabled,
-        imageUrl: modal.imageUrl,
+        imageUrl: await resolveModalImageUrl(modal.imageUrl),
       },
     };
   } catch (error) {
@@ -118,7 +160,7 @@ export async function listModals(filter?: any) {
 
     const modals = await ModalModel.find(query).sort({ createdAt: -1 }).lean();
 
-    const formattedModals = modals.map((modal: any) => ({
+    const formattedRows = modals.map((modal: any) => ({
       id: modal._id,
       title: modal.title || modal.textMessage || 'Untitled',
       type: modal.isBanner ? 'banner' : 'modal',
@@ -137,6 +179,7 @@ export async function listModals(filter?: any) {
       agreeButton: modal.agreeButton,
       dismissible: modal.closeButton,
     }));
+    const formattedModals = await Promise.all(formattedRows.map(withSignedModalImage));
 
     return {
       success: true,
@@ -207,22 +250,8 @@ export async function updateModal(modalId: string | undefined, params: any) {
     if (params.startDate !== undefined) updates.startDate = params.startDate;
     if (params.endDate !== undefined) updates.endDate = params.endDate;
     if (params.imageUrl !== undefined) {
-      // Process image URL - cache external URLs to S3 or process S3 signed URLs
       if (params.imageUrl) {
-        const imageUrl = params.imageUrl;
-
-        // For external URLs (not S3), cache them to S3
-        if (!imageUrl.includes('amazonaws.com')) {
-          updates.imageUrl = await cacheExternalImage(imageUrl);
-        }
-        // For S3 signed URLs, convert to permanent storage
-        else if (imageUrl.includes('X-Amz-Algorithm')) {
-          updates.imageUrl = await ModalImageHandler.processModalImageUrl(imageUrl);
-        }
-        // Otherwise it's already a permanent S3 URL, keep as-is
-        else {
-          updates.imageUrl = imageUrl;
-        }
+        updates.imageUrl = await storableModalImageUrl(params.imageUrl);
       } else {
         updates.imageUrl = null;
       }
@@ -261,6 +290,7 @@ export async function updateModal(modalId: string | undefined, params: any) {
     if (!updatedModal) {
       return { success: false, error: 'Failed to update modal' };
     }
+    noteModalChange('updated', updatedModal._id, updatedModal);
 
     // Build descriptive message based on what was updated
     let actionDescription = 'updated';
@@ -295,7 +325,7 @@ export async function updateModal(modalId: string | undefined, params: any) {
         tags: updatedModal.tags,
         startDate: updatedModal.startDate,
         endDate: updatedModal.endDate,
-        imageUrl: updatedModal.imageUrl,
+        imageUrl: await resolveModalImageUrl(updatedModal.imageUrl),
       },
     };
   } catch (error) {
@@ -317,6 +347,7 @@ export async function deleteModal(modalId: string | undefined) {
     if (!modal) {
       return { success: false, error: 'Modal not found' };
     }
+    noteModalChange('deleted', modal._id, modal);
 
     return {
       success: true,

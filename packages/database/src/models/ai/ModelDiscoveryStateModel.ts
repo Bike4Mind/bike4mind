@@ -173,6 +173,10 @@ export class ModelDiscoveryStateRepository
     return docs as IModelDiscoveryState[];
   }
 
+  async countPendingSuggestions(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(PENDING_SUGGESTIONS_QUERY.filter, { limit: options.limit }).exec();
+  }
+
   async resolveSuggestion(
     modelId: string,
     resolution: NonNullable<IModelLifecycleSuggestion['resolution']>,

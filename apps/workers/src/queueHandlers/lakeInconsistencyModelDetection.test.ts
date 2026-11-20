@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
   loggerError: vi.fn(),
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   // Pass-through so the handler's own logic is what the tests exercise, with a logger it can call.
   dispatchWithLogger:
     (fn: (event: unknown, context: unknown, logger: unknown) => Promise<void>) => (event: unknown, context: unknown) =>

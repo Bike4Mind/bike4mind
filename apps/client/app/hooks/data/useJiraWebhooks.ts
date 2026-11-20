@@ -33,13 +33,11 @@ export const jiraWebhookQueryKeys = {
 /**
  * Hook to get Jira webhook configuration for the current user's Atlassian site
  */
-export function useGetJiraWebhookConfig(options?: { revealSecret?: boolean }) {
+export function useGetJiraWebhookConfig() {
   return useQuery({
-    queryKey: [...jiraWebhookQueryKeys.config(), { revealSecret: options?.revealSecret }],
+    queryKey: jiraWebhookQueryKeys.config(),
     queryFn: async () => {
-      const response = await api.get<IJiraWebhookConfigResponse | null>('/api/webhooks/jira/config', {
-        params: { revealSecret: options?.revealSecret ? 'true' : undefined },
-      });
+      const response = await api.get<IJiraWebhookConfigResponse | null>('/api/webhooks/jira/config');
       return response.data;
     },
     retry: (failureCount, error) => {

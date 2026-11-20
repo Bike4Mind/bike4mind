@@ -1,3 +1,4 @@
+import { isProviderRefusalStopReason, MODEL_DECLINED_MESSAGE } from '@bike4mind/common';
 import { logger } from '../utils/Logger';
 import { StreamAccumulator } from './streamAccumulator';
 import { isConnectionDrop } from './modelCallError';
@@ -18,7 +19,9 @@ export class NoReplyCompletionError extends Error {
     super(
       stopReason === 'max_tokens'
         ? 'The model used its whole output limit on reasoning and produced no reply. Raise the max tokens setting or ask a narrower question.'
-        : `The model finished (stop reason: ${stopReason}) without producing a reply.`
+        : isProviderRefusalStopReason(stopReason)
+          ? `${MODEL_DECLINED_MESSAGE}.`
+          : `The model finished (stop reason: ${stopReason}) without producing a reply.`
     );
     this.name = 'NoReplyCompletionError';
   }
@@ -56,10 +59,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * The shared completion lifecycle for BOTH CLI transports. Given a
- * {@link StreamTransport} that only knows how to open a wire stream and yield
- * decoded events, this owns everything subtle that used to be duplicated (and
- * divergent) in `ServerLlmBackend` and `WebSocketLlmBackend`:
+ * The completion lifecycle for a CLI transport (`ServerLlmBackend` over SSE).
+ * Given a {@link StreamTransport} that only knows how to open a wire stream and
+ * yield decoded events, this owns everything subtle about a turn:
  *
  * - when the caller asked for live text (`options.streamText`), stream visible
  *   text to the callback as deltas, at most every {@link TEXT_FLUSH_INTERVAL_MS};
@@ -67,9 +69,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  *   (deliver-once, no double-bill);
  * - retry a delivered-nothing attempt when `decide` says so (by default
  *   {@link decideRetry}: typed transient failures, backoff with jitter, Retry-After);
- * - treat an empty completion as a retryable failure, never a silent blank turn
- *   (this is the WebSocket parity fix - its old path resolved empty without
- *   erroring or retrying);
+ * - treat an empty completion as a retryable failure, never a silent blank turn;
  * - on abort, settle without invoking the callback - or, once text was streamed,
  *   reject with an `AbortError` so the agent does not keep the partial reply.
  *
@@ -120,7 +120,7 @@ export async function runCompletion(
         return;
       }
 
-      if (!accumulator.isEmpty()) {
+      if (!accumulator.isEmpty() || isProviderRefusalStopReason(accumulator.finalStopReason)) {
         await accumulator.finalize(callback);
         return; // delivered exactly once
       }

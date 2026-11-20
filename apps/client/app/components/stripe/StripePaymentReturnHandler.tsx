@@ -3,6 +3,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
 import { BILLING_SEARCH_PARAM } from '@client/app/utils/billingDeepLink';
 import { markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
+import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { claimSessionForReporting, releaseSessionClaim } from './StripeCheckoutSuccessHandler';
 
 /**
@@ -32,8 +34,12 @@ export function reportCreditPurchaseConversion(paymentIntentId: string): void {
   if (!paymentIntentId.startsWith('pi_') || !claimSessionForReporting(paymentIntentId)) return;
   // Not awaited and never surfaced, as for subscriptions: analytics must not
   // delay or interrupt the customer. A failed lookup releases the claim so a retry can report.
-  api
-    .get('/api/stripe/payment-intent', { params: { id: paymentIntentId } })
+  // A redirect return is a cold page load, so the lookup waits for the session bootstrap.
+  bootstrapSession()
+    .then(() => {
+      if (!useAccessToken.getState().accessToken) throw new Error('No session to look the payment up with');
+      return api.get('/api/stripe/payment-intent', { params: { id: paymentIntentId } });
+    })
     .then(response => trackPurchaseConversion(response.data))
     .catch(() => releaseSessionClaim(paymentIntentId));
 }

@@ -1,4 +1,4 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { dataLakeService, apiKeyService } from '@bike4mind/services';
 import {
   adminSettingsRepository,

@@ -112,6 +112,19 @@ describe('OpenAIBackend.formatMessages — caller system consolidation (#8844)',
     expect(lead).toContain(`you are GPT-5.4 (model id ${ChatModels.GPT5_4}).`);
   });
 
+  it('names the identity model in place of the serving model when one is passed', () => {
+    const messages: IMessage[] = [{ role: 'user', content: 'Hello.' }];
+
+    const lead = leadSystemText(
+      formatMessages(backend, messages, false, ChatModels.GPT5_4, {
+        modelDisplayName: 'Claude Opus',
+        modelIdentityId: 'claude-opus',
+      })
+    );
+
+    expect(lead).toBe(buildIdentityReminder('claude-opus', 'Claude Opus'));
+  });
+
   it.each([ChatModels.GPT5_4, ChatModels.GPT4_1])(
     'synthesizes no persona or tool protocol for %s, with or without tools',
     model => {

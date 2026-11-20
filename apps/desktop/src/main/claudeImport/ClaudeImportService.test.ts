@@ -72,6 +72,17 @@ async function setup(
   return { root, home, store, service, sent, deleted, pick: (path: string | null) => (picked = path) };
 }
 
+/**
+ * Drops an export into the watched folder after the watch began. Linux stamps mtimes from a coarse
+ * clock that can trail Date.now() by a millisecond or so, so a file written moments after
+ * setChatWatchFolder could read as older than the watch and be skipped; stamp it clearly after.
+ */
+async function writeWatchedExport(path: string, data: string | Buffer): Promise<void> {
+  await writeFile(path, data);
+  const arrived = new Date(Date.now() + 1000);
+  await utimes(path, arrived, arrived);
+}
+
 describe('ClaudeImportService', () => {
   it('syncs the default folder, counts what it found, and tells the sidebar once', async () => {
     const { service, store, sent } = await setup();
@@ -150,6 +161,7 @@ describe('ClaudeImportService', () => {
     const repository = join(root, 'repo');
     const worktree = join(repository, '.claude', 'worktrees', 'wt');
     await mkdir(worktree, { recursive: true });
+    await mkdir(join(repository, '.manifold', 'worktrees', 'run'), { recursive: true });
     const copy = (id: string, cwd: string, extra: Partial<ChatSession['importOrigin']> = {}): ChatSession => ({
       id,
       title: id,
@@ -284,7 +296,7 @@ describe('ClaudeImportService', () => {
     await service.setChatWatchFolder(false);
     const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
     const path = join(folder, 'export.zip');
-    await writeFile(
+    await writeWatchedExport(
       path,
       buildZip([
         { name: 'users.json', data: Buffer.from('[]') },
@@ -311,7 +323,7 @@ describe('ClaudeImportService', () => {
     await service.setChatWatchFolder(false);
     const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
     const path = join(folder, 'export.zip');
-    await writeFile(
+    await writeWatchedExport(
       path,
       buildZip([
         { name: 'users.json', data: Buffer.from('[]') },
@@ -335,7 +347,7 @@ describe('ClaudeImportService', () => {
     pick(folder);
     await service.setChatWatchFolder(false);
     const path = join(folder, 'export.zip');
-    await writeFile(path, 'not a complete zip archive yet');
+    await writeWatchedExport(path, 'not a complete zip archive yet');
     const original = await stat(path);
     service.start();
     await vi.advanceTimersByTimeAsync(5000);
@@ -363,7 +375,7 @@ describe('ClaudeImportService', () => {
     await mkdir(folder);
     pick(folder);
     await service.setChatWatchFolder(false);
-    await writeFile(join(folder, 'export.zip'), 'recognition is stubbed');
+    await writeWatchedExport(join(folder, 'export.zip'), 'recognition is stubbed');
     const recognition = vi.spyOn(chatImport, 'looksLikeClaudeExport').mockImplementationOnce(async () => {
       scope = null;
       return true;
@@ -423,6 +435,9 @@ describe('registerClaudeImport', () => {
         IPC_CHANNELS.claudeImportSyncCode,
         IPC_CHANNELS.claudeImportChatExport,
         IPC_CHANNELS.claudeImportSetWatchFolder,
+        IPC_CHANNELS.claudeImportSetWebSettings,
+        IPC_CHANNELS.claudeImportSyncWeb,
+        IPC_CHANNELS.claudeImportDismissHint,
         IPC_CHANNELS.claudeImportRemove,
       ].sort()
     );
@@ -444,5 +459,97 @@ describe('registerClaudeImport', () => {
       code: { settings: { sourceFolder: string | null } };
     };
     expect(state.code.settings.sourceFolder).toBeNull();
+  });
+});
+
+describe('sync hints', () => {
+  async function hintSetup(options: { notebooks?: number; countFails?: { times: number } } = {}) {
+    const root = await mkdtemp(join(tmpdir(), 'claude-import-hints-'));
+    const home = join(root, 'home');
+    const projects = join(home, '.claude', 'projects');
+    const files: [string, string][] = [
+      ['-work-repo--claude-worktrees-one', SOURCE_ID],
+      ['-work-repo', '99999999-2222-4333-8444-555555555555'],
+    ];
+    for (const [folder, id] of files) {
+      await mkdir(join(projects, folder), { recursive: true });
+      await writeFile(join(projects, folder, `${id}.jsonl`), 'not read for a hint', 'utf8');
+    }
+    const get = vi.fn(async (url: string) => {
+      if (url === '/api/sessions/count') {
+        if (options.countFails && options.countFails.times-- > 0) throw new Error('offline');
+        return { count: options.notebooks ?? 4 };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const userData = join(root, 'userData');
+    const warn = vi.fn();
+    const make = () => {
+      const store = new SessionStore(join(root, 'sessions'), 'default-model');
+      const service = new ClaudeImportService({
+        home,
+        userData,
+        store,
+        scopeKey: () => 'test-scope',
+        pickModel: async () => undefined,
+        listSessions: () => store.list(),
+        deleteImported: async () => 'missing',
+        pickPath: async () => null,
+        send: () => {},
+        logger: { warn },
+        webApi: () => ({ get: get as <T>(url: string) => Promise<T> }),
+      });
+      services.push(service);
+      return service;
+    };
+    return { service: make(), get, make, warn };
+  }
+
+  it('counts Claude worktree sessions by name and the web notebooks with one request', async () => {
+    const { service, get } = await hintSetup();
+    service.onScopeChanged();
+    await vi.waitFor(async () => expect((await service.state()).hints.webNotebooks).toBe(4));
+    const { hints } = await service.state();
+    expect(hints.codeSessions).toBe(1);
+    expect(get).toHaveBeenCalledTimes(1);
+    service.onScopeChanged();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the Claude Code count when the web count fails, and retries it on focus', async () => {
+    const { service, get, warn } = await hintSetup({ countFails: { times: 1 } });
+    service.onScopeChanged();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    const { hints } = await service.state();
+    expect(hints.codeSessions).toBe(1);
+    expect(hints.webNotebooks).toBeNull();
+    service.onWindowFocus();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(get).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 61_000);
+    service.onWindowFocus();
+    await vi.waitFor(async () => expect((await service.state()).hints.webNotebooks).toBe(4));
+    vi.useRealTimers();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the session listing and the web count once the empty-sidebar card is dismissed', async () => {
+    const { service, get } = await hintSetup();
+    await service.dismissHint('sidebar-empty');
+    service.onScopeChanged();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const { hints } = await service.state();
+    expect(get).not.toHaveBeenCalled();
+    expect(hints.webNotebooks).toBeNull();
+    expect(hints.codeSessions).not.toBe(1);
+  });
+
+  it('keeps a dismissal for the account across a restart, and ignores unknown ids', async () => {
+    const { service, make } = await hintSetup();
+    expect((await service.dismissHint('claude-code')).hints.dismissed).toEqual(['claude-code']);
+    expect((await service.dismissHint('tour')).hints.dismissed).toEqual(['claude-code']);
+    expect((await make().state()).hints.dismissed).toEqual(['claude-code']);
   });
 });

@@ -1,6 +1,7 @@
 import { Box, Button, Typography } from '@mui/joy';
 import type { ReactNode } from 'react';
-import { CreditOfferActions } from './CreditOfferActions';
+import { CREDIT_OFFER_SURFACES, CREDIT_OFFER_TRIGGERS, CreditOfferActions } from './CreditOfferActions';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
 import { ComposerNote } from './ComposerNote';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
@@ -89,12 +90,20 @@ interface LowCreditsWarningProps {
 export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: LowCreditsWarningProps) {
   if (!show) return null;
 
+  const handleDismiss = () => {
+    // An `actions` override is a preview, not a prompt a user saw.
+    if (!actions) {
+      trackUpsell('dismiss', { surface: CREDIT_OFFER_SURFACES.lowCreditsWarning, trigger: CREDIT_OFFER_TRIGGERS.low });
+    }
+    onDismiss();
+  };
+
   return (
     <ComposerNote
       data-testid="session-low-credits-warning"
       dismissTestId="low-credits-warning-dismiss"
       dismissLabel="Dismiss low credits notice"
-      onDismiss={onDismiss}
+      onDismiss={handleDismiss}
     >
       <Typography
         data-testid="low-credits-warning-text"
@@ -107,7 +116,7 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: 
       </Typography>
       {/* The actions go under the copy, not beside it. */}
       <Box data-testid="low-credits-warning-actions" sx={{ mt: '12px' }}>
-        {actions ?? <CreditOfferActions moment="low" />}
+        {actions ?? <CreditOfferActions moment="low" surface={CREDIT_OFFER_SURFACES.lowCreditsWarning} />}
       </Box>
     </ComposerNote>
   );
@@ -178,7 +187,7 @@ export function CreditsWarning({ show, actions, reason, hasDraft = false, freeRo
           )}
         </Box>
         <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>
-          {actions ?? <CreditOfferActions moment="out" />}
+          {actions ?? <CreditOfferActions moment="out" surface={CREDIT_OFFER_SURFACES.outOfCreditsBanner} />}
         </Box>
       </Box>
     </Box>

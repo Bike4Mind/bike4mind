@@ -119,6 +119,7 @@ function props(overrides: Overrides = {}): Omit<SessionPanelProps, 'collapsed' |
   return {
     variant: overrides.variant ?? 'docked',
     ...(overrides.onDismiss ? { onDismiss: overrides.onDismiss } : {}),
+    ...(overrides.anchor ? { anchor: overrides.anchor } : {}),
     environment: {
       project: PROJECT,
       binding,
@@ -211,7 +212,7 @@ afterEach(() => {
 describe('SessionPanel sections', () => {
   it('draws only Environment, with the chips in their panel layout, when nothing else has content', async () => {
     await show();
-    expect(sectionIds()).toEqual(['environment']);
+    expect(sectionIds()).toEqual(['environment', 'context']);
     expect(find('session-chips-panel')).not.toBeNull();
     expect(get('session-chip-branch-btn').textContent).toBe('main');
   });
@@ -220,7 +221,7 @@ describe('SessionPanel sections', () => {
     await show({
       context: { contextTokens: 1_000, contextLimit: 200_000 },
       changes: { workspace: CHANGES },
-      plan: { todos: [{ content: 'Do it', status: 'pending' }], turnOpen: true },
+      plan: { todos: [{ id: '1', content: 'Do it', status: 'pending' }], turnOpen: true },
       background: { processes: [process('dev', 'running')] },
     });
     expect(sectionIds()).toEqual(['environment', 'context', 'changes', 'plan', 'background']);
@@ -267,21 +268,22 @@ describe('the Changes / Pull request section', () => {
 
   it('leaves the section out for a PR whose bar was dismissed, rather than offering another', async () => {
     await show({ changes: { workspace: CHANGES, hasPullRequest: true, pullRequest: null } });
-    expect(sectionIds()).toEqual(['environment']);
+    expect(sectionIds()).toEqual(['environment', 'context']);
   });
 });
 
 describe('the Context section', () => {
-  it('is left out until a request has been measured', async () => {
+  it('honestly states that the first request is not measured', async () => {
     await show({ context: { contextTokens: null, contextLimit: 200_000 } });
-    expect(sectionIds()).not.toContain('context');
+    expect(get('session-panel-context-body').textContent).toContain('Not measured yet');
+    expect(find('session-panel-context-bar')).toBeNull();
   });
 
   it('shows the share of the window with a bar, and folds to the percentage', async () => {
     await show({ context: { contextTokens: 50_000, contextLimit: 200_000 } });
     expect(sectionIds()).toEqual(['environment', 'context']);
     expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('25%');
-    expect(get('session-panel-context-figure').textContent).toContain('(25%)');
+    expect(get('session-panel-context-figure').textContent).toContain('50k / 200k');
 
     await act(async () => get('session-panel-context-toggle-btn').click());
     expect(find('session-panel-context-bar')).toBeNull();
@@ -293,14 +295,59 @@ describe('the Context section', () => {
     expect(find('session-panel-context-bar')).toBeNull();
     expect(get('session-panel-context-figure').textContent).toContain('reports no window size');
   });
+
+  it('draws estimated categories, reserved/free space and expandable injected inventories', async () => {
+    await show({
+      context: {
+        contextTokens: 52_000,
+        contextLimit: 200_000,
+        contextSnapshot: {
+          model: 'test',
+          inputTokens: 50_000,
+          overhead: [
+            { id: 'mcp-tools', tokens: 2000, items: ['mcp__example__search'] },
+            { id: 'project', tokens: 3000, items: ['/project/CLAUDE.md'] },
+          ],
+        },
+      },
+    });
+    expect(get('context-row-messages').textContent).toContain('~45k');
+    expect(get('context-row-reserve').textContent).toContain('20k');
+    expect(get('context-row-free').textContent).toContain('130k');
+    expect(get('session-panel-context-body').textContent).not.toContain('Last measured request, not unsent messages');
+    expect(get('session-panel-context-body').textContent).toContain('Compacts automatically at 180k');
+    expect(get('session-panel-context-body').textContent).toContain('Buffer is reserved headroom, not injected');
+    const inventory = get('context-inventory-mcp-tools') as HTMLDetailsElement;
+    expect(inventory.open).toBe(false);
+    await act(async () => inventory.querySelector('summary')!.click());
+    expect(inventory.open).toBe(true);
+    expect(inventory.textContent).toContain('mcp__example__search');
+    expect(get('session-panel-context-body').textContent).toContain('Category shares (~) are estimates');
+  });
+
+  it('clamps the meter but retains the real over-limit figure', async () => {
+    await show({ context: { contextTokens: 220_000, contextLimit: 200_000 } });
+    expect(get('session-panel-context-bar').getAttribute('aria-valuenow')).toBe('200000');
+    expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('110%');
+    expect(get('context-row-free').textContent).toContain('0');
+  });
 });
 
 describe('the Plan section', () => {
   const todos = [
-    { content: 'Read the code', status: 'completed' as const },
-    { content: 'Write the fix', status: 'in_progress' as const },
-    { content: 'Run the tests', status: 'pending' as const },
+    { id: '1', content: 'Read the code', status: 'completed' as const },
+    { id: '2', content: 'Write the fix', status: 'in_progress' as const },
+    { id: '3', content: 'Run the tests', status: 'pending' as const },
   ];
+
+  it('leaves cancelled items out of the summary count', async () => {
+    await show({
+      plan: { todos: [...todos, { id: '4', content: 'Old idea', status: 'cancelled' as const }], turnOpen: true },
+    });
+    expect(find('chat-todo-item-cancelled')).not.toBeNull();
+    await act(async () => get('session-panel-plan-toggle-btn').click());
+    expect(get('session-panel-plan-toggle-btn').textContent).toContain('1/3');
+  });
 
   it('lists the items, and folds to the progress count', async () => {
     await show({ plan: { todos, turnOpen: true } });
@@ -318,6 +365,30 @@ describe('the Plan section', () => {
 });
 
 describe('the Background tasks section', () => {
+  it('shows a loop as the only background task, with cadence and a stop control', async () => {
+    const stop = vi.fn();
+    vi.stubGlobal('b4m', { ...window.b4m, chat: { ...window.b4m.chat, loopCommand: stop } });
+    await show({
+      background: {
+        loop: {
+          sessionId: 's',
+          prompt: 'Check the build',
+          intervalMs: 30_000,
+          phase: 'scheduled',
+          nextRunAt: Date.now() + 30_000,
+        },
+      },
+    });
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(get('loop-status').textContent).toContain('30s after completion');
+    await act(async () => get('loop-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('s', 'stop');
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('session-panel-background-toggle-btn').textContent).toContain('Loop scheduled');
+    await show();
+    expect(find('session-panel-section-background')).toBeNull();
+  });
+
   it('lists running commands and spawned sessions with a stop each, and folds the finished ones', async () => {
     const onStopProcess = vi.fn();
     const onStopSession = vi.fn();
@@ -339,6 +410,7 @@ describe('the Background tasks section', () => {
 
     expect(get('session-panel-task-running').textContent).toContain('pnpm run dev');
     expect(get('session-panel-task-running').textContent).toMatch(/1m [56]s/);
+    expect(getComputedStyle(get('session-panel-spawned-open-btn')).fontSize).toBe('var(--joy-fontSize-xs)');
     const stops = host.querySelectorAll<HTMLElement>('[data-testid="session-panel-task-stop-btn"]');
     expect(stops).toHaveLength(2);
     await act(async () => stops[0].click());
@@ -389,11 +461,13 @@ describe('section headers', () => {
   });
 });
 
-describe('the popover variant', () => {
-  it('shuts on Escape or a press outside it, and not on a press inside', async () => {
+describe('the overlay variant', () => {
+  it('shuts on Escape, a press outside it or on its scrim, and its close button, not on a press inside', async () => {
     const onDismiss = vi.fn();
-    await show({ variant: 'popover', onDismiss });
-    expect(get('session-panel').dataset.variant).toBe('popover');
+    await show({ variant: 'overlay', onDismiss });
+    expect(get('session-panel').dataset.variant).toBe('overlay');
+    expect(get('session-panel').getAttribute('role')).toBe('dialog');
+    expect(get('session-panel').getAttribute('aria-modal')).toBe('true');
 
     await act(async () =>
       get('session-panel-environment-toggle-btn').dispatchEvent(new Event('pointerdown', { bubbles: true }))
@@ -403,13 +477,47 @@ describe('the popover variant', () => {
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
-    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    await act(async () => get('session-panel-scrim').dispatchEvent(new Event('pointerdown', { bubbles: true })));
     expect(onDismiss).toHaveBeenCalledTimes(2);
+
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+
+    await act(async () => get('session-panel-close-btn').click());
+    expect(onDismiss).toHaveBeenCalledTimes(4);
   });
 
-  it('ignores Escape and outside presses while docked', async () => {
+  it('takes focus, keeps Tab inside, and hands focus back to its anchor when it shuts', async () => {
+    const anchor = document.createElement('button');
+    document.body.appendChild(anchor);
+    await show({ variant: 'overlay', onDismiss: vi.fn(), anchor: { current: anchor } });
+
+    const close = get('session-panel-close-btn');
+    expect(document.activeElement).toBe(close);
+    const focusables = [...get('session-panel').querySelectorAll<HTMLElement>('button:not([disabled])')];
+    const last = focusables[focusables.length - 1];
+    const tab = (shiftKey: boolean) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      });
+
+    await tab(true);
+    expect(document.activeElement).toBe(last);
+    await tab(false);
+    expect(document.activeElement).toBe(close);
+
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(anchor);
+    anchor.remove();
+    root = createRoot(host);
+  });
+
+  it('is not modal while docked: no scrim, no close button, and Escape and outside presses do nothing', async () => {
     const onDismiss = vi.fn();
     await show({ variant: 'docked', onDismiss });
+    expect(find('session-panel-scrim')).toBeNull();
+    expect(find('session-panel-close-btn')).toBeNull();
+    expect(get('session-panel').getAttribute('role')).toBe('complementary');
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(onDismiss).not.toHaveBeenCalled();

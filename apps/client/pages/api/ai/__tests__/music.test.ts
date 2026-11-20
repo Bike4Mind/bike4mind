@@ -1,3 +1,12 @@
+import { ForbiddenError } from '@bike4mind/utils';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { createMocks } from 'node-mocks-http';
@@ -84,6 +93,8 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
+  warmExchangeAttribution: async () => undefined,
   apiKeyRepository: {},
   cacheRepository: { sentinel: 'cacheRepository' },
   adminSettingsRepository: { sentinel: 'adminSettingsRepository' },
@@ -126,6 +137,11 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => findById(...a),
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 // Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
 // the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is
@@ -158,7 +174,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
   getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
 }));
 
@@ -229,6 +245,23 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/music', () => {
+  it('refuses an unlisted model before holding credits or calling the provider', async () => {
+    const refusal = new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { promise, res } = run({ prompt: 'a song', modelId: 'music_v1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, false, {
+      organizationId: undefined,
+    });
+    expect(assertAdmission).toHaveBeenCalledWith('music_v1', { orgModelBackend: null });
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });

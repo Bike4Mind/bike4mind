@@ -9,11 +9,11 @@ import {
   LLMModelConfig,
   B4MLLMToolsList,
   IImageGenerationTemplateDocument,
-  LEGACY_IMAGE_MODEL_MAP,
   isImageModel,
   isModelDeprecated,
   requiresImageInput,
   FIXED_TEMPERATURE_MODELS,
+  resolveLegacyImageModel,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -111,6 +111,18 @@ export interface LLMContextProps {
   lastUsedImageEditModel: string | null; // Tracks last used image edit model
   enabledMcpServers: string[] | null;
   /**
+   * Custom MCP connector slugs switched off in the Tools menu; every other connector switched on
+   * in Integrations is offered. Opt-out, unlike `enabledMcpServers`, so a connector added later
+   * starts on (see ChatCompletionInvokeParamsSchema.disabledMcpConnections).
+   */
+  disabledMcpConnections: string[];
+  /**
+   * Platform connector ids switched on in the Tools menu. Opt-in, unlike `disabledMcpConnections`:
+   * a platform connector stays out of every chat until the user switches it on (see
+   * ChatCompletionInvokeParamsSchema.enabledPlatformMcpConnections).
+   */
+  enabledPlatformMcpConnections: string[];
+  /**
    * Agent-mode composer toggle state.
    *
    * `enabled`: when true, `routeQuery()` is forced to `agent_executor` via
@@ -198,6 +210,8 @@ const DEFAULTS = {
   lastUsedImageModel: null,
   lastUsedImageEditModel: null,
   enabledMcpServers: null,
+  disabledMcpConnections: [] as string[],
+  enabledPlatformMcpConnections: [] as string[],
   agentMode: { enabled: false, source: 'toggle' as const },
   disableAutoRouteForThisSession: false,
 };
@@ -342,17 +356,21 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 7,
+      version: 8,
       migrate: (persistedState: any, version: number) => {
         // Nothing to migrate in a missing or corrupt entry; the store keeps its defaults.
         if (!persistedState || typeof persistedState !== 'object' || Array.isArray(persistedState)) return {};
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
-          for (const key of ['imageModel', 'lastUsedImageModel'] as const) {
-            const value = state[key];
-            if (typeof value === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, value)) {
-              state[key] = LEGACY_IMAGE_MODEL_MAP[value];
-            }
+          // `model` too: picking an image model as primary writes its id there (see setLLM).
+          for (const key of [
+            'model',
+            'imageModel',
+            'lastUsedImageModel',
+            'imageEditModel',
+            'lastUsedImageEditModel',
+          ] as const) {
+            if (typeof state[key] === 'string') state[key] = resolveLegacyImageModel(state[key]);
           }
         };
         // Migration v0->v1: clean up invalid tools like 'confluence_search'
@@ -401,6 +419,10 @@ export const useLLM = create(
           if (persistedState.max_tokens === DEFAULTS.max_tokens && !persistedState.defaultTextModel) {
             persistedState.max_tokens = 0;
           }
+        }
+        // Migration v7->v8: re-run the remap for gpt-image-1, retired by OpenAI and aliased to gpt-image-2.
+        if (version < 8) {
+          remapLegacyImageModels(persistedState);
         }
         return persistedState;
       },

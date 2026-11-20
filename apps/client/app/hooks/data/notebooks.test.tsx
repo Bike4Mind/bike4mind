@@ -48,4 +48,14 @@ describe('useSendNotebooksEmail', () => {
     expect(post).toHaveBeenCalledWith('/api/email/send', expect.objectContaining({ type: 'notebooks' }));
     expect(post.mock.calls[0][1].recipients).toHaveLength(MAX_EMAIL_RECIPIENTS);
   });
+
+  it('toasts the server message when the send is refused', async () => {
+    post.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 429, data: { message: 'Email limit reached. Try again in 1800 seconds.' } },
+    });
+    const result = renderSend();
+    await expect(result.current.mutateAsync(request(1))).rejects.toBeDefined();
+    expect(toast.error).toHaveBeenCalledWith('Email limit reached. Try again in 1800 seconds.');
+  });
 });

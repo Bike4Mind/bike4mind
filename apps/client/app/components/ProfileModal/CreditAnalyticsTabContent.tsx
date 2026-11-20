@@ -30,7 +30,14 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { CreditHolderType, ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  LEDGER_USAGE_TRANSACTION_TYPES,
+  ModelBackend,
+  ModelInfo,
+  REFERRAL_REWARD_REASON,
+  usdToCredits,
+} from '@bike4mind/common';
 import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
@@ -38,7 +45,10 @@ import { TYPE } from './settingsStyles';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
+import { getCreditSeriesLabel } from './creditChartLabels';
 import dynamic from 'next/dynamic';
+
+type SliceTooltipPoint = { id: string; seriesId: string | number; data: { x: string | number | Date; y: number } };
 
 const UsageDashboard = dynamic(
   () =>
@@ -103,11 +113,17 @@ const CreditAnalyticsTabContent: React.FC = () => {
     );
 
     // Separate transactions by type.
-    // When adding a new transaction type: add filtering here, include in allDeductTransactions,
-    // add to daily data processing, and add a tooltip label in getTooltipLabel().
+    // When adding a new transaction type: add filtering here, add to daily data processing, and add a
+    // tooltip label in getTooltipLabel(). A new deduct type goes in CREDIT_DEDUCT_TRANSACTION_TYPES
+    // (b4m-core/common), which feeds allDeductTransactions and GET /api/usage.
     const purchaseTransactions = sortedTransactions.filter(t => t.type === 'purchase');
     const subscriptionTransactions = sortedTransactions.filter(t => t.type === 'subscription');
-    const genericAddTransactions = sortedTransactions.filter(t => t.type === 'generic_add');
+    const referralRewardTransactions = sortedTransactions.filter(
+      t => t.type === 'generic_add' && t.reason === REFERRAL_REWARD_REASON
+    );
+    const genericAddTransactions = sortedTransactions.filter(
+      t => t.type === 'generic_add' && t.reason !== REFERRAL_REWARD_REASON
+    );
     const genericDeductTransactions = sortedTransactions.filter(t => t.type === 'generic_deduct');
     const textUsageTransactions = sortedTransactions.filter(t => t.type === 'text_generation_usage');
     const completionApiUsageTransactions = sortedTransactions.filter(t => t.type === 'completion_api_usage');
@@ -123,21 +139,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const videoUsageTransactions = sortedTransactions.filter(t => t.type === 'video_generation_usage');
 
     // Combined deduct transactions for burn rate calculation
-    const allDeductTransactions = [
-      ...genericDeductTransactions,
-      ...textUsageTransactions,
-      ...completionApiUsageTransactions,
-      ...decisionUsageTransactions,
-      ...imageUsageTransactions,
-      ...imageEditUsageTransactions,
-      ...voiceUsageTransactions,
-      ...toolUsageTransactions,
-      ...speechToTextUsageTransactions,
-      ...textToSpeechUsageTransactions,
-      ...soundEffectsUsageTransactions,
-      ...musicUsageTransactions,
-      ...videoUsageTransactions,
-    ];
+    const allDeductTransactions = sortedTransactions.filter(t => LEDGER_USAGE_TRANSACTION_TYPES.includes(t.type));
 
     const { burnRate, usageTrend, daysRemaining, observedDays } = computeBurnStats({
       usage: allDeductTransactions,
@@ -156,6 +158,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const purchaseDailyData = new Map<string, { x: string; y: number }>();
     const subscriptionDailyData = new Map<string, { x: string; y: number }>();
     const genericAddDailyData = new Map<string, { x: string; y: number }>();
+    const referralRewardDailyData = new Map<string, { x: string; y: number }>();
     const genericDeductDailyData = new Map<string, { x: string; y: number }>();
     const textUsageDailyData = new Map<string, { x: string; y: number }>();
     const completionApiUsageDailyData = new Map<string, { x: string; y: number }>();
@@ -192,6 +195,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(purchaseTransactions, purchaseDailyData);
     processTransactionType(subscriptionTransactions, subscriptionDailyData);
     processTransactionType(genericAddTransactions, genericAddDailyData);
+    processTransactionType(referralRewardTransactions, referralRewardDailyData);
     processTransactionType(genericDeductTransactions, genericDeductDailyData);
     processTransactionType(textUsageTransactions, textUsageDailyData);
     processTransactionType(completionApiUsageTransactions, completionApiUsageDailyData);
@@ -217,21 +221,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     });
 
     // Create combined usage (all usage types including generic deducts)
-    [
-      ...genericDeductTransactions,
-      ...textUsageTransactions,
-      ...completionApiUsageTransactions,
-      ...decisionUsageTransactions,
-      ...imageUsageTransactions,
-      ...imageEditUsageTransactions,
-      ...voiceUsageTransactions,
-      ...toolUsageTransactions,
-      ...speechToTextUsageTransactions,
-      ...textToSpeechUsageTransactions,
-      ...soundEffectsUsageTransactions,
-      ...musicUsageTransactions,
-      ...videoUsageTransactions,
-    ].forEach(transaction => {
+    allDeductTransactions.forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
         allUsageDailyData.set(day, { x: day, y: 0 });
@@ -249,6 +239,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         purchaseDailyData,
         subscriptionDailyData,
         genericAddDailyData,
+        referralRewardDailyData,
         genericDeductDailyData,
         textUsageDailyData,
         completionApiUsageDailyData,
@@ -280,6 +271,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const purchaseDataPoints = sortDataPoints(purchaseDailyData);
     const subscriptionDataPoints = sortDataPoints(subscriptionDailyData);
     const genericAddDataPoints = sortDataPoints(genericAddDailyData);
+    const referralRewardDataPoints = sortDataPoints(referralRewardDailyData);
     const genericDeductDataPoints = sortDataPoints(genericDeductDailyData);
     const textUsageDataPoints = sortDataPoints(textUsageDailyData);
     const completionApiUsageDataPoints = sortDataPoints(completionApiUsageDailyData);
@@ -307,6 +299,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
           color: theme.palette.success[500],
         },
       ];
+      if (referralRewardDataPoints.some(p => p.y > 0)) {
+        dataToReturn.push({
+          id: 'referral_rewards',
+          data: referralRewardDataPoints,
+          color: theme.palette.warning[500],
+        });
+      }
     } else if (viewMode === 'usage') {
       dataToReturn = [
         {
@@ -341,6 +340,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
           id: 'generic_add',
           data: genericAddDataPoints,
           color: theme.palette.success[300],
+        });
+      }
+
+      if (referralRewardDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'referral_rewards',
+          data: referralRewardDataPoints,
+          color: theme.palette.warning[500],
         });
       }
 
@@ -925,72 +932,28 @@ const CreditAnalyticsTabContent: React.FC = () => {
               enableSlices="x"
               curve="monotoneX"
               colors={chartData.map(d => d.color || theme.palette.primary[500])}
-              tooltip={({ point }: { point: any }) => {
-                // When adding a new transaction type, add a case here for friendly display name
-                const getTooltipLabel = (seriesId: string) => {
-                  switch (seriesId) {
-                    case 'purchases':
-                      return 'Purchases';
-                    case 'subscriptions':
-                      return 'Subscriptions';
-                    case 'generic_add':
-                      return 'Generic Credits Added';
-                    case 'generic_deduct':
-                      return 'Generic Credits Deducted';
-                    case 'text_usage':
-                      return 'Text Generation';
-                    case 'completion_api_usage':
-                      return 'Completion API Usage';
-                    case 'image_usage':
-                      return 'Image Generation';
-                    case 'image_edit_usage':
-                      return 'Image Editing';
-                    case 'voice_usage':
-                      return 'Voice Usage';
-                    case 'tool_usage':
-                      return 'Tool Usage';
-                    case 'speech_to_text_usage':
-                      return 'Speech to Text';
-                    case 'text_to_speech_usage':
-                      return 'Text to Speech';
-                    case 'sound_effects_usage':
-                      return 'Sound Effects';
-                    case 'music_generation_usage':
-                      return 'Music Generation';
-                    case 'decision_usage':
-                      return 'Decisions';
-                    case 'video_generation_usage':
-                      return 'Video Generation';
-                    case 'usage':
-                      return t('credits.credits_used');
-                    case 'credits_added':
-                      return 'Credits Added';
-                    default:
-                      return t('credits.credits');
-                  }
-                };
-
-                return (
-                  <Box
-                    sx={{
-                      p: 1,
-                      bgcolor: 'background.surface',
-                      borderRadius: 'sm',
-                      boxShadow: 'sm',
-                      border: '1px solid',
-                      borderColor: 'divider',
-                    }}
-                  >
-                    <Typography level="body-xs">
-                      <strong>{dayjs(point.data.x).format('MMM D, YYYY')}</strong>
+              sliceTooltip={({ slice }: { slice: { points: SliceTooltipPoint[] } }) => (
+                <Box
+                  sx={{
+                    p: 1,
+                    bgcolor: 'background.surface',
+                    borderRadius: 'sm',
+                    boxShadow: 'sm',
+                    border: '1px solid',
+                    borderColor: 'divider',
+                  }}
+                >
+                  <Typography level="body-xs">
+                    <strong>{dayjs(slice.points[0]?.data.x).format('MMM D, YYYY')}</strong>
+                  </Typography>
+                  {slice.points.map(point => (
+                    <Typography key={point.id} level="body-xs">
+                      {getCreditSeriesLabel(String(point.seriesId), t)}:{' '}
+                      <strong>{point.data.y.toLocaleString()}</strong> {t('credits.credits')}
                     </Typography>
-                    <Typography level="body-xs">
-                      {getTooltipLabel(point.serieId)}: <strong>{point.data.y.toLocaleString()}</strong>{' '}
-                      {t('credits.credits')}
-                    </Typography>
-                  </Box>
-                );
-              }}
+                  ))}
+                </Box>
+              )}
             />
           ) : (
             <Box
@@ -1011,7 +974,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
               <Typography level="title-md">{t('credits.usage_by_model')}</Typography>
             </Stack>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              From the credit ledger over the range selected above; may differ from the usage-event breakdown below.
+              From the credit ledger over the range selected above.
             </Typography>
 
             <Box sx={{ height: 340 }}>
@@ -1084,14 +1047,18 @@ const CreditAnalyticsTabContent: React.FC = () => {
         {/* Removed bottom current balance card (duplicated at top) */}
       </Stack>
 
-      {/* Owner-scoped usage-event breakdown. It keeps its own 30/60/90-day toggle: the credit
-          ledger behind the charts above offers different ranges. */}
+      {/* Owner-scoped breakdown, on the ledger's range toggle so both cover the same window. */}
       {currentUser?.id && (
         <Box data-testid="usage-spend-breakdown">
           <Divider sx={{ my: 4 }}>
             <Typography level="title-md">Spend by key, model, feature and source</Typography>
           </Divider>
-          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
+          <UsageDashboard
+            ownerType={CreditHolderType.User}
+            ownerId={currentUser.id}
+            days={parseInt(timePeriod, 10)}
+            reconcileLedger
+          />
         </Box>
       )}
 

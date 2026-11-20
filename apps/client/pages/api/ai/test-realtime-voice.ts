@@ -1,18 +1,20 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType, estimateTtsCreditCost, type ApiErrorCode } from '@bike4mind/common';
+import { ApiKeyType, estimateTtsCreditCost, resolveAudioVendorBackend, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository, spendFreezeRepository } from '@bike4mind/database';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import {
   holdPreflightCredits,
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const TTS_MODEL = 'tts-1-hd';
 
@@ -29,7 +31,7 @@ const handler = baseApi().post(async (req, res) => {
     .parse(req.body);
 
   const { text, voice } = validatedBody;
-  console.log('[DEBUG] Test Realtime Voice - Text:', text.substring(0, 50) + '...', 'Voice:', voice);
+  console.log('[DEBUG] Test Realtime Voice', { textLength: text.length, voice });
 
   // Get voice settings from admin settings
   const settings = await getSettingsMap(
@@ -63,6 +65,13 @@ const handler = baseApi().post(async (req, res) => {
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
+  // The hold below runs only when credits are enforced; the freeze applies either way.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {
     try {

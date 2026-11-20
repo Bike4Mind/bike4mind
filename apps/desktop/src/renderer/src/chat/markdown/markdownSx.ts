@@ -67,6 +67,8 @@ export const markdownSx: SxProps = {
     backgroundColor: 'var(--joy-palette-background-level2)',
     color: 'var(--joy-palette-text-primary)',
   },
+  // A path in inline code that FilePathLink made a link reads as one, chip and all.
+  '& a[data-file-path] > code': { color: 'var(--joy-palette-primary-plainColor)' },
 
   // Scrolls on its own so a wide table widens the column rather than the whole thread.
   '& table': {

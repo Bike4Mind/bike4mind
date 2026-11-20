@@ -10,8 +10,8 @@ import { type MigrationFile } from './index';
  * range bound on the date and falls back to scanning every row stamped with the org.
  *
  * Migration rather than autoIndex, for the same reason as
- * 20260909000000_ensure-quest-images-index: prod runs DocumentDB, where an index build takes a
- * foreground collection lock. Feedback is written on every user report (the create handler at
+ * 20260909000000_ensure-quest-images-index: autoIndex builds are fire-and-forget (a
+ * failure is silent). Feedback is written on every user report (the create handler at
  * apps/client/pages/api/feedback/index.ts), so leaving the build to whichever Lambda cold-boots
  * first after deploy would block those writes at an arbitrary moment rather than a chosen one.
  *

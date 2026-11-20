@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { excelGenerationTool } from './index';
 
@@ -222,7 +223,8 @@ describe('excel_generation', () => {
         ],
       };
 
-      await expect(toolFn(params)).rejects.toThrow('disallowed pattern');
+      await expect(toolFn(params)).rejects.toBeInstanceOf(ExpectedToolError);
+      expect(mockContext.logger.error).not.toHaveBeenCalled();
     });
 
     it('should reject HYPERLINK formula', async () => {
@@ -572,6 +574,31 @@ describe('excel_generation', () => {
       const result = await toolFn(params);
 
       expect(result).toContain('Successfully generated Excel file');
+    });
+  });
+
+  describe('content disposition', () => {
+    const run = async (filename: string) => {
+      await toolFn({ filename, sheets: [{ name: 'Sheet1', data: [{ row: 1, col: 1, value: 'x' }] }] });
+      return mockContext.imageGenerateStorage.upload.mock.calls[0][2].ContentDisposition as string;
+    };
+
+    it('keeps the plain header for ASCII names', async () => {
+      expect(await run('Quarterly')).toBe('attachment; filename="Quarterly.xlsx"');
+    });
+
+    it('emits an ASCII fallback plus filename* for CJK names', async () => {
+      expect(await run('\u5831\u544a')).toBe(
+        'attachment; filename="__.xlsx"; filename*=UTF-8\'\'%E5%A0%B1%E5%91%8A.xlsx'
+      );
+    });
+
+    it('does not split an emoji at the truncation boundary', async () => {
+      const a99 = 'a'.repeat(99);
+      // Fallback has two underscores: the helper replaces non-ASCII per UTF-16 unit.
+      expect(await run(a99 + '\u{1F600}'.repeat(3))).toBe(
+        `attachment; filename="${a99}__.xlsx"; filename*=UTF-8''${a99}%F0%9F%98%80.xlsx`
+      );
     });
   });
 

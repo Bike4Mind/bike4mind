@@ -103,6 +103,40 @@ describe('mfa.totpSecret encryption at rest', () => {
     });
   });
 
+  describe('mfa.pendingBackupCodes', () => {
+    const CODES = 'ABCDE12345,FGHIJ67890';
+    const readStoredCodes = async (): Promise<string | undefined> => {
+      const raw = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+      return (raw?.mfa as { pendingBackupCodes?: string } | undefined)?.pendingBackupCodes;
+    };
+
+    it('is stored encrypted, read back decrypted, and hidden from default reads', async () => {
+      await userRepository.update({ id: userId, mfa: { ...mfaWith(TOTP_SECRET), pendingBackupCodes: CODES } });
+
+      expect(isEncrypted((await readStoredCodes()) ?? '')).toBe(true);
+      expect((await userRepository.findByIdWithMfaSecrets(userId))!.mfa!.pendingBackupCodes).toBe(CODES);
+      expect((await userRepository.findById(userId))!.mfa?.pendingBackupCodes).toBeUndefined();
+    });
+
+    it('is stored encrypted through User.create / save', async () => {
+      await User.deleteMany({});
+      const user = await User.create({
+        username: 'codes-create',
+        email: 'codes-create@example.com',
+        name: 'Codes Create',
+        mfa: { ...mfaWith(TOTP_SECRET), pendingBackupCodes: CODES },
+      });
+      userId = user.id;
+      expect(isEncrypted((await readStoredCodes()) ?? '')).toBe(true);
+    });
+
+    it('is cleared when MFA is enabled', async () => {
+      await userRepository.update({ id: userId, mfa: { ...mfaWith(TOTP_SECRET), pendingBackupCodes: CODES } });
+      expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).not.toBeNull();
+      expect(await readStoredCodes()).toBeUndefined();
+    });
+  });
+
   describe('legacy plaintext rows (pre-backfill)', () => {
     beforeEach(async () => {
       await User.collection.updateOne(

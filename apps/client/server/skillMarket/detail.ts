@@ -1,5 +1,4 @@
 import { SkillListingImport, SkillListingVersion, skillRepository } from '@bike4mind/database';
-import { organizationRepository } from '@bike4mind/database/infra';
 import { NotFoundError, type ISkillListing, type ISkillListingVersion } from '@bike4mind/common';
 import {
   canDelistListing,
@@ -7,11 +6,12 @@ import {
   canReviewListing,
   canSeeListing,
   isListingAuthor,
-  memberOrgIdsFor,
+  adminAudienceIdsFor,
+  audienceIdsFor,
   publicVersionView,
   serializeListing,
   type MarketActor,
-} from './market';
+} from '@bike4mind/server-utils/skillMarket/market';
 import { similarListings } from './search';
 
 /**
@@ -20,15 +20,12 @@ import { similarListings } from './search';
  * reviewers reach delisted or hidden listings. Anyone else gets a 404 (no existence leak).
  */
 export async function buildListingDetail(listing: ISkillListing, actor: MarketActor, token?: string) {
-  const [memberOrgIds, adminOrgIds] = await Promise.all([
-    memberOrgIdsFor(actor.id),
-    organizationRepository.findIdsAdministeredBy(actor.id),
-  ]);
+  const [audience, adminAudience] = await Promise.all([audienceIdsFor(actor.id), adminAudienceIdsFor(actor.id)]);
   const listingId = String(listing.id);
   const myImport = await SkillListingImport.findOne({ listingId, userId: actor.id }).lean();
-  const visible = canSeeListing(listing, memberOrgIds, token, Boolean(myImport));
+  const visible = canSeeListing(listing, audience, token, Boolean(myImport));
   const isAuthor = isListingAuthor(listing, actor);
-  const canModerate = canDelistListing(listing, actor, adminOrgIds);
+  const canModerate = canDelistListing(listing, actor, adminAudience);
   if (!visible && !isAuthor && !canModerate) throw new NotFoundError('Listing not found');
 
   const [versionDoc, ratingRows] = await Promise.all([
@@ -44,7 +41,9 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
 
   return {
     listing: serializeListing(listing, { privileged: isAuthor || canModerate }),
-    version: versionDoc ? publicVersionView(versionDoc.toJSON() as unknown as ISkillListingVersion) : null,
+    version: versionDoc
+      ? publicVersionView(versionDoc.toJSON() as unknown as ISkillListingVersion, String(listing.authorUserId))
+      : null,
     // Ratings are shown anonymously as "verified importer" reviews.
     ratings: ratingRows.map(r => ({
       stars: r.stars,
@@ -65,14 +64,14 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
       : null,
     viewer: {
       isAuthor,
-      canReview: canReviewListing(listing, actor, adminOrgIds),
+      canReview: canReviewListing(listing, actor, adminAudience),
       canDelist: canModerate,
-      canRestore: listing.status === 'delisted' && canRestoreListing(listing, actor, adminOrgIds),
+      canRestore: listing.status === 'delisted' && canRestoreListing(listing, actor, adminAudience),
       canImport: visible && !isAuthor,
       canRate: visible && !isAuthor && Boolean(myImport),
     },
     similar: visible
-      ? await similarListings({ id: listingId, name: listing.name, tags: listing.tags }, actor.id, memberOrgIds)
+      ? await similarListings({ id: listingId, name: listing.name, tags: listing.tags }, actor.id, audience)
       : [],
   };
 }

@@ -8,6 +8,9 @@ import { deleteDataLake } from './deleteDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { promoteDataLake } from './promoteDataLake';
+
+// The lake cap has its own tests (assertLakeCountWithinCap.test.ts).
+vi.mock('./assertLakeCountWithinCap', () => ({ assertLakeCountWithinCap: vi.fn(async () => undefined) }));
 import { demoteDataLake } from './demoteDataLake';
 
 /**

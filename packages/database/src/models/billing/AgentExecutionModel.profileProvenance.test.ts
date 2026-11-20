@@ -36,6 +36,21 @@ describe('agent execution profile provenance', () => {
     expect(loaded?.profileDeniedTools).toEqual(['coordinate_task']);
   });
 
+  it('round-trips the resolved confidence gate settings and leaves legacy rows without them', async () => {
+    const legacy = await createExecution();
+    expect((await agentExecutionRepository.findById(legacy.id))?.confidenceGate).toBeUndefined();
+
+    const execution = await createExecution();
+    await agentExecutionRepository.persistConfidenceGate(execution.id, {
+      threshold: 0,
+      mode: 'answer',
+      selfReport: false,
+    });
+
+    const loaded = await agentExecutionRepository.findById(execution.id);
+    expect(loaded?.confidenceGate).toEqual({ threshold: 0, mode: 'answer', selfReport: false });
+  });
+
   it.each([true, false])('persists profileIsPinned=%s together with its denials', async profileIsPinned => {
     const execution = await createExecution();
     const update = vi.spyOn(AgentExecutionModel, 'updateOne');

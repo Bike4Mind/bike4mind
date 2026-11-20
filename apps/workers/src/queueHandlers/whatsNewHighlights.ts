@@ -4,13 +4,15 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import type {
+  WhatsNewHighlightsPayload,
   WhatsNewHighlightsConfig,
   HighlightsRunStatus,
 } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
-import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
+import {
+  loadHighlightsReleaseNotes,
+  parseHighlightsEndDate,
+} from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 import {
   buildHighlightsPrompt,
   createSlackBlocks,
@@ -23,7 +25,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, CHAT_MODELS } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
@@ -89,14 +91,9 @@ async function postHighlightsNotice(
   }
 }
 
-/**
- * Queue handler for generating What's New weekly highlights and posting to Slack
- */
-export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+/** Generates What's New weekly highlights and posts them to Slack. Rethrows so the queue retries into the DLQ. */
+export async function runHighlightsJob(payload: WhatsNewHighlightsPayload, logger: Logger): Promise<void> {
   const startTime = Date.now();
-  const body = event.Records[0].body;
-  const payload = WhatsNewHighlightsPayloadSchema.parse(JSON.parse(body));
-
   const { correlationId, environment, startDate, endDate, manualTrigger } = payload;
 
   // Add correlation ID to all logs
@@ -142,10 +139,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     throw error; // Re-throw to trigger DLQ
   }
-});
+}
 
 async function processHighlightsGeneration(
-  payload: ReturnType<typeof WhatsNewHighlightsPayloadSchema.parse>,
+  payload: WhatsNewHighlightsPayload,
   logger: Logger,
   startTime: number
 ): Promise<void> {

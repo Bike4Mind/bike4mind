@@ -3,6 +3,7 @@ import { connectDB, modelDiscoveryRunRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { auditModelReferences } from './modelReferenceAudit';
 
 const logger = new Logger({ metadata: { service: 'modelDiscoveryStaleness' } });
 
@@ -50,5 +51,14 @@ export async function handler(): Promise<void> {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  }
+
+  // Isolated: an audit failure must not fail the watchdog or trip its errors alarm.
+  try {
+    await auditModelReferences(stage);
+  } catch (error) {
+    logger.error('[model-discovery] model reference audit failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }

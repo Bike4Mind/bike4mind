@@ -1,6 +1,16 @@
-import { basename, dirname, sep } from 'node:path';
+import { lstatSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
+import { own } from '@shared/ownKeys';
+import {
+  caseFolded,
+  guardForm,
+  guardFormWithin,
+  ownLocation,
+  realpathSyncNearest,
+  withDriveSpellings,
+} from '../tools/paths';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -117,7 +127,7 @@ export function parseRule(text: string, options: { native?: boolean } = {}): Par
     };
   }
 
-  const mapping = CLAUDE_CODE_TOOLS[name];
+  const mapping = own(CLAUDE_CODE_TOOLS, name);
   if (!mapping) {
     if (options.native && NATIVE_NAME.test(name)) {
       const kind = DESKTOP_KIND.get(name);
@@ -246,6 +256,7 @@ export function compileRule(
 export interface ShellSubjectCommand {
   text: string;
   words?: string;
+  expanded?: string;
   coverable: boolean;
   opaque?: string;
 }
@@ -258,6 +269,16 @@ export interface PermissionSubject {
     commands: readonly ShellSubjectCommand[];
     directories: readonly string[];
     paths?: readonly string[];
+    /** Folders a glob or an expanded operand reaches anything under: a protected folder within or below one is reached. */
+    globFolders?: readonly string[];
+    /** As globFolders, but reached only through names without a leading dot directly under each. */
+    dotlessGlobFolders?: readonly string[];
+    /** Paths in a WSL distro no root is in: no allow rule covers a call that names one. */
+    ungranted?: readonly string[];
+    /** Files the script writes, including in place (`git apply`, `patch`, `sed -i`). */
+    writes?: readonly string[];
+    /** Folders whose contents the script may rewrite. */
+    writtenTrees?: readonly string[];
   };
   paths?: readonly string[];
   /** A search may read descendants of any named path, rather than only the named file. */
@@ -275,12 +296,107 @@ const NO_VERDICT: PermissionVerdict = { decision: null };
 const NAMES_RULE_FILE = /\.claude|permission-rules/;
 
 function within(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
+  return guardFormWithin(guardForm(root), guardForm(candidate));
+}
+
+/** On Windows, the `/mnt/<drive>/...` spelling of a guard-form drive path, else null. */
+function wslMountSpelling(guardRoot: string): string | null {
+  const match = /^([a-z]):(?:\/(.*))?$/.exec(guardRoot);
+  return match ? `/mnt/${match[1]}/${match[2] ?? ''}` : null;
+}
+
+/** The protected roots, or a provider that is read on each decision. */
+export type ProtectedRoots = readonly string[] | (() => readonly string[]);
+
+/** A protected root in each spelling the checks compare against. */
+interface GuardRoot {
+  folded: string;
+  form: string;
+  mount: string | null;
+}
+
+function guardRoot(root: string): GuardRoot {
+  const form = guardForm(root);
+  return { folded: caseFolded(root), form, mount: process.platform === 'win32' ? wslMountSpelling(form) : null };
+}
+
+function scriptNamesRoot(script: string, roots: readonly GuardRoot[]): boolean {
+  const folded = caseFolded(script);
+  const text = guardForm(script);
+  return roots.some(
+    root =>
+      folded.includes(root.folded) || text.includes(root.form) || (root.mount !== null && text.includes(root.mount))
+  );
 }
 
 function isSettingsFile(path: string): boolean {
   const name = basename(path);
   return (name === 'settings.json' || name === 'settings.local.json') && basename(dirname(path)) === '.claude';
+}
+
+function isProtectedPath(path: string, roots: readonly GuardRoot[]): boolean {
+  const all = spellings(path);
+  return (
+    all === null ||
+    all.some(spelling => {
+      const form = guardForm(spelling);
+      return isSettingsFile(spelling) || roots.some(root => guardFormWithin(root.form, form));
+    })
+  );
+}
+
+/**
+ * Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home.
+ * `dotless` when only names without a leading dot are reached directly under `directory`.
+ */
+function isProtectedFolder(directory: string, roots: readonly GuardRoot[], dotless = false): boolean {
+  const all = spellings(directory);
+  return (
+    all === null ||
+    all.some(spelling => {
+      const form = guardForm(spelling);
+      return roots.some(root => folderReaches(form, root.form, dotless));
+    })
+  );
+}
+
+/** The parts of a shell call the protected floor reads. */
+export type ShellReach = Pick<
+  NonNullable<PermissionSubject['shell']>,
+  'script' | 'paths' | 'globFolders' | 'dotlessGlobFolders' | 'writes' | 'writtenTrees'
+>;
+
+/** Whether a path, or shell text, names `.claude` or the permission rules file anywhere. */
+export const namesRuleFile = (path: string): boolean => NAMES_RULE_FILE.test(caseFolded(path));
+
+/** Whether `tree` holds a `.claude` entry; one that cannot be looked at counts as holding it. */
+function holdsSettings(tree: string): boolean {
+  try {
+    return lstatSync(join(tree, '.claude'), { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOTDIR';
+  }
+}
+
+/** `byName` refuses any text or path that merely names `.claude` or the rules file, as no allow rule may cover it. */
+function floorRefuses(shell: ShellReach, roots: readonly GuardRoot[], byName = true): boolean {
+  if ((byName && NAMES_RULE_FILE.test(caseFolded(shell.script))) || scriptNamesRoot(shell.script, roots)) return true;
+  const named = (path: string): boolean => byName && namesRuleFile(path);
+  const files = [...(shell.paths ?? []), ...(shell.writes ?? [])];
+  if (files.some(path => isProtectedPath(path, roots) || named(path))) return true;
+  if (shell.globFolders?.some(folder => isProtectedFolder(folder, roots))) return true;
+  if (shell.dotlessGlobFolders?.some(folder => isProtectedFolder(folder, roots, true))) return true;
+  // A rewritten tree holding a `.claude` folder may rewrite the settings in it.
+  return (shell.writtenTrees ?? []).some(tree => isProtectedFolder(tree, roots) || named(tree) || holdsSettings(tree));
+}
+
+/**
+ * Whether a shell call reaches a protected root, a settings file, or a rewritten tree holding `.claude`: the floor
+ * no allow rule lifts, less the refusal of anything that merely names `.claude`, which auto mode leaves to the
+ * file tools' rules.
+ */
+export function shellReachesProtected(shell: ShellReach, roots: readonly string[]): boolean {
+  return floorRefuses(shell, roots.map(guardRoot), false);
 }
 
 function hostMatches(host: string, rule: { host: string; wildcard: boolean }): boolean {
@@ -303,11 +419,15 @@ export class PermissionRuleSet {
   private readonly byTool = new Map<string, CompiledRule[]>();
   private readonly mcp: CompiledRule[] = [];
   private readonly folderAllows: CompiledRule[] = [];
+  private readonly protectedRoots: () => readonly string[];
+  private guards: { roots: readonly string[]; compiled: readonly GuardRoot[] } | null = null;
 
   constructor(
     readonly rules: readonly CompiledRule[],
-    private readonly protectedRoots: readonly string[] = []
+    protectedRoots: ProtectedRoots = [],
+    private readonly unresolvedProtected: () => readonly string[] = () => []
   ) {
+    this.protectedRoots = typeof protectedRoots === 'function' ? protectedRoots : () => protectedRoots;
     for (const rule of rules) {
       if (rule.matcher.kind === 'mcp') this.mcp.push(rule);
       for (const tool of rule.tools) {
@@ -329,6 +449,13 @@ export class PermissionRuleSet {
     return this.rules.length;
   }
 
+  /** Read per decision: a protected root that could not be resolved yet is retried by its provider. */
+  private get guardRoots(): readonly GuardRoot[] {
+    const roots = this.protectedRoots();
+    if (this.guards?.roots !== roots) this.guards = { roots, compiled: roots.map(guardRoot) };
+    return this.guards.compiled;
+  }
+
   evaluate(subject: PermissionSubject): PermissionVerdict {
     const rules = subject.mcp ? this.mcp : (this.byTool.get(subject.tool) ?? []);
     if (rules.length === 0) return NO_VERDICT;
@@ -346,7 +473,7 @@ export class PermissionRuleSet {
 
   /** Whether a folder outside the shared ones is covered by a Read or Edit allow rule. */
   coversFolder(directory: string): boolean {
-    if (this.isProtectedFolder(directory)) return false;
+    if (isProtectedFolder(directory, this.guardRoots)) return false;
     const probe = `${directory.replace(/\/+$/, '')}/x`;
     return this.folderAllows.some(
       rule =>
@@ -364,7 +491,9 @@ export class PermissionRuleSet {
       case 'shell':
         return (subject.shell?.commands ?? []).some(
           command =>
-            matcher.pattern.test(command.text) || (command.words !== undefined && matcher.pattern.test(command.words))
+            matcher.pattern.test(command.text) ||
+            (command.words !== undefined && matcher.pattern.test(command.words)) ||
+            (command.expanded !== undefined && matcher.pattern.test(command.expanded))
         );
       case 'path':
         // The probe makes `Read(~/.ssh/**)` refuse a search rooted at ~/.ssh itself.
@@ -381,26 +510,34 @@ export class PermissionRuleSet {
     }
   }
 
+  /**
+   * The allow rule covering each sub-command of a shell call, or null for one no rule covers; null as a whole
+   * when a floor holds for the whole script (see `allowing`), when no rule could cover any part, and for a call
+   * a deny or ask rule names. Folders outside the shared ones are not checked here: see `coversFolder`.
+   */
+  shellParts(subject: PermissionSubject): (CompiledRule | null)[] | null {
+    const shell = subject.shell;
+    const rules = this.byTool.get(subject.tool) ?? [];
+    if (!shell || subject.irreversible || rules.length === 0 || this.unresolvedProtected().length > 0) return null;
+    if (shell.ungranted?.length || floorRefuses(shell, this.guardRoots)) return null;
+    if (rules.some(rule => rule.list !== 'allow' && this.touches(rule, subject))) return null;
+    const allows = rules.filter(rule => rule.list === 'allow');
+    return shell.commands.map(command => allows.find(rule => this.coversCommand(rule, command)) ?? null);
+  }
+
   /** allow: EVERY part of the call is covered, and no floor applies. The first covering rule, for the report. */
   private allowing(rules: readonly CompiledRule[], subject: PermissionSubject): CompiledRule | null {
     if (rules.length === 0) return null;
+    if (this.unresolvedProtected().length > 0) return null;
     if (subject.shell) {
-      const { script, commands, directories } = subject.shell;
-      if (commands.length === 0 || NAMES_RULE_FILE.test(script)) return null;
-      if (this.protectedRoots.some(root => script.includes(root))) return null;
-      if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(path))) return null;
-      if (!directories.every(directory => this.coversFolder(directory))) return null;
-      let first: CompiledRule | null = null;
-      for (const command of commands) {
-        const rule = rules.find(each => this.coversCommand(each, command));
-        if (!rule) return null;
-        first ??= rule;
-      }
-      return first;
+      const parts = this.shellParts(subject);
+      if (!parts?.length || parts.some(rule => rule === null)) return null;
+      if (!subject.shell.directories.every(directory => this.coversFolder(directory))) return null;
+      return parts[0];
     }
     if (subject.paths) {
       const { paths } = subject;
-      if (paths.length === 0 || paths.some(path => this.isProtectedPath(path))) return null;
+      if (paths.length === 0 || paths.some(path => isProtectedPath(path, this.guardRoots))) return null;
       let first: CompiledRule | null = null;
       for (const path of paths) {
         const rule = rules.find(
@@ -431,13 +568,25 @@ export class PermissionRuleSet {
     if (!subject.mcp || subject.mcp.server !== matcher.server) return false;
     return matcher.tool === null || cleanToolName(subject.mcp.tool) === matcher.tool;
   }
+}
 
-  private isProtectedPath(path: string): boolean {
-    return isSettingsFile(path) || this.protectedRoots.some(root => within(root, path));
-  }
+/**
+ * Whether reaching everything under `folder` reaches `root`, both in guard form: `folder` is inside it or above
+ * it. `dotless` when the names directly under `folder` that are reached never start with a dot, as for `ls *`.
+ */
+export function folderReaches(folder: string, root: string, dotless = false): boolean {
+  if (guardFormWithin(root, folder)) return true;
+  if (!guardFormWithin(folder, root)) return false;
+  return !dotless || !root.slice(folder.length).replace(/^\/+/, '').startsWith('.');
+}
 
-  /** Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home. */
-  private isProtectedFolder(directory: string): boolean {
-    return this.protectedRoots.some(root => within(root, directory) || within(directory, root));
-  }
+/**
+ * The lexical and real spellings of `path`, plus any WSL drive spelling, case folded where volumes ignore case.
+ * Also its own location, a final link unfollowed. Null when either cannot be resolved; the callers then treat it as protected.
+ */
+function spellings(path: string): string[] | null {
+  const real = isAbsolute(path) ? realpathSyncNearest(path) : path;
+  const own = ownLocation(path);
+  if (real === null || own === null) return null;
+  return withDriveSpellings([path, real, own]).map(spelling => caseFolded(spelling));
 }

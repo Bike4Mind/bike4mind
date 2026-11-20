@@ -170,6 +170,10 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env.selfhost
+    environment:
+      # Pinned here, not left to the env file, so an env file from before the gateway
+      # split still reaches the management port.
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
       mongo:
         condition: service_healthy
@@ -199,10 +203,10 @@ services:
     # when unused. The bundled `ollama` service below is reached as `ollama`.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
-    # Realtime: the app reads the browser URL + management endpoint from
-    # WEBSOCKET_URL / WEBSOCKET_MANAGEMENT_ENDPOINT (.env.selfhost, -> the `ws`
-    # gateway below) and uses INTERNAL_WS_SECRET to authenticate the gateway's
-    # internal handler calls. Both come from the env file.
+    # Realtime: the app reads the browser URL from WEBSOCKET_URL (.env.selfhost) and
+    # pushes to the `ws` gateway's management port (WEBSOCKET_MANAGEMENT_ENDPOINT,
+    # pinned above). INTERNAL_WS_SECRET, from the env file, authenticates the
+    # gateway's internal handler calls.
 
   # Container agent execution transport (optional). Runs long-lived agent starts/resumes
   # dispatched over HTTP by dispatchAgentExecution.ts instead of the hosted Lambda path, which
@@ -220,6 +224,9 @@ services:
       - .env.selfhost
     environment:
       PORT: '8080'
+      # Pinned here, not left to the env file, so an env file from before the gateway
+      # split still reaches the management port.
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
       mongo:
         condition: service_healthy
@@ -242,6 +249,33 @@ services:
     stop_grace_period: 14m
     restart: unless-stopped
 
+  # Studio render worker (optional), the same worker the chart runs as its renderWorker Deployment.
+  # Long-polls renderJobQueue, encodes with ffmpeg, writes the MP4 to
+  # object storage and hands the job back to generationJobQueue. Behind the `render` profile so a
+  # stack that does not export video never pulls the ffmpeg image; it reads RENDER_JOB_QUEUE from
+  # .env.selfhost like the app. Without it, exports wait until their deadline and are refunded. Opt in with:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile render up -d
+  # The sst alias hook maps `Resource.*` onto the env-backed @bike4mind/resource shim, as for `worker`.
+  render-worker:
+    profiles: ['render']
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile.renderworker
+    env_file:
+      - .env.selfhost
+    # The image CMD runs the worker with the sst alias shim, so there is no command override here.
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+    # On SIGTERM the worker aborts an in-flight encode and hands its message back after 90s
+    # (RENDER_DRAIN_GRACE_MS); the extra time covers the upload and hand-back.
+    stop_grace_period: 150s
+    restart: unless-stopped
+
   # Always-on chatCompletion HTTP worker — the self-host equivalent of the hosted Fargate
   # ChatCompletion. The `app` container POSTs created quests to `/process` here
   # (dispatchQuest -> ${CHAT_COMPLETION}/process); this container runs
@@ -257,6 +291,10 @@ services:
       dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
     env_file:
       - .env.selfhost
+    environment:
+      # Pinned here, not left to the env file, so an env file from before the gateway
+      # split still reaches the management port.
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
       mongo:
         condition: service_healthy
@@ -302,6 +340,10 @@ services:
       dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
     env_file:
       - .env.selfhost
+    environment:
+      # Pinned here, not left to the env file, so an env file from before the gateway
+      # split still reaches the management port.
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     # Runs from apps/workers with tsconfig.selfhost.json: its @workers/* paths plus the interim
     # bridge into apps/client, and an include wide enough that the bridged client files also
     # transpile in strict mode. The sst alias hook still lives in apps/client.
@@ -335,12 +377,12 @@ services:
     restart: unless-stopped
 
   # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
-  # WebSocket. One port (3001) with two faces: a browser-facing socket server
+  # WebSocket. Two ports: a browser-facing socket server on 3001
   # (WEBSOCKET_URL=ws://localhost:3001) and an API Gateway Management API
-  # emulator (WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001) that the app and the
-  # subscriber-fanout push to. It holds no auth/model logic; it delegates
-  # connect/subscribe/unsubscribe to the app over an internal shared-secret
-  # endpoint. Source: selfhost/ws-gateway/.
+  # emulator on 3002 (WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3002) that the app
+  # and the subscriber-fanout push to. Only 3001 is published. It holds no
+  # auth/model logic; it delegates connect/subscribe/unsubscribe to the app over
+  # an internal shared-secret endpoint. Source: selfhost/ws-gateway/.
   ws:
     build:
       context: ./selfhost/ws-gateway
@@ -349,10 +391,11 @@ services:
       - .env.selfhost
     environment:
       PORT: '3001'
+      MANAGEMENT_PORT: '3002'
       APP_INTERNAL_URL: http://app:3000
-    # Browser connects to ws://localhost:3001; app + fanout reach it as
-    # http://ws:3001 over the compose network. Override WS_HOST_PORT if 3001 is
-    # taken on your host (also update WEBSOCKET_URL to match).
+    # Browser connects to ws://localhost:3001; app + fanout push to http://ws:3002
+    # over the compose network. Do not publish 3002. Override WS_HOST_PORT if 3001
+    # is taken on your host (also update WEBSOCKET_URL to match).
     ports:
       - '${WS_HOST_PORT:-3001}:3001'
     depends_on:
@@ -381,7 +424,7 @@ services:
     environment:
       # The fanout logs the stage and pushes to the management endpoint below.
       STAGE: ${APP_STAGE:-selfhost}
-      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3001
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
       # Browsers have no 128KB frame cap and don't reassemble chunks, so send whole.
       WEBSOCKET_DISABLE_CHUNKING: 'true'
       # Dummy creds satisfy the AWS SDK; the ws gateway ignores the SigV4 signature.

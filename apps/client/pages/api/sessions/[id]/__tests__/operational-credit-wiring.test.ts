@@ -1,6 +1,6 @@
 /**
  * What the two single-session publishers ASK the credit pre-flight for. The helper's own
- * behaviour is covered by server/utils/sessionOperationalCreditPreflight.test.ts; this file
+ * behaviour is covered by packages/server-utils/src/utils/sessionOperationalCreditPreflight.test.ts; this file
  * covers the arguments, which the helper cannot check for itself and which a reader cannot infer
  * from a green unit suite.
  *
@@ -27,15 +27,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@bike4mind/database/auth', () => ({ Session: { findOne: mockFindOne } }));
+vi.mock('@bike4mind/database/auth', () => ({
+  Session: {
+    findOne: mockFindOne,
+    // The tag route looks sessions up in a batch (queueSessionTags); same lookup, list-shaped.
+    find: async (...a: unknown[]) => [await mockFindOne(...a)].filter(Boolean),
+  },
+}));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { Tag: { publish: mockPublishTag }, Summarize: { publish: mockPublishSummarize } },
 }));
 // Only the pre-flight itself is mocked. OPERATIONS_PER_SUMMARIZE_WITH_TAGGING lives in its own
 // unmocked module precisely so the `operationCount: 2` assertion below reads the real constant -
 // re-declaring it in this factory would pin the test to its own copy instead.
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));
 
@@ -45,7 +51,7 @@ import summaryHandler from '../summary';
 const OWNER_ID = 'owner-1';
 const REQUESTER_ID = 'requester-2';
 // Must be ObjectId-shaped: both routes narrow on `isValidObjectId(sessionId)` before they query
-// (tag.ts:14, summary.ts:15), so a non-hex id short-circuits the lookup to null and the handler
+// (queueSessionTags, summary.ts), so a non-hex id short-circuits the lookup to null and the handler
 // throws "Cannot update session" without ever reaching the pre-flight these tests assert on.
 const SESSION_ID = '65a1f2c3d4e5f60718293a4b';
 
@@ -92,6 +98,12 @@ describe('session operational credit pre-flight wiring', () => {
 
       await expect(run(tagHandler)).rejects.toThrow('insufficient credits');
       expect(mockPublishTag).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed publish as a queueing failure, not an access denial', async () => {
+      mockPublishTag.mockRejectedValue(new Error('queue down'));
+
+      await expect(run(tagHandler)).rejects.toThrow('Could not queue tagging');
     });
 
     it('names the requester on the queued job so the write re-checks their access', async () => {

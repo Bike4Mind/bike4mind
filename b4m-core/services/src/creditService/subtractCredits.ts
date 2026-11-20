@@ -1,4 +1,5 @@
 import {
+  CreditHolderType,
   CompletionApiUsageTransaction,
   DecisionUsageTransaction,
   GenericCreditDeductTransaction,
@@ -19,6 +20,7 @@ import {
   TransferCreditTransaction,
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import type { CreditLedgerWrite } from './ledgerWrite';
 import { z } from 'zod';
 
@@ -114,11 +116,14 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Text generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'completion_api_usage') {
     tx = await db.creditTransactions.createTransaction('completion_api_usage', {
@@ -130,8 +135,11 @@ export async function subtractCreditsWithLedgerRow(
       source,
       model: params.model,
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
+      sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'decision_usage') {
     tx = await db.creditTransactions.createTransaction('decision_usage', {
@@ -145,6 +153,8 @@ export async function subtractCreditsWithLedgerRow(
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'image_generation_usage') {
     tx = await db.creditTransactions.createTransaction('image_generation_usage', {
@@ -154,6 +164,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Image generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -166,6 +177,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Image editing usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -178,6 +190,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Video generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -190,6 +203,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Tool usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -202,6 +216,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Speech to text usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -213,6 +228,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Text to speech usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -224,6 +240,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Sound effects usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -235,6 +252,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Music generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -256,6 +274,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Voice usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -268,6 +287,7 @@ export async function subtractCreditsWithLedgerRow(
     if (!currentCreditHolder) {
       throw new BadRequestError('currentCreditHolder is required when skipBalanceUpdate is true');
     }
+    await notifyOrgDebit(ownerType, ownerId, currentCreditHolder);
     return { creditHolder: currentCreditHolder, creditTransactionId: tx?.id };
   }
 
@@ -276,7 +296,14 @@ export async function subtractCreditsWithLedgerRow(
     throw new BadRequestError('Failed to update credits');
   }
 
+  await notifyOrgDebit(ownerType, ownerId, updatedEntity);
   return { creditHolder: updatedEntity, creditTransactionId: tx?.id };
+}
+
+/** Raised after the ledger row and balance write; notifyOrgEvent swallows alert failures. */
+async function notifyOrgDebit(ownerType: string, ownerId: string, holder: ICreditHolder): Promise<void> {
+  if (ownerType !== CreditHolderType.Organization) return;
+  await notifyOrgEvent({ type: 'credit_debit', organizationId: ownerId, balanceAfter: Number(holder.currentCredits) });
 }
 
 /** subtractCredits for callers that need the ledger row id; see subtractCreditsWithLedgerRow. */

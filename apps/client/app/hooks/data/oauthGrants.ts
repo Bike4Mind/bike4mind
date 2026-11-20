@@ -8,11 +8,11 @@ export interface OAuthGrant {
   approvedAt: string;
 }
 
-const QUERY_KEY = ['oauth-grants'];
+export const OAUTH_GRANTS_QUERY_KEY = ['oauth-grants'] as const;
 
 export function useOAuthGrants() {
   return useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: OAUTH_GRANTS_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<{ grants: OAuthGrant[] }>('/api/oauth/grants');
       return response.data.grants;
@@ -27,6 +27,6 @@ export function useRevokeOAuthGrant() {
       const response = await api.delete(`/api/oauth/grants/${encodeURIComponent(clientId)}`);
       return response.data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: OAUTH_GRANTS_QUERY_KEY }),
   });
 }

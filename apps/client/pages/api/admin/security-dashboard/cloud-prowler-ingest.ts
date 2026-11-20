@@ -2,8 +2,8 @@ import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -47,13 +47,11 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
 
   const ingestToken = prowlerResource.SECOPS_PROWLER_INGEST_TOKEN?.value || process.env.SECOPS_PROWLER_INGEST_TOKEN;
 
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Prowler ingest token is not configured.' });
   }
 
-  const providedTokenHeader = req.headers['x-security-ingest-token'];
-  const providedToken = Array.isArray(providedTokenHeader) ? providedTokenHeader[0] : providedTokenHeader;
-  if (!providedToken || !safeCompareTokens(String(providedToken), ingestToken)) {
+  if (!verifyIngestToken(req, 'x-security-ingest-token', ingestToken)) {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -8,14 +8,16 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
 } from '@bike4mind/database';
+import { lakeProposalApproveResponseSchema, lakeProposalReviewResponseSchema } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { respond } from '@server/utils/respond';
 
 const ReviewInput = z.object({
   decision: z.enum(['approve', 'decline', 'restore']),
@@ -24,11 +26,11 @@ const ReviewInput = z.object({
 });
 
 /**
- * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal (#1671), or
+ * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal, or
  * `restore` a declined one to the pending queue.
  *
- * The only way content a producer found reaches a lake, and it is a human action by construction:
- * there is no auto-approval lever here or anywhere else (#1658 decision 10). Authorization,
+ * The manual way content a producer found reaches a lake. The only automatic way is a trusted-site
+ * rule on the research config, applied by the worker, never by a score. Authorization,
  * writability, the once-only claim and the admission itself all live in the service; this route
  * resolves the actor, checks the proposal belongs to the lake in the path, and wires the ordinary
  * URL ingestion door as the admission adapter.
@@ -76,7 +78,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         await dataLakeRepository.touchIfStable(lake.id);
         return result;
       });
-      return res.json({ data: restored });
+      return respond(res, lakeProposalReviewResponseSchema, { data: restored });
     }
 
     if (decision === 'decline') {
@@ -91,7 +93,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         await dataLakeRepository.touchIfStable(lake.id);
         return result;
       });
-      return res.json({ data: declined });
+      return respond(res, lakeProposalReviewResponseSchema, { data: declined });
     }
 
     const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
@@ -109,7 +111,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       },
       { approverName: req.user?.name || req.user?.username || undefined }
     );
-    return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
+    return respond(res, lakeProposalApproveResponseSchema, {
+      data: approved,
+      fabFile: { id: fabFile.id, fileName: fabFile.fileName },
+    });
   });
 
 export const config = {

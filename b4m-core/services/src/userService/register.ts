@@ -1,12 +1,19 @@
 import {
+  canonicalizeEmail,
+  GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE,
+  grantPackageRefusalMessage,
+  isGrantPackageExpired,
   IAdminSettingsRepository,
   ICreditLotRepository,
+  type IGrantPackageDocument,
+  type IGrantPackageRepository,
   ICreditTransactionRepository,
+  newSignupGrant,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
-import { ISubscriberRepository } from '@bike4mind/common';
+import { ISubscriberRepository, RegInviteSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -20,10 +27,17 @@ import {
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { releasePendingFreeCredits } from './freeCredits';
+import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
+import { callerTransactionSession } from './callerTransaction';
+import {
+  claimRegistrationInvite,
+  redeemRegistrationInvite,
+  type RegistrationInviteRepository,
+  resolveRegistrationInvite,
+} from './registrationInvite';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -66,14 +80,9 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
-    registrationInvites: {
-      findByCode: (code: string) => Promise<IRegInviteDocument | null>;
-      update: (
-        invite: Partial<IRegInviteDocument>,
-        options?: RepositoryUpdateOptions<IRegInviteDocument>
-      ) => Promise<unknown>;
-    };
+    registrationInvites: RegistrationInviteRepository;
     subscribers?: ISubscriberRepository;
 
     /**
@@ -83,6 +92,8 @@ interface RegisterUserAdapters {
     creditTransactions?: ICreditTransactionRepository;
     oauthClients?: OAuthSourceClientLookup;
     creditLots?: ICreditLotRepository;
+    /** Required to redeem an invite that names a grant package; such an invite is refused without it. */
+    grantPackages?: IGrantPackageRepository;
   };
   logger: Logger;
   /**
@@ -90,11 +101,21 @@ interface RegisterUserAdapters {
    * Used by OTC registration where email ownership is already verified.
    */
   skipInviteCheck?: boolean;
+  /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
+  collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
+  emitRiskBand?: FreeCreditAdapters['emitRiskBand'];
+  signupMeta?: IUserDocument['signupMeta'];
+  /**
+   * Leave the pending free credits tagged instead of releasing them here. A caller that runs this
+   * inside a transaction must release after it commits: the staged grant opens its own transaction,
+   * which cannot see the account this one inserted but has not committed.
+   */
+  deferFreeCreditRelease?: boolean;
 }
 
 export const registerUser = async (
   params: RegisterUserParameters,
-  { db, logger, skipInviteCheck }: RegisterUserAdapters
+  { db, logger, skipInviteCheck, signupMeta }: RegisterUserAdapters
 ) => {
   const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
@@ -133,17 +154,21 @@ export const registerUser = async (
   }
 
   // anti-sybil: refuse throwaway inboxes at the chokepoint every credit-bearing
-  // registration flows through. The self-serve OAuth signup grant (verifyCallback.ts) applies
-  // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
+  // registration flows through. Self-serve OAuth signup (verifyCallback.ts) refuses on the
+  // same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
-  if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
+  if (
+    await shouldBlockDisposableEmail(normalizedEmail, {
+      adminSettings: db.adminSettings,
+      signupProtection: db.signupProtection,
+    })
+  ) {
     throw new BadRequestError('This email domain is not allowed');
   }
 
   let tags: string[] = [];
   const settings = await db.adminSettings.findBySettingName('defaultTags');
-  const referralCredits = await db.adminSettings.findBySettingName('ReferralCreditsAmount');
   if (settings) {
     tags = settings.settingValue
       .split(',')
@@ -152,17 +177,17 @@ export const registerUser = async (
   }
 
   // Resolve the invite (if any) and the free-credit / storage grant. Two paths:
-  //   - invite path - validate the code, resolve subscriber/invite/admin credits. The
-  //     resolved amount is NOT granted here: it is persisted as
-  //     `pendingCreditGrant` + the pending-free-credits tag and released only once email
-  //     ownership is proven. releasePendingFreeCredits (freeCredits.ts) does the release on
+  //   - invite path - validate the code and resolve an operator-sized amount (grant package,
+  //     subscriber or the invite's own credits). That amount is NOT granted here: it is
+  //     persisted as `pendingCreditGrant` + the pending-free-credits tag and released only once
+  //     email ownership is proven. releasePendingFreeCredits (freeCredits.ts) does the release on
   //     every path: OTC registration (registerViaOTC), email-link verify (/api/email/verify),
   //     first OTC login (/api/otc/verify), OAuth signup and promote-on-link
   //     (verifyCallback.ts, okta/callback.ts), and the backfillPendingFreeCredits script.
+  //     A referral code, or any code that sizes no amount, enrolls a staged `signupGrant` instead.
   //   - open-registration path - gated behind the `allowOpenRegistration` master switch
   //     (default OFF, so existing invite-only behavior is preserved exactly). When enabled,
-  //     no code is needed; the `defaultFreeCredits` grant is DEFERRED the same way (tag
-  //     only, no pendingCreditGrant - the amount is read from settings at grant time).
+  //     no code is needed and the account enrolls a staged `signupGrant`, released the same way.
   //   Either way no unverified account ever holds credits. This is safe because the
   //     pre-request credit reservation in ChatCompletionProcess makes it impossible to spend
   //     beyond the credits eventually granted - a free user's hard ceiling is their balance.
@@ -177,28 +202,22 @@ export const registerUser = async (
   const hasInviteCode = typeof inviteCode === 'string' && inviteCode.trim().length > 0;
   const normalizedInviteCode = hasInviteCode ? inviteCode!.trim() : '';
 
-  let invite: IRegInviteDocument | null = null;
-  let isUnlimitedInvite = false;
+  const resolvedInvite = hasInviteCode
+    ? await resolveRegistrationInvite(normalizedInviteCode, normalizedEmail, db.registrationInvites)
+    : null;
+  const invite = resolvedInvite?.invite ?? null;
+  let grantPackage: IGrantPackageDocument | null = null;
+  // A legacy package (migrated from an invite's own amounts) keeps the pre-package rules: subscriber
+  // amounts win, its own amount never claims the inbox, and a 0 amount takes the staged signup grant
+  // (which claims the inbox on payout, like any default grant).
+  let packageGrantsCredits = false;
   let freeCredits = 0;
+  // True when an operator sized this signup's grant (package, subscriber or invite credits).
+  let explicitAmount = false;
   let storageLimitOverride: number | null = null;
+  const isReferralInvite = resolvedInvite?.isReferral ?? false;
 
-  if (hasInviteCode) {
-    invite = await db.registrationInvites.findByCode(normalizedInviteCode);
-    if (!invite) throw new BadRequestError('Invalid invite code');
-    isUnlimitedInvite = Boolean(invite.unlimitedUse);
-    if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) {
-      throw new BadRequestError('Invite code has expired');
-    }
-    if (invite.used && !isUnlimitedInvite) throw new BadRequestError('Invite code already used');
-
-    // an invite issued to a specific inbox is redeemable only by that inbox -
-    // referral invites (refer.ts) always carry the target email, so a leaked/forwarded
-    // code can't move its credit grant to a different account. Admin bulk codes have
-    // no email and stay freely redeemable.
-    if (invite.email && invite.email.toLowerCase().trim() !== normalizedEmail) {
-      throw new BadRequestError('This invite code was issued for a different email address');
-    }
-
+  if (invite) {
     // Merge invite-code-specific tags with admin default tags
     if (invite.tags && invite.tags.length > 0) {
       tags = [...new Set([...tags, ...invite.tags])];
@@ -214,11 +233,14 @@ export const registerUser = async (
         const subscriber = await db.subscribers.findByEmail(invite.email);
         if (subscriber && subscriber.inviteCode === normalizedInviteCode) {
           // Use subscriber-specific allocations if available
-          subscriberCredits = subscriber.startingCredits || 0;
+          subscriberCredits = isReferralInvite ? 0 : subscriber.startingCredits || 0;
+          // Storage sits outside the signup grant, so a referral invite keeps the subscriber's storage override.
           subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
-            `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
+            isReferralInvite
+              ? `Applying subscriber storage override for referral invite: ${subscriberStorage}MB storage for ${email}`
+              : `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
           );
         }
       } catch (error) {
@@ -227,20 +249,54 @@ export const registerUser = async (
       }
     }
 
+    // Referral invites carry the inviter's own grant rules, so a package id on one is ignored.
+    if (invite.grantPackageId && invite.source !== RegInviteSource.referral) {
+      grantPackage = db.grantPackages ? await db.grantPackages.findById(invite.grantPackageId) : null;
+      if (!grantPackage) throw new BadRequestError('Invalid invite code');
+      if (!grantPackage.active) throw new BadRequestError(grantPackageRefusalMessage('inactive'));
+      if (isGrantPackageExpired(grantPackage)) throw new BadRequestError(grantPackageRefusalMessage('expired'));
+      packageGrantsCredits = !grantPackage.legacy;
+      // Early, readable refusal for an alias of an inbox that already took a signup grant. The
+      // authoritative claim is made when the grant is released (freeCredits.ts).
+      const claimEmail = canonicalizeEmail(normalizedEmail);
+      if (
+        packageGrantsCredits &&
+        grantPackage.credits > 0 &&
+        claimEmail &&
+        (await db.grantPackages!.isInboxClaimed(claimEmail))
+      ) {
+        throw new BadRequestError(GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE);
+      }
+      if (grantPackage.tags && grantPackage.tags.length > 0) {
+        tags = [...new Set([...tags, ...grantPackage.tags])];
+      }
+    }
+
     // Invite code credits/storage (set when generating the code)
-    const inviteCredits = invite.startingCredits || 0;
-    const inviteStorage = invite.startingStorage || 0;
+    // A referral invitee always takes the default staged grant, so a referral code sizes no credits.
+    const inviteCredits = isReferralInvite
+      ? 0
+      : (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
+    const inviteStorage = (grantPackage?.legacy ? grantPackage.storageMb : invite.startingStorage) || 0;
 
-    // Priority: subscriber > invite code > admin default
-    freeCredits =
-      subscriberCredits > 0
+    // Priority: package > subscriber > invite code. A non-legacy package's amount is authoritative
+    // even at 0; a legacy package stands in for the invite's own amounts.
+    explicitAmount = packageGrantsCredits || subscriberCredits > 0 || inviteCredits > 0;
+    freeCredits = packageGrantsCredits
+      ? grantPackage!.credits
+      : subscriberCredits > 0
         ? subscriberCredits
-        : inviteCredits > 0
-          ? inviteCredits
-          : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
+        : inviteCredits;
 
-    // Priority: subscriber > invite code > default (1000)
-    const signupStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : null;
+    // Priority: non-legacy package > subscriber > invite code (or legacy package) > default (1000)
+    const signupStorage =
+      packageGrantsCredits && grantPackage!.storageMb
+        ? grantPackage!.storageMb
+        : subscriberStorageFound
+          ? subscriberStorage
+          : inviteStorage > 0
+            ? inviteStorage
+            : null;
     storageLimitOverride = signupStorage === DEFAULT_STORAGE_LIMIT_MB ? null : signupStorage;
   } else {
     // No invite code - only permitted when open registration is enabled or invite check is skipped
@@ -259,9 +315,13 @@ export const registerUser = async (
     logger.info(`Open registration (no invite) for ${email}: free credits deferred until email verification`);
   }
 
+  // A referral, and an admin bulk, unlimited or pre-source code sizing no amount, take the default
+  // staged grant.
+  const takesDefaultGrant = Boolean(invite) && (isReferralInvite || !explicitAmount);
+
   // invite-resolved credits are deferred behind the same pending tag as the
   // open-registration grant; the amount travels on the user doc.
-  if (freeCredits > 0) {
+  if (freeCredits > 0 || takesDefaultGrant) {
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
   }
 
@@ -274,6 +334,20 @@ export const registerUser = async (
       logger.warn(`Could not resolve OAuth source tag for client ${sourceClientId}: ${error}`);
     }
   }
+
+  // Every self-serve signup trickles its grant; only an operator-sized amount stays flat.
+  const referralGrant = !hasInviteCode || takesDefaultGrant ? await newSignupGrant(db.adminSettings) : undefined;
+
+  // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
+  // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
+  // minted before `source` existed are deliberately not attributed.
+  const referredByUserId = isReferralInvite && invite?.userId ? invite.userId : null;
+
+  const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
+  const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
+  const numReferralsAvailable = invitesPerUserParsed.success
+    ? invitesPerUserParsed.data
+    : settingsMap.ReferralInvitesPerUser.schema.parse(undefined);
 
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
@@ -300,7 +374,11 @@ export const registerUser = async (
     planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    // Stored even at 0 so a package grant is never mistaken for the default open-registration one.
+    pendingCreditGrant: packageGrantsCredits ? freeCredits : freeCredits > 0 && !referralGrant ? freeCredits : null,
+    ...(packageGrantsCredits ? { grantPackageId: grantPackage!.id } : {}),
+    ...(signupMeta ? { signupMeta } : {}),
+    ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -338,7 +416,12 @@ export const registerUser = async (
     pendingEmailExpires: null,
     pendingEmailUsed: null,
     regInvites: [],
-    numReferralsAvailable: 3,
+    referredByUserId,
+    // Marks the referral signup so a later invite bonus can key off it.
+    ...(isReferralInvite && invite
+      ? { signupInvite: { source: 'referral' as const, inviteId: invite.id, at: new Date() } }
+      : {}),
+    numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
     googleDrive: null,
@@ -352,43 +435,48 @@ export const registerUser = async (
     updatedAt: new Date(),
   };
 
+  const inviteClaim = resolvedInvite ? await claimRegistrationInvite(resolvedInvite, db.registrationInvites) : null;
+  if (resolvedInvite && !inviteClaim) throw new BadRequestError('Invite code already used');
+  // Inside a caller's transaction its rollback restores the claim; a release there would fail on the aborted session.
+  const releaseInviteClaim = async () => {
+    if (callerTransactionSession()) return;
+    await inviteClaim?.release().catch(() => {
+      logger.warn('Registration invite claim release failed; the code may remain claimed');
+    });
+  };
+
   let user: Awaited<ReturnType<typeof db.users.create>>;
   try {
     user = await db.users.create(buildUser);
   } catch (err: unknown) {
+    await releaseInviteClaim();
     // E11000: concurrent registration race on the unique email index.
     if ((err as { code?: number }).code === 11000) {
       throw new BadRequestError('Email already in use');
     }
     throw err;
   }
-  // Update the invite to mark it as used (only when registration used an invite code)
-  if (invite) {
-    const usageEventDate = new Date();
-    const usageEntry = { userId: user.id, usedAt: usageEventDate };
-    invite.usageHistory = [...(invite.usageHistory ?? []), usageEntry];
 
-    if (isUnlimitedInvite) {
-      delete invite.used;
-      delete invite.usedbyId;
-      invite.status = RegInviteStatusType.open;
-    } else {
-      invite.used = usageEventDate;
-      invite.usedbyId = user.id;
-      invite.status = RegInviteStatusType.used;
+  // Counted after the account exists so the redemption can be keyed by it. The invite path runs
+  // inside a transaction (otc/verify.ts), so a refusal here also rolls back the account.
+  let releaseRedemption: (() => Promise<void>) | null = null;
+  if (grantPackage) {
+    const reservation = await db.grantPackages!.reserveRedemption(grantPackage.id, user.id);
+    if (reservation.outcome === 'refused') {
+      logger.info(`Grant package ${grantPackage.id} refused a signup: ${reservation.reason}`);
+      await releaseInviteClaim();
+      throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));
     }
-    await db.registrationInvites.update(
-      isUnlimitedInvite
-        ? { id: invite.id, usageHistory: invite.usageHistory, status: invite.status }
-        : {
-            id: invite.id,
-            usageHistory: invite.usageHistory,
-            used: invite.used,
-            usedbyId: invite.usedbyId,
-            status: invite.status,
-          },
-      isUnlimitedInvite ? { unset: ['used', 'usedbyId'] } : undefined
-    );
+    releaseRedemption = reservation.release;
+  }
+
+  try {
+    if (resolvedInvite) {
+      await redeemRegistrationInvite(resolvedInvite, user.id, db.registrationInvites);
+    }
+  } catch (err) {
+    if (releaseRedemption) await releaseRedemption();
+    throw err;
   }
 
   return user;
@@ -413,22 +501,29 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
+  if (newUser.signupGrant) {
+    await db.users.update({ id: newUser.id, emailVerified: true, emailVerifiedAt: new Date() });
+  }
+
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions && !adapters.deferFreeCreditRelease) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
+        grantPackages: db.grantPackages,
       },
       reason: 'OTC registration (email verified)',
       logger,
+      collectRiskSignals: adapters.collectRiskSignals,
+      emitRiskBand: adapters.emitRiskBand,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.
@@ -437,7 +532,7 @@ export const registerViaOTC = async (
       pendingCreditGrant = null;
       if (release.currentCredits !== null) newUser.currentCredits = release.currentCredits;
     }
-  } else {
+  } else if (!db.creditTransactions) {
     finalTags = finalTags.filter(t => t !== PENDING_FREE_CREDITS_TAG);
     pendingCreditGrant = null;
   }
@@ -451,6 +546,10 @@ export const registerViaOTC = async (
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });
 
+  if (newUser.signupGrant) {
+    const persisted = await db.users.findById(newUser.id);
+    if (persisted) return persisted;
+  }
   return { ...newUser, ...verification } as IUserDocument;
 };
 

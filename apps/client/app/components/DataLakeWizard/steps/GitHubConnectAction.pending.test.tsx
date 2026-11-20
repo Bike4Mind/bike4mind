@@ -51,6 +51,7 @@ const connected: LakeGitHubConnection = {
   skippedCount: 0,
   syncStale: false,
   fileCount: 3,
+  isLastInstallationBinding: true,
   disconnecting: false,
   disconnectStalled: false,
 };

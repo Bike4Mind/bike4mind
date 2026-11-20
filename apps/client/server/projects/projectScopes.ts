@@ -1,9 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { assertApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import { assertApiKeyScope, type ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**
  * API-key scopes for the SPA-internal `/api/projects` doors. Write does not imply read, matching the
- * files family (server/files/fileScopes.ts).
+ * files family (packages/server-utils/src/files/fileScopes.ts).
  *
  * Enforcement sites: every route under `pages/api/projects`, pinned by
  * server/__tests__/projectsAgentsApiKeyScopeCoverage.test.ts. Mixed-method doors declare the

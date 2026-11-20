@@ -1,6 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
-import { clearFailedAttempts, matchTOTPStep, userHasMFAConfigured } from './utils';
+import QRCode from 'qrcode';
+import {
+  clearFailedAttempts,
+  generateTOTPSetup,
+  isMfaEnforcementExempt,
+  matchTOTPStep,
+  userHasMFAConfigured,
+  userHasTotpConfigured,
+  userCanDisableMFA,
+  userRequiresMFA,
+} from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
 const user = (mfa: unknown) => ({ mfa }) as unknown as IUserDocument;
@@ -18,6 +28,34 @@ describe('userHasMFAConfigured', () => {
     expect(userHasMFAConfigured(user({ totpEnabled: false }))).toBe(false);
     expect(userHasMFAConfigured(user(null))).toBe(false);
     expect(userHasMFAConfigured(user(undefined))).toBe(false);
+  });
+
+  it.each([
+    ['an authenticator app only', { totpEnabled: true }, true],
+    ['a passkey only', { totpEnabled: false, passkeyEnabled: true }, true],
+    ['a passkey with no totp flag at all', { passkeyEnabled: true }, true],
+    ['both factors', { totpEnabled: true, passkeyEnabled: true }, true],
+    ['neither factor', { totpEnabled: false, passkeyEnabled: false }, false],
+    ['a pending app setup', { totpEnabled: false }, false],
+    ['an empty mfa object', {}, false],
+  ])('for %s returns %s', (_label, mfa, expected) => {
+    expect(userHasMFAConfigured(user(mfa))).toBe(expected);
+  });
+});
+
+describe('userHasTotpConfigured', () => {
+  it.each([
+    ['an authenticator app only', { totpEnabled: true }, true],
+    ['both factors', { totpEnabled: true, passkeyEnabled: true }, true],
+    ['a passkey only', { totpEnabled: false, passkeyEnabled: true }, false],
+    ['a pending app setup', { totpEnabled: false }, false],
+  ])('for %s returns %s', (_label, mfa, expected) => {
+    expect(userHasTotpConfigured(user(mfa))).toBe(expected);
+  });
+
+  it('is false when the user has no mfa', () => {
+    expect(userHasTotpConfigured(user(null))).toBe(false);
+    expect(userHasTotpConfigured(user(undefined))).toBe(false);
   });
 });
 
@@ -75,5 +113,58 @@ describe('matchTOTPStep', () => {
   it('fails closed on an empty secret (an undecryptable stored secret reads as empty)', () => {
     const emptyKeyCode = speakeasy.totp({ secret: '', encoding: 'base32', time: Math.floor(nowMs / 1000) });
     expect(matchTOTPStep('', emptyKeyCode, 1, nowMs)).toBeNull();
+  });
+});
+
+describe('generateTOTPSetup', () => {
+  it('encodes the same otpauth URI for a re-served secret as speakeasy does for a new one', async () => {
+    const label = 'Test App (a.b+c@example.com)';
+    const fresh = speakeasy.generateSecret({ name: label });
+    const toDataURL = vi.spyOn(QRCode, 'toDataURL');
+
+    const setup = await generateTOTPSetup('a.b+c@example.com', 'Test App', fresh.base32);
+
+    expect(setup.secret).toBe(fresh.base32);
+    expect(setup.manualEntryKey).toBe(fresh.base32);
+    expect(toDataURL).toHaveBeenCalledWith(fresh.otpauth_url);
+    toDataURL.mockRestore();
+  });
+});
+
+describe('userRequiresMFA', () => {
+  const ordinary = { mfa: {} } as unknown as IUserDocument;
+  const persona = { mfa: {}, isPersona: true } as unknown as IUserDocument;
+
+  it('requires every ordinary user while enforcement is on, and nobody while it is off', () => {
+    expect(userRequiresMFA(ordinary, true)).toBe(true);
+    expect(userRequiresMFA({ ...ordinary, isPersona: false } as IUserDocument, true)).toBe(true);
+    expect(userRequiresMFA(ordinary, false)).toBe(false);
+  });
+
+  it('never requires a test persona', () => {
+    expect(isMfaEnforcementExempt(persona)).toBe(true);
+    expect(userRequiresMFA(persona, true)).toBe(false);
+  });
+
+  it('requires a persona that holds any admin access', () => {
+    const fullAdmin = { ...persona, isAdmin: true } as IUserDocument;
+    const delegate = { ...persona, adminPermissions: ['settings:manage'] } as unknown as IUserDocument;
+    expect(userRequiresMFA(fullAdmin, true)).toBe(true);
+    expect(userRequiresMFA(delegate, true)).toBe(true);
+  });
+
+  it('requires a forced account while the stage setting is off, unless it is an exempt persona', () => {
+    expect(userRequiresMFA({ ...ordinary, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(true);
+    expect(userRequiresMFA({ ...persona, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(false);
+  });
+});
+
+describe('userCanDisableMFA', () => {
+  const ordinary = { mfa: { totpEnabled: true } } as unknown as IUserDocument;
+
+  it('lets a user disable only while neither the stage nor their account forces MFA', () => {
+    expect(userCanDisableMFA(ordinary, false)).toBe(true);
+    expect(userCanDisableMFA(ordinary, true)).toBe(false);
+    expect(userCanDisableMFA({ ...ordinary, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(false);
   });
 });

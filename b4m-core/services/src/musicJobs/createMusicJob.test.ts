@@ -35,7 +35,9 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
 const validRequest = { model: 'test-music', prompt: 'a folk song', durationSeconds: 5 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 // Registered as ElevenLabs so a priced, per-second model can be held against.
 const elevenLabsStub: MusicProvider = {
@@ -57,6 +59,7 @@ const lyriaStub: MusicProvider = {
 const makeDeps = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider(), elevenLabsStub, lyriaStub]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -90,6 +93,25 @@ describe('createMusicJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('refuses a paid-only model before holding credits or enqueuing work', async () => {
+    const { deps } = makeDeps();
+    const refusal = new Error('paid plan required');
+    vi.mocked(deps.assertModelAdmission).mockRejectedValue(refusal);
+    await expect(
+      createMusicJob(
+        {
+          user: { ...user, adminRoleWithheld: true },
+          request: { model: 'test-music', prompt: 'a song' },
+          source: 'api',
+        },
+        deps
+      )
+    ).rejects.toBe(refusal);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-music', true, null);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
   });
 
   it('holds credits, creates a pending music job with its defaults resolved and enqueues it', async () => {
@@ -229,6 +251,7 @@ describe('createMusicJob', () => {
       { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
       deps
     );
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', expect.any(String), undefined, 'org1');
     expect(result).toMatchObject({ ok: true, job: { ownerType: CreditHolderType.Organization, ownerId: 'org1' } });
   });
 

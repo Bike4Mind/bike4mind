@@ -432,26 +432,42 @@ const NotionAppContainer = ({
           </Box>
         </Box>
 
-        <Button
-          className={`connected-app-button ${needsReconnect ? 'connected-app-reconnect' : isConnected ? 'connected-app-disconnect' : 'connected-app-connect'}`}
-          loading={loading}
-          color={needsReconnect ? 'warning' : isConnected ? 'danger' : undefined}
-          onClick={() => (needsReconnect ? onConnect() : isConnected ? onDisconnect() : onConnect())}
-          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-        >
-          {needsReconnect
-            ? t('settings.connected_apps.reconnect', 'Reconnect')
-            : isConnected
-              ? t('settings.connected_apps.unlink')
-              : t('settings.connected_apps.link')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+          {/* A grant that cannot be re-authorized would otherwise leave no way to remove it. */}
+          {needsReconnect && (
+            <Button
+              className="connected-app-button connected-app-disconnect"
+              variant="plain"
+              color="neutral"
+              disabled={loading}
+              onClick={onDisconnect}
+              data-testid="connected-app-unlink-expired-btn"
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              {t('settings.connected_apps.unlink')}
+            </Button>
+          )}
+          <Button
+            className={`connected-app-button ${needsReconnect ? 'connected-app-reconnect' : isConnected ? 'connected-app-disconnect' : 'connected-app-connect'}`}
+            loading={loading}
+            color={needsReconnect ? 'warning' : isConnected ? 'danger' : undefined}
+            onClick={() => (needsReconnect ? onConnect() : isConnected ? onDisconnect() : onConnect())}
+            sx={{ whiteSpace: 'nowrap' }}
+          >
+            {needsReconnect
+              ? t('settings.connected_apps.reconnect', 'Reconnect')
+              : isConnected
+                ? t('settings.connected_apps.unlink')
+                : t('settings.connected_apps.link')}
+          </Button>
+        </Box>
       </Box>
 
       {needsReconnect && (
         <Typography level="body-xs" sx={{ color: 'warning.600', fontSize: '12px' }}>
           {t(
             'settings.connected_apps.connection_expired',
-            'Connection expired. Please reconnect to continue using this integration.'
+            'Connection expired. Reconnect to keep using this integration, or unlink it.'
           )}
         </Typography>
       )}
@@ -632,25 +648,41 @@ const AppContainer = ({
           </Box>
         </Box>
 
-        <Button
-          className={`connected-app-button ${needsReconnect ? 'connected-app-reconnect' : isConnected ? 'connected-app-disconnect' : 'connected-app-connect'}`}
-          loading={loading}
-          color={needsReconnect ? 'warning' : isConnected ? 'danger' : undefined}
-          onClick={() => (needsReconnect ? onConnect() : isConnected ? onDisconnect() : onConnect())}
-          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-        >
-          {needsReconnect
-            ? t('settings.connected_apps.reconnect', 'Reconnect')
-            : isConnected
-              ? t('settings.connected_apps.unlink')
-              : t('settings.connected_apps.link')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+          {/* A grant that cannot be re-authorized would otherwise leave no way to remove it. */}
+          {needsReconnect && (
+            <Button
+              className="connected-app-button connected-app-disconnect"
+              variant="plain"
+              color="neutral"
+              disabled={loading}
+              onClick={onDisconnect}
+              data-testid="connected-app-unlink-expired-btn"
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              {t('settings.connected_apps.unlink')}
+            </Button>
+          )}
+          <Button
+            className={`connected-app-button ${needsReconnect ? 'connected-app-reconnect' : isConnected ? 'connected-app-disconnect' : 'connected-app-connect'}`}
+            loading={loading}
+            color={needsReconnect ? 'warning' : isConnected ? 'danger' : undefined}
+            onClick={() => (needsReconnect ? onConnect() : isConnected ? onDisconnect() : onConnect())}
+            sx={{ whiteSpace: 'nowrap' }}
+          >
+            {needsReconnect
+              ? t('settings.connected_apps.reconnect', 'Reconnect')
+              : isConnected
+                ? t('settings.connected_apps.unlink')
+                : t('settings.connected_apps.link')}
+          </Button>
+        </Box>
       </Box>
       {needsReconnect && (
         <Typography level="body-xs" sx={{ color: 'warning.600', fontSize: '12px' }}>
           {t(
             'settings.connected_apps.connection_expired',
-            'Connection expired. Please reconnect to continue using this integration.'
+            'Connection expired. Reconnect to keep using this integration, or unlink it.'
           )}
         </Typography>
       )}

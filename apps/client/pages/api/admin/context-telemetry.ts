@@ -1,9 +1,8 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { dateParam } from '@server/utils/dateParam';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -21,23 +20,19 @@ const querySchema = z.object({
 });
 
 const ONE_MINUTE_MS = 60 * 1000;
-// Its only caller is ContextInspectorTab (via useContextTelemetry, 30s staleTime): six filter
-// dropdowns that each reset to page 0 and refetch, plus pagination and a Refresh button already
-// guarded on isFetching. A worst-case pass through every filter and a few pages lands near 15 in
-// a minute, so 20 leaves headroom without matching the CSV-export-driven counterLogs.ts route.
+// Its only caller is ContextInspectorTab (via useContextTelemetry, 30s staleTime): two date inputs
+// and four filter chips that each reset to page 0 and refetch, plus pagination and a Refresh button
+// already guarded on isFetching. A worst-case pass through every filter and a few pages lands near
+// 15 in a minute, so 20 leaves headroom without matching the CSV-export-driven counterLogs.ts route.
 export const CONTEXT_TELEMETRY_RATE_LIMIT = 20;
 
 // requiredScopes only constrains API-key callers (server/middlewares/baseApi.ts); browser/JWT
-// admins are unaffected and still rely on the isAdmin check below. rateLimit is chained after
-// baseApi so it keys on req.user.id rather than the client IP.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// admins are unaffected and still pass the admin permission gate. rateLimit is chained after
+// adminApi so it keys on req.user.id rather than the client IP.
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: CONTEXT_TELEMETRY_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-context-telemetry' }))
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const params = querySchema.parse(req.query);
       const parsedLimit = parseInt(params.limit || '50', 10);
       const parsedOffset = parseInt(params.offset || '0', 10);
@@ -69,7 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // requested minimum, so 0 includes benign turns. The 0 case deliberately uses
       // $gte: 0 rather than dropping the predicate: every path then hits the same
       // anomalyScore key (index-ready), and legacy docs lacking the anomalies
-      // sub-object stay excluded (TelemetryEntryCard reads anomalies.* unguarded).
+      // sub-object stay excluded (TelemetryEntryRow reads anomalies.* unguarded).
       const minScore = params.minAnomalyScore === undefined ? NaN : parseInt(params.minAnomalyScore, 10);
       if (Number.isNaN(minScore) || minScore < 0 || minScore > 100) {
         query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gt: 0 };

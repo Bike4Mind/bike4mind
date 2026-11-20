@@ -1,16 +1,19 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
-import { BadRequestError, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 import {
   completionCeilingUsd,
   createModelAdmission,
   isCreditsEnforced,
   reserveCompletionCredits,
-} from '@server/billing/meterPlatformCompletion';
+  resolveShadowSubstitute,
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { z } from 'zod';
@@ -72,6 +75,8 @@ const BATCH_CREDIT_HOLD_TTL_MS = 29 * 24 * 60 * 60_000;
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
 const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
   const body = BatchSubmitSchema.parse(req.body);
+  // The provider queues this work; its lifetime is independent of the HTTP request.
+  await admitRequestCompletion(req, { holdSlot: false });
 
   const apiKey = Config.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === 'not-configured') {
@@ -80,12 +85,21 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
 
   const modelIds = [...new Set(body.requests.map(r => r.model))];
   const catalog = await getAvailableModels({ anthropic: apiKey });
-  const admission = await createModelAdmission(req.user, catalog);
+  const admission = await createModelAdmission(req.user, catalog, false, {
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   for (const modelId of modelIds) await admission.assert(modelId);
   const modelInfos = new Map<string, ModelInfo>(catalog.filter(m => modelIds.includes(m.id)).map(m => [m.id, m]));
   const unpriced = modelIds.filter(id => !modelInfos.has(id));
   if (unpriced.length > 0 && (await isCreditsEnforced())) {
     throw new BadRequestError(`Unknown model(s): ${unpriced.join(', ')}`);
+  }
+  // Restricted-tier users run on an allowlisted Anthropic substitute; admission, hold and credits stay on the requested model.
+  const anthropicModels = catalog.filter(m => m.backend === ModelBackend.Anthropic);
+  const runModelInfos = new Map<string, ModelInfo>();
+  for (const [id, info] of modelInfos) {
+    const run = await resolveShadowSubstitute(req, info, anthropicModels);
+    if (run) runModelInfos.set(id, run);
   }
   const ceilingUsd = body.requests.reduce((sum, r) => {
     const modelInfo = modelInfos.get(r.model);
@@ -102,13 +116,18 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
   }, 0);
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 
-  const requests: BatchTransformRequest[] = body.requests.map(r => ({
-    clientRef: r.client_ref,
-    model: r.model,
-    maxTokens: r.max_tokens,
-    system: r.system,
-    messages: r.messages as MessageParam[],
-  }));
+  const requests: BatchTransformRequest[] = body.requests.map(r => {
+    const run = runModelInfos.get(r.model);
+    // A derived max_tokens is a default, not a real ceiling, so only a declared limit clamps.
+    const runLimit = run && !run.maxOutputTokensDerived ? run.max_tokens : undefined;
+    return {
+      clientRef: r.client_ref,
+      model: run?.id ?? r.model,
+      maxTokens: runLimit ? Math.min(r.max_tokens, runLimit) : r.max_tokens,
+      system: r.system,
+      messages: r.messages as MessageParam[],
+    };
+  });
 
   const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms', {
     holdTtlMs: BATCH_CREDIT_HOLD_TTL_MS,
@@ -119,11 +138,21 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     submitted = await service.submitBatch(requests);
   } catch (error) {
     await reservation.refund();
+    // A provider error can name the substitute, so the caller gets a generic one.
+    if (runModelInfos.size > 0) {
+      req.logger.error('[transforms/batch] submit failed', error);
+      throw new Error('Batch submission failed');
+    }
     throw error;
   }
   const { anthropicBatchId } = submitted;
-  // submitBatch maps requests in order, so customIdMap[i] is requests[i].
-  const customIdMap = submitted.customIdMap.map((m, i) => ({ ...m, model: requests[i].model }));
+  // submitBatch maps requests in order, so customIdMap[i] is requests[i]. `model` is the credit pricing key
+  // (as requested); `executedModel` is what ran, when substituted.
+  const customIdMap = submitted.customIdMap.map((m, i) => ({
+    ...m,
+    model: body.requests[i].model,
+    ...(runModelInfos.has(body.requests[i].model) && { executedModel: requests[i].model }),
+  }));
 
   try {
     await transformBatchRepository.create({
@@ -134,7 +163,7 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
       succeededCount: 0,
       erroredCount: 0,
       customIdMap,
-      billingModels: Object.fromEntries(modelInfos),
+      billingModels: Object.fromEntries([...modelInfos, ...[...runModelInfos.values()].map(i => [i.id, i] as const)]),
       // Settled by the first poll that sees the batch end, through the pending-hold claim; a batch
       // never polled within BATCH_CREDIT_HOLD_TTL_MS is refunded by the expired-hold sweep instead.
       creditHold: reservation.hold,

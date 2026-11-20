@@ -24,11 +24,13 @@ Required variables fail loudly when their feature runs; optional variables may s
 | `MONGODB_URI` | MongoDB connection string. Must point at a **replica set** (transactions require it): `mongodb://mongo:27017/bike4mind?replicaSet=rs0` |
 | `JWT_SECRET` | Auth token signing key (32-byte hex, `openssl rand -hex 32`) |
 | `SESSION_SECRET` | Session signing key (32-byte hex) |
-| `SECRET_ENCRYPTION_KEY` | Encrypts secrets stored in the database (32-byte hex). **Cannot be rotated after first boot** |
+| `SECRET_ENCRYPTION_KEY` | Encrypts secrets stored in the database (32-byte hex). Preserve the old key as `SECRET_ENCRYPTION_KEY_PREVIOUS` if rotating |
 
 Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become the admin on a fresh install. It is optional; if it is unset, the first account to register with the emailed code becomes the admin. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in.
 
-The three secrets are the **only values you must change** - everything else in the template already points at the bundled services.
+If you rotate `SECRET_ENCRYPTION_KEY`, keep the old key configured permanently as `SECRET_ENCRYPTION_KEY_PREVIOUS` so existing ciphertext stays readable. Rotation is not automated.
+
+The six secrets (these three plus `CHAT_COMPLETION_INTERNAL_SECRET`, `INTERNAL_WS_SECRET` and `INTERNAL_S3_WEBHOOK_SECRET`) are the **only values you must change**, and the app refuses to run while any of them still holds its `change-me` template value - everything else in the template already points at the bundled services.
 
 ## Local infra backends (bundled services)
 
@@ -39,13 +41,13 @@ Pre-filled for the compose stack; change them only for production hardening or i
 | Object storage | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, plus the `*_BUCKET` names | MinIO |
 | Queues | `AWS_ENDPOINT_URL_SQS` plus the `*_QUEUE` URLs (predeclared in `elasticmq.conf`) | ElasticMQ |
 | Mail | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` | Mailpit (UI at `http://localhost:8025`) |
-| Realtime | `WEBSOCKET_URL` (browser-facing), `WEBSOCKET_MANAGEMENT_ENDPOINT` (server-facing) | Gateway not in the stack yet - live updates degrade to fetch-on-refresh |
+| Realtime | `WEBSOCKET_URL` (browser-facing), `WEBSOCKET_MANAGEMENT_ENDPOINT` (server-facing) | Bundled `ws` gateway and `subscriber-fanout` |
 
 For real outbound email, point the `MAIL_*` variables at an SMTP provider. Use port `465` for implicit TLS.
 
 ## LLM providers
 
-Set keys only for the providers you want available. Only models for providers with a configured key appear in the model picker; Bedrock-backed models are hidden on self-host. Users can also add or override keys per-user in the app under **Settings > API Keys** (stored encrypted with `SECRET_ENCRYPTION_KEY`).
+Set keys only for the providers you want available. Only models for providers with a configured key appear in the model picker; Bedrock-backed models are hidden on self-host unless `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY` are set. Users can also add or override keys per-user in the app under **Profile menu -> More -> API Keys** (stored encrypted with `SECRET_ENCRYPTION_KEY`).
 
 | Variable | Provider |
 |---|---|
@@ -67,6 +69,7 @@ Each of these is fully optional; leaving the variables blank disables the integr
 | Okta | `OKTA_CLIENT_ID`, `OKTA_CLIENT_SECRET`, `OKTA_AUDIENCE` | Enterprise SSO |
 | Stripe | `STRIPE_*` | Billing (hosted-service feature; not needed for self-host - credit metering is off by default) |
 | Slack | `SLACK_*` | Slack integration |
+| Signing secret | `HMAC_SIGNING_SECRET`, `HMAC_SIGNING_SECRET_PREVIOUS` | A dedicated key for signed image URLs and hashed identifiers (`openssl rand -hex 32`). While `HMAC_SIGNING_SECRET` is blank, `SECRET_ENCRYPTION_KEY` is used. Put the outgoing secret in `HMAC_SIGNING_SECRET_PREVIOUS` and keep it for at least 90 days, the telemetry retention window |
 
 ## Gotchas
 

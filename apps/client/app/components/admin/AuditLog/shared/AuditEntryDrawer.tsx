@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react';
 import { Box, Drawer, IconButton, Link, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { AuditEntry } from '@bike4mind/common';
 import { AuditActorLabel } from './AuditActorLabel';
 import { AuditSeverityChip } from './AuditSeverityChip';
+import { auditTargetHref } from './auditTargetHref';
 import {
   ChangesTable,
   CollapsibleJson,
@@ -21,6 +23,8 @@ export type AuditEntryDrawerProps = {
   onSelectRelated?(entry: AuditEntry): void;
   /** Hidden when undefined. */
   openInAuditLogHref?: string;
+  /** Rendered as the "Review" section right after the header; hidden when undefined. */
+  reviewSection?: ReactNode;
 };
 
 export const AuditEntryDrawer: React.FC<AuditEntryDrawerProps> = ({
@@ -29,6 +33,7 @@ export const AuditEntryDrawer: React.FC<AuditEntryDrawerProps> = ({
   relatedEntries,
   onSelectRelated,
   openInAuditLogHref,
+  reviewSection,
 }) => (
   <Drawer open={entry !== null} onClose={onClose} anchor="right" size="md">
     {entry && (
@@ -49,6 +54,13 @@ export const AuditEntryDrawer: React.FC<AuditEntryDrawerProps> = ({
         </Stack>
 
         <Stack spacing={2}>
+          {reviewSection && (
+            <DrawerSection title="Review">
+              {/* SectionCard lays facts out in two columns; the review controls span both. */}
+              <Box sx={{ gridColumn: '1 / -1' }}>{reviewSection}</Box>
+            </DrawerSection>
+          )}
+
           {openInAuditLogHref && (
             <Link href={openInAuditLogHref} data-testid="audit-drawer-open-in-log-link">
               Open in Audit Log
@@ -71,6 +83,11 @@ export const AuditEntryDrawer: React.FC<AuditEntryDrawerProps> = ({
           </DrawerSection>
 
           <DrawerSection title="Target">
+            {auditTargetHref(entry.target) && (
+              <Link href={auditTargetHref(entry.target)} data-testid="audit-drawer-target-link">
+                Open affected record
+              </Link>
+            )}
             <KeyValueRows
               rows={[
                 ['Name', entry.target.displayName],

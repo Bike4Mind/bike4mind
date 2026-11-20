@@ -1,4 +1,9 @@
-import { ArtifactTypeSchema, queryBool, readExperimentalFeaturePreference } from '@bike4mind/common';
+import {
+  ARTIFACTS_DISABLED_ERROR,
+  ArtifactTypeSchema,
+  queryBool,
+  readExperimentalFeaturePreference,
+} from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -9,7 +14,7 @@ import {
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveUserArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
-import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
+import { createArtifactSourceRefsGuard } from '@bike4mind/server-utils/utils/artifactSourceRefsGuards';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import type { Request } from 'express';
 import { z } from 'zod';
@@ -135,7 +140,7 @@ const handler = baseApi()
       validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
 
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
-        return res.status(403).json({ error: 'Artifacts are disabled for this user' });
+        return res.status(403).json({ error: ARTIFACTS_DISABLED_ERROR });
       }
 
       const result = await artifactService.create(userId, validatedData, {

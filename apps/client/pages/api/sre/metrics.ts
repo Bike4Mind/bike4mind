@@ -6,15 +6,12 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { sreErrorTrackingRepository } from '@bike4mind/database';
 import { DEFAULT_SRE_METRICS_WINDOW, SRE_METRICS_WINDOW_MS, type SreMetricsWindow } from '@bike4mind/common';
 
-const handler = baseApi().get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const query = req.query as Record<string, string | string[] | undefined>;
     const repoSlug = typeof query.repoSlug === 'string' ? query.repoSlug : undefined;
     const windowParam = typeof query.window === 'string' ? query.window : undefined;

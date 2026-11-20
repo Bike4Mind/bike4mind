@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import handler from '../openapi.json';
 
@@ -132,6 +132,24 @@ describe('GET /api/v1/openapi.json', () => {
     handler(makeReq('GET'), res);
     expect(headers['Access-Control-Allow-Origin']).toBe('*');
     expect(headers['Access-Control-Allow-Methods']).toContain('GET');
+  });
+
+  // The response is CDN-cached without Origin in the key, so the copy a no-Origin request fills
+  // must still carry the header; with an Origin the function URL adds it instead.
+  it('on Lambda, sets Allow-Origin only for a request the function URL leaves without one', () => {
+    vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'frontend-server');
+    try {
+      const withOrigin = makeRes();
+      handler(makeReq('GET', { origin: 'https://example.com' }), withOrigin.res);
+      expect(withOrigin.headers).not.toHaveProperty('Access-Control-Allow-Origin');
+      expect(withOrigin.headers['Access-Control-Allow-Methods']).toContain('GET');
+
+      const withoutOrigin = makeRes();
+      handler(makeReq('GET'), withoutOrigin.res);
+      expect(withoutOrigin.headers['Access-Control-Allow-Origin']).toBe('*');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('sets nosniff and a cache header', () => {

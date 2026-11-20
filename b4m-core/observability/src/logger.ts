@@ -17,9 +17,16 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export class Logger implements ILogger {
   private static _globalInstance: Logger | undefined;
 
+  // Lets a server runtime scope the global logger per request without this browser-safe package importing node:async_hooks.
+  private static contextProvider: (() => Logger | undefined) | undefined;
+
+  static setContextProvider(provider: (() => Logger | undefined) | undefined): void {
+    Logger.contextProvider = provider;
+  }
+
   // Built on first access, not at import, so importing this module reads no process.env.
   static get globalInstance(): Logger {
-    return (Logger._globalInstance ??= new Logger());
+    return Logger.contextProvider?.() ?? (Logger._globalInstance ??= new Logger());
   }
 
   protected metadata: Record<string, unknown> = {};
@@ -34,6 +41,8 @@ export class Logger implements ILogger {
     warn: 2,
     error: 3,
   };
+
+  private static readonly MAX_CAUSE_DEPTH = 5;
 
   // ANSI color codes for pretty printing
   private static readonly COLORS = {
@@ -90,11 +99,30 @@ export class Logger implements ILogger {
   // which silently loses the stack wherever an Error is nested inside metadata. Spread
   // first so own enumerable properties (HTTPError's statusCode/additionalInfo, axios's
   // code/response, ...) survive alongside them.
+  // `cause` is non-enumerable too and is where undici keeps the real network reason, so it is
+  // serialized explicitly, capped so a long or cyclic chain cannot blow up the line.
   private static errorReplacer(_key: string, value: unknown): unknown {
-    if (value instanceof Error) {
-      return { ...value, name: value.name, message: value.message, stack: value.stack };
+    return value instanceof Error ? Logger.serializeError(value, 0, new Set()) : value;
+  }
+
+  private static serializeError(error: Error, depth: number, seen: Set<Error>): Record<string, unknown> {
+    seen.add(error);
+    const serialized: Record<string, unknown> = {
+      ...error,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+    const { cause } = error as Error & { cause?: unknown };
+    if (cause !== undefined) {
+      serialized.cause =
+        cause instanceof Error
+          ? depth + 1 >= Logger.MAX_CAUSE_DEPTH || seen.has(cause)
+            ? '[Truncated]'
+            : Logger.serializeError(cause, depth + 1, seen)
+          : cause;
     }
-    return value;
+    return serialized;
   }
 
   /**

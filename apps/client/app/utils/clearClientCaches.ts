@@ -2,6 +2,7 @@ import { del } from 'idb-keyval';
 import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
 import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
+import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
 import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**
@@ -24,6 +25,9 @@ const USER_SPECIFIC_LS_KEYS = [
   // behind handed the previous identity's model (often the priciest one) to the next account on
   // the same browser, which a fresh account then billed until access checks swapped it out.
   'llm-settings',
+  // MFAEnforcementWrapper's "this user is enrolled" hint (mfaEnrollmentHint.ts). It is keyed to a
+  // user id, so a stale one is already ignored for another account; removing it is hygiene.
+  MFA_ENROLLMENT_HINT_KEY,
 ];
 
 /**

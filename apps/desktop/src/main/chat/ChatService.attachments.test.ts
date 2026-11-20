@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -7,6 +7,7 @@ import type { ChatAttachment, ChatModelOption, ChatStreamEvent } from '@shared/c
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AttachmentStore } from './AttachmentStore';
 import { ChatService } from './ChatService';
+import { makePdf } from './pdfFixtures';
 import { SessionStore } from './SessionStore';
 import { TITLE_INSTRUCTION } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
@@ -114,7 +115,14 @@ describe('ChatService attachments', () => {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: Buffer.from([1, 2, 3]).toString('base64') },
     });
-    expect(content[1]).toEqual({ type: 'text', text: 'what is wrong here?' });
+    expect(content[1]).toMatchObject({
+      type: 'text',
+      text: expect.stringMatching(
+        /^<attached-image-file name="bug\.png" media-type="image\/png" path="[^"]+" \/>\n\nwhat is wrong here\?$/
+      ),
+    });
+    const storedPath = /path="([^"]+)"/.exec((content[1] as { text: string }).text)?.[1] ?? '';
+    expect([...(await readFile(storedPath))]).toEqual([1, 2, 3]);
   });
 
   it('inlines a text file ahead of the prompt, tagged with its name', async () => {
@@ -130,6 +138,61 @@ describe('ChatService attachments', () => {
     expect(block.text).toContain('boom');
     // The question is the last thing the model reads.
     expect(block.text.endsWith('why?')).toBe(true);
+  });
+
+  it('inlines a PDF as extracted text with its page count, never as an image block', async () => {
+    const { id } = await service.createSession();
+    const pdf = await attach(id, {
+      name: 'report.pdf',
+      mediaType: 'application/pdf',
+      data: makePdf(['Revenue grew', 'Costs fell']),
+    });
+    expect(pdf.kind).toBe('pdf');
+
+    await service.send(id, 'summarise', [pdf]);
+    await settle();
+
+    const content = userContent(post) as { type: string; text: string }[];
+    expect(content).toHaveLength(1);
+    expect(content[0].type).toBe('text');
+    expect(content[0].text).toContain('<attached-file name="report.pdf"');
+    expect(content[0].text).toContain('pages="2"');
+    expect(content[0].text).toContain('Revenue grew');
+    expect(content[0].text.endsWith('summarise')).toBe(true);
+  });
+
+  it('truncates a long PDF with the same marker a text file gets', async () => {
+    const { id } = await service.createSession();
+    const pdf = await attach(id, { name: 'big.pdf', data: makePdf([`${'word '.repeat(40)}\n`.repeat(900)]) });
+    expect(pdf.truncated).toBe(true);
+
+    await service.send(id, 'read', [pdf]);
+    await settle();
+
+    const [block] = userContent(post) as { text: string }[];
+    expect(block.text).toContain('truncated="true"');
+    expect(block.text).toContain('extracted text. The rest was not sent');
+  });
+
+  it('skips a PDF whose bytes are gone', async () => {
+    const { id } = await service.createSession();
+    const pdf = await attach(id, { name: 'gone.pdf', data: makePdf(['vanishing']) });
+    await attachments.discard(id, pdf.id);
+
+    await service.send(id, 'hello', [pdf]);
+    await settle();
+
+    const body = post.mock.calls[replyCallIndex(post)][1] as WireBody;
+    expect(body.messages.find(message => message.role === 'user')?.content).toBe('hello');
+  });
+
+  it('never refuses a PDF over vision', async () => {
+    cachedModels = [{ id: 'vision-model', name: 'Blind Model', supportsVision: false }];
+    const { id } = await service.createSession();
+    const pdf = await attach(id, { name: 'a.pdf', data: makePdf(['text here']) });
+
+    expect(await service.send(id, 'read this', [pdf])).toMatchObject({ ok: true });
+    await settle();
   });
 
   it('accepts an attachment with no words as a turn of its own', async () => {

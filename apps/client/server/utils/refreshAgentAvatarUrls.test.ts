@@ -55,16 +55,15 @@ describe('refreshAgentAvatarUrls access gate', () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 
-  it('the owner both gets the fresh URL and persists it back onto their own record', async () => {
-    h.findOne.mockResolvedValue(expiredFile('owner'));
-    const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'owner'); // owner === owner
+  it('signs a windowed URL for the owner too and never writes the record, ignoring a stored URL', async () => {
+    h.findOne.mockResolvedValue({ ...expiredFile('owner'), fileUrlExpireAt: new Date(Date.now() + 3600000) });
+    const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'owner');
     expect(agent.visual?.portraitUrl).toBe('https://signed.example/new.png');
-    expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.update).toHaveBeenCalledWith({
-      id: 'file-1',
-      fileUrl: 'https://signed.example/new.png',
-      fileUrlExpireAt: expect.any(Date),
+    expect(h.getSignedUrl).toHaveBeenCalledWith('abc.png', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
     });
+    expect(h.update).not.toHaveBeenCalled();
   });
 
   it('refuses to sign a foreign private file the agent portrait points at (exploit)', async () => {

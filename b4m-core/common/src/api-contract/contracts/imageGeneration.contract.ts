@@ -25,7 +25,7 @@ export const imageQuestPollResult = {
     'the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: ' +
     '"insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a ' +
     'provider error, a reference image that is missing, not an image, or still in moderation, and the ' +
-    'combined FLUX.2 input-image limit after attachments are resolved. Check ' +
+    'combined FLUX.2 or FLUX 3 input-image limit after attachments are resolved. Check ' +
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
@@ -57,9 +57,15 @@ export const generateImageContract = defineEndpoint({
     "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
     'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
-    '(4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized ' +
-    'reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render ' +
-    'resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours ' +
+    '(4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and ' +
+    '`referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. ' +
+    'A request over the limit with only `fabFileIds`, or with a primary picked from session history, is ' +
+    'checked when the render runs and fails on the polled quest. ' +
+    'Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to ' +
+    '`ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), ' +
+    'the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image ' +
+    'with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. ' +
+    '"the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. ' +
@@ -82,7 +88,7 @@ export const generateImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`referenceImageFabFileIds\` is set for an unsupported model or its distinct ids alone exceed the model's reference limit, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
+        `\`referenceImageFabFileIds\` is set for an unsupported model or the distinct input images exceed the model's limit, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
         BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ApiErrorSchema,
     },

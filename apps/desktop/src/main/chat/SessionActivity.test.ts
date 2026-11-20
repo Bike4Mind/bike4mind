@@ -74,15 +74,16 @@ describe('SessionActivity', () => {
   it('stays processing from a worktree being prepared into the reply it starts, with no done between', () => {
     const { activity, events } = track();
 
-    activity.preparingStarted('a');
+    activity.preparingStarted('a', 'worktree');
     expect(activity.statusOf('a')).toBe('processing');
-    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'processing' }]);
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
     activity.replyStarted('a');
     activity.preparingEnded('a');
     expect(activity.statusOf('a')).toBe('processing');
     activity.replyEnded('a');
 
-    expect(events.map(event => event.status)).toEqual(['processing', 'done']);
+    // The middle push only drops the preparing flag; the status never leaves 'processing'.
+    expect(events.map(event => event.status)).toEqual(['processing', 'processing', 'done']);
   });
 
   it('tracks sessions independently', () => {
@@ -129,5 +130,76 @@ describe('SessionActivity', () => {
     expect(activity.statusOf('a')).toBe('done');
     expect(activity.snapshot()).toEqual([]);
     expect(events).toEqual([]);
+  });
+
+  it('flags preparing until a reply starts, and pushes the flag flipping off', () => {
+    const { activity, events } = track();
+
+    activity.preparingStarted('a', 'worktree');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
+
+    activity.replyStarted('a');
+    activity.preparingEnded('a');
+    activity.replyEnded('a');
+
+    expect(events).toEqual([
+      { sessionId: 'a', status: 'processing', preparing: 'worktree' },
+      { sessionId: 'a', status: 'processing' },
+      { sessionId: 'a', status: 'done' },
+    ]);
+  });
+
+  it('pushes each setup step, ignoring a repeat and a session that is not preparing', () => {
+    const { activity, events } = track();
+
+    activity.preparingStep('b', 'starting');
+    activity.preparingStarted('a', 'worktree');
+    activity.preparingStep('a', 'worktree');
+    activity.preparingStep('a', 'starting');
+    activity.preparingStep('a', 'starting');
+
+    expect(events).toEqual([
+      { sessionId: 'a', status: 'processing', preparing: 'worktree' },
+      { sessionId: 'a', status: 'processing', preparing: 'starting' },
+    ]);
+    expect(activity.statusOf('b')).toBe('done');
+  });
+
+  it('does not flag preparing while a session waits on approval', () => {
+    const { activity, events } = track();
+
+    activity.preparingStarted('a', 'worktree');
+    activity.approvalRequested('a');
+
+    expect(events.at(-1)).toEqual({ sessionId: 'a', status: 'needs-action' });
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action' }]);
+  });
+
+  it('shows a session with a held relay as needs-action until it is cleared', () => {
+    const { activity, events } = track();
+
+    activity.heldChanged('a', true);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action' }]);
+
+    activity.heldChanged('a', false);
+    expect(activity.statusOf('a')).toBe('done');
+    expect(activity.snapshot()).toEqual([]);
+    expect(events.map(event => event.status)).toEqual(['needs-action', 'done']);
+  });
+
+  it('shows a worker waiting on a user decision as needs-action until it is answered or forgotten', () => {
+    const { activity, events } = track();
+
+    activity.decisionChanged('a', true);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action' }]);
+
+    activity.decisionChanged('a', false);
+    expect(activity.statusOf('a')).toBe('done');
+    activity.decisionChanged('b', true);
+    activity.forget('b');
+    expect(activity.snapshot()).toEqual([]);
+    expect(events.map(event => event.status)).toEqual(['needs-action', 'done', 'needs-action']);
   });
 });

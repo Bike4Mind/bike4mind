@@ -141,6 +141,14 @@ def affected(base, head):
             return True
         if path.startswith(('scripts/desktop_', 'scripts/test_desktop_', '.github/workflows/desktop-release.')):
             return True
+        # The main process bundles the curated model list from here, through @bike4mind/local-models (curated.ts).
+        if path.startswith('catalog/model-hub/'):
+            return True
+        # Release-time trust checks are build inputs even though the scripts package is not bundled.
+        if path in ('packages/scripts/src/curatedCatalog/checkDesktopBuild.ts',
+                    'packages/scripts/src/curatedCatalog/devKey.ts',
+                    'packages/scripts/src/curatedCatalog/cli.ts'):
+            return True
         if path in ('pnpm-workspace.yaml', 'turbo.json', '.npmrc', 'vitest.shared.ts'):
             return True
         if path.startswith('patches/'):

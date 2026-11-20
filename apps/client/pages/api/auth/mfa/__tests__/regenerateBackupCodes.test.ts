@@ -9,7 +9,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIdWithMfaSecrets: vi.fn().mockResolvedValue({ id: 'u1' }) },
 }));

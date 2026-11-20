@@ -3,7 +3,7 @@
  *
  * Every compute that runs the music/video tools enqueues a generation job, so it must link
  * generationJobQueue directly (resolveGenerationJobQueueUrl in
- * apps/client/server/generationJobs/wiring.ts; the sourceQueueUrls fallback is web-only) and carry
+ * packages/server-utils/src/generationJobs/wiring.ts; the sourceQueueUrls fallback is web-only) and carry
  * the test providers so keyless non-production stages still offer those tools.
  *
  * Text-matched, not executed: infra/ is an SST program and does not load outside `sst`.

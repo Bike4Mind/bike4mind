@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OllamaEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
+import {
+  ApiBedrockEmbeddingModel,
+  OllamaEmbeddingModel,
+  OpenAIEmbeddingModel,
+  VoyageAIEmbeddingModel,
+} from '../schemas/embedding';
 import { getEmbeddingModelCost, hasPublishedEmbeddingRate } from './estimateCost';
 
 describe('getEmbeddingModelCost', () => {
@@ -7,6 +12,11 @@ describe('getEmbeddingModelCost', () => {
     // text-embedding-3-small is $0.02 / 1M tokens.
     expect(getEmbeddingModelCost(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL, 1_000_000)).toBeCloseTo(0.02, 10);
     expect(getEmbeddingModelCost(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL, 0)).toBe(0);
+  });
+
+  it('prices Cohere on Bedrock at the published input-token rate', () => {
+    expect(hasPublishedEmbeddingRate(ApiBedrockEmbeddingModel.COHERE_EMBED_V4)).toBe(true);
+    expect(getEmbeddingModelCost(ApiBedrockEmbeddingModel.COHERE_EMBED_V4, 1_000_000)).toBeCloseTo(0.12, 10);
   });
 
   it('prices a known Voyage model', () => {

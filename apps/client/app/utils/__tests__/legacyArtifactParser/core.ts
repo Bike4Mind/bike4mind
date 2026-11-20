@@ -37,7 +37,7 @@ export interface ArtifactParseResult {
  * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
  * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
  * the input from every opening that never finds a closer: quadratic on a run of bare
- * `<!--` tokens. Exported so apps/client/app/utils/artifactParser.ts imports this copy
+ * `<!--` tokens. Exported so packages/server-utils/src/app/utils/artifactParser.ts imports this copy
  * instead of keeping its own.
  */
 export function stripHtmlComments(value: string): string {
@@ -89,7 +89,7 @@ export interface ExtractArtifactBlocksOptions {
 /**
  * Every `<artifact ...>...</artifact>` block in `content`, in source order, with its
  * attributes resolved and its position kept so callers can strip or replace the tag.
- * Shared by this module's parseArtifacts and the client's (apps/client/app/utils/artifactParser.ts),
+ * Shared by this module's parseArtifacts and the client's (packages/server-utils/src/app/utils/artifactParser.ts),
  * which differ only in `typeFallback` and in what they do with the tags afterwards.
  */
 export function extractArtifactBlocks(content: string, options: ExtractArtifactBlocksOptions = {}): ParsedArtifact[] {
@@ -267,7 +267,7 @@ function hasReactComponentLine(code: string): boolean {
   return false;
 }
 
-// The next two are exported for apps/client/app/utils/artifactParser.ts to import
+// The next two are exported for packages/server-utils/src/app/utils/artifactParser.ts to import
 // (hasReactComponentLine above is not shared: the client splits that decision across
 // per-language predicates).
 
@@ -365,7 +365,7 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
 /**
  * Info-string token marking a fence that holds a verbatim quote of tool output. Such a
  * region is never promoted to an artifact, by this parser or by the client mirror in
- * apps/client/app/utils/artifactParser.ts. History replay must strip it before the model
+ * packages/server-utils/src/app/utils/artifactParser.ts. History replay must strip it before the model
  * sees the reply again.
  */
 export const TOOL_OUTPUT_MARKER = 'b4m-tool-output';
@@ -708,7 +708,7 @@ const NO_ECHO: EchoMarking = { fence: () => null, only: false };
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * Also called by the client's convertCodeBlocksToArtifacts (apps/client/app/utils/artifactParser.ts),
+ * Also called by the client's convertCodeBlocksToArtifacts (packages/server-utils/src/app/utils/artifactParser.ts),
  * without `echo`.
  */
 export function promoteToolCallJsonArtifact(

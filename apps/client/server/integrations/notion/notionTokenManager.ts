@@ -1,19 +1,32 @@
 import { Types } from 'mongoose';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
 
 const TOKEN_VALIDATION_TIMEOUT = 10000;
 
+const REVOKED_TOKEN_REASON = 'Your Notion connection has been revoked. Please reconnect your account.';
+const UNREADABLE_TOKEN_REASON = 'Your Notion connection needs to be re-established. Please reconnect your account.';
+
 /**
  * Signals expected token revocation, distinct from unexpected errors.
  */
 export class NotionReconnectRequiredError extends Error {
-  constructor(message = 'Your Notion connection has been revoked. Please reconnect your account.') {
+  constructor(message = REVOKED_TOKEN_REASON) {
     super(message);
     this.name = 'NotionReconnectRequiredError';
+  }
+}
+
+/**
+ * The user has no Notion connection (never connected, or unlinked). An expected state, not a fault.
+ */
+export class NotionNotConnectedError extends Error {
+  constructor(message = 'Notion is not connected. Please connect your Notion account.') {
+    super(message);
+    this.name = 'NotionNotConnectedError';
   }
 }
 
@@ -24,6 +37,27 @@ interface NotionTokenResult {
 }
 
 export class NotionTokenManager {
+  /** Null when the stored value is empty or cannot be decrypted with the current or previous key. */
+  private static readStoredToken(storedToken: string | null | undefined): string | null {
+    try {
+      return decryptToken(storedToken);
+    } catch (error) {
+      // A missing key is a deployment fault, not a bad token: marking the connection would outlive the fix.
+      if (error instanceof Error && error.message.includes('is not configured')) throw error;
+      // decryptToken already logs the cause at error.
+      return null;
+    }
+  }
+
+  /** Dotted $set so the select:false accessToken (and the user's page settings) stay untouched. */
+  private static async markNeedsReconnect(userId: string, reason: string): Promise<void> {
+    const update: Record<string, unknown> = {
+      'notionConnect.status': 'needs_reconnect',
+      'notionConnect.disconnectReason': reason,
+    };
+    await userRepository.update({ id: userId, ...update });
+  }
+
   /**
    * Notion tokens don't expire, so validity only means "not revoked" - checked via a test API call.
    * Returns 'valid', 'revoked' (confirmed 401/403), or 'unknown' (network/timeout/5xx).
@@ -53,7 +87,8 @@ export class NotionTokenManager {
   }
 
   /**
-   * Returns the access token string, or throws if invalid/revoked.
+   * Returns the access token string. Throws NotionNotConnectedError / NotionReconnectRequiredError for the
+   * expected states, and a generic Error when the token cannot be read.
    */
   static async ensureValidToken(userId: string): Promise<string> {
     const result = await this.getValidTokens(userId);
@@ -65,15 +100,15 @@ export class NotionTokenManager {
 
   /**
    * Gets tokens with workspace metadata after confirming the token is still active.
-   * Returns null on error instead of throwing.
+   * Throws NotionNotConnectedError / NotionReconnectRequiredError for the expected states (including a
+   * stored token that is missing or will not decrypt); returns null (logged at error) for unexpected failures.
    */
   static async getValidTokens(userId: string): Promise<NotionTokenResult | null> {
     try {
       const user = await userRepository.findByIdWithNotionToken(userId);
 
       if (!user || !user.notionConnect) {
-        console.error('Notion connection not found for user:', userId);
-        return null;
+        throw new NotionNotConnectedError();
       }
 
       const { notionConnect } = user;
@@ -83,26 +118,19 @@ export class NotionTokenManager {
         throw new NotionReconnectRequiredError();
       }
 
-      const accessToken = decryptToken(notionConnect.accessToken);
+      const accessToken = this.readStoredToken(notionConnect.accessToken);
       if (!accessToken) {
-        console.error('Failed to decrypt Notion access token for user:', userId);
-        return null;
+        // A stored connection whose token is missing or will not decrypt can only be fixed by a new OAuth grant.
+        console.warn('Stored Notion access token is unreadable. Marking for reconnection.');
+        await this.markNeedsReconnect(userId, UNREADABLE_TOKEN_REASON);
+        throw new NotionReconnectRequiredError(UNREADABLE_TOKEN_REASON);
       }
 
       const status = await this.validateToken(accessToken);
 
       if (status === 'revoked') {
         console.log('Notion token is confirmed revoked (401/403). Marking for reconnection.');
-
-        await userRepository.update({
-          id: userId,
-          notionConnect: {
-            ...notionConnect,
-            status: 'needs_reconnect',
-            disconnectReason: 'Your Notion connection has been revoked. Please reconnect your account.',
-          },
-        });
-
+        await this.markNeedsReconnect(userId, REVOKED_TOKEN_REASON);
         throw new NotionReconnectRequiredError();
       }
 
@@ -120,7 +148,7 @@ export class NotionTokenManager {
         workspaceName: notionConnect.workspaceName,
       };
     } catch (error) {
-      if (error instanceof NotionReconnectRequiredError) {
+      if (error instanceof NotionReconnectRequiredError || error instanceof NotionNotConnectedError) {
         throw error;
       }
       console.error('Error in getValidTokens:', error);
@@ -200,7 +228,7 @@ export class NotionTokenManager {
       try {
         // Imported inside the try so a module-resolution failure degrades to "no tool schemas"
         // rather than failing the whole OAuth flow. Repeat imports hit the module cache.
-        const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+        const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
         const result = await invokeMcpHandler<unknown>({
           envVariables: envVars,
           name: 'notion',

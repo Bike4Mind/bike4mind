@@ -8,6 +8,12 @@ import { preflightAnswerCredits } from '../../utils/creditEstimate';
 import { AffordableModelOffer } from './AffordableModelOffer';
 
 vi.mock('./CreditOfferActions', () => ({
+  CREDIT_OFFER_SURFACES: {
+    lowCreditsWarning: 'low_credits_warning',
+    outOfCreditsBanner: 'out_of_credits_banner',
+    affordableModelOffer: 'affordable_model_offer',
+  },
+  CREDIT_OFFER_TRIGGERS: { low: 'low_balance', out: 'insufficient_credits' },
   CreditOfferActions: ({ moment }: { moment: string }) => (
     <div data-testid="credit-offer-actions" data-moment={moment} />
   ),

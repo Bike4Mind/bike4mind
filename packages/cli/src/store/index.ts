@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Session, Message } from '../storage';
 import type { PermissionResponse } from '../components';
 import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
+import type { PlanItem } from '@bike4mind/common';
 import type { BackgroundAgentJob, BackgroundAgentStatus } from '../agents/types.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
@@ -120,6 +121,8 @@ interface CliStore {
   /** True from the start of runTurn until its last queued follow-up settles, including after an eager ESC. */
   turnInFlight: boolean;
   setTurnInFlight: (inFlight: boolean) => void;
+  peerTurnActive: boolean;
+  setPeerTurnActive: (active: boolean) => void;
 
   // Operations that read the session, await, then write it back from that snapshot (agent turns,
   // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
@@ -128,6 +131,10 @@ interface CliStore {
   sessionHolds: number;
   /** Takes a hold; the returned release is idempotent. */
   holdSession: () => () => void;
+
+  /** Live write_todos plan shown by PlanBlock. */
+  plan: PlanItem[];
+  setPlan: (plan: PlanItem[]) => void;
 
   // UI state
   isThinking: boolean;
@@ -346,6 +353,11 @@ export const useCliStore = create<CliStore>(set => ({
   clearMessageQueue: () => set({ messageQueue: [] }),
   turnInFlight: false,
   setTurnInFlight: inFlight => set({ turnInFlight: inFlight }),
+  peerTurnActive: false,
+  setPeerTurnActive: active => set({ peerTurnActive: active }),
+
+  plan: [],
+  setPlan: plan => set({ plan }),
 
   // UI state
   isThinking: false,

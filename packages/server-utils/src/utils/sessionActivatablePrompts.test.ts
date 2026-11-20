@@ -13,7 +13,7 @@ describe('isSessionActivatablePromptId', () => {
   // What these tests do and do not prove: deleting the membership check INSIDE this module turns
   // them red, so the policy itself is regression-locked. They do NOT prove the policy is enforced -
   // the call in sessionSystemPromptResolver is what enforces it, and no unit test here can see that
-  // call go missing. sessionSystemPromptWiring.test.ts covers that separately.
+  // call go missing. sessionSystemPromptWiring.repo.test.ts covers that separately.
   it('rejects an arbitrary client-supplied id', () => {
     expect(isSessionActivatablePromptId('anything')).toBe(false);
   });

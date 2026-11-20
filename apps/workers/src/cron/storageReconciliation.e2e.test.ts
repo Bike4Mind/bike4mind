@@ -8,7 +8,7 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 const { postMessageToSlack } = vi.hoisted(() => ({ postMessageToSlack: vi.fn() }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack }));
 
 import { runStorageReconciliation, StorageReconciliationOptions } from './storageReconciliation';
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -7,12 +7,14 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({
   currentUser: { id: 'user-2', isAdmin: false } as { id: string; isAdmin?: boolean },
   enabled: true,
+  configured: true,
   subscriptions: [] as unknown[],
   createSubscription: vi.fn(),
   updateSubscription: vi.fn(),
   // Stable identity per enabled value: a fresh object each render re-triggers the form's sync effect forever.
   configs: {} as Record<string, object>,
-  config(): object {
+  config(): object | null {
+    if (!this.configured) return null;
     const key = String(this.enabled);
     this.configs[key] ??= {
       id: 'jcfg-1',
@@ -57,31 +59,86 @@ const renderForm = () =>
   );
 
 describe('JiraNotificationsForm secret controls', () => {
+  beforeEach(() => {
+    mutation.mutateAsync.mockReset();
+    h.createSubscription.mockReset();
+    h.updateSubscription.mockReset();
+  });
   afterEach(() => {
     cleanup();
     h.enabled = true;
+    h.configured = true;
     h.subscriptions = [];
     h.currentUser = { id: 'user-2', isAdmin: false };
     vi.clearAllMocks();
   });
 
-  it('shows reveal and copy controls only to the config creator or an admin', () => {
+  it('does not offer repeatable reveal or copy controls on a fetched config', () => {
     h.currentUser = { id: 'user-2', isAdmin: false };
     const other = renderForm();
     expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
     expect(screen.queryByTestId('copy-jira-secret')).toBeNull();
     expect(screen.getByDisplayValue('abcd****')).toBeTruthy();
+    expect(screen.queryByTestId('rotate-jira-secret')).toBeNull();
     other.unmount();
 
     h.currentUser = { id: 'user-1', isAdmin: false };
     const creator = renderForm();
-    expect(screen.getByTestId('toggle-jira-secret-visibility')).toBeTruthy();
-    expect(screen.getByTestId('copy-jira-secret')).toBeTruthy();
+    expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
+    expect(screen.queryByTestId('copy-jira-secret')).toBeNull();
+    expect(screen.getByTestId('rotate-jira-secret')).toBeTruthy();
     creator.unmount();
 
     h.currentUser = { id: 'admin-1', isAdmin: true };
     renderForm();
-    expect(screen.getByTestId('toggle-jira-secret-visibility')).toBeTruthy();
+    expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
+    expect(screen.getByTestId('rotate-jira-secret')).toBeTruthy();
+  });
+
+  it('displays the new secret from rotation without fetching it again', async () => {
+    h.currentUser = { id: 'user-1', isAdmin: false };
+    mutation.mutateAsync.mockResolvedValue({ id: 'jcfg-1', secret: 'new-secret' });
+    renderForm();
+
+    fireEvent.click(screen.getByTestId('rotate-jira-secret'));
+
+    await waitFor(() => expect(screen.getByTestId('jira-one-time-secret')).toBeTruthy());
+    expect(screen.getByDisplayValue('new-secret')).toBeTruthy();
+    expect(mutation.mutateAsync).toHaveBeenCalledWith({ rotateSecret: true });
+    expect(screen.getByTestId('copy-jira-secret')).toBeTruthy();
+  });
+
+  it('keeps the creation secret available when subscription creation fails', async () => {
+    h.configured = false;
+    h.currentUser = { id: 'user-1', isAdmin: false };
+    mutation.mutateAsync.mockImplementation(async () => {
+      h.configured = true;
+      return { id: 'jcfg-1', secret: 'created-secret' };
+    });
+    h.createSubscription.mockRejectedValue(new Error('Subscription unavailable'));
+    renderForm();
+
+    fireEvent.click(screen.getByTestId('jira-notifications-enable'));
+
+    await waitFor(() => expect(h.createSubscription).toHaveBeenCalledTimes(1));
+    expect(screen.getByDisplayValue('created-secret')).toBeTruthy();
+    expect(screen.getByTestId('copy-jira-secret')).toBeTruthy();
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('shows only the masked secret after remounting following rotation', async () => {
+    h.currentUser = { id: 'user-1', isAdmin: false };
+    mutation.mutateAsync.mockResolvedValue({ id: 'jcfg-1', secret: 'new-secret' });
+    const form = renderForm();
+    fireEvent.click(screen.getByTestId('rotate-jira-secret'));
+    await waitFor(() => expect(screen.getByDisplayValue('new-secret')).toBeTruthy());
+    form.unmount();
+
+    renderForm();
+
+    expect(screen.queryByDisplayValue('new-secret')).toBeNull();
+    expect(screen.queryByTestId('copy-jira-secret')).toBeNull();
+    expect(screen.getByDisplayValue('abcd****')).toBeTruthy();
   });
 
   it('shows Enable, Disable and Delete only to the config creator or an admin', () => {

@@ -72,7 +72,7 @@ describe('OrganizationGroupTypesCard', () => {
     await waitFor(() => expect(screen.getByTestId('org-group-types-save-btn')).not.toBeDisabled());
   });
 
-  it('submits the selected group types', async () => {
+  it('submits selected group types only after a reason is chosen', async () => {
     setOrganizationGroupTypes.mockResolvedValue({ added: ['sales'], removed: [] });
     renderCard(makeOrg({ allowedGroupTypes: [] }));
 
@@ -83,6 +83,45 @@ describe('OrganizationGroupTypesCard', () => {
     fireEvent.click(screen.getAllByRole('option')[0]);
     fireEvent.click(screen.getByTestId('org-group-types-save-btn'));
 
-    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledWith('org1', [expect.any(String)]));
+    expect(screen.getByTestId('org-group-types-preview')).toHaveTextContent('Grant:');
+    expect(screen.getByTestId('org-group-types-action-dialog-confirm-btn')).toBeDisabled();
+    expect(setOrganizationGroupTypes).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(setOrganizationGroupTypes).toHaveBeenCalledWith('org1', [expect.any(String)], 'Pilot or partner access')
+    );
+  });
+
+  it('keeps a failed group-type change open and retries the same selected types and reason', async () => {
+    setOrganizationGroupTypes
+      .mockRejectedValueOnce(new Error('Save failed'))
+      .mockResolvedValue({ added: ['sales'], removed: [] });
+    renderCard(makeOrg({ allowedGroupTypes: [] }));
+    const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.click((await screen.findAllByRole('option'))[0]);
+    fireEvent.click(screen.getByTestId('org-group-types-save-btn'));
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-confirm-btn'));
+    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('org-group-types-action-dialog')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('org-group-types-action-dialog-confirm-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-confirm-btn'));
+    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledTimes(2));
+    expect(setOrganizationGroupTypes.mock.calls[1]).toEqual(setOrganizationGroupTypes.mock.calls[0]);
+  });
+
+  it('warns that revoking a type cannot restore member assignments', () => {
+    renderCard(makeOrg({ allowedGroupTypes: ['sales'] }));
+    const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'Backspace' });
+    fireEvent.click(screen.getByTestId('org-group-types-save-btn'));
+
+    expect(screen.getByTestId('org-group-types-action-dialog')).toHaveTextContent('will not restore those assignments');
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
   });
 });

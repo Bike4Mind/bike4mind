@@ -104,7 +104,7 @@ const layout = (brand: string, heading: string, content: string): string => `
 
 /**
  * The first-failure notice for a subscription renewal. Access is paused from this point, not at
- * cancellation: `past_due` grants no entitlements (server/entitlements/index.ts), so the copy
+ * cancellation: `past_due` grants no entitlements (packages/server-utils/src/entitlements/index.ts), so the copy
  * must not promise otherwise.
  */
 export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailContent => {
@@ -122,7 +122,7 @@ export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailCo
           <p>Hello,</p>
           <p>We could not charge the renewal payment for ${plan}.</p>
           ${reason}
-          <p>Paid features are paused until the payment goes through. Updating your payment method restores them as soon as the charge succeeds.</p>
+          <p>Paid features are paused until the payment goes through. To restore them now, update your payment method if needed, then select Pay now on your billing page.</p>
           <div style="text-align: center;">
             <a href="${escapeHtml(input.billingUrl)}" class="cta-button">Update payment method</a>
           </div>

@@ -5,6 +5,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatAttachment, ChatImageRef } from '@shared/chat';
+import { DocumentIcon } from './icons';
 import { useImageMenu } from './ImageContextMenu';
 import { ImageViewer } from './ImageViewer';
 
@@ -89,7 +90,7 @@ function ImageTile({ sessionId, attachment }: { sessionId: string | null; attach
 }
 
 /**
- * One attachment as a tile: the image itself, or a name-and-size card for a text file.
+ * One attachment as a tile: the image itself, or a name-and-size card for a text file or PDF.
  *
  * The size shown is the SOURCE size, not what was sent, and a truncated file says so - the
  * user attached a 50MB log and needs to know the model only got the head of it.
@@ -122,9 +123,15 @@ export function AttachmentTile({
             placeItems: 'center',
           }}
         >
-          <Typography level="body-xs" textColor="text.tertiary">
-            TXT
-          </Typography>
+          {attachment.kind === 'pdf' ? (
+            <Box sx={{ color: 'text.tertiary', display: 'grid' }} data-testid="attachment-pdf-icon">
+              <DocumentIcon size={24} />
+            </Box>
+          ) : (
+            <Typography level="body-xs" textColor="text.tertiary">
+              TXT
+            </Typography>
+          )}
         </Box>
       )}
 
@@ -133,6 +140,9 @@ export function AttachmentTile({
           {attachment.name}
         </Typography>
         <Typography level="body-xs" textColor={attachment.truncated ? 'warning.plainColor' : 'text.tertiary'} noWrap>
+          {attachment.kind === 'pdf' && attachment.pages
+            ? `${attachment.pages} ${attachment.pages === 1 ? 'page' : 'pages'}, `
+            : ''}
           {formatBytes(attachment.sourceBytes)}
           {attachment.truncated ? ' - truncated' : ''}
         </Typography>

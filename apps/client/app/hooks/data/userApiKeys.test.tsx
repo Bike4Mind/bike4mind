@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { API_KEY_TRUST_REQUIRED_ERROR_CODE } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useApiKeyEligibility, useCreateUserApiKey } from './userApiKeys';
+import { useAdminResetApiKeyRateLimit, useApiKeyEligibility, useCreateUserApiKey } from './userApiKeys';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
@@ -70,5 +70,28 @@ describe('useApiKeyEligibility - refetch after create', () => {
       expect(result.current.eligibility.data).toEqual({ canCreate: false, message: 'Trust revoked.' })
     );
     expect(get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useAdminResetApiKeyRateLimit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('sends the composed audit reason in the reset request body', async () => {
+    post.mockResolvedValue({ data: { success: true, id: 'key-1' } });
+    const { result } = renderHook(() => useAdminResetApiKeyRateLimit(), { wrapper: createWrapper() });
+
+    await result.current.mutateAsync({ keyId: 'key-1', reason: 'Key locked out: owner confirmed' });
+
+    expect(post).toHaveBeenCalledWith('/api/admin/user-api-keys/key-1/reset-rate-limit', {
+      reason: 'Key locked out: owner confirmed',
+    });
+  });
+
+  it('rejects a failed reset and reports the server response', async () => {
+    post.mockRejectedValue(serverError({ error: 'A reason is required.' }));
+    const { result } = renderHook(() => useAdminResetApiKeyRateLimit(), { wrapper: createWrapper() });
+
+    await expect(result.current.mutateAsync({ keyId: 'key-1', reason: 'Support request' })).rejects.toBeDefined();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A reason is required.'));
   });
 });

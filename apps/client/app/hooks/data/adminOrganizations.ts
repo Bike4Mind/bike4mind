@@ -2,8 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 
-const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
+export const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
 
 /**
  * Unwrap the server's error message from an axios error so users see the
@@ -51,10 +56,14 @@ export function useGrantOrganization() {
       initialCredits: number;
       reason: string;
     }) => {
-      const res = await api.post<{ organizationId: string }>('/api/admin/organizations/grant', params);
+      const res = await api.post<{ organizationId: string } | ApprovalPendingResponse>(
+        '/api/admin/organizations/grant',
+        params
+      );
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       toast.success('Free organization granted');
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
@@ -80,7 +89,8 @@ export function useTopUpOrganization() {
       });
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       toast.success('Credits added');
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
@@ -91,9 +101,9 @@ export function useTopUpOrganization() {
 export function useAdjustOrgSeats() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; seats: number }) => {
-      const { organizationId, seats } = params;
-      const res = await api.patch(`/api/admin/organizations/${organizationId}/seats`, { seats });
+    mutationFn: async (params: { organizationId: string; seats: number; reason: string }) => {
+      const { organizationId, ...body } = params;
+      const res = await api.patch(`/api/admin/organizations/${organizationId}/seats`, body);
       return res.data;
     },
     onSuccess: () => {
@@ -104,41 +114,14 @@ export function useAdjustOrgSeats() {
   });
 }
 
-/**
- * Re-sync an org's seat count to its active subscription's billed quantity.
- * Unlike useAdjustOrgSeats (PATCH /seats, which the backend refuses for
- * Stripe-billed orgs), this only PULLS from what Stripe already invoices, so
- * it is the repair path for orgs whose seats drifted from their paid quantity.
- */
-export function useReconcileOrgSeats() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (params: { organizationId: string }) => {
-      const res = await api.post<{ organizationId: string; before: number; after: number }>(
-        `/api/admin/organizations/${params.organizationId}/reconcile-seats`
-      );
-      return res.data;
-    },
-    onSuccess: data => {
-      toast.success(
-        data.before === data.after
-          ? `Seats already in sync (${data.after})`
-          : `Seats reconciled: ${data.before} -> ${data.after}`
-      );
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-    },
-    onError: err => toast.error(apiErrorMessage(err, 'Reconcile failed')),
-  });
-}
-
 export function useConvertOrgToPaid() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; callbackUrl: string }) => {
-      const { organizationId, callbackUrl } = params;
+    mutationFn: async (params: { organizationId: string; callbackUrl: string; reason: string }) => {
+      const { organizationId, ...body } = params;
       const res = await api.post<{ checkoutUrl: string }>(
         `/api/admin/organizations/${organizationId}/convert-to-paid`,
-        { callbackUrl }
+        body
       );
       return res.data;
     },
@@ -156,7 +139,7 @@ export function useConvertOrgToPaid() {
 export function useRevokeOrganization() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; reason?: string }) => {
+    mutationFn: async (params: { organizationId: string; reason: string }) => {
       const { organizationId, ...body } = params;
       const res = await api.post(`/api/admin/organizations/${organizationId}/revoke`, body);
       return res.data;

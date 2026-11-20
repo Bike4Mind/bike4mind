@@ -2,7 +2,7 @@ import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/dat
 import { listWhatsNewContract, type PublicReleaseNote } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   decodeCursor,
   decodeTimeIdCursor,

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
@@ -75,7 +75,9 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('sst', () => ({ Resource: { driveDisconnectPurgeQueue: { url: 'purge-queue-url' } } }));
-vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnection: h.releaseDriveConnection }));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
+  releaseDriveConnection: h.releaseDriveConnection,
+}));
 vi.mock('@bike4mind/server-utils/dataLakes/shredMemoryForLakeTags', () => ({
   shredMemoryForLakeTags: h.shredMemoryForLakeTags,
 }));

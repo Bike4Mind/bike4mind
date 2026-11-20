@@ -39,6 +39,12 @@ const PendingCreditHoldSchema = new Schema<PendingCreditHoldDocument>(
 );
 
 PendingCreditHoldSchema.index({ expiresAt: 1 });
+// Serves findOutstandingForUser (the new-account spend cap). Built by the
+// 20260921236900_ensure-pending-credit-hold-user-index migration.
+PendingCreditHoldSchema.index({ userId: 1, createdAt: -1 });
+// Serves the admin billing overview's outstanding holds per owner (an organization has no userId to
+// filter on). Built by the 20260921239997_ensure-pending-credit-hold-owner-index migration.
+PendingCreditHoldSchema.index({ ownerId: 1, ownerType: 1, settledAt: 1 });
 // Only completed settlements have this field: TTL never deletes an outstanding hold.
 PendingCreditHoldSchema.index({ settledAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
@@ -94,6 +100,20 @@ export class PendingCreditHoldRepository {
       .findOneAndDelete({ _id: id, expiresAt: { $lte: now }, settledAt: { $exists: false } })
       .lean<PendingCreditHoldDocument>();
     return doc ? toPendingCreditHold(doc) : null;
+  }
+
+  /** The user's own (not org-billed) holds created since `since` that have not settled yet. */
+  async findOutstandingForUser(userId: string, since: Date): Promise<Array<{ at: Date; credits: number }>> {
+    const docs = await this.model
+      .find({
+        userId,
+        ownerType: CreditHolderType.User,
+        createdAt: { $gte: since },
+        settledAt: { $exists: false },
+      })
+      .select({ reservedCredits: 1, createdAt: 1 })
+      .lean<Array<{ reservedCredits: number; createdAt: Date }>>();
+    return docs.map(doc => ({ at: doc.createdAt, credits: doc.reservedCredits }));
   }
 
   /** Oldest first, so a backlog drains in expiry order over successive sweeps. */

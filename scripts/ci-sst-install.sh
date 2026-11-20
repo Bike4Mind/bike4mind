@@ -3,10 +3,18 @@ set -euo pipefail
 
 readonly MAX_ATTEMPTS=3
 readonly RETRY_DELAY_SECONDS=5
+# A provider download from GitHub releases can stall without ever failing, which would hold the job
+# until its own timeout; bounding each attempt turns a stall into a retry. Overridable for tests.
+readonly ATTEMPT_TIMEOUT_SECONDS="${SST_INSTALL_ATTEMPT_TIMEOUT_SECONDS:-300}"
+
+bounded=()
+if command -v timeout >/dev/null 2>&1; then
+  bounded=(timeout --kill-after=30 "$ATTEMPT_TIMEOUT_SECONDS")
+fi
 
 # Provider installation can fail transiently on fresh runners, before any code checks run.
 for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
-  if pnpm sst install --print-logs; then
+  if ${bounded[@]+"${bounded[@]}"} pnpm sst install --print-logs; then
     exit 0
   else
     install_status=$?

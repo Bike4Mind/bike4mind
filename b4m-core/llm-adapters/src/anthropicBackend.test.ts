@@ -34,6 +34,19 @@ describe('AnthropicBackend.getModelInfo', () => {
     expect(opus5?.pricing[1_000_000]).toEqual({ input: 5 / 1_000_000, output: 25 / 1_000_000 });
   });
 
+  it('lists claude-sonnet-5-5 at $2/$10 with 0.05x cache reads', async () => {
+    const models = await new AnthropicBackend('test-key').getModelInfo();
+    const sonnet55 = models.filter(m => m.id === ChatModels.CLAUDE_5_5_SONNET);
+
+    expect(sonnet55, 'claude-sonnet-5-5 should be listed exactly once').toHaveLength(1);
+    expect(sonnet55[0].thinkingStyle).toBe('adaptive');
+    expect(sonnet55[0].contextWindow).toBe(1_000_000);
+    expect(sonnet55[0].max_tokens).toBe(128_000);
+    expect(sonnet55[0].trainingCutoff).toBe('2026-06-01');
+    // 1M in ($2) + 1M out ($10) + 1M cache read ($0.10) + 1M 5m cache write ($2.50)
+    expect(getTextModelCost(sonnet55[0], 1_000_000, 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(2 + 10 + 0.1 + 2.5, 10);
+  });
+
   it('prices claude-haiku-5-5 by prompt length: $0.10/$0.50 up to 100K, $0.50/$2.50 beyond', async () => {
     const models = await new AnthropicBackend('test-key').getModelInfo();
     const haiku55 = models.filter(m => m.id === ChatModels.CLAUDE_5_5_HAIKU);

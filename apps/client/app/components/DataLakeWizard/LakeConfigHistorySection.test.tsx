@@ -351,6 +351,28 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText('approved: https://example.com/report')).toBeInTheDocument();
   });
 
+  it('renders a rule admission with its own label and the system principal', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'auto-approve-proposal',
+            principalKind: 'system',
+            changes: [
+              {
+                field: 'proposalReview',
+                kind: 'literal',
+                after: 'auto-approved: Report [config Weekly (c1), trusted site example.com]',
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Proposal added by rule')).toBeInTheDocument();
+    expect(screen.getByText(/trusted site example\.com/)).toBeInTheDocument();
+  });
+
   // A saved research config's create/update/delete left no trace in this tab at all.
   it('renders a research-config change with its action label and encoded name', () => {
     renderSection({

@@ -1,3 +1,4 @@
+import type { IncomingHttpHeaders } from 'node:http';
 import { emailPreferencesRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -9,9 +10,17 @@ const unsubscribeBodySchema = z.object({
   globalUnsubscribe: z.boolean().optional(),
 });
 
+/** Request header carrying the email's tracking token; the unsubscribe page reads it from its link. */
+const UNSUBSCRIBE_TOKEN_HEADER = 'x-unsubscribe-token';
+
+const readToken = (headers: IncomingHttpHeaders): string | undefined => {
+  const value = headers[UNSUBSCRIBE_TOKEN_HEADER];
+  return typeof value === 'string' && value ? value : undefined;
+};
+
 const handler = baseApi({ auth: false })
   .get(async (req, res) => {
-    const { token } = req.query as { token: string };
+    const token = readToken(req.headers);
 
     if (!token) {
       throw new BadRequestError('Token is required');
@@ -36,7 +45,7 @@ const handler = baseApi({ auth: false })
     });
   })
   .post(async (req, res) => {
-    const { token } = req.query as { token: string };
+    const token = readToken(req.headers);
     const { category, globalUnsubscribe } = unsubscribeBodySchema.parse(req.body ?? {});
 
     if (!token) {

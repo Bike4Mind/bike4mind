@@ -116,7 +116,7 @@ export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
 
 /**
  * The owner-only tier: the billing owner or a platform admin, never a manager. The server enforces
- * it with `verifyOrgOwner` (apps/client/server/utils/orgAccess.ts) and the client's org tab gates
+ * it with `verifyOrgOwner` (packages/server-utils/src/utils/orgAccess.ts) and the client's org tab gates
  * (apps/client/app/routes/organizations/orgTabAccess.ts) run this same function.
  */
 export const isOrgOwnerOrPlatformAdmin = (
@@ -153,7 +153,7 @@ export type AdministrableOrg = {
  * `userId` and `adminUserIds` are declared as strings on the organization schema, so a strict
  * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
  * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
- * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * `canManageOrg` in packages/server-utils/src/utils/orgAccess.ts, and the client's Members tab
  * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
@@ -178,3 +178,34 @@ export function canRevokeOrgMember(
   if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
   return !(organization.adminUserIds ?? []).includes(targetUserId);
 }
+
+export type OrganizationSeatUsage = { used: number; seats: number; full: boolean };
+
+/**
+ * Owner-inclusive seat usage: the owner holds a seat but no `users[]` row, so `used` is the roster
+ * plus one and the org is full once that reaches `seats`. Pending invites are not counted. Shared by
+ * `organizationService.addMember`'s capacity check and the admin console, so the two cannot drift.
+ */
+export const organizationSeatUsage = (org: {
+  users?: ReadonlyArray<unknown> | null;
+  seats: number;
+}): OrganizationSeatUsage => {
+  const used = (org.users?.length ?? 0) + 1;
+  return { used, seats: org.seats, full: used >= org.seats };
+};
+
+/** Why an add is refused when `organizationSeatUsage(org).full`; shared by the admin dialog and route. */
+export const organizationSeatsFullMessage = (name: string, seats: number): string =>
+  `${name} uses ${seats === 1 ? 'its only paid seat' : `all ${seats} paid seats`}. Raise the seat count on its profile before adding anyone.`;
+
+export type OrganizationMemberRole = 'owner' | 'manager' | 'member';
+
+/**
+ * The user's place in the org: billing owner, a manager (`adminUserIds` with a current `users[]` row,
+ * the rule `isOrgOwnerOrCurrentAdmin` applies), a plain member, or null when not on the roster.
+ */
+export const organizationMemberRole = (org: AdministrableOrg, userId: string): OrganizationMemberRole | null => {
+  if (org.userId === userId) return 'owner';
+  if (!(org.users ?? []).some(member => member.userId === userId)) return null;
+  return (org.adminUserIds ?? []).includes(userId) ? 'manager' : 'member';
+};

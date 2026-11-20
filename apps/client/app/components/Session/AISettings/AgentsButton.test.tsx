@@ -25,4 +25,22 @@ describe('AgentsButton in a crowded composer row', () => {
     );
     expect(screen.getByTestId('session-agents-dropdown-toggle')).toHaveStyle({ flexShrink: '0' });
   });
+
+  it('names the button with its active count when the tablet layout hides the label', () => {
+    render(
+      <TestWrapper>
+        <AgentsButton isMobile={false} isTablet={true} activeAgentsCount={2} />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Agents, 2 active' })).toBeInTheDocument();
+  });
+
+  it('names the button "Agents" on a tablet with none active', () => {
+    render(
+      <TestWrapper>
+        <AgentsButton isMobile={false} isTablet={true} activeAgentsCount={0} />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Agents' })).toBeInTheDocument();
+  });
 });

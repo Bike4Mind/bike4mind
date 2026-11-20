@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
+import { CreditHolderType, type IGenerationJob, type IGenerationJobDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
 import { MAX_STEP_ATTEMPTS } from './backoff';
@@ -20,7 +20,15 @@ const payload = {
 
 const LEASE_MS = 330_000;
 
-const setup = ({ submitMode = 'async' }: { submitMode?: GenerationJobHandler['submitMode'] } = {}) => {
+const setup = ({
+  submitMode = 'async',
+  aiAccessDenial,
+  onTerminalHandled,
+}: {
+  submitMode?: GenerationJobHandler['submitMode'];
+  aiAccessDenial?: (userId: string) => Promise<string | null>;
+  onTerminalHandled?: (job: IGenerationJobDocument) => Promise<void>;
+} = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const now = () => clock;
   const repository = createInMemoryGenerationJobRepository({ now });
@@ -51,6 +59,8 @@ const setup = ({ submitMode = 'async' }: { submitMode?: GenerationJobHandler['su
     now,
     logger,
     leaseMs: LEASE_MS,
+    aiAccessDenial,
+    onTerminalHandled,
   });
   const create = (overrides: Partial<IGenerationJob> = {}) =>
     repository.createJob({
@@ -108,6 +118,34 @@ describe('GenerationJobEngine', () => {
     expect(final.leaseUntil).toBeNull();
     expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
     expect(t.notify).toHaveBeenCalled();
+  });
+
+  it('fails a pending job whose requester is blocked before the provider is called, and settles the hold', async () => {
+    const aiAccessDenial = vi.fn(
+      async () => 'Your account is on hold pending a payment review. Please contact support.'
+    );
+    const t = setup({ aiAccessDenial });
+    const job = await t.create();
+
+    expect(await t.engine.step(job.id)).toBe('terminal');
+
+    expect(aiAccessDenial).toHaveBeenCalledWith('u1');
+    expect(t.handler.submit).not.toHaveBeenCalled();
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.state).toBe('failed');
+    expect(final.error).toEqual({ code: 'account_blocked', message: expect.stringContaining('payment review') });
+    expect(final.submitAttemptedAt).toBeFalsy();
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits as usual for a requester who may still spend', async () => {
+    const aiAccessDenial = vi.fn(async () => null);
+    const t = setup({ aiAccessDenial });
+    const job = await t.create();
+    t.results.submit.push({ next: 'running', payload });
+
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.handler.submit).toHaveBeenCalledOnce();
   });
 
   it('duplicate message while leased is a no-op', async () => {
@@ -190,6 +228,47 @@ describe('GenerationJobEngine', () => {
     expect(await t.engine.step(job.id)).toBe('terminal');
     expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
     expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+  });
+
+  it('a submit cut off by the step deadline logs one warning and still fails as orphaned_submit', async () => {
+    const t = setup({ submitMode: 'sync' });
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    vi.mocked(t.handler.submit).mockImplementationOnce(
+      (_job, context) =>
+        new Promise((_resolve, reject) =>
+          context.signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }))
+          )
+        )
+    );
+    expect(await t.engine.step(job.id, { stepBudgetMs: 5 })).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error).toMatchObject({ code: 'orphaned_submit', cutOffByStepDeadline: true });
+    expect(t.handler.submit).toHaveBeenCalledTimes(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toEqual([
+      [
+        'generation_job_submit_deadline',
+        expect.objectContaining({ jobId: job.id, kind: 'video', elapsedMs: expect.any(Number) }),
+      ],
+    ]);
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(0);
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a submit that throws before the step deadline still logs an orphaned-submit error', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    t.results.submit.push(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }));
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error?.code).toBe('orphaned_submit');
+    expect(final.error?.cutOffByStepDeadline).toBeUndefined();
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toHaveLength(0);
   });
 
   it('a definitive submit rejection clears the attempt and retries with backoff', async () => {
@@ -474,6 +553,51 @@ describe('GenerationJobEngine', () => {
     });
   });
 
+  describe('a submit mode chosen per job', () => {
+    const modeByProvider: GenerationJobHandler['submitMode'] = job =>
+      job.payload.providerId === 'sync-provider' ? 'sync' : 'async';
+    const withProvider = (providerId: string) => ({ ...payload, providerId }) as IGenerationJob['payload'];
+
+    it.each([
+      ['sync-provider', 'orphaned_submit'],
+      ['async-provider', undefined],
+    ])('a running job with a recorded submit attempt (%s) settles as %s', async (providerId, errorCode) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({
+        state: 'running',
+        payload: withProvider(providerId),
+        submitAttemptedAt: new Date('2026-10-05T23:59:00Z'),
+      });
+      t.results.poll.push({ next: 'poll_again', progress: 0.5 });
+      await t.engine.step(job.id);
+      expect(t.repository.jobs.get(job.id)!.error?.code).toBe(errorCode);
+      expect(t.handler.poll).toHaveBeenCalledTimes(errorCode ? 0 : 1);
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('submit for %s marks the job running: %s', async (providerId, markRunning) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const markSubmitAttempted = vi.spyOn(t.repository, 'markSubmitAttempted');
+      t.results.submit.push({ next: 'succeeded', payload: withProvider(providerId) });
+      await t.engine.step(job.id);
+      expect(markSubmitAttempted).toHaveBeenCalledWith(job.id, expect.any(Date), { markRunning });
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('a cancel for %s restricts the cancel to before the submit: %s', async (providerId, beforeSubmitOnly) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const requestCancel = vi.spyOn(t.repository, 'requestCancel');
+      await t.engine.requestCancel(job);
+      expect(requestCancel).toHaveBeenCalledWith(job.id, { beforeSubmitOnly });
+    });
+  });
+
   // The cancel lands after the step's own cancelRequested check but before the provider call.
   it.each(['sync', 'async'] as const)(
     'a %s submit that loses the race to a cancel ends cancelled without calling the provider',
@@ -620,6 +744,33 @@ describe('GenerationJobEngine', () => {
     });
   });
 
+  describe('onTerminalHandled', () => {
+    const enqueueFailed = { code: 'enqueue_failed' as const, message: 'The job could not be queued' };
+
+    it('runs once, after terminal handling is recorded', async () => {
+      const storedHandledAt: Array<Date | null | undefined> = [];
+      let readStored: (id: string) => Date | null | undefined = () => undefined;
+      const onTerminalHandled = vi.fn(async (job: IGenerationJobDocument) => {
+        storedHandledAt.push(readStored(job.id));
+      });
+      const t = setup({ onTerminalHandled });
+      readStored = id => t.repository.jobs.get(id)?.terminalHandledAt;
+      const job = await t.create();
+      await t.engine.failBeforeStart(job.id, enqueueFailed);
+      await t.engine.step(job.id);
+      expect(onTerminalHandled).toHaveBeenCalledTimes(1);
+      expect(onTerminalHandled).toHaveBeenCalledWith(expect.objectContaining({ id: job.id, state: 'failed' }));
+      expect(storedHandledAt).toEqual([expect.any(Date)]);
+    });
+
+    it('a throw never fails the terminal step', async () => {
+      const t = setup({ onTerminalHandled: async () => Promise.reject(new Error('bus down')) });
+      const job = await t.create();
+      expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('failed');
+      expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('a notify failure never fails the step', async () => {
     const t = setup();
     const job = await t.create();
@@ -654,6 +805,24 @@ describe('step time budget', () => {
     await t.engine.step(first.id);
     await t.engine.step(second.id, { remainingMs: 24 * 3_600_000 });
     expect(timeout.mock.calls).toEqual([[LEASE_MS - 30_000], [LEASE_MS - 30_000]]);
+  });
+
+  it('narrows the step signal to a caller step budget, never widening it', async () => {
+    const t = setup();
+    const first = await t.create();
+    const second = await t.create();
+    t.results.submit.push(running, running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(first.id, { stepBudgetMs: 12_000 });
+    await t.engine.step(second.id, { remainingMs: 40_000, stepBudgetMs: 60_000 });
+    expect(timeout.mock.calls).toEqual([[12_000], [10_000]]);
+  });
+
+  it('refuses a step whose caller budget is spent, leaving the job unleased', async () => {
+    const t = setup();
+    const job = await t.create();
+    await expect(t.engine.step(job.id, { stepBudgetMs: 0 })).rejects.toThrow(/no time budget/);
+    expect(t.repository.jobs.get(job.id)?.leaseUntil ?? null).toBeNull();
   });
 
   it.each([20_000, 30_000, Number.NaN])(

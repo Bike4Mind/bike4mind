@@ -116,6 +116,7 @@ function Harness({
       onTogglePin={() => {}}
       onToggleArchived={() => {}}
       onRename={() => {}}
+      onDownload={() => {}}
       userSections={sections}
       sectionActions={actions}
       sectionError={sectionError}

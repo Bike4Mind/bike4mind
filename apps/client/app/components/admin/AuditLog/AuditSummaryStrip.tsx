@@ -1,4 +1,5 @@
-import { Alert, Button, ButtonGroup, Card, Stack, Typography } from '@mui/joy';
+import { Box, Button, ButtonGroup, Skeleton, Stack } from '@mui/joy';
+import { ErrorState, StatTile } from '../shared';
 import {
   AUDIT_SUMMARY_WINDOWS,
   type AuditLogFilters,
@@ -33,7 +34,7 @@ const creditTileDetail = ({ count, deductedCredits, topGranters }: AuditSummary[
 type Tile = { key: string; label: string; value: string; detail?: string; filters: AuditLogFilters };
 
 export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ windowDays, onWindowChange, onApply }) => {
-  const { data: summary, isError } = useAuditSummary(windowDays);
+  const { data: summary, isError, isLoading, refetch } = useAuditSummary(windowDays);
 
   const tiles: Tile[] = summary
     ? [
@@ -81,18 +82,17 @@ export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ windowDays
         ))}
       </ButtonGroup>
       {isError && (
-        <Alert color="danger" variant="soft" size="sm" data-testid="audit-summary-error">
-          Could not load the audit summary.
-        </Alert>
+        <Box data-testid="audit-summary-error">
+          <ErrorState message="Could not load the audit summary." onRetry={() => void refetch()} />
+        </Box>
       )}
+      {isLoading && <Skeleton variant="rectangular" height="6rem" data-testid="audit-summary-loading" />}
       <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap">
         {tiles.map(tile => (
-          <Card
+          <Box
             key={tile.key}
-            variant="outlined"
-            size="sm"
-            role="button"
-            tabIndex={0}
+            component="button"
+            type="button"
             data-testid={`audit-summary-tile-${tile.key}`}
             onClick={() => onApply({ ...tile.filters, from: summary?.since })}
             onKeyDown={event => {
@@ -100,12 +100,18 @@ export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ windowDays
               event.preventDefault();
               onApply({ ...tile.filters, from: summary?.since });
             }}
-            sx={{ minWidth: 160, cursor: 'pointer', '&:hover': { borderColor: 'primary.outlinedBorder' } }}
+            sx={{
+              minWidth: '10rem',
+              flex: '1 1 10rem',
+              p: 0,
+              border: 0,
+              bgcolor: 'transparent',
+              textAlign: 'left',
+              cursor: 'pointer',
+            }}
           >
-            <Typography level="body-xs">{tile.label}</Typography>
-            <Typography level="title-lg">{tile.value}</Typography>
-            {tile.detail && <Typography level="body-xs">{tile.detail}</Typography>}
-          </Card>
+            <StatTile label={tile.label} value={tile.value} comparison={tile.detail} />
+          </Box>
         ))}
       </Stack>
     </Stack>

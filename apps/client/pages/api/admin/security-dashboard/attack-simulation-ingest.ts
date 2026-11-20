@@ -8,8 +8,8 @@ import {
   type SecurityFindingSeverity,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { isPlaceholderValue } from '@bike4mind/common';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
+import { isUnconfiguredSecret } from '@bike4mind/common';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -94,13 +94,11 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
 
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Attack simulation ingest token is not configured.' });
   }
 
-  const providedTokenHeader = req.headers['x-security-ingest-token'];
-  const providedToken = Array.isArray(providedTokenHeader) ? providedTokenHeader[0] : providedTokenHeader;
-  if (!providedToken || !safeCompareTokens(String(providedToken), ingestToken)) {
+  if (!verifyIngestToken(req, 'x-security-ingest-token', ingestToken)) {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 
@@ -231,6 +229,13 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   // persisted to MongoDB; a missed SQS publish only loses the GitHub-issue side effect.
   if (persistedFindings.length > 0) {
     try {
+      // Runs after markMissingAsResolved, so what is still active is what Mongo considers unresolved.
+      // Findings of probes that did not run this time are reported so their issues stay open.
+      const reportedFingerprints = new Set(persistedFindings.map(f => f.fingerprint));
+      const unverifiedFindingIds = (await securityFindingRepository.findActiveByStage(stage))
+        .map(f => f.fingerprint)
+        .filter(fingerprint => !reportedFingerprints.has(fingerprint));
+
       await sqsClient.send(
         new SendMessageCommand({
           QueueUrl: getSourceQueueUrl('secopsTriageQueue'),
@@ -239,6 +244,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
             scanSource: 'active-defense' as const,
             snapshotId: runId,
             targetUrl,
+            unverifiedFindingIds,
             findings: persistedFindings.map(f => ({
               id: f.fingerprint,
               title: f.title,

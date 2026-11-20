@@ -51,7 +51,7 @@ const MAX_RESERVATIONS = 1024;
 const MAX_ATTEMPTS = 16;
 
 function validateId(value: string): void {
-  if (typeof value !== 'string' || !/^[a-zA-Z0-9_:-]{1,128}$/.test(value)) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 128 || /[^a-zA-Z0-9_:-]/.test(value)) {
     throw new Error('Invalid budget identifier');
   }
 }
@@ -62,7 +62,11 @@ function validateAmount(value: number): void {
 
 export type SpokeBudgetAdmission = 'reserved' | 'settled' | 'budget_exceeded' | 'capacity_exceeded';
 
-/** Internal accounting only; callers must bind client/user IDs through authentication and hold wallet credits separately. */
+/**
+ * Internal accounting in caller-defined integer units and original UTC admission windows, not execution authorization.
+ * Callers must authenticate identities, deduplicate execution, hold wallet credits and bound cost separately.
+ * Entries (including unresolved holds) never expire; each client has a lifetime cap of 1,024 requests.
+ */
 export class SpokeBudgetRepository {
   constructor(private readonly clock: () => Date = () => new Date()) {}
 
@@ -99,7 +103,8 @@ export class SpokeBudgetRepository {
     amount: number;
     limits: SpokeBudgetLimits;
   }): Promise<SpokeBudgetAdmission> {
-    const { clientId, userId, requestId, amount, limits } = params;
+    const { clientId, userId, requestId, amount } = params;
+    const limits = { ...params.limits };
     validateId(userId);
     validateId(requestId);
     validateAmount(amount);
@@ -116,8 +121,9 @@ export class SpokeBudgetRepository {
       if (budget.reservations.length >= MAX_RESERVATIONS) return 'capacity_exceeded';
       const now = this.clock();
       if (!Number.isFinite(now.getTime())) throw new Error('Invalid budget clock');
-      const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-      const month = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+      const windowStart = new Date(now);
+      const day = windowStart.setUTCHours(0, 0, 0, 0);
+      const month = windowStart.setUTCDate(1);
       const totals = { daily: 0, monthly: 0, userDaily: 0, userMonthly: 0 };
       for (const row of budget.reservations) {
         const cost = row.state === 'reserved' ? row.reserved : row.charged;

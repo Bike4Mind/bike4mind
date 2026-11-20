@@ -1,7 +1,7 @@
 import { userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { stepUpMethodsFor, stepUpUnavailableError } from '@server/auth/stepUp';
 import { sendStepUpEmailCode } from '@server/auth/stepUpEmail';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, type AxiosResponse } from 'axios';
@@ -10,7 +10,10 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: vi.fn() }))
 const postMock = vi.fn();
 const getMock = vi.fn();
 const solveMock = vi.fn();
-vi.mock('@client/app/utils/turnstile', () => ({ getTurnstileToken: (...args: unknown[]) => solveMock(...args) }));
+vi.mock('@client/app/utils/turnstile', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/turnstile')>()),
+  getTurnstileToken: (...args: unknown[]) => solveMock(...args),
+}));
 beforeEach(() => {
   vi.resetAllMocks();
   getMock.mockResolvedValue({ data: { turnstileSiteKey: '' } });
@@ -20,6 +23,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 import { useSendOTC } from './auth';
+import { TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
@@ -94,10 +98,114 @@ describe('useSendOTC challenge gate', () => {
   it('does not send when the challenge fails', async () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new Error('turnstile-error'));
+    postMock.mockResolvedValue({ data: undefined });
     const { result } = renderHook(() => useSendOTC(), { wrapper });
     await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
       message: expect.stringContaining('verification check'),
     });
+    expect(postMock).not.toHaveBeenCalledWith('/api/otc/send', expect.anything());
+  });
+
+  it('reports a failed challenge to the server with its reason and error code', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileError('error', 3, '110600'));
+    postMock.mockResolvedValue({ data: undefined });
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
+      message: expect.stringContaining('refresh and try again'),
+    });
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
+      action: 'otc-send',
+      reason: 'error',
+      errorCode: '110600',
+      attempts: 3,
+    });
+  });
+
+  it('points a browser Cloudflare keeps rejecting at a regular browser instead of a refresh', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileError('error', 3, '600010'));
+    postMock.mockResolvedValue({ data: undefined });
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    const rejection = await result.current.mutateAsync({ email: 'x@test.com' }).catch(e => e);
+    expect(rejection.message).toContain('regular browser');
+    expect(rejection.message).not.toContain('refresh');
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
+      action: 'otc-send',
+      reason: 'error',
+      errorCode: '600010',
+      attempts: 3,
+    });
+  });
+
+  it('keeps the verification error when the failure report itself fails', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new Error('unexpected'));
+    postMock.mockRejectedValue(new Error('network down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
+      message: expect.stringContaining('verification check'),
+    });
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
+      action: 'otc-send',
+      reason: 'unavailable',
+      attempts: 1,
+    });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    warn.mockRestore();
+  });
+
+  it('solves the challenge the server asks for and retries once with its token', async () => {
+    const required = new AxiosError('Request failed with status code 403', 'ERR_BAD_REQUEST');
+    required.response = {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: {},
+      config: {},
+      data: { error: 'Please complete the verification check.', code: 'challenge_required', siteKey: 'step-up' },
+    } as AxiosResponse;
+    postMock.mockRejectedValueOnce(required).mockResolvedValueOnce({ data: { pendingToken: 'pending' } });
+    solveMock.mockResolvedValueOnce('step-up-token');
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+
+    await expect(result.current.mutateAsync({ email: 'x@test.com' })).resolves.toEqual({ pendingToken: 'pending' });
+
+    expect(solveMock).toHaveBeenCalledExactlyOnceWith('step-up', 'otc-send');
+    expect(postMock.mock.calls.map(call => call[1].turnstileToken)).toEqual([undefined, 'step-up-token']);
+  });
+
+  it('does not report a cancelled challenge or ask the user to refresh', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileCancelledError());
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    const rejection = await result.current.mutateAsync({ email: 'x@test.com' }).catch(e => e);
+    expect(rejection.message).toContain('cancelled');
+    expect(rejection.message).not.toContain('refresh');
     expect(postMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSendOTC form token refresh', () => {
+  const setup = () => {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const clientWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client }, children);
+    return { spy, ...renderHook(() => useSendOTC(), { wrapper: clientWrapper }) };
+  };
+
+  it('refetches the signup form token after a successful send', async () => {
+    postMock.mockResolvedValue({ data: { pendingToken: 'p' } });
+    const { spy, result } = setup();
+    await result.current.mutateAsync({ email: 'a@b.co' } as never);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['signupFormToken'] }));
+  });
+
+  it('keeps the token when the send fails', async () => {
+    postMock.mockRejectedValueOnce(make429({}));
+    const { spy, result } = setup();
+    await expect(result.current.mutateAsync({ email: 'a@b.co' } as never)).rejects.toBeDefined();
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['signupFormToken'] });
   });
 });

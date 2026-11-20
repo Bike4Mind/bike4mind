@@ -1,4 +1,4 @@
-import { elevenLabsContentTypeForFormat } from '@bike4mind/common';
+import { DEFAULT_SOUND_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedSound, SoundGenerationOptions, SoundGenerator } from './types';
@@ -62,11 +62,14 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
+        model_id: DEFAULT_SOUND_MODEL_ID,
         text,
         ...(options.durationSeconds !== undefined ? { duration_seconds: options.durationSeconds } : {}),
         ...(options.promptInfluence !== undefined ? { prompt_influence: options.promptInfluence } : {}),
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: options.signal
+        ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), options.signal])
+        : AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
@@ -81,7 +84,11 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         );
       }
       this.logger.error('ElevenLabs sound generation failed', { status: res.status, detail });
-      throw new Error(`ElevenLabs sound generation failed: ${res.status} ${detail}`);
+      // status and detail let a caller classify the failure without parsing the message.
+      throw Object.assign(new Error(`ElevenLabs sound generation failed: ${res.status} ${detail}`), {
+        status: res.status,
+        detail,
+      });
     }
 
     const audio = Buffer.from(await res.arrayBuffer());

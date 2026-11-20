@@ -8,9 +8,10 @@ import type { IUserDocument } from '@bike4mind/common';
 // fails the test rather than passing tautologically.
 const mockVerifyMFA = vi.fn();
 vi.mock('@bike4mind/auth/mfaService', async () => {
-  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt } =
+  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt, userHasTotpConfigured } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
+    userHasTotpConfigured,
     verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
     isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } } | null) => !!user?.mfa?.lockedUntil,
     getLockoutTimeRemaining: () => 0,
@@ -117,5 +118,119 @@ describe('adminService.loginAs — MFA secret loading', () => {
       loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
     ).rejects.toThrow(/MFA locked/);
     expect(mocks.atomicRecordMfaFailedAttempt).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminService.loginAs - deletion-pending target', () => {
+  it('refuses an account in its deletion grace period without notifying it', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    mocks.findById.mockResolvedValue({ ...targetUser, deletion: { scheduledFor: new Date() } } as never);
+
+    await expect(
+      loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
+    ).rejects.toThrow('scheduled for deletion');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminService.loginAs - delegated users:impersonate', () => {
+  const delegateJwt = {
+    id: 'admin1',
+    isAdmin: false,
+    adminPermissions: ['users:impersonate'],
+    mfa: { totpEnabled: true },
+  } as unknown as IUserDocument;
+  const freshDelegate = () =>
+    ({
+      ...freshAdminWithSecret(),
+      isAdmin: false,
+      adminPermissions: ['users:impersonate'],
+    }) as unknown as IUserDocument;
+  const run = (jwt: IUserDocument, adapters: unknown) =>
+    loginAs(jwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never);
+
+  it('lets a delegate with the permission impersonate a non-admin target', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters } = makeAdapters(freshDelegate());
+    await expect(run(delegateJwt, adapters)).resolves.toBe(targetUser);
+    expect(mockVerifyMFA).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin target before notifying', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshDelegate());
+    mocks.findById.mockResolvedValue({ ...targetUser, adminPermissions: ['support:read'] } as never);
+    await expect(run(delegateJwt, adapters)).rejects.toThrow('Only full administrators can impersonate');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('judges the admin target against the fresh record, not a stale full-admin JWT', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshDelegate());
+    mocks.findById.mockResolvedValue({ ...targetUser, isAdmin: true } as never);
+    await expect(run(adminJwt, adapters)).rejects.toThrow('Only full administrators can impersonate');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('still lets a full admin impersonate an admin target', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    const adminTarget = { ...targetUser, isAdmin: true } as unknown as IUserDocument;
+    mocks.findById.mockResolvedValue(adminTarget);
+    await expect(run(adminJwt, adapters)).resolves.toBe(adminTarget);
+  });
+
+  it('refuses a delegate without the permission before MFA is verified', async () => {
+    vi.clearAllMocks();
+    const jwt = { ...delegateJwt, adminPermissions: ['support:read'] } as unknown as IUserDocument;
+    const { adapters } = makeAdapters(freshDelegate());
+    await expect(run(jwt, adapters)).rejects.toThrow('Missing permission: users:impersonate');
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
+  });
+
+  it('counts a role-held permission on the fresh record through resolveAdminRoles', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const roleJwt = { ...delegateJwt, adminPermissions: [], roleAdminPermissions: ['users:impersonate'] };
+    const stored = { ...freshDelegate(), adminPermissions: [], adminRoleIds: ['a'.repeat(24)] };
+    const { adapters } = makeAdapters(stored as unknown as IUserDocument);
+    const resolveAdminRoles = vi.fn(async (user: object) => ({ ...user, roleAdminPermissions: ['users:impersonate'] }));
+
+    await expect(run(roleJwt as unknown as IUserDocument, { ...adapters, resolveAdminRoles })).resolves.toBe(
+      targetUser
+    );
+    expect(resolveAdminRoles).toHaveBeenCalledWith(stored);
+  });
+
+  it('refuses when the fresh record no longer holds the permission', async () => {
+    vi.clearAllMocks();
+    const stale = { ...freshDelegate(), adminPermissions: [] } as unknown as IUserDocument;
+    const { adapters } = makeAdapters(stale);
+    await expect(run(delegateJwt, adapters)).rejects.toThrow('Missing permission: users:impersonate');
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminService.loginAs - factor gate', () => {
+  it('refuses a passkey-only admin: the code it verifies is an authenticator-app code', async () => {
+    vi.clearAllMocks();
+    const passkeyOnlyAdmin = {
+      id: 'admin1',
+      isAdmin: true,
+      mfa: { totpEnabled: false, passkeyEnabled: true },
+    } as unknown as IUserDocument;
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+
+    await expect(
+      loginAs(passkeyOnlyAdmin, { targetUserId: 'target1', mfaToken: '123456' }, adapters as never)
+    ).rejects.toThrow('An authenticator app must be enabled to use loginAs');
+    expect(mocks.findByIdWithMfaSecrets).not.toHaveBeenCalled();
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
   });
 });

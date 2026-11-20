@@ -1,47 +1,64 @@
 import { describe, it, expect } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import ts from 'typescript';
 
-/**
- * Structural sync check: ensures DLQ_REGISTRY (runtime) and DLQ_DESCRIPTORS (infra)
- * contain the same set of queue labels. Catches drift between the two registries
- * that must be maintained in parallel due to different SST contexts.
- */
-describe('DLQ registry sync', () => {
-  function extractLabels(filePath: string, arrayName: string): string[] {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    // Extract only the array definition block, then find labels within it
-    const arrayRegex = new RegExp(`(?:const|let|var)\\s+${arrayName}[^=]*=\\s*\\[([\\s\\S]*?)\\];`);
-    const arrayMatch = arrayRegex.exec(content);
-    if (!arrayMatch) throw new Error(`Could not find ${arrayName} in ${filePath}`);
-    const arrayBlock = arrayMatch[1];
-    const labels: string[] = [];
-    const labelRegex = /label:\s*['"]([^'"]+)['"]/g;
-    let match;
-    while ((match = labelRegex.exec(arrayBlock)) !== null) {
-      labels.push(match[1]);
+function extractLabels(content: string): string[] {
+  const source = ts.createSourceFile('registry.ts', content, ts.ScriptTarget.Latest, true);
+  const labels: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      node.name.getText(source) === 'label' &&
+      ts.isStringLiteral(node.initializer) &&
+      ts.isObjectLiteralExpression(node.parent) &&
+      node.parent.properties.some(property => property.name?.getText(source) === 'application')
+    ) {
+      labels.push(node.initializer.text);
     }
-    return labels.sort();
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return labels.sort();
+}
 
-  const repoRoot = path.resolve(__dirname, '../../../../');
-  const registryPath = path.join(repoRoot, 'packages/server-utils/src/utils/dlqRegistry.ts');
-  const alarmsPath = path.join(repoRoot, 'infra/dlqAlarms.ts');
+const repoRoot = path.resolve(__dirname, '../../../../');
+const registryLabels = extractLabels(
+  readFileSync(path.join(repoRoot, 'packages/server-utils/src/utils/dlqRegistry.ts'), 'utf8')
+);
+const alarmLabels = extractLabels(readFileSync(path.join(repoRoot, 'infra/dlqAlarms.ts'), 'utf8'));
+const missing = (expected: string[], actual: string[]) => expected.filter(label => !actual.includes(label));
 
-  it('DLQ_REGISTRY and DLQ_DESCRIPTORS have the same labels', () => {
-    const registryLabels = extractLabels(registryPath, 'DLQ_REGISTRY');
-    const alarmsLabels = extractLabels(alarmsPath, 'DLQ_DESCRIPTORS');
-
-    expect(registryLabels).toEqual(alarmsLabels);
+describe('DLQ registry sync', () => {
+  it('lists every alarmed DLQ, including standalone and out-of-band descriptors', () => {
+    expect(alarmLabels).toContain('fab-file-moderation');
+    expect(alarmLabels).toContain('alarm-handler');
+    expect(missing(alarmLabels, registryLabels)).toEqual([]);
   });
 
-  it('no duplicate labels in DLQ_REGISTRY', () => {
-    const labels = extractLabels(registryPath, 'DLQ_REGISTRY');
-    expect(new Set(labels).size).toBe(labels.length);
+  it('alarms every registered core DLQ', () => {
+    expect(missing(registryLabels, alarmLabels)).toEqual([]);
   });
 
-  it('no duplicate labels in DLQ_DESCRIPTORS', () => {
-    const labels = extractLabels(alarmsPath, 'DLQ_DESCRIPTORS');
+  it('detects label omissions in either direction', () => {
+    expect(
+      missing(
+        alarmLabels,
+        registryLabels.filter(label => label !== 'fab-file-moderation')
+      )
+    ).toEqual(['fab-file-moderation']);
+    expect(
+      missing(
+        registryLabels,
+        alarmLabels.filter(label => label !== 'fab-file-moderation')
+      )
+    ).toEqual(['fab-file-moderation']);
+  });
+
+  it.each([
+    ['registry', registryLabels],
+    ['alarms', alarmLabels],
+  ] as const)('has no duplicate labels in %s', (_name, labels) => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 });

@@ -4,7 +4,11 @@ import path from 'path';
 import { McpServerName } from '@bike4mind/common';
 import {
   MCP_SERVER_ENV_KEYS,
+  MCP_SERVER_REQUIRED_ENV_KEYS,
+  McpServerConfigError,
+  assertMcpServerStartable,
   buildMcpChildEnv,
+  findMissingMcpEnvKeys,
   findForbiddenMcpEnvKeys,
   isCodeInjectingMcpEnvKey,
   isForbiddenMcpEnvKey,
@@ -243,4 +247,82 @@ describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
       ).toEqual([]);
     }
   });
+});
+
+describe('findMissingMcpEnvKeys', () => {
+  it('reports a required key that is absent', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.Github, [])).toEqual(['GITHUB_ACCESS_TOKEN']);
+  });
+
+  it('reports a required key whose value is empty, as the server check sees it', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.Github, [{ key: 'GITHUB_ACCESS_TOKEN', value: '' }])).toEqual([
+      'GITHUB_ACCESS_TOKEN',
+    ]);
+  });
+
+  it('reports a required key supplied under a name the allowlist drops', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.Github, [{ key: 'GITHUB_TOKEN', value: 'ghp_x' }])).toEqual([
+      'GITHUB_ACCESS_TOKEN',
+    ]);
+  });
+
+  it('reports nothing when every required key has a value', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.Github, [{ key: 'GITHUB_ACCESS_TOKEN', value: 'ghp_x' }])).toEqual([]);
+  });
+
+  it('lists only the missing keys of a server that needs several', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.LinkedIn, [{ key: 'LINKEDIN_ACCESS_TOKEN', value: 't' }])).toEqual([
+      'COMPANY_NAME',
+    ]);
+  });
+
+  it('requires nothing of a server that reads its config lazily or is not bundled', () => {
+    expect(findMissingMcpEnvKeys(McpServerName.Notion, [])).toEqual([]);
+    expect(findMissingMcpEnvKeys('some-custom-server', [])).toEqual([]);
+  });
+});
+
+describe('assertMcpServerStartable', () => {
+  it('throws a config error naming the missing keys and never the values', () => {
+    let thrown: unknown;
+    try {
+      assertMcpServerStartable(McpServerName.LinkedIn, [{ key: 'COMPANY_NAME', value: 'secret-company' }]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(McpServerConfigError);
+    expect((thrown as McpServerConfigError).name).toBe('McpServerConfigError');
+    expect((thrown as McpServerConfigError).missingKeys).toEqual(['LINKEDIN_ACCESS_TOKEN']);
+    expect((thrown as Error).message).toContain('LINKEDIN_ACCESS_TOKEN');
+    expect((thrown as Error).message).not.toContain('secret-company');
+  });
+
+  it('passes a startable configuration', () => {
+    expect(() =>
+      assertMcpServerStartable(McpServerName.Github, [{ key: 'GITHUB_ACCESS_TOKEN', value: 'ghp_x' }])
+    ).not.toThrow();
+  });
+});
+
+describe('MCP_SERVER_REQUIRED_ENV_KEYS stays in sync with the server code', () => {
+  const packageSrc = path.resolve(import.meta.dirname);
+  const startupFiles: Partial<Record<McpServerName, string>> = {
+    [McpServerName.Github]: path.join(packageSrc, 'github', 'config.ts'),
+    [McpServerName.LinkedIn]: path.join(packageSrc, 'linkedin', 'index.ts'),
+  };
+
+  it('lists exactly the servers whose startup check is pinned here', () => {
+    expect(Object.keys(MCP_SERVER_REQUIRED_ENV_KEYS).sort()).toEqual(Object.keys(startupFiles).sort());
+  });
+
+  for (const [name, file] of Object.entries(startupFiles)) {
+    it(`${name} requires only keys it is allowed and reads at startup`, () => {
+      const declared = MCP_SERVER_ENV_KEYS[name as McpServerName];
+      const source = readFileSync(file, 'utf8');
+      for (const key of MCP_SERVER_REQUIRED_ENV_KEYS[name as McpServerName] ?? []) {
+        expect(declared).toContain(key);
+        expect(source).toContain(`process.env.${key}`);
+      }
+    });
+  }
 });

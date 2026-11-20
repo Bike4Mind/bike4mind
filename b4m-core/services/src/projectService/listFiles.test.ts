@@ -82,7 +82,7 @@ describe('projectService - listFiles', () => {
     expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
-  it('generates and persists a real URL for a clean image', async () => {
+  it('signs a windowed URL for a clean image without persisting it', async () => {
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
       {
         id: 'file-clean-image',
@@ -95,10 +95,27 @@ describe('projectService - listFiles', () => {
     const result = await listFiles(userId, { projectId }, adapters());
 
     expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
-    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/clean.png', 'get', { expiresIn: 3600 });
-    expect(mockFabFileRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-clean-image', fileUrl: 'https://signed.example.com/fresh-url' })
-    );
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/clean.png', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
+    });
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('returns the expiry the signer granted, not the requested hour, for a clamped SigV4 URL', async () => {
+    const signedAt = new Date();
+    const amzDate = signedAt.toISOString().replace(/[-:]|\.\d{3}/g, '');
+    const clampedUrl = `https://bucket.example.invalid/doc.pdf?X-Amz-Date=${amzDate}&X-Amz-Expires=600`;
+    (mockStorage.getSignedUrl as Mock).mockResolvedValueOnce(clampedUrl);
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      { id: 'file-doc', filePath: 'fab-files/doc.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
+    ]);
+
+    const result = await listFiles(userId, { projectId }, adapters());
+
+    const expectedExpiry = new Date(Math.floor(signedAt.getTime() / 1000) * 1000 + 600 * 1000);
+    expect(result[0].fileUrlExpireAt).toEqual(expectedExpiry);
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   // isImageServeable gates on moderationStatus alone now (no mimeType
@@ -134,6 +151,46 @@ describe('projectService - listFiles', () => {
     const result = await listFiles(userId, { projectId }, adapters());
 
     expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
-    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/doc.pdf', 'get', { expiresIn: 3600 });
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/doc.pdf', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
+    });
+  });
+
+  it('ignores a stored URL and always signs', async () => {
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      {
+        id: 'file-clean-image',
+        filePath: 'fab-files/clean.png',
+        mimeType: 'image/png',
+        moderationStatus: 'clean',
+        fileUrl: 'https://cached.example.com/url',
+        fileUrlExpireAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    ]);
+
+    const result = await listFiles(userId, { projectId }, adapters());
+
+    expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledTimes(1);
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('hands out the stable content URL when a builder is passed, without signing S3', async () => {
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      { id: 'file-clean-image', filePath: 'fab-files/clean.png', mimeType: 'image/png', moderationStatus: 'clean' },
+      { id: 'file-pending', filePath: 'fab-files/pending.png', mimeType: 'image/png', moderationStatus: 'pending' },
+    ]);
+    const contentUrl = vi.fn(
+      (file: { id: string }, exp: number) => `https://app.example.invalid/${file.id}?exp=${exp}`
+    );
+
+    const [clean, pending] = await listFiles(userId, { projectId }, { ...adapters(), contentUrl });
+
+    expect(clean.fileUrl).toMatch(/^https:\/\/app\.example\.invalid\/file-clean-image\?exp=\d+$/);
+    expect(clean.fileUrlExpireAt).toBeInstanceOf(Date);
+    expect(pending.fileUrl).toBeUndefined();
+    expect(contentUrl).toHaveBeenCalledTimes(1);
+    expect(mockStorage.getSignedUrl).not.toHaveBeenCalled();
   });
 });

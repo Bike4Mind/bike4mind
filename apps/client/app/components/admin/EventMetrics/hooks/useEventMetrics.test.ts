@@ -283,3 +283,34 @@ describe('useEventMetrics forceRefresh', () => {
     expect(client.getQueryData(['event-metrics', filtersB])).toEqual(freshMetrics);
   });
 });
+
+describe('useEventMetrics filter changes', () => {
+  it('keeps the previous metrics on screen while a new filter set loads', async () => {
+    let resolveNewWindow: ((value: { data: EventMetric[] }) => void) | undefined;
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      url.includes('dateFrom=2026-10-15')
+        ? new Promise(resolve => {
+            resolveNewWindow = resolve;
+          })
+        : Promise.resolve({ data: staleMetrics })
+    );
+    const { result, rerender } = renderHook(({ filters }) => useEventMetrics(filters), {
+      wrapper: makeWrapper(),
+      initialProps: { filters: { dateFrom: '2026-10-14' } },
+    });
+    await waitFor(() => expect(result.current.data).toEqual(staleMetrics));
+
+    rerender({ filters: { dateFrom: '2026-10-15' } });
+    await waitFor(() => expect(resolveNewWindow).toBeDefined());
+    expect(result.current.data).toEqual(staleMetrics);
+    expect(result.current.isPlaceholderData).toBe(true);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isFetching).toBe(true);
+
+    await act(async () => {
+      resolveNewWindow?.({ data: freshMetrics });
+    });
+    await waitFor(() => expect(result.current.data).toEqual(freshMetrics));
+    expect(result.current.isPlaceholderData).toBe(false);
+  });
+});

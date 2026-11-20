@@ -27,14 +27,14 @@ const AI_MARKERS = [
   /\brefineTextRequest\(/,
   /\.complete\(/,
   /\bSessionEvents\.(?:Summarize|Tag)\.publish\(/,
+  /\battachSessionsToProject\(/,
 ];
-const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|isAiAccessRevoked)\(/;
+const GATE =
+  /\b(?:assertAiAccessAllowed|assertOutboundActionAllowed|createModelAdmission|reserveRequestCredits|aiAccessDeniedMessage)\(/;
 
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin
   'admin/operations-model.ts', // admin
-  'admin/security-dashboard/ai-assessment.ts', // admin
-  'users/counterLogs.ts', // admin
 ]);
 
 function sourceFiles(dir: string): string[] {
@@ -60,6 +60,7 @@ const selfGatedMarkers = new Set(
   [
     ['transcribe/transcribe.ts', /\btranscribeUpload\(/.source],
     ['ai/refineTextRequest.ts', /\brefineTextRequest\(/.source],
+    ['projects/attachSessionsToProject.ts', /\battachSessionsToProject\(/.source],
   ].flatMap(([file, marker]) => (GATE.test(read(file)) ? [marker] : []))
 );
 

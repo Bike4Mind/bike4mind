@@ -1,6 +1,15 @@
-import { CreditHolderType } from '@bike4mind/common';
-import { creditTransactionRepository, sessionRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { CONVERSATIONAL_VOICE_MODEL_ID, CreditHolderType, type ISpendFreezeRepository } from '@bike4mind/common';
+import {
+  creditTransactionRepository,
+  newAccountSpendCapAdapters,
+  sessionRepository,
+  userRepository,
+  warmExchangeAttribution,
+  withTransaction,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { creditService } from '@bike4mind/services';
+import { spendFreezeSubjectForRequest } from '../billing/spendFreezeSubject';
 import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
 
 const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
@@ -45,6 +54,8 @@ export async function recordVoiceUsage(row: {
   model: string;
   credits: number;
   transactionId: string;
+  /** The UserApiKey that opened the hold (voiceHoldApiKeyId); omitted for a JWT caller. */
+  apiKeyId?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   const recorded = await creditTransactionRepository.createTransaction('realtime_voice_usage', {
@@ -55,6 +66,7 @@ export async function recordVoiceUsage(row: {
     model: row.model,
     sessionId: row.sessionId,
     transactionId: row.transactionId,
+    ...(row.apiKeyId ? { apiKeyId: row.apiKeyId } : {}),
     ...(row.metadata ? { metadata: row.metadata } : {}),
   });
   if (!recorded) throw new VoiceLedgerKeyTaken(row.transactionId);
@@ -71,6 +83,8 @@ export type VoiceHold = {
   voiceSessionStartedAt: Date;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  /** The key that opened the hold, so its attribution can be cached before the settlement transaction. */
+  voiceHoldApiKeyId?: string | null;
 };
 
 export type VoiceHoldSettlementSource = 'end' | 'sweep' | 'bootstrap';
@@ -107,6 +121,7 @@ export async function settleVoiceHold(
 ): Promise<VoiceHoldSettlement> {
   const reserved = hold.voiceReservedCredits;
   let settlement: VoiceHoldSettlement;
+  await warmExchangeAttribution(hold.voiceHoldApiKeyId);
   try {
     settlement = await withTransaction(async (): Promise<VoiceHoldSettlement> => {
       const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
@@ -140,9 +155,10 @@ export async function settleVoiceHold(
         await recordVoiceUsage({
           userId: payerId,
           sessionId: hold.id,
-          model: billedCredits !== null ? 'openai-realtime' : 'elevenlabs',
+          model: billedCredits !== null ? 'openai-realtime' : CONVERSATIONAL_VOICE_MODEL_ID,
           credits: unrecorded,
           transactionId: voiceHoldSettleTransactionId(hold.id, hold.voiceSessionStartedAt),
+          apiKeyId: claimed.apiKeyId,
         });
       }
       return { settled: true, connected, chargedCredits, refundedCredits };
@@ -174,7 +190,11 @@ export async function settleVoiceHold(
  * The caller's balance pre-check reads the user before the provider call, so it can be stale by
  * now (another call's reserve, a chat debit). The reserve is therefore re-checked against the
  * balance inside the transaction: a reserve the balance no longer covers throws `unaffordable()`
- * and the transaction aborts with nothing moved.
+ * and the transaction aborts with nothing moved. A reserve that would take a new account over its
+ * spend cap is refused before anything opens, with the cap's 422 `insufficient_credits`.
+ *
+ * A frozen user, organization or API key is refused first, with nothing moved, even when credits are
+ * not enforced. Settlement never checks the freeze: a call already running still closes and refunds.
  */
 export async function reserveVoiceHold(args: {
   userId: string;
@@ -183,14 +203,43 @@ export async function reserveVoiceHold(args: {
   reservedCredits: number | null;
   startedAt: Date;
   realtime: boolean;
+  /** The UserApiKey that authenticated the bootstrap; every ledger row billed against the hold names it. */
+  apiKeyId?: string;
   unaffordable: () => Error;
+  /** Organization the caller spends under, for the spend freeze check. */
+  organizationId: string | null;
+  /** Server-derived from the API key. No longer read by the spend freeze check, which keeps the acting user. */
+  apiKeyBillingOwnerType?: CreditHolderType;
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
+  /** The apps pass theirs, which alert LiveOps on a refusal; this package cannot import them. */
+  newAccountSpendCap?: creditService.NewAccountSpendCapAdapters;
 }): Promise<boolean> {
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(
+      {
+        user: { id: args.userId },
+        apiKeyInfo: args.apiKeyId ? { keyId: args.apiKeyId } : undefined,
+      },
+      args.organizationId
+    ),
+    { db: { spendFreezes: args.spendFreezes } }
+  );
+  if (args.reservedCredits) {
+    const user = await userRepository.findById(args.userId);
+    if (user) {
+      await creditService.assertNewAccountSpendWithinCap(
+        { user, requestedCredits: args.reservedCredits, billedToOrganization: false },
+        args.newAccountSpendCap ?? newAccountSpendCapAdapters
+      );
+    }
+  }
   return withTransaction(async () => {
     const opened = await sessionRepository.openVoiceHold(args.sessionId, args.priorStartedAt, {
       voiceReservedCredits: args.reservedCredits,
       voiceSessionStartedAt: args.startedAt,
       realtime: args.realtime,
       payerId: args.userId,
+      ...(args.apiKeyId ? { apiKeyId: args.apiKeyId } : {}),
     });
     if (!opened) return false;
     if (args.reservedCredits) {
@@ -218,6 +267,7 @@ export async function settlePriorVoiceHold(session: {
   voiceSessionStartedAt?: Date | null;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  voiceHoldApiKeyId?: string | null;
 }): Promise<VoiceHoldSettlement> {
   if (session.voiceReservedCredits == null || session.voiceSessionStartedAt == null) return { settled: false };
   const hold: VoiceHold = {
@@ -227,6 +277,7 @@ export async function settlePriorVoiceHold(session: {
     voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
     voiceConnectedAt: session.voiceConnectedAt ?? null,
     voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+    voiceHoldApiKeyId: session.voiceHoldApiKeyId ?? null,
   };
   return settleVoiceHold(hold, lastSeenAt(hold), 'bootstrap');
 }

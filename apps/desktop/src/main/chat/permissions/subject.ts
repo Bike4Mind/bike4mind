@@ -56,6 +56,11 @@ export function permissionSubject(
         commands,
         directories: prompt?.always?.directories ?? [],
         paths: prompt?.always?.paths ?? [],
+        ...(prompt?.always?.globFolders ? { globFolders: prompt.always.globFolders } : {}),
+        ...(prompt?.always?.dotlessGlobFolders ? { dotlessGlobFolders: prompt.always.dotlessGlobFolders } : {}),
+        ungranted: prompt?.always?.ungranted ?? [],
+        ...(prompt?.always?.writes ? { writes: prompt.always.writes } : {}),
+        ...(prompt?.always?.writtenTrees ? { writtenTrees: prompt.always.writtenTrees } : {}),
       },
       ...irreversible,
     };
@@ -96,11 +101,11 @@ export function permissionSubject(
  * consenting to the tool, since a per-site or per-message rule would ask again on the next call.
  */
 export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPrompt): string[] {
-  if (prompt.irreversible || prompt.choice || prompt.askInFull) return [];
+  if (prompt.irreversible || prompt.choice || prompt.askInFull || prompt.allowOnce) return [];
   if (subject.mcp) return [`mcp__${subject.mcp.server}__${cleanToolName(subject.mcp.tool)}`];
   if (subject.shell) {
-    const { commands, directories } = subject.shell;
-    if (!prompt.always || directories.length > 0 || commands.length === 0) return [];
+    const { commands, directories, ungranted } = subject.shell;
+    if (!prompt.always || directories.length > 0 || ungranted?.length || commands.length === 0) return [];
     if (commands.some(command => !command.coverable || command.opaque)) return [];
     // A literal '*' is rule syntax too, including inside shell quotes: an "exact" saved rule
     // would silently cover more than the command the user saw.

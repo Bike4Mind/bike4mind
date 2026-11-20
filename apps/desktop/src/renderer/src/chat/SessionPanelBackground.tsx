@@ -4,6 +4,8 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import type { LoopState } from '@shared/loop';
+import { LoopBar } from './LoopBar';
 import {
   isSpawnedRunning,
   splitTasks,
@@ -18,6 +20,7 @@ import { formatElapsed } from './statusLine';
 import type { BackgroundProcessView } from './useBackgroundProcesses';
 
 export interface BackgroundSectionProps {
+  loop?: LoopState | null;
   processes: readonly BackgroundProcessView[];
   spawned: readonly SpawnedSessionView[];
   onStopProcess: (processId: string) => void;
@@ -30,15 +33,18 @@ export interface BackgroundSectionProps {
 /** "2 running", or "3 finished" once nothing is: the section header's collapsed summary. */
 export function backgroundSummary(
   processes: readonly BackgroundProcessView[],
-  spawned: readonly SpawnedSessionView[]
+  spawned: readonly SpawnedSessionView[],
+  loop?: LoopState | null
 ): string {
   const total = processes.length + spawned.length;
   const running = splitTasks(processes).running.length + spawned.filter(isSpawnedRunning).length;
-  return running > 0 ? `${running} running` : `${total} finished`;
+  const tasks = total > 0 ? (running > 0 ? `${running} running` : `${total} finished`) : '';
+  return [tasks, loop ? `Loop ${loop.phase}` : ''].filter(Boolean).join(', ');
 }
 
 const linkSx = {
   all: 'unset',
+  fontSize: 'xs',
   cursor: 'pointer',
   minWidth: 0,
   overflow: 'hidden',
@@ -118,6 +124,7 @@ function SessionTitle({ entry, onOpen }: { entry: SpawnedSessionView; onOpen: (s
  * panel (Show output), which is wide enough to read them.
  */
 export function BackgroundSection({
+  loop,
   processes,
   spawned,
   onStopProcess,
@@ -134,6 +141,7 @@ export function BackgroundSection({
 
   return (
     <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+      {loop && <LoopBar state={loop} />}
       {commands.running.map(entry => (
         <TaskRow
           key={entry.id}
@@ -173,7 +181,7 @@ export function BackgroundSection({
             }}
             data-testid="session-panel-finished-toggle-btn"
           >
-            <Typography level="body-xs" textColor="inherit" fontWeight="lg">
+            <Typography level="body-xs" textColor="inherit" fontWeight="sm">
               {`Finished ${finishedCount}`}
             </Typography>
             <DisclosureIcon open={finishedOpen} />

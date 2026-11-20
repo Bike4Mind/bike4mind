@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { setAllowOrigin } from '@server/utils/allowOrigin';
 
 /**
  * Route-scoped CORS for the public embed surfaces. A plain Express handler (no
@@ -26,7 +27,7 @@ export function embedCors(opts: { methods?: string } = {}) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = req.headers.origin;
     if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
+      setAllowOrigin(req, res, origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', allowMethods);
       res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);

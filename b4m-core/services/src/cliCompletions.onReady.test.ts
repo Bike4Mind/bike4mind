@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -68,6 +74,7 @@ function buildDb(balanceAfterHold = 100_000) {
       creditTransactions: {} as never,
       users: users as never,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     },
   };
 }

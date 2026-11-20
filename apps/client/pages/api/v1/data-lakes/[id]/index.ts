@@ -19,9 +19,9 @@ import {
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { loadRegistryLakeStats, toPublicDataLake } from '@server/dataLakes/toPublicDataLake';
 
 const handler = nextRouteForContract(getDataLakeContract, {

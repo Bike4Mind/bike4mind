@@ -40,6 +40,31 @@ describe('AgentModel', () => {
     }
   });
 
+  describe('confidence gate profile persistence', () => {
+    it('round-trips zero, off and false without applying defaults', async () => {
+      const created = await Agent.create({
+        ...baseAgentData,
+        confidenceGateThreshold: 0,
+        confidenceGateMode: 'off',
+        confidenceGateSelfReport: false,
+      });
+      const loaded = await Agent.findById(created.id);
+      expect(loaded).toMatchObject({
+        confidenceGateThreshold: 0,
+        confidenceGateMode: 'off',
+        confidenceGateSelfReport: false,
+      });
+    });
+
+    it('leaves a legacy agent gate configuration absent', async () => {
+      const created = await Agent.create(baseAgentData);
+      const loaded = await Agent.findById(created.id);
+      expect(loaded?.confidenceGateThreshold).toBeUndefined();
+      expect(loaded?.confidenceGateMode).toBeUndefined();
+      expect(loaded?.confidenceGateSelfReport).toBeUndefined();
+    });
+  });
+
   describe('projectId optionality', () => {
     it('should create an agent without projectId', async () => {
       const agent = await Agent.create(baseAgentData);

@@ -6,12 +6,12 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { HtmlArtifact } from '@bike4mind/common';
 
 vi.mock('dompurify', () => ({ default: { sanitize: vi.fn((content: string) => content) } }));
-vi.mock('@client/app/utils/artifactParser', () => ({
+vi.mock('@bike4mind/server-utils/app/utils/artifactParser', () => ({
   validateArtifactContent: vi.fn(() => ({ isValid: true, errors: [] })),
 }));
 
 import HtmlArtifactViewer from '../HtmlArtifactViewer';
-import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { validateArtifactContent } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (

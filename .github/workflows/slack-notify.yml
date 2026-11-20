@@ -60,6 +60,9 @@ on:
         description: 'Slack webhook URL for notifications'
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest

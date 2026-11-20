@@ -1,3 +1,4 @@
+import { toCsvCell } from '@client/app/utils/csv';
 import { DataSourceType, DataSource } from './types';
 import earningsData from '../data/earnings-targets.json';
 import pressData from '../data/press-targets.json';
@@ -35,21 +36,10 @@ export function downloadTemplateData() {
 
   const rows: string[] = [];
 
-  function csvEscape(value: string) {
-    if (value == null) return '';
-    // Escape double quotes by doubling them, and wrap in quotes if contains comma, quote, or newline
-    const needsQuotes = /[",\n]/.test(value);
-    let escaped = value.replace(/"/g, '""');
-    if (needsQuotes) {
-      escaped = `"${escaped}"`;
-    }
-    return escaped;
-  }
-
   Object.values(DATA_SOURCES).forEach(source => {
     source.targets.forEach(target => {
       const values = [target.company, target.ticker, target.url, target.category, source.title, source.description].map(
-        v => csvEscape(String(v ?? ''))
+        v => toCsvCell(String(v ?? ''))
       );
       rows.push(values.join(','));
     });

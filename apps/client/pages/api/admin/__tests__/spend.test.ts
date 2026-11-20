@@ -8,8 +8,15 @@ import { ApiKeyScope, type ISpendSummary } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (middleware: (typeof middlewares)[number]) => {
+      middlewares.push(middleware);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -50,7 +57,17 @@ const summary = (over: Partial<ISpendSummary> = {}): ISpendSummary => ({
   latency: { p50: 500, p95: 1500 },
   status: { total: 100, errors: 2, timeouts: 1, refusals: 5, degenerates: 3 },
   byModel: [{ provider: 'bedrock', model: 'opus', requests: 60, cogsUsd: 12, creditsCharged: 1200 }],
-  byAccount: [{ ownerId: 'user-1', ownerType: 'User', requests: 100, cogsUsd: 20, creditsCharged: 2000 } as never],
+  byAccount: [
+    {
+      ownerId: 'user-1',
+      ownerType: 'User',
+      requests: 100,
+      cogsUsd: 20,
+      creditsCharged: 2000,
+      failures: 3,
+      p95LatencyMs: 1500,
+    } as never,
+  ],
   dailyCost: [{ day: '2026-08-01', cogsUsd: 20 }],
   ...over,
 });
@@ -83,7 +100,7 @@ describe('GET /api/admin/spend', () => {
 
   it('rejects a non-admin', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockSpendSummary).not.toHaveBeenCalled();
   });
 
@@ -104,6 +121,44 @@ describe('GET /api/admin/spend', () => {
     const { run } = call({ query: { userFilter: 'u-9', modelFilter: 'opus' } });
     await run();
     expect(mockSpendSummary.mock.calls[0][0]).toMatchObject({ userId: 'u-9', model: 'opus' });
+  });
+
+  it('labels a substituted model row with what ran and keeps ids unique', async () => {
+    mockSpendSummary.mockResolvedValue(
+      summary({
+        byModel: [
+          { provider: 'bedrock', model: 'opus', requests: 1, cogsUsd: 1, creditsCharged: 1 },
+          {
+            provider: 'bedrock',
+            model: 'haiku',
+            executedProvider: 'bedrock',
+            executedModel: 'haiku',
+            requests: 1,
+            cogsUsd: 1,
+            creditsCharged: 1,
+          },
+          {
+            provider: 'bedrock',
+            model: 'opus',
+            executedProvider: 'openai',
+            executedModel: 'gpt-4o-mini',
+            requests: 1,
+            cogsUsd: 1,
+            creditsCharged: 1,
+          },
+        ],
+      })
+    );
+    const { res, run } = call({ query: {} });
+    await run();
+    const rows = res._getJSONData().byModel;
+    expect(rows.map((r: { modelName: string }) => r.modelName)).toEqual([
+      'bedrock / opus',
+      'bedrock / haiku',
+      'bedrock / opus (ran: openai / gpt-4o-mini)',
+    ]);
+    expect(rows[2].modelId).toBe('bedrock/opus->openai/gpt-4o-mini');
+    expect(new Set(rows.map((r: { modelId: string }) => r.modelId)).size).toBe(3);
   });
 
   it('shapes SpendData: derived KPIs, resolved account name, and model share', async () => {
@@ -191,5 +246,55 @@ describe('GET /api/admin/spend', () => {
     const { res, run } = call({ query: {} });
     await run();
     expect(res._getJSONData().byAccount[0].accountName).toBe('Northwind Labs');
+  });
+
+  describe('account threshold flags', () => {
+    // 30-day window, so $50/day is $1500 over the window.
+    const window = { dateFrom: '2026-07-08T00:00:00Z', dateTo: '2026-08-07T00:00:00Z' };
+    const bucket = (over: Record<string, unknown>) => ({
+      ownerType: 'User',
+      requests: 100,
+      cogsUsd: 10,
+      creditsCharged: 1000,
+      failures: 0,
+      p95LatencyMs: 1000,
+      ...over,
+    });
+
+    async function rowsFor(accounts: Array<Record<string, unknown>>) {
+      mockSpendSummary.mockResolvedValue(summary({ byAccount: accounts as never }));
+      mockResolveUserNames.mockResolvedValue(new Map());
+      const { res, run } = call({ query: window });
+      await run();
+      return Object.fromEntries(
+        (res._getJSONData().byAccount as Array<{ accountId: string }>).map(r => [r.accountId, r])
+      ) as Record<string, { flags: string[]; errorRate: number; p95LatencyMs: number }>;
+    }
+
+    it('flags an account over every limit and leaves a healthy one unflagged', async () => {
+      const rows = await rowsFor([
+        bucket({ ownerId: 'hot', cogsUsd: 1600, failures: 6, p95LatencyMs: 130_000 }),
+        bucket({ ownerId: 'calm', cogsUsd: 1400, failures: 5, p95LatencyMs: 120_000 }),
+      ]);
+
+      expect(rows.hot.flags).toEqual(['dailyCost', 'errorRate', 'p95Latency']);
+      expect(rows.hot.errorRate).toBeCloseTo(0.06);
+      expect(rows.hot.p95LatencyMs).toBe(130_000);
+      // Exactly at a limit is not over it.
+      expect(rows.calm.flags).toEqual([]);
+    });
+
+    it('needs a minimum request count before flagging error rate or latency', async () => {
+      const rows = await rowsFor([bucket({ ownerId: 'tiny', requests: 3, failures: 3, p95LatencyMs: 200_000 })]);
+      expect(rows.tiny.errorRate).toBe(1);
+      expect(rows.tiny.flags).toEqual([]);
+    });
+
+    it('does not scale a sub-day window up to a daily rate', async () => {
+      mockSpendSummary.mockResolvedValue(summary({ byAccount: [bucket({ ownerId: 'u', cogsUsd: 40 })] as never }));
+      const { res, run } = call({ query: { dateFrom: '2026-08-07T00:00:00Z', dateTo: '2026-08-07T01:00:00Z' } });
+      await run();
+      expect(res._getJSONData().byAccount[0].flags).toEqual([]);
+    });
   });
 });

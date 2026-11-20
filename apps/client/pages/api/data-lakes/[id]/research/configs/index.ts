@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import {
@@ -9,12 +9,18 @@ import {
   dataLakeRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
-import { RESEARCH_RUN_TRIGGERS } from '@bike4mind/common';
+import {
+  RESEARCH_RUN_TRIGGERS,
+  researchConfigEnvelopeResponseSchema,
+  researchConfigListResponseSchema,
+  withResearchFeedStatus,
+} from '@bike4mind/common';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 
 const CreateInput = ResearchLeversInput.merge(ResearchScheduleInput).extend({
   name: z.string(),
@@ -44,7 +50,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       dataLakeResearchService.listResearchConfigs(lake.id, { db }),
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
     ]);
-    return res.json({ data: configs, pendingProposals: pendingByLake[lake.id] ?? 0 });
+    return respond(res, researchConfigListResponseSchema, {
+      data: configs.map(c => withResearchFeedStatus(c, dataLakeResearchService.feedFingerprintLevers(c))),
+      pendingProposals: pendingByLake[lake.id] ?? 0,
+    });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -66,7 +75,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return created;
     });
-    return res.status(201).json({ data: config });
+    return respond(
+      res,
+      researchConfigEnvelopeResponseSchema,
+      { data: withResearchFeedStatus(config, dataLakeResearchService.feedFingerprintLevers(config)) },
+      201
+    );
   });
 
 export const config = {

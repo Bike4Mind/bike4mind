@@ -1,7 +1,7 @@
 import { FabFile } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import {
   claimModerationScan,
   recordLandedObject,
@@ -9,8 +9,8 @@ import {
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
-} from '@server/s3/moderationScan';
-import { sendToClient } from '@server/websocket/utils';
+} from '@bike4mind/server-utils/s3/moderationScan';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -81,7 +81,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     // Version reconciliation owns its compare-and-set. A separate HEAD followed by an unconditional
     // version write in the claim could rewind a newer event's version while this request waited.
     try {
-      await recordLandedObject(fabFile._id, objectKey);
+      await recordLandedObject(fabFile._id, objectKey, req.logger);
     } catch (error) {
       req.logger.warn('On-demand moderation could not reconcile the current object; leaving it pending', {
         fabFileId,
@@ -111,6 +111,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
         claimedAt = new Date();
         if (!(await claimModerationScan(fabFile._id, claimedAt))) return settleOnOwnerVerdict('claim lost on retry');
         result = await scan();
+      }
+      if (result.moderationStatus === 'pending') {
+        // The uploader's moderation allowance is spent: not a failure, so no attempt is counted and a
+        // call after the window resets scans the file.
+        await releaseModerationClaim(fabFile._id, claimedAt, { countAttempt: false });
+        return res.json({ moderationStatus: 'pending' });
       }
       // The byte-sniffed type rides in the guarded write: the S3 handler persists it through its own
       // save, but it will have lost the claim and skipped the scan by now.

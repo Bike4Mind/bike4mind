@@ -14,8 +14,9 @@
  * still receive the markers (otherwise we silently regress caching).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ChatModels, type ICacheStrategy } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import AnthropicBedrockBackend from './anthropic';
 import type { IMessage } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '../backend';
@@ -226,15 +227,17 @@ describe('translateStreamChunk', () => {
     expect(c?.tool).toEqual({ name: 'get_weather', id: 'tool_1' });
   });
 
-  it('content_block_start thinking opens a <think> block', () => {
-    expect(first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })?.chunkText).toBe(
-      '<think>'
-    );
+  it('content_block_start thinking defers <think> to the first reasoning text', () => {
+    expect(first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })?.chunkText).toBe('');
+    expect(
+      first({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } })?.chunkText
+    ).toBe('<think>hmm');
   });
 
   it('content_block_stop closes an open <think> block and resets thinking state', () => {
     // Same backend instance (isInThinkingBlock is stateful): open thinking, then stop.
     first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } });
+    first({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } });
     expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('</think>');
     // Flag reset - a subsequent stop with no open thinking block emits no close tag.
     expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('');
@@ -407,9 +410,33 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
     );
   });
 
+  it('warns before throwing the refusal, naming the model', () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta)).toThrow(
+        /safety classifier refusal/
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Safety classifier refusal'), {
+        model: ChatModels.CLAUDE_FABLE_5_BEDROCK,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('does not throw for a refusal from a model outside the fallback set', () => {
     expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
     expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
+  });
+
+  it('settles a Bedrock Fable refusal when the caller has no fallback loop', () => {
+    const settle = { settleRefusal: true };
+    expect(
+      backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta, settle).chunk?.stopReason
+    ).toBe('refusal');
+    expect(backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse, settle).chunk?.stopReason).toBe(
+      'refusal'
+    );
   });
 });
 

@@ -6,12 +6,12 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { mfaService } from '@bike4mind/services';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@server/utils/adminAudit';
+import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),

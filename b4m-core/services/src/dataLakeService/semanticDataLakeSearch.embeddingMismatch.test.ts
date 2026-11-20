@@ -1,22 +1,23 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: () => 'openai',
+  bindEmbeddingModel: (_registry: unknown, model: string) => {
+    return {
+      model,
+      maxInputTokens: 8192,
+      embed: async (inputs: readonly string[]) => ({
+        vectors: await Promise.all(inputs.map(async () => h.queryVector)),
+      }),
+    };
+  },
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The sibling suite mocks computeCosineSimilarity away, so it cannot prove any of the ranking
 // behavior below. Here only the provider/embedding plumbing is mocked and the REAL cosine runs,
 // which is the whole point: the headline case turns on two vectors of IDENTICAL width.
 const h = vi.hoisted(() => ({ queryVector: [] as number[] }));
-
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return {
-    ...actual,
-    getProviderFromModel: () => 'openai',
-    EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => h.queryVector };
-      }
-    },
-  };
-});
 
 import {
   fileScopedSemanticSearch,

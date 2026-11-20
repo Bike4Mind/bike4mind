@@ -1,0 +1,26 @@
+/*
+ * The document is exactly the window and never scrolls; every screen scrolls inside its own panes.
+ *
+ * Without this the document grew whenever anything was laid out below the window - most often a
+ * popper Joy portals to the body, which is outside chatShellRootSx's clip - and a wheel that ran
+ * past the end of the transcript then chained out to it, carrying the whole app up off the window
+ * and leaving empty background behind. The body is positioned so those portaled boxes resolve
+ * against it and are clipped with everything else; `clip` rather than `hidden` so a
+ * `scrollIntoView` cannot shift it either. agentBrowser.ts's avoidPageModifier relies on the
+ * document never scrolling.
+ */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  position: relative;
+  overflow: clip;
+}

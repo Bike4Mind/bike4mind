@@ -3,7 +3,7 @@ import { getWhatsNewMediaContract, isImageServeable, NotFoundError, releaseNoteM
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { ownModalMediaKey } from '@server/releaseNotes/publicMedia';
 

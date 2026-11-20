@@ -36,8 +36,8 @@ export enum SettingsSubTab {
  * top-level Profile tabs - personal Custom Instructions (user-facing system
  * prompts), Email Inbox, and the flag-gated Mementos - so the top strip stays
  * short. The sub-tab is driven by the `?subtab=` search param so each panel
- * remains deep-linkable; an absent param resolves to General, which preserves
- * the existing `?section=security` MFA deep link.
+ * remains deep-linkable; an absent param resolves to General. The old
+ * `?section=security` deep link is redirected to the Security tab by the profile route.
  */
 const SettingsTabContent = () => {
   const { currentUser } = useUser();

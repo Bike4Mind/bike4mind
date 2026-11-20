@@ -79,6 +79,18 @@ describe('handleFeedbackCommand', () => {
     expect(h.createFeedbackOnServer.mock.calls[0][0]).not.toHaveProperty('questId');
   });
 
+  it('sends the client context with the model and app version the cache has', async () => {
+    queryClient.setQueryData(['appVersion'], { version: '9.9.9' });
+
+    await run(queryClient, 'where did this come from');
+
+    expect(h.createFeedbackOnServer.mock.calls[0][0].clientContext).toMatchObject({
+      platform: 'web',
+      appVersion: '9.9.9',
+      path: window.location.pathname,
+    });
+  });
+
   it('omits contextQuestId when nothing has been asked yet', async () => {
     await run(queryClient, 'first impressions are good');
 

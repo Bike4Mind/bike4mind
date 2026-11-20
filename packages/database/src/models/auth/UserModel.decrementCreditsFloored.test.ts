@@ -55,3 +55,28 @@ describe('UserRepository.decrementCreditsFloored', () => {
     expect(await userRepository.decrementCreditsFloored(String(new mongoose.Types.ObjectId()), 10)).toBe(0);
   });
 });
+
+describe('UserRepository.decrementCreditsIfCovered', () => {
+  it('debits when the balance covers the whole amount', async () => {
+    const id = await seed(40);
+    expect(await userRepository.decrementCreditsIfCovered(id, 40)).toBe(true);
+    expect(await balanceOf(id)).toBe(0);
+  });
+
+  it('leaves a short balance untouched', async () => {
+    const id = await seed(30);
+    expect(await userRepository.decrementCreditsIfCovered(id, 40)).toBe(false);
+    expect(await balanceOf(id)).toBe(30);
+  });
+
+  it('lets only covered debits through under concurrency', async () => {
+    const id = await seed(100);
+    const taken = await Promise.all(Array.from({ length: 5 }, () => userRepository.decrementCreditsIfCovered(id, 30)));
+    expect(taken.filter(Boolean)).toHaveLength(3);
+    expect(await balanceOf(id)).toBe(10);
+  });
+
+  it('resolves false for a missing user', async () => {
+    expect(await userRepository.decrementCreditsIfCovered(String(new mongoose.Types.ObjectId()), 10)).toBe(false);
+  });
+});

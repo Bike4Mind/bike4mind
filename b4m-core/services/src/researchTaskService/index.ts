@@ -9,3 +9,4 @@ export * from './remove';
 export * from './retry';
 export * from './processDiscoveredLinks';
 export * from './downloadRelevantLinks';
+export * from './deepResearchIntoQuest';

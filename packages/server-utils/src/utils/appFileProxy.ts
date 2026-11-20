@@ -19,6 +19,16 @@ export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
 
 export type ProxyTarget = { bucket: 'appFiles' | 'generated'; key: string };
 
+/**
+ * Maps an app-files bucket key to its CDN request path (no leading slash). Server-side twin of
+ * toCdnPath in apps/client/app/utils/s3.ts; a parity test keeps the two in sync.
+ */
+export function appFileKeyToCdnPath(key: string): string {
+  if (key.startsWith('organizations/')) return `org-files/${key.slice('organizations/'.length)}`;
+  if (key.startsWith('admin/logos/')) return `admin-logos/${key.slice('admin/logos/'.length)}`;
+  return key;
+}
+
 export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
   if (cdnPath.startsWith('generated/')) {
     // infra: generated -> generatedImagesBucket with `^/generated/(.*)$` -> `/$1`

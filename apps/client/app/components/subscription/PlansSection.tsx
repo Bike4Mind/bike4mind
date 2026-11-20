@@ -1,5 +1,6 @@
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
-import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
@@ -9,24 +10,29 @@ import {
   pickSubscriptionByPrice,
   resolveSubscriptionSource,
   SubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
+import {
+  professionalPriceIdForStage,
+  SUBSCRIPTION_PLANS,
+} from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
+import PayNowButton from './PayNowButton';
 import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
+import { BILLING_PLANS_SURFACE } from './billingUpsell';
 
 // Bullets, credits and copy come from the shared plan table so this section and the server-side plan
 // map cannot drift; only the price id is re-picked by runtime stage below.
@@ -58,7 +64,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
-  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
+  const hasStarterCredits = useSignupGrantCredits() > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';
@@ -105,12 +111,8 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
     () => [
       {
         ...PROFESSIONAL_PLAN,
-        // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
-        // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
-        // stage here to match the rest of this section.
-        priceId: isTestMode
-          ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-          : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
+        // Selected by runtime stage here to match the rest of this section.
+        priceId: professionalPriceIdForStage(isTestMode),
       },
     ],
     [isTestMode]
@@ -237,10 +239,14 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                 priceId={plan.priceId}
                 actionButton={
                   <Stack gap={1} direction={{ xs: 'column', sm: 'row' }} sx={{ '& > *': { flex: 1 } }}>
+                    {isStripeManaged && hasPaymentIssue && isCurrentPlan.subscriptionId && (
+                      <PayNowButton subscriptionId={isCurrentPlan.subscriptionId} testId="plan-card-pay-now-btn" />
+                    )}
                     {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
                     <SubscribeButton
                       priceId={plan.priceId}
                       planName={plan.name}
+                      surface={BILLING_PLANS_SURFACE}
                       onSubscriptionChanged={onSubscriptionChanged}
                       cancellableSubscriptions={cancellableSubscriptions}
                     />
@@ -268,6 +274,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
               ? `Up to ${teamMinSeats} people at one flat price`
               : `Up to ${teamMinSeats} people at one flat price; $${centsToDollars(teamSeatPrice).toFixed(2)} per month for each person after that`,
             'Shared credit pool with 3-month rollover',
+            'Questmaster included',
             'Advanced Projects with RAG & Auto-Summary',
             'Team workspace & knowledge management',
             'Automated tagging & organization',

@@ -12,13 +12,15 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import type { Request } from 'express';
 
 /**
@@ -50,6 +52,9 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
 
   let refund: { owner: StorageOwner; bytes: number } | undefined;
 
+  // Flushed after the transaction settles so the CloudFront call stays out of it; a rolled-back
+  // attempt still flushes because the deleted copy's bytes do not come back.
+  const generatedCdn = createCdnInvalidationBatch('generated-copy', req.logger);
   const { action: deleteAction, references } = await withTransaction(async session => {
     const result = await fabFilesService.deleteFabFile(
       userId,
@@ -64,7 +69,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
-        generatedCopies: getGeneratedCopyStore(),
+        generatedCopies: getGeneratedCopyStore({ batch: generatedCdn }),
         onDeleteComplete: async (deleted, size) => {
           refund = { owner: storageOwnerOf(deleted), bytes: size };
         },
@@ -93,7 +98,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
     }
 
     return result;
-  });
+  }).finally(() => generatedCdn.flush());
 
   // After the commit, outside the transaction's session (see cleanUpDeletedFileReferences).
   if (references) {
@@ -114,6 +119,25 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
         error: error instanceof Error ? error.message : 'Unknown error',
         owner,
         sizeToDeduct: bytes,
+      });
+    }
+  }
+
+  // A published file snapshot outlives its source, so take the caller's own pages down with it, as the
+  // bulk delete does. Only on 'deleted': an unshare leaves the owner's file, and their pages, in place.
+  if (deleteAction === 'deleted') {
+    // The delete is already committed, so a failure is logged rather than failing the request.
+    try {
+      await unpublishUserArtifactsBySource(
+        userId,
+        { kind: 'fabfile', fabFileIds: [fabFileId] },
+        { logger: req.logger }
+      );
+    } catch (error) {
+      req.logger.error('Error unpublishing pages after single file delete:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        fabFileId,
+        userId,
       });
     }
   }

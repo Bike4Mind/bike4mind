@@ -1,11 +1,13 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getQaTestHistory } from '@server/qa/reads';
 
 /** GET /api/admin/qa/tests?testKey= . Query param, not a path segment: keys contain / > ? #. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const testKey = req.query.testKey;
   if (typeof testKey !== 'string' || testKey.length === 0 || testKey.length > 1000) {
     throw new BadRequestError('testKey is required');

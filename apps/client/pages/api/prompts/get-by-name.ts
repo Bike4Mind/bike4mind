@@ -1,6 +1,8 @@
 import { Prompt } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
+import { promptResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 const GetPromptByNameSchema = z.object({
@@ -15,7 +17,7 @@ const handler = baseApi().get(
       name,
     });
 
-    return res.json(prompt);
+    return respond(res, promptResponseSchema.nullable(), prompt?.toJSON() ?? null);
   })
 );
 

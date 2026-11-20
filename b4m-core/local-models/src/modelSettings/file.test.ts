@@ -1,0 +1,381 @@
+import { describe, expect, it } from 'vitest';
+import {
+  isModelSettingsId,
+  parseModelSettingsFile,
+  parseModelSettingsInput,
+  parseModelSettingsJson,
+  modelSettingsJsonProblem,
+  ModelSettingsEncodingError,
+  changedJsonPath,
+  quotedForMessage,
+  storedModelEntry,
+  type ModelSettings,
+} from './file';
+
+const QWEN = 'local:ollama:qwen3.8:27b';
+
+function settingsOf(raw: unknown): [string, ModelSettings][] {
+  const parsed = parseModelSettingsFile(raw);
+  if (!parsed || parsed.invalid.size > 0) throw new Error(`not read: ${JSON.stringify(parsed?.invalid)}`);
+  return [...parsed.settings];
+}
+
+describe('parseModelSettingsJson', () => {
+  const text = `{"models": {"${QWEN}": {"effort": "high"}}}`;
+  const BOM = String.fromCharCode(0xfeff);
+
+  it('reads the same settings with or without a leading byte order mark', () => {
+    expect(parseModelSettingsJson(text)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+    expect(parseModelSettingsJson(`${BOM}${text}`)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+  });
+
+  it('throws as JSON.parse does for text that is not JSON, a lone mark, or a mark past the start', () => {
+    expect(() => parseModelSettingsJson('{"models": {')).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(BOM)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(`${BOM}${BOM}${text}`)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(` ${BOM}${text}`)).toThrow(SyntaxError);
+  });
+
+  const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  const utf16be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+
+  it.each([
+    ['UTF-16 LE bytes read as UTF-8', utf16le.toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-8', utf16be.toString('utf8')],
+    ['a lone UTF-16 LE mark read as UTF-8', Buffer.from([0xff, 0xfe]).toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-16 LE', utf16be.toString('utf16le')],
+  ])('names the encoding and says to save as UTF-8 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+      expect((error as Error).message).toContain('UTF-16');
+      expect((error as Error).message).toContain('UTF-8');
+    }
+  });
+
+  it.each([
+    ['UTF-16 LE without a mark', Buffer.from(text, 'utf16le').toString('utf8')],
+    ['UTF-16 BE without a mark', Buffer.from(text, 'utf16le').swap16().toString('utf8')],
+  ])('names UTF-16 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+    }
+  });
+
+  const utf32le = Buffer.alloc(text.length * 4);
+  for (let i = 0; i < text.length; i++) utf32le.writeUInt32LE(text.charCodeAt(i), i * 4);
+  const utf32be = Buffer.from(utf32le).swap32();
+
+  it.each([
+    ['UTF-32 LE with a mark', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]), utf32le])],
+    ['UTF-32 BE with a mark', Buffer.concat([Buffer.from([0, 0, 0xfe, 0xff]), utf32be])],
+    ['UTF-32 LE without a mark', utf32le],
+    ['UTF-32 BE without a mark', utf32be],
+  ])('names UTF-32, not UTF-16, for %s', (_name, bytes) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(bytes.toString('utf8'));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-32, which cannot be read. Save it as UTF-8');
+  });
+
+  it.each([
+    ['a file of NUL bytes', '\u0000'.repeat(64)],
+    ['UTF-8 JSON followed by NUL padding', `${text}${'\u0000'.repeat(8)}`],
+    ['truncated UTF-8 followed by one NUL', `${text.slice(0, 20)}\u0000`],
+  ])('reports %s as not valid JSON, not as another encoding', (_name, damaged) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(damaged);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SyntaxError);
+    expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+  });
+
+  it('names UTF-16, not UTF-32, for UTF-16 LE text with a wide character right after an ASCII one', () => {
+    const decoded = Buffer.from('{\u{4E00}: 1}', 'utf16le').toString('utf8');
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+  });
+
+  it('reports ordinary bad JSON as not valid JSON, including a single replacement character', () => {
+    for (const bad of ['{"models": ', '\u{FFFD}{}', `{"a": "\u{FFFD}\u{FFFD}"`]) {
+      let thrown: unknown;
+      try {
+        parseModelSettingsJson(bad);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SyntaxError);
+      expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+      expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+    }
+  });
+});
+
+describe('parseModelSettingsFile', () => {
+  it('reads known fields, and keeps unknown fields and unrecognized ids as written without reading them', () => {
+    const models = JSON.parse(
+      `{"${QWEN}": {"generation": {"temperature": 0.6, "bogus": 1}, "effort": "high", "extra": true},
+        "claude-sonnet": {"generation": {"temperature": "hot"}},
+        "local:ollama:newer": {"futureOnly": 1},
+        "__proto__": {"effort": "wild"}}`
+    ) as Record<string, unknown>;
+    expect(Object.hasOwn(models, '__proto__')).toBe(true);
+    const parsed = parseModelSettingsFile({ version: 9, models });
+    if (!parsed || parsed.invalid.size > 0) throw new Error('not read');
+    expect([...parsed.settings]).toEqual([[QWEN, { generation: { temperature: 0.6 }, effort: 'high' }]]);
+    expect(Object.fromEntries(parsed.entries)).toEqual(models);
+    expect(parsed.rest).toEqual({ version: 9 });
+  });
+
+  it.each([
+    [{ generation: { temperature: '0.6' } }, 'generation.temperature'],
+    [{ generation: { temperature: null } }, 'generation.temperature'],
+    [{ generation: 'warm' }, 'generation'],
+    [{ effort: 3 }, 'effort'],
+    [{ context: 'auto' }, 'context'],
+    [{ context: { mode: 1 } }, 'context'],
+    [{ context: { mode: 'fixed', tokens: '400' } }, 'context'],
+    [{ context: { mode: 'auto', maxTokens: null } }, 'context'],
+    [{ draftTokens: '2' }, 'draftTokens'],
+    [{ keepAlive: '1h' }, 'keepAlive'],
+    [{ draftTokens: Infinity }, 'draftTokens'],
+    [{ keepAlive: -Infinity }, 'keepAlive'],
+    [{ generation: { temperature: Infinity } }, 'generation.temperature'],
+    [{ context: { mode: 'fixed', tokens: Infinity } }, 'context'],
+    [{ context: { mode: 'auto', maxTokens: Infinity } }, 'context'],
+    [{ context: { mode: 'fixed', tokens: 4096, maxTokens: 'x' } }, 'context'],
+    [{ context: { mode: 'auto', tokens: [4096] } }, 'context'],
+    [7, null],
+  ])('names the known field of %j that holds the wrong type for that model only', (entry, field) => {
+    const parsed = parseModelSettingsFile({ models: { 'local:ollama:other': { effort: 'low' }, [QWEN]: entry } });
+    expect([...(parsed?.invalid ?? [])]).toEqual([[QWEN, field]]);
+    expect([...(parsed?.settings ?? [])]).toEqual([['local:ollama:other', { effort: 'low' }]]);
+    expect(parsed?.entries.get(QWEN)).toEqual(entry);
+  });
+
+  it.each([
+    ['generation.topK', { generation: { topK: 1.5 } }, 1.5],
+    ['generation.temperature', { generation: { temperature: 9 } }, 9],
+    ['effort', { effort: 'ultra' }, 'ultra'],
+    ['effort', { effort: 'default' }, 'default'],
+    ['context', { context: { mode: 'fixed', tokens: 400 } }, { mode: 'fixed', tokens: 400 }],
+    ['context', { context: { mode: 'stretch', tokens: 'any' } }, { mode: 'stretch', tokens: 'any' }],
+    ['draftTokens', { draftTokens: 99 }, 99],
+    ['keepAlive', { keepAlive: 2 }, 2],
+  ])('lists %s of the right type beyond this version as unsupported and leaves it unset', (field, entry, value) => {
+    const parsed = parseModelSettingsFile({ models: { [QWEN]: entry } });
+    if (!parsed || parsed.invalid.size > 0) throw new Error('not read');
+    expect(parsed.unsupported.get(QWEN)).toEqual([{ field, value }]);
+    expect(parsed.settings.has(QWEN)).toBe(false);
+  });
+
+  it('reads the supported fields of an entry that also holds an unsupported one', () => {
+    expect(settingsOf({ models: { [QWEN]: { effort: 'ultra', keepAlive: -1, generation: { topK: 20 } } } })).toEqual([
+      [QWEN, { generation: { topK: 20 }, keepAlive: -1 }],
+    ]);
+  });
+
+  it.each([null, 'text', [], { models: [] }, { models: 'x' }, {}, { model: {} }])(
+    'does not take %j for a file',
+    raw => {
+      expect(parseModelSettingsFile(raw)).toBeNull();
+    }
+  );
+
+  it('reads a file with no models as no defaults', () => {
+    expect(settingsOf({ models: {} })).toEqual([]);
+  });
+});
+
+describe('quotedForMessage', () => {
+  it('quotes a value as JSON on one line and cuts it to the limit with an ASCII ellipsis', () => {
+    expect(quotedForMessage('local:ollama:a\nb')).toBe('"local:ollama:a\\nb"');
+    const long = quotedForMessage(`local:ollama:${'x'.repeat(1000)}`);
+    expect(long).toHaveLength(120);
+    expect(long.endsWith('...')).toBe(true);
+  });
+});
+
+describe('changedJsonPath', () => {
+  it('names where a value does not survive a JSON round trip', () => {
+    const value = { a: [1, { b: 'c' }], d: null, e: -0 };
+    expect(changedJsonPath(value, JSON.parse(JSON.stringify(value)))).toBeNull();
+    const large = { a: [1, { b: Infinity }] };
+    expect(changedJsonPath(large, JSON.parse(JSON.stringify(large)))).toEqual(['a', '1', 'b']);
+    expect(changedJsonPath({ a: 1 }, { a: 1, b: 2 })).toEqual([]);
+    expect(changedJsonPath([1], { 0: 1 })).toEqual([]);
+  });
+});
+
+describe('storedModelEntry', () => {
+  it('writes the new settings over the known fields and keeps the unknown ones, inside generation too', () => {
+    expect(
+      storedModelEntry(
+        { generation: { temperature: 0.6, bogus: [1] }, effort: 'high', futureOnly: { a: 1 } },
+        { generation: { topK: 20 }, keepAlive: -1 }
+      )
+    ).toEqual({ futureOnly: { a: 1 }, generation: { bogus: [1], topK: 20 }, keepAlive: -1 });
+  });
+
+  it('keeps a value beyond this version unless the new settings set that field', () => {
+    const stored = {
+      generation: { temperature: 0.6, topK: 1.5 },
+      effort: 'ultra',
+      context: { mode: 'stretch' },
+      draftTokens: 99,
+      keepAlive: 2,
+    };
+    expect(storedModelEntry(stored, { generation: { temperature: 0.7 } })).toEqual({
+      ...stored,
+      generation: { topK: 1.5, temperature: 0.7 },
+    });
+    expect(storedModelEntry(stored, { effort: 'low', keepAlive: -1, generation: { topK: 20 } })).toEqual({
+      generation: { topK: 20 },
+      effort: 'low',
+      context: { mode: 'stretch' },
+      draftTokens: 99,
+      keepAlive: -1,
+    });
+  });
+
+  it('keeps unknown keys inside context when a new context is written', () => {
+    expect(
+      storedModelEntry(
+        { context: { mode: 'fixed', tokens: 32768, rope: { factor: 2 } } },
+        { context: { mode: 'auto', maxTokens: 65536 } }
+      )
+    ).toEqual({ context: { rope: { factor: 2 }, mode: 'auto', maxTokens: 65536 } });
+  });
+
+  it('writes a stored context back as it was when the new settings hold the same choice', () => {
+    const stored = { context: { mode: 'fixed', tokens: 8192, maxTokens: 4096 }, effort: 'low' };
+    expect(storedModelEntry(stored, { context: { mode: 'fixed', tokens: 8192 }, effort: 'high' })).toEqual({
+      context: stored.context,
+      effort: 'high',
+    });
+    expect(storedModelEntry(stored, { context: { mode: 'fixed', tokens: 16384 } })).toEqual({
+      context: { mode: 'fixed', tokens: 16384 },
+    });
+  });
+
+  it('leaves the extra keys of a context this version cannot use behind when a new one is written', () => {
+    expect(
+      storedModelEntry({ context: { mode: 'ratio', ratio: 0.5 } }, { context: { mode: 'fixed', tokens: 4096 } })
+    ).toEqual({ context: { mode: 'fixed', tokens: 4096 } });
+  });
+
+  it('keeps an entry that only holds unknown fields after a clear, and drops one with nothing left', () => {
+    expect(storedModelEntry({ effort: 'low', futureOnly: true }, {})).toEqual({ futureOnly: true });
+    expect(storedModelEntry({ effort: 'low' }, {})).toBeUndefined();
+    expect(storedModelEntry(undefined, { effort: 'low' })).toEqual({ effort: 'low' });
+  });
+});
+
+describe('parseModelSettingsInput', () => {
+  it('accepts a full set and treats {} as a clear', () => {
+    expect(parseModelSettingsInput({ generation: { topP: 0.9 }, effort: 'low' })).toEqual({
+      generation: { topP: 0.9 },
+      effort: 'low',
+    });
+    expect(parseModelSettingsInput({})).toEqual({});
+    expect(parseModelSettingsInput({ generation: {} })).toEqual({});
+  });
+
+  it.each([
+    null,
+    'hot',
+    { generation: { temperature: 50 } },
+    { generation: { temperature: '0.5' } },
+    { effort: 'default' },
+    { effort: 'turbo' },
+    { generaton: { temperature: 0.5 } },
+  ])('rejects %j', raw => {
+    expect(parseModelSettingsInput(raw)).toBeNull();
+  });
+});
+
+describe('load settings', () => {
+  it('keeps a trained length between the offered sizes, and loads a value stored before it was offered', () => {
+    expect(parseModelSettingsInput({ context: { mode: 'fixed', tokens: 40960 } })).toEqual({
+      context: { mode: 'fixed', tokens: 40960 },
+    });
+    expect(settingsOf({ models: { [QWEN]: { context: { mode: 'auto', maxTokens: 40960 } } } })).toEqual([
+      [QWEN, { context: { mode: 'auto', maxTokens: 40960 } }],
+    ]);
+    expect(settingsOf({ models: { [QWEN]: { context: { mode: 'fixed', tokens: 65536 } } } })).toEqual([
+      [QWEN, { context: { mode: 'fixed', tokens: 65536 } }],
+    ]);
+  });
+
+  it('accepts a context choice, a draft count and a keep-alive', () => {
+    expect(
+      parseModelSettingsInput({ context: { mode: 'auto', maxTokens: 65536 }, draftTokens: 0, keepAlive: -1 })
+    ).toEqual({ context: { mode: 'auto', maxTokens: 65536 }, draftTokens: 0, keepAlive: -1 });
+    expect(parseModelSettingsInput({ context: { mode: 'fixed', tokens: 16384 } })).toEqual({
+      context: { mode: 'fixed', tokens: 16384 },
+    });
+  });
+
+  it('keeps a context below 16K, which a model trained that short is offered', () => {
+    expect(parseModelSettingsInput({ context: { mode: 'fixed', tokens: 4096 } })).toEqual({
+      context: { mode: 'fixed', tokens: 4096 },
+    });
+    expect(parseModelSettingsInput({ context: { mode: 'auto', maxTokens: 8192 } })).toEqual({
+      context: { mode: 'auto', maxTokens: 8192 },
+    });
+  });
+
+  it.each([
+    { context: { mode: 'fixed', tokens: 256 } },
+    { context: { mode: 'auto', maxTokens: 511 } },
+    { context: { mode: 'fixed' } },
+    { context: { mode: 'auto', maxTokens: 524288 } },
+    { context: { mode: 'fixed', tokens: 40960.5 } },
+    { context: 'auto' },
+    { draftTokens: 17 },
+    { draftTokens: 1.5 },
+    { draftTokens: -1 },
+    { keepAlive: 60 },
+    { keepAlive: '1h' },
+    { generation: { temperature: 0.5 }, keepAlive: 7 },
+  ])('rejects %j', raw => {
+    expect(parseModelSettingsInput(raw)).toBeNull();
+  });
+
+  it('reads the load fields of a stored entry', () => {
+    expect(settingsOf({ models: { [QWEN]: { draftTokens: 2, keepAlive: 3600 } } })).toEqual([
+      [QWEN, { draftTokens: 2, keepAlive: 3600 }],
+    ]);
+    expect(settingsOf({ models: { [QWEN]: { context: { mode: 'auto' } } } })).toEqual([
+      [QWEN, { context: { mode: 'auto' } }],
+    ]);
+  });
+});
+
+describe('isModelSettingsId', () => {
+  it('takes device-side model ids only', () => {
+    expect(isModelSettingsId(QWEN)).toBe(true);
+    expect(isModelSettingsId('gpt-5')).toBe(false);
+    expect(isModelSettingsId(7)).toBe(false);
+    expect(isModelSettingsId(`local:ollama:${'x'.repeat(2000)}`)).toBe(false);
+  });
+});

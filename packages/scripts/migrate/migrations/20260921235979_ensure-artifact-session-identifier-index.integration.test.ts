@@ -12,7 +12,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const INDEX_NAME = 'sessionId_1_identifier_1';
 // Dropped and asserted to stay gone: the migration must build only its own index, not every
-// declared one, under DocumentDB's foreground lock.
+// declared one.
 const OTHER_DECLARED_INDEX = 'sourceQuestId_1';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;

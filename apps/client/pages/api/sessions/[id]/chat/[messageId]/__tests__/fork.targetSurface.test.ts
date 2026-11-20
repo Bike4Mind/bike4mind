@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: RouteHandler) => fn }));
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 // The build's copy grant table, stood in for so the test can see whether the route hands it on.
 vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated', () => ({
   get premiumWorkspaceCopyEntitlements() {
@@ -34,6 +34,7 @@ vi.mock('@bike4mind/services', () => ({ sessionService: { forkSession: h.forkSes
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   fabFileRepository: {},
+  organizationRepository: {},
   projectRepository: {},
   questRepository: {},
   sessionRepository: {},

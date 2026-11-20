@@ -12,30 +12,31 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
+import { ResponseBodyError } from 'openid-client';
 import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
-import { verifyStateToken } from '@server/auth/jwtStateStore';
+import { verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   readStateNonceHash,
   clearStateNonce,
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
-} from '@server/auth/oauthFlowCookie';
+} from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from '@server/auth/signInSecondFactor';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import { validateAppUrl } from '@server/utils/validators';
+import { validateAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { authSessionService } from '@bike4mind/services';
@@ -45,7 +46,7 @@ import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/c
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -54,7 +55,9 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -96,8 +99,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Handle OAuth errors from Okta
     if (error) {
-      // Log full error details for debugging, but show sanitized message to user
-      Logger.error('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
+      // Log full error details for debugging, but show sanitized message to user. access_denied is
+      // the IdP refusing this user (policy, cancelled consent), an expected outcome, so it does not
+      // log at error, the level the alert channel pages on.
+      const logOktaError = error === 'access_denied' ? Logger.warn : Logger.error;
+      logOktaError('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -111,13 +117,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       return res.redirect(`/login?error=${encodeURIComponent(userMessage)}`);
     }
 
+    // warn: a code- or state-less hit on this public URL is caller input, not a server fault.
     if (!state) {
-      Logger.error('[Okta Callback] Missing state parameter');
+      Logger.warn('[Okta Callback] Missing state parameter');
       return res.redirect('/login?error=missing_state');
     }
 
     if (!code) {
-      Logger.error('[Okta Callback] Missing authorization code');
+      Logger.warn('[Okta Callback] Missing authorization code');
       return res.redirect('/login?error=missing_code');
     }
 
@@ -131,7 +138,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     );
 
     if (!stateResult.valid) {
-      Logger.error('[Okta Callback] Invalid state token:', stateResult.reason);
+      Logger.warn('[Okta Callback] Invalid state token:', stateResult.reason);
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -149,7 +156,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // PKCE verifier travels in a browser-bound HttpOnly cookie, not in state.
     const codeVerifier = readPkceVerifierCookie(req);
     if (!codeVerifier) {
-      Logger.error('[Okta Callback] Missing PKCE code verifier cookie');
+      Logger.warn('[Okta Callback] Missing PKCE code verifier cookie');
       return res.redirect('/login?error=invalid_state');
     }
 
@@ -498,12 +505,15 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     if (isNewUser) {
       await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+      await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },
         method: AuthStrategy.Okta,
         emailVerified: userInfo.email_verified === true,
         creditsGranted: signupCreditsGranted,
+        visitId: readVisitId(req.headers.cookie),
       });
     }
 
@@ -524,12 +534,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     const successQuery = authSuccessRedirectQuery(redirectTo);
     const signupFragment = isNewUser ? '&firstSignupSession=1' : '';
 
-    // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
-    // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
-    // consumer social sign-in.
-    const secondFactor: SecondFactorOutcome = idp
-      ? { kind: 'satisfied', trustedDevice: null }
-      : await resolveSecondFactor(req, user, { origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' } });
+    const secondFactor: SecondFactorOutcome = await resolveSecondFactor(req, user, {
+      origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' },
+      enterpriseIdp: !!idp,
+    });
     if (secondFactor.kind !== 'satisfied') {
       const handoff = mfaHandoffFragment({
         mfaToken: secondFactor.mfaToken,
@@ -572,15 +580,23 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
     return res.redirect(redirectUrl);
   } catch (error) {
-    Logger.error('[Okta Callback] Processing error:', error);
+    // invalid_grant is Okta rejecting the code itself (expired, replayed or never issued): caller
+    // input, so warn with the provider code only. Every other failure (network, our client config,
+    // DB) stays at error, the level the alert channel pages on.
+    const rejectedGrant = error instanceof ResponseBodyError && error.error === 'invalid_grant';
+    if (rejectedGrant) {
+      Logger.warn('[Okta Callback] Token exchange rejected by provider:', { error: error.error });
+    } else {
+      Logger.error('[Okta Callback] Processing error:', error);
+    }
     try {
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
         userAgent,
-        reason: error instanceof Error ? error.message : 'Callback processing error',
+        reason: rejectedGrant ? 'invalid_grant' : error instanceof Error ? error.message : 'Callback processing error',
         headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
-        meta: { path: req.url, status: 500 },
+        meta: { path: req.url, status: rejectedGrant ? 400 : 500 },
       });
     } catch (logErr) {
       Logger.error('[Okta Callback] Failed to log auth failure:', logErr);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { oauthRouteGate, admitsOptionalAuthUser } from './oauthRouteGate';
+import { oauthRouteGate, admitsOptionalAuthUser, admitsOptionalAuthSession } from './oauthRouteGate';
 
 function mockRes() {
   const res: { status: ReturnType<typeof vi.fn>; json: ReturnType<typeof vi.fn> } = {
@@ -112,5 +112,19 @@ describe('admitsOptionalAuthUser', () => {
 
   it('rejects a relying-party OAuth token (oauthGrant present)', () => {
     expect(admitsOptionalAuthUser({ id: 'u1', oauthGrant: { scopes: ['openid'], clientId: 'c1' } })).toBe(false);
+  });
+
+  it('rejects a deletion-pending session', () => {
+    expect(admitsOptionalAuthUser({ id: 'u1', deletion: { scheduledFor: new Date() } })).toBe(false);
+  });
+
+  it('admits a session whose deletion is null', () => {
+    expect(admitsOptionalAuthUser({ id: 'u1', deletion: null })).toBe(true);
+  });
+});
+
+describe('admitsOptionalAuthSession', () => {
+  it('rejects a deletion-pending session', async () => {
+    expect(await admitsOptionalAuthSession({ id: 'u1', deletion: { scheduledFor: new Date() } })).toBe(false);
   });
 });

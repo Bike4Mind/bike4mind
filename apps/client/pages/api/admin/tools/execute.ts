@@ -1,18 +1,15 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@bike4mind/utils';
 import { initializeServerAdminTools, getServerAdminToolService } from '@client/server/tools/adminToolsServer';
+import { collectModalChanges } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { AdminToolContext, AdminToolParams, ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req: any, res: any) => {
-    // Check if user is admin using server-side authentication
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
-    // 'Admin' is not in VALID_USER_TAGS; the isAdmin flag alone gates admin access.
-
     const { tool, params, context: clientContext } = req.body;
 
     // Initialize and get server-side admin tool service
@@ -36,7 +33,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     };
 
     // Execute the tool
-    const result = await adminToolService.execute(tool, context, toolParams);
+    const { result, changes } = await collectModalChanges(
+      () => adminToolService.execute(tool, context, toolParams),
+      partial => recordModalChanges(req, partial, 'admin-tool')
+    );
+
+    await recordModalChanges(req, changes, 'admin-tool');
 
     return res.json(result);
   })

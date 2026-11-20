@@ -17,6 +17,7 @@ const usage = (pct: number, extra: Partial<SessionContextUsage> = {}): SessionCo
   overflowDetected: false,
   cachingIneffective: false,
   compactedTurns: 0,
+  cacheExpiresAt: null,
   ...extra,
 });
 

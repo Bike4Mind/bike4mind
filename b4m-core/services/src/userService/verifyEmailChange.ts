@@ -1,7 +1,6 @@
 import { ConflictError, IUserDocument } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, emailTokenMatches, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import { isDuplicateKeyErrorOn } from './duplicateKeyError';
 
 const verifyEmailChangeSchema = z.object({
@@ -30,12 +29,7 @@ export const verifyEmailChange = async (
 
   const user = await db.users.findByPendingEmailToken(token);
 
-  if (
-    !user ||
-    !user?.pendingEmailSentAt ||
-    !user?.pendingEmail ||
-    !safeCompareTokens(token, user.pendingEmailToken || '')
-  ) {
+  if (!user || !user?.pendingEmailSentAt || !user?.pendingEmail || !emailTokenMatches(token, user.pendingEmailToken)) {
     throw new BadRequestError('Invalid or expired email change token');
   }
 

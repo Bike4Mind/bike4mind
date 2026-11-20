@@ -88,13 +88,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 // Records the options each route asks for, so a limit can be asserted by value
 // rather than by "some middleware is present".
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => Object.assign(vi.fn(), { _rateLimit: options }),
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
 vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 // Real constants (not re-declared literals) so the route is pinned to the same
 // window the roster sort uses; only the repository is faked.
@@ -127,7 +127,7 @@ type MockedRouter = {
   _routes: Record<string, Handler>;
   _middleware: Record<string, unknown[]>;
   _uses: unknown[];
-  _config?: { requiredScopes?: string[] };
+  _config?: { requiredScopes?: string[]; recordsActivity?: boolean; recordsKeyUse?: boolean };
 };
 
 /** The rate-limit options a route registered for a verb, or undefined if none. */
@@ -808,6 +808,14 @@ describe('hearth route scope declarations', () => {
     ['events', () => eventsRouter, ['hearth:write', 'admin:*']],
   ])('%s declares its scope list', (_name, router, expected) => {
     expect(router()._config?.requiredScopes).toEqual(expected);
+  });
+
+  it.each([
+    ['catchup', () => catchupRouter],
+    ['events', () => eventsRouter],
+  ])('%s counts as a use of the key but never stamps the user active', (_name, router) => {
+    // Agent hooks and the CLI send these on their own, around the clock.
+    expect(router()._config).toMatchObject({ recordsActivity: false, recordsKeyUse: true });
   });
 
   it('no route omits requiredScopes entirely', () => {

@@ -1,10 +1,11 @@
-import type { ChatModelOption } from '@shared/chat';
+import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   pickSuggestionModel,
   sanitizeSuggestion,
   suggestionModelChoices,
   suggestionRequestMessages,
+  SUGGESTION_INSTRUCTION,
   SUGGESTION_MODELS,
 } from './nextPrompt';
 
@@ -53,6 +54,13 @@ describe('pickSuggestionModel', () => {
     expect(pickSuggestionModel([local])).toBeNull();
   });
 
+  it('treats any local-* backend as device-local', () => {
+    const local = option('local:lmstudio:some-model', 'local-lmstudio');
+    expect(suggestionModelChoices([local])).toEqual([local]);
+    expect(isLocalBackend(local)).toBe(true);
+    expect(isLocalBackend(option('claude-sonnet'))).toBe(false);
+  });
+
   it('refuses a pin on a big hosted model the picker never offered', () => {
     expect(pickSuggestionModel([option('claude-opus-4-5-20251101')], 'claude-opus-4-5-20251101')).toBeNull();
   });
@@ -77,6 +85,11 @@ describe('suggestionModelChoices', () => {
 });
 
 describe('suggestionRequestMessages', () => {
+  it('steers away from suggesting a push to main', () => {
+    expect(SUGGESTION_INSTRUCTION).toContain('Never suggest pushing to main');
+    expect(SUGGESTION_INSTRUCTION).toContain('Suggest opening a PR instead');
+  });
+
   // The regression guard, and the whole point of the fix. A request that ends on an assistant
   // turn is a prefill: the model continues that turn instead of writing the user's next
   // message, and this feature shipped answering with a few tokens of nothing on nearly every

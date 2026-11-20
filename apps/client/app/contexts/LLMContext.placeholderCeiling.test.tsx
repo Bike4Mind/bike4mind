@@ -133,9 +133,9 @@ describe('llm-settings v6 -> v7 migration', () => {
     expect(useLLM.getState().max_tokens).toBe(8192);
   });
 
-  it('writes the migrated store back at v7, so a later 8192 survives the next load', async () => {
+  it('writes the migrated store back at the current version, so a later 8192 survives the next load', async () => {
     await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 });
-    expect(JSON.parse(localStorage.getItem('llm-settings') ?? '{}').version).toBe(7);
+    expect(JSON.parse(localStorage.getItem('llm-settings') ?? '{}').version).toBe(8);
 
     act(() => useLLM.getState().setLLM({ max_tokens: 8192 }));
     await useLLM.persist.rehydrate();

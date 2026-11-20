@@ -72,6 +72,7 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   // for in vain.
   'membership-succession': 'Ownership passed on (creator left the org)',
   'approve-proposal': 'Proposal approved',
+  'auto-approve-proposal': 'Proposal added by rule',
   'decline-proposal': 'Proposal declined',
   'restore-proposal': 'Proposal restored',
   'create-research-config': 'Research configuration created',

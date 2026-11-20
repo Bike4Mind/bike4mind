@@ -1,7 +1,16 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, ModelBackend } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import type { IModelCatalogRow } from '@bike4mind/common';
-import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
+import {
+  MODEL_LIST_REVISION_READ_DEADLINE_MS,
+  RUNTIME_DISCOVERED_BACKENDS,
+  getAvailableModels,
+  seededModelIds,
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+  setModelPriceRowsProvider,
+} from './index';
 import { replacedByOverlayEntries, resetReplacedByOverlay } from './resolveDeprecatedModel';
 import { AnthropicBackend } from './anthropicBackend';
 import { directTwinId } from './routeTwinNames';
@@ -22,6 +31,7 @@ const row: IModelCatalogRow = {
 afterEach(() => {
   setModelCatalogProvider(null);
   setModelPriceRowsProvider(null);
+  setModelListRevisionProvider(null);
   resetReplacedByOverlay();
 });
 
@@ -80,6 +90,329 @@ describe('getAvailableModels model catalog provider', () => {
     await getAvailableModels(null);
     await getAvailableModels(null);
     expect(calls).toBe(1);
+  });
+
+  describe('catalogRevision', () => {
+    const countingProvider = () => {
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      return calls;
+    };
+
+    it('rebuilds when a caller reports a revision this process has not seen', async () => {
+      const calls = countingProvider();
+
+      await getAvailableModels(null, { catalogRevision: 'rev-a' });
+      await getAvailableModels(null, { catalogRevision: 'rev-a' });
+      expect(calls.count).toBe(1);
+
+      await getAvailableModels(null, { catalogRevision: 'rev-b' });
+      expect(calls.count).toBe(2);
+    });
+
+    it('serves callers that pass no revision from the list built under the newest one', async () => {
+      const calls = countingProvider();
+
+      await getAvailableModels(null, { catalogRevision: 'rev-c' });
+      await getAvailableModels(null);
+      expect(calls.count).toBe(1);
+    });
+
+    it('does not keep a list whose build started before a newer revision was reported', async () => {
+      const pending: Array<() => void> = [];
+      let calls = 0;
+      setModelCatalogProvider(async () => {
+        calls += 1;
+        if (calls > 2) return [row];
+        return new Promise<IModelCatalogRow[]>(resolve => pending.push(() => resolve([row])));
+      });
+
+      const older = getAvailableModels(null, { catalogRevision: 'rev-d' });
+      await vi.waitFor(() => expect(pending).toHaveLength(1));
+      const newer = getAvailableModels(null, { catalogRevision: 'rev-e' });
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1]();
+      await newer;
+      // The older build lands last and overwrites the slot, stamped with the revision it started under.
+      pending[0]();
+      await older;
+
+      await getAvailableModels(null, { catalogRevision: 'rev-e' });
+      expect(calls).toBe(3);
+    });
+
+    it('shares one build between concurrent misses for the same revision', async () => {
+      const calls = countingProvider();
+
+      await Promise.all([
+        getAvailableModels(null, { catalogRevision: 'rev-f' }),
+        getAvailableModels(null, { catalogRevision: 'rev-f' }),
+      ]);
+
+      expect(calls.count).toBe(1);
+    });
+  });
+
+  describe('model-list revision provider', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('expires a slow successful read from its start so chat catches a pushed revision on time', async () => {
+      vi.useFakeTimers();
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let shared = 'rev-1';
+      let answerLate: (revision: string) => void = () => {};
+      const revisionProvider = vi.fn(async () => shared);
+      setModelListRevisionProvider(revisionProvider);
+      await getAvailableModels(null);
+
+      vi.advanceTimersByTime(5_000);
+      revisionProvider.mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            answerLate = resolve;
+          })
+      );
+      const previousRevision = getAvailableModels(null);
+      vi.advanceTimersByTime(100);
+      shared = 'rev-2';
+      vi.advanceTimersByTime(900);
+      answerLate('rev-1');
+      await previousRevision;
+
+      // A tab refetches at the earliest permitted time: five seconds after the bump.
+      vi.advanceTimersByTime(4_100);
+      await getAvailableModels(null);
+
+      expect(revisionProvider).toHaveBeenCalledTimes(3);
+      expect(catalog).toHaveBeenCalledTimes(2);
+    });
+
+    it('warns once per shared revision read that exceeds its deadline', async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      setModelListRevisionProvider(() => new Promise<string>(() => {}));
+
+      const concurrent = [getAvailableModels(null), getAvailableModels(null)];
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS);
+      await Promise.all(concurrent);
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        '[getAvailableModels] model-list revision read timed out; keeping the last one'
+      );
+
+      vi.advanceTimersByTime(5_000);
+      const retry = getAvailableModels(null);
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS);
+      await retry;
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not extend the process memo when a delayed caller reports a pre-bump revision', async () => {
+      vi.useFakeTimers();
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let shared = 'rev-1';
+      const revisionProvider = vi.fn(async () => shared);
+      setModelListRevisionProvider(revisionProvider);
+      await getAvailableModels(null);
+
+      vi.advanceTimersByTime(100);
+      shared = 'rev-2';
+      vi.advanceTimersByTime(4_000);
+      // This request read rev-1 before the bump, then awaited its caller's credentials.
+      await getAvailableModels(null, { catalogRevision: 'rev-1' });
+      vi.advanceTimersByTime(1_000);
+      await getAvailableModels(null);
+
+      expect(revisionProvider).toHaveBeenCalledTimes(2);
+      expect(catalog).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignores an old revision read after its provider is replaced', async () => {
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let answerOld: (revision: string) => void = () => {};
+      setModelListRevisionProvider(
+        () =>
+          new Promise<string>(resolve => {
+            answerOld = resolve;
+          })
+      );
+      const old = getAvailableModels(null);
+      const replacement = vi.fn(async () => 'rev-new');
+      setModelListRevisionProvider(replacement);
+      await getAvailableModels(null);
+      answerOld('rev-old');
+      await old;
+      await getAvailableModels(null);
+
+      expect(replacement).toHaveBeenCalledTimes(1);
+      expect(catalog).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds for a caller that passes no revision once the provider reports a new one', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let shared = 'rev-1';
+      setModelListRevisionProvider(async () => shared);
+
+      await getAvailableModels(null);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(1);
+
+      shared = 'rev-2';
+      vi.advanceTimersByTime(5_000);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(2);
+    });
+
+    it('reads the revision at most once per memo window', async () => {
+      vi.useFakeTimers();
+      const reads = { count: 0 };
+      setModelListRevisionProvider(async () => {
+        reads.count += 1;
+        return 'rev-1';
+      });
+
+      await Promise.all([getAvailableModels(null), getAvailableModels(null)]);
+      vi.advanceTimersByTime(4_000);
+      await getAvailableModels(null);
+      expect(reads.count).toBe(1);
+
+      vi.advanceTimersByTime(1_000);
+      await getAvailableModels(null);
+      expect(reads.count).toBe(2);
+    });
+
+    it('keeps the cached list when the revision read fails', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let failing = false;
+      setModelListRevisionProvider(async () => {
+        if (failing) throw new Error('cache unreachable');
+        return 'rev-1';
+      });
+
+      await getAvailableModels(null);
+      failing = true;
+      vi.advanceTimersByTime(5_000);
+      await getAvailableModels(null);
+
+      expect(calls.count).toBe(1);
+    });
+
+    it('serves the cached list within the deadline while the revision read hangs, then applies the late answer', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let answerLate: (revision: string) => void = () => {};
+      let hanging = false;
+      let shared = 'rev-1';
+      setModelListRevisionProvider(async () => {
+        if (!hanging) return shared;
+        return new Promise<string>(resolve => {
+          answerLate = resolve;
+        });
+      });
+      await getAvailableModels(null);
+
+      hanging = true;
+      vi.advanceTimersByTime(5_000);
+      let served = false;
+      const stalled = getAvailableModels(null).then(models => {
+        served = true;
+        return models;
+      });
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS - 1);
+      expect(served).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(served).toBe(true);
+      expect((await stalled).find(m => m.id === TARGET)?.rank).toBe(4242);
+      expect(calls.count).toBe(1);
+
+      // Inside the memo window that the timeout opened, a caller does not wait on the stuck read again.
+      let servedAgain = false;
+      void getAvailableModels(null).then(() => {
+        servedAgain = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(servedAgain).toBe(true);
+
+      shared = 'rev-2';
+      hanging = false;
+      answerLate(shared);
+      await vi.advanceTimersByTimeAsync(0);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(2);
+    });
+
+    it('uses a reported revision for that call without replacing the provider memo for other callers', async () => {
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      setModelListRevisionProvider(async () => 'rev-1');
+
+      await getAvailableModels(null);
+      await getAvailableModels(null, { catalogRevision: 'rev-2' });
+      await getAvailableModels(null);
+
+      expect(calls.count).toBe(3);
+    });
+  });
+
+  describe('onCatalogUnavailable', () => {
+    it('reports an adapter-table fallback, and replays it on the cached list', async () => {
+      setModelCatalogProvider(async () => {
+        throw new Error('db down');
+      });
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a failed price overlay too', async () => {
+      setModelPriceRowsProvider(async () => {
+        throw new Error('db down');
+      });
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays quiet when both overlays were read', async () => {
+      setModelCatalogProvider(async () => [row]);
+      setModelPriceRowsProvider(async () => []);
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).not.toHaveBeenCalled();
+    });
   });
 
   it('caches a failed catalog fetch briefly, not for the full TTL (transient blip recovers in seconds)', async () => {
@@ -182,5 +515,20 @@ describe('getAvailableModels model catalog provider', () => {
 
     const models = await getAvailableModels({ xai: 'xai-key' });
     expect(models.find(m => m.id === 'grok-9')?.pricing).toEqual({ 0: { input: 1e-6, output: 3e-6 } });
+  });
+});
+
+describe('seededModelIds', () => {
+  it('covers every model a static-table backend of getAvailableModels lists, BFL included', async () => {
+    const keys = Object.fromEntries(
+      Object.values(ModelBackend)
+        .filter(backend => !RUNTIME_DISCOVERED_BACKENDS.includes(backend))
+        .map(backend => [backend, `${backend}-key`])
+    );
+    const listed = await getAvailableModels(keys, { isSelfHost: false, bedrockReachable: true });
+    const seeded = await seededModelIds();
+
+    expect(listed.some(model => model.backend === ModelBackend.BFL)).toBe(true);
+    expect(listed.map(model => model.id).filter(id => !seeded.has(id))).toEqual([]);
   });
 });

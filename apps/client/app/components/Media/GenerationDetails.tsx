@@ -40,6 +40,8 @@ export const GenerationDetails: FC<{ file: Pick<IFabFileDocument, 'sourceMetadat
   const { t } = useTranslation();
   const generation = readGenerationMetadata(file);
   if (!generation) return null;
+  // The placeholder UNRECORDED_IMAGE_GENERATION in pages/api/files/copy-generated-image.ts; keep the two in sync.
+  if (!generation.prompt && !generation.modelId && generation.provider === 'unknown') return null;
 
   return (
     <Stack

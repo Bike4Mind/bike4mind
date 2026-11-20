@@ -12,7 +12,11 @@ vi.mock('@bike4mind/database', () => ({
   passkeyCredentialRepository: { countByUser: mockCountPasskeys },
 }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user.mfa?.totpEnabled || !!user.mfa?.passkeyEnabled,
+    userHasTotpConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
+  },
 }));
 
 import {
@@ -148,6 +152,12 @@ describe('stepUpMethodsFor', () => {
     expect(await stepUpMethodsFor(enrolled)).toEqual(['totp']);
     mockCountPasskeys.mockResolvedValue(2);
     expect(await stepUpMethodsFor(enrolled)).toEqual(['totp', 'passkey']);
+  });
+
+  it('offers only passkey to a passkey-only user, never totp', async () => {
+    mockCountPasskeys.mockResolvedValue(1);
+    const passkeyOnly = asUser({ mfa: { passkeyEnabled: true }, password: 'hash', email: 'a@example.com' });
+    expect(await stepUpMethodsFor(passkeyOnly)).toEqual(['passkey']);
   });
 
   it('offers password and email to a user without MFA', async () => {

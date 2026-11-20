@@ -2,14 +2,21 @@ import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { resolveConsent } from '@client/app/utils/consentRegion';
 import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@client/app/utils/funnelEvents';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
-import { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { type OrgSubscriptionSubscribeRequest } from '@client/lib/subscriptions/schema';
+import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
+import { ADMIN_GRANTS_KEY } from './adminOrganizations';
+import type { SeatPlan } from '@server/subscriptions/seatPlan';
+import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 
 export const useSubscribePlan = () => {
   return useMutation({
@@ -95,13 +102,18 @@ export const useChangeSubscription = () => {
   });
 };
 
-export const useGetSubscriptionsByOwner = (ownerType: SubscriptionOwnerType, ownerId: string) => {
+export const useGetSubscriptionsByOwner = (
+  ownerType: SubscriptionOwnerType,
+  ownerId: string,
+  { enabled = true }: { enabled?: boolean } = {}
+) => {
   return useQuery({
     queryKey: ['subscriptions', ownerType, ownerId],
     queryFn: async () => {
       const response = await api.get<ISubscription[]>(`/api/subscriptions/${ownerType}/${ownerId}`);
       return response.data;
     },
+    enabled,
   });
 };
 
@@ -122,68 +134,19 @@ export const useGetSubscriptions = (
   });
 };
 
-/**
- * Hook for admin users to get all subscriptions across the platform
- */
-export const useGetAllSubscriptions = (
-  options: {
-    enabled?: boolean;
-    search?: string;
-    page?: number;
-    limit?: number;
-  } = {}
-) => {
-  const { enabled = true, search, page = 1, limit = 10 } = options;
+// Under ['entitlements'] so the server's entitlement pushes (seat removal, plan grants) refresh it too.
+export const SEAT_PLAN_QUERY_KEY = ['entitlements', 'seat-plan'] as const;
 
-  return useQuery({
-    queryKey: ['admin', 'subscriptions', search, page, limit],
+/** The plan the user holds through an organization seat (e.g. Team), or null. */
+export const useGetSeatPlan = ({ enabled = true }: { enabled?: boolean } = {}) =>
+  useQuery({
+    queryKey: SEAT_PLAN_QUERY_KEY,
     queryFn: async () => {
-      const params = {
-        ...(search ? { search } : {}),
-        page,
-        limit,
-      };
-      const response = await api.get<{
-        subscriptions: Array<
-          IUserSubscription & { owner: { username: string; email: string; name: string; _id: string } }
-        >;
-        pagination: {
-          total: number;
-          page: number;
-          limit: number;
-          totalPages: number;
-        };
-      }>('/api/subscriptions', { params });
-      return response.data;
+      const response = await api.get<{ seatPlan: SeatPlan | null }>('/api/subscriptions/seat-plan');
+      return response.data.seatPlan;
     },
     enabled,
   });
-};
-
-/**
- * Hook for admin users to get subscription statistics
- */
-export const useGetSubscriptionStats = (
-  options: {
-    enabled?: boolean;
-  } = {}
-) => {
-  const { enabled = true } = options;
-
-  return useQuery({
-    queryKey: ['admin', 'subscription-stats'],
-    queryFn: async () => {
-      const response = await api.get<{
-        total: number;
-        active: number;
-        expiringThisMonth: number;
-        canceled: number;
-      }>('/api/subscriptions/stats');
-      return response.data;
-    },
-    enabled,
-  });
-};
 
 /**
  * Hook for users to subscribe to a team plan. This will also create a new organization.
@@ -298,13 +261,16 @@ export const useGrantSubscription = () => {
       billingOwnerId?: string;
       reason: string;
     }) => {
-      const { data } = await api.post<{
-        success: boolean;
-        message: string;
-        credits?: number;
-        organizationId?: string;
-        seats?: number;
-      }>(`/api/admin/users/${userId}/grant-subscription`, {
+      const { data } = await api.post<
+        | {
+            success: boolean;
+            message: string;
+            credits?: number;
+            organizationId?: string;
+            seats?: number;
+          }
+        | ApprovalPendingResponse
+      >(`/api/admin/users/${userId}/grant-subscription`, {
         subscriptionType,
         priceId,
         seats,
@@ -317,10 +283,12 @@ export const useGrantSubscription = () => {
       return data;
     },
     onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
       toast.success(data.message);
     },
     onError: err => {
@@ -339,6 +307,8 @@ export const useGetUserSubscriptions = (userId: string) => {
       const { data } = await api.get<{
         individualSubscriptions: Array<
           IUserSubscription & {
+            cancelAtPeriodEnd?: boolean;
+            cancelAt?: Date | null;
             planName?: string;
             planCredits?: number;
             effectiveCreditsPerCycle?: number;
@@ -353,6 +323,8 @@ export const useGetUserSubscriptions = (userId: string) => {
             users: Array<{ userId: string; email: string; name: string }>;
           };
           subscription: ISubscription & {
+            /** The Subscription document's Mongo id, which the admin detail page is keyed by. */
+            id: string;
             effectiveCreditsPerCycle?: number;
             defaultCreditsPerCycle?: number;
           };
@@ -372,11 +344,19 @@ export const useRemoveSubscription = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ userId, subscriptionId }: { userId: string; subscriptionId: string }) => {
+    mutationFn: async ({
+      userId,
+      subscriptionId,
+      reason,
+    }: {
+      userId: string;
+      subscriptionId: string;
+      reason: string;
+    }) => {
       const { data } = await api.delete<{
         success: boolean;
         message: string;
-      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`);
+      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`, { data: { reason } });
       return data;
     },
     onSuccess: (data, variables) => {
@@ -393,7 +373,8 @@ export const useRemoveSubscription = () => {
 };
 
 /**
- * Hook for admins to update credits per billing cycle for a subscription
+ * Hook for admins to update credits per billing cycle for a subscription. Success shows nothing: the
+ * caller confirms with an UndoToast.
  */
 export const useUpdateSubscriptionCredits = () => {
   const queryClient = useQueryClient();
@@ -403,27 +384,30 @@ export const useUpdateSubscriptionCredits = () => {
       userId,
       subscriptionId,
       creditsPerCycle,
+      reason,
     }: {
       userId: string;
       subscriptionId: string;
-      creditsPerCycle: number;
+      /** `null` clears the admin override, so the plan's own rate applies again. */
+      creditsPerCycle: number | null;
+      reason: string;
     }) => {
       const { data } = await api.put<{
         success: boolean;
         message: string;
-        creditsPerCycle: number;
+        creditsPerCycle: number | null;
       }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/credits`, {
         creditsPerCycle,
+        reason,
       });
       return data;
     },
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions', variables.userId] });
       queryClient.invalidateQueries({ queryKey: ['users', variables.userId] });
-      toast.success(data.message);
     },
     onError: err => {
       toast.error(getErrorMessage(err));

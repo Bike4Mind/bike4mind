@@ -42,7 +42,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .post(async (req, res) => {
     assertAgentsWriteScope(req);
     try {
-      const { agent, userCredits } = await createAgent(req.body as Partial<IAgent>, req.user!.id);
+      const { agent, userCredits } = await createAgent(req.body as Partial<IAgent>, req.user!, undefined, req.logger);
 
       // Return agent and updated user credits
       return res.status(201).json({
@@ -50,11 +50,14 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         userCredits,
       });
     } catch (error: any) {
-      console.error('Error creating agent:', error);
       if (error.name === 'BadRequestError' || error.statusCode === 400) {
+        req.logger.warn('Agent create rejected:', error.message);
         return res.status(400).json({ error: error.message });
       }
-      res.status(500).json({ error: 'Failed to create agent', details: error.message });
+      req.logger.error('Error creating agent:', error);
+      res
+        .status(error.statusCode === 503 ? 503 : 500)
+        .json({ error: 'Failed to create agent', details: error.message });
     }
   });
 

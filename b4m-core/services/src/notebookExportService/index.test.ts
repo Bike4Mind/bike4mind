@@ -750,6 +750,22 @@ describe('notebook export - knowledge file bytes', () => {
     expect(knowledge.contentUrl).toBeUndefined();
   });
 
+  it('does not inline an unsized file when the size limit is 0', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: [GOOD] }]) },
+      knowledgeRepository: {
+        findAccessibleInIds: vi.fn().mockResolvedValue([{ ...PDF_FILE, fileSize: undefined }]),
+        findOne: vi.fn().mockResolvedValue(null),
+      },
+      fileStorageService: { getFileContent: vi.fn().mockResolvedValue(PDF_BYTES) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', { ...OPTIONS, maxFileSize: 0 });
+
+    const [knowledge] = JSON.parse(uploaded[0]).notebooks[0].knowledge;
+    expect(knowledge.content).toBeUndefined();
+    expect(adapters.fileStorageService.getFileContent).not.toHaveBeenCalled();
+  });
+
   it('embeds a UTF-8 text file unchanged', async () => {
     const payload = await exportWithKnowledge(TEXT_BYTES, TEXT_FILE);
     const [knowledge] = payload.notebooks[0].knowledge;
@@ -900,5 +916,89 @@ describe('notebook export - image bytes', () => {
     const payload = await exportWithImage(null);
 
     expect(payload.notebooks[0].chatHistory[0].images).toEqual(['images/user-1/shot.png']);
+  });
+});
+
+describe('notebook export - images as keys', () => {
+  const images = ['images/user-1/shot.png', 'images/user-1/held.png'];
+  const makeWith = (over: AdapterOverrides = {}) => {
+    const getFileContent = vi.fn().mockResolvedValue(Buffer.from('bytes'));
+    const findOne = vi.fn(async ({ filePath }: { filePath: string }) =>
+      filePath === images[1] ? { id: 'f', moderationStatus: 'pending' } : null
+    );
+    const { adapters } = makeAdapters({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([{ id: 'msg-1', timestamp: new Date('2026-01-01T00:00:00Z'), images }])
+          .mockResolvedValue([]),
+      },
+      knowledgeRepository: { find: vi.fn().mockResolvedValue([]), findOne },
+      fileStorageService: { getFileContent },
+      ...over,
+    });
+    return { adapters, getFileContent };
+  };
+  const build = async (adapters: NotebookExportAdapters) => {
+    const out = [];
+    for await (const nb of new NotebookExportService(adapters).buildNotebooks('user-1', {
+      ...OPTIONS,
+      imagesAsKeys: true,
+    })) {
+      out.push(nb);
+    }
+    return out;
+  };
+
+  it('returns the key without reading the bytes, and still drops a held upload', async () => {
+    const { adapters, getFileContent } = makeWith();
+    const [notebook] = await build(adapters);
+
+    expect(notebook.chatHistory[0].images).toEqual([images[0]]);
+    expect(getFileContent).not.toHaveBeenCalled();
+  });
+
+  it('skips an image whose moderation lookup fails', async () => {
+    const { adapters } = makeWith({
+      knowledgeRepository: { find: vi.fn().mockResolvedValue([]), findOne: vi.fn().mockRejectedValue(new Error('x')) },
+    });
+    const [notebook] = await build(adapters);
+
+    expect(notebook.chatHistory[0].images).toEqual([]);
+  });
+});
+
+describe('notebook export - listing', () => {
+  it('lists id and name of the notebooks the build would visit', async () => {
+    const { adapters } = makeAdapters();
+    const list = await new NotebookExportService(adapters).listNotebooks('user-1', OPTIONS);
+
+    expect(list).toEqual([{ id: 'session-1', name: 'Notebook One' }]);
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith({ userId: 'user-1' }, { name: 1 });
+  });
+});
+
+describe('buildNotebooks', () => {
+  it('yields each notebook without storing a file', async () => {
+    const { adapters, uploaded } = makeAdapters();
+    const notebooks = [];
+    for await (const notebook of new NotebookExportService(adapters).buildNotebooks('user-1', OPTIONS)) {
+      notebooks.push(notebook);
+    }
+
+    expect(notebooks.map(n => n.id)).toEqual(['session-1']);
+    expect(notebooks[0].chatHistory).toHaveLength(1);
+    expect(uploaded).toHaveLength(0);
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith({ userId: 'user-1' });
+  });
+
+  it('yields nothing for a user with no notebooks instead of throwing', async () => {
+    const { adapters } = makeAdapters({ sessionRepository: { find: vi.fn().mockResolvedValue([]) } });
+    const notebooks = [];
+    for await (const notebook of new NotebookExportService(adapters).buildNotebooks('user-1', OPTIONS)) {
+      notebooks.push(notebook);
+    }
+
+    expect(notebooks).toEqual([]);
   });
 });

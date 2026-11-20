@@ -57,7 +57,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
  * This is a header rather than a meta tag on purpose: a policy the artifact's own markup could
  * contain would be a policy the artifact could choose.
  */
-const SANDBOX_CSP = [
+export const SANDBOX_CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
   "script-src 'unsafe-inline'",

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ModelMetric } from '../types';
@@ -36,6 +36,8 @@ export const useModelMetrics = (filters?: MetricsFilters) => {
     queryFn: () => fetchModelMetrics(filters),
     staleTime: 1000 * 60 * 60, // 1 hour
     enabled: isAdmin,
+    // Keep the old rows on screen while a changed filter refetches.
+    placeholderData: keepPreviousData,
   });
 
   // Force a server-side recache (bypasses the 12h response cache) and refresh the

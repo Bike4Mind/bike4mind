@@ -39,10 +39,14 @@ export interface ImportScanner {
   braceSpan(text: string, greedy?: boolean): { open: number; close: number } | null;
   stripTypeOnlyImports(source: string): string;
   findRelativeImport(source: string): string | null;
-  findRelativeImports(source: string): string[];
-  moduleBaseName(path: string): string;
   renameAsBindings(clause: string): string;
 }
+
+/** Additional module-graph operations returned by the factory, without tightening legacy scanners. */
+export type ModuleImportScanner = ImportScanner & {
+  findRelativeImports(source: string): string[];
+  moduleBaseName(path: string): string;
+};
 
 /* eslint-disable no-var -- `var` keeps the serialized body free of anything a compiler might downlevel */
 /**
@@ -52,7 +56,7 @@ export interface ImportScanner {
  * into a helper call: `var`/`function`, no `??`, `?.`, arrows, spread, default params, template
  * literals or non-ASCII. importStatements.test.ts evaluates the source in an empty context.
  */
-export function createImportScanner(): ImportScanner {
+export function createImportScanner(): ModuleImportScanner {
   'use strict';
   var WS = /\s/;
   var WORD = /\w/;

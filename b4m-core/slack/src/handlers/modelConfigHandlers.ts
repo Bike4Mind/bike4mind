@@ -6,8 +6,16 @@
  */
 
 import { WebClient } from '@slack/web-api';
+import mongoose from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { IModelConfig, McpServerName } from '@bike4mind/common';
+import {
+  IModelConfig,
+  McpServerName,
+  type IMcpServerDocument,
+  type IOrganizationDocument,
+  type ISlackChannelConfig,
+  type ISlackChannelConfigRepository,
+} from '@bike4mind/common';
 import { getSlackDb } from '../di/registry';
 import { SlackClient } from '../SlackClient';
 import { AppHomeBuilder } from '../views/AppHomeBuilder';
@@ -90,11 +98,9 @@ export async function handleOrgDefaultsEdit(
   const organizationId = dbUser.organizationId;
   try {
     await openModalThenLoad(new WebClient(botToken), triggerId, 'Org Model Defaults', async () => {
-      const { Organization } = getSlackDb();
-      const org = await (Organization as any)
-        .findById(organizationId)
-        .select('preferredModel temperature maxTokens')
-        .lean();
+      // DI exposes models as unknown; the bound implementations are the database Mongoose models.
+      const Organization = getSlackDb().Organization as mongoose.Model<IOrganizationDocument>;
+      const org = await Organization.findById(organizationId).select('preferredModel temperature maxTokens').lean();
       return buildOrgModelDefaultsModal({
         organizationId,
         preferredModel: org?.preferredModel,
@@ -149,8 +155,8 @@ export async function handleOrgModelDefaultsSubmission(
     if (Object.keys($unset).length > 0) update.$unset = $unset;
 
     if (Object.keys(update).length > 0) {
-      const { Organization: OrgModel } = getSlackDb();
-      await (OrgModel as any).findByIdAndUpdate(submission.organizationId, update);
+      const OrgModel = getSlackDb().Organization as mongoose.Model<IOrganizationDocument>;
+      await OrgModel.findByIdAndUpdate(submission.organizationId, update);
     }
 
     logger.info('[Slack Interactive] Org model defaults saved', {
@@ -220,8 +226,8 @@ export async function handleChannelConfigEdit(
 
   try {
     await openModalThenLoad(new WebClient(botToken), triggerId, 'Edit Channel Config', async () => {
-      const { slackChannelConfigRepository } = getSlackDb();
-      const existing = await (slackChannelConfigRepository as any).findByChannelId(channelId);
+      const slackChannelConfigRepository = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+      const existing = await slackChannelConfigRepository.findByChannelId(channelId);
       return buildChannelModelConfigModal({
         slackTeamId,
         channelId,
@@ -254,9 +260,10 @@ export async function handleChannelConfigRemove(
   }
 
   try {
-    const { slackChannelConfigRepository: channelConfigRepo } = getSlackDb();
-    await (channelConfigRepo as any).deleteByChannelId(channelId);
-    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackUserId });
+    const channelConfigRepo = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+    // Scoped to this workspace, and leaves an API posting opt-in to the organization route that owns it.
+    const removed = await channelConfigRepo.removeModelConfigByChannelId(channelId, slackTeamId);
+    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackTeamId, slackUserId, removed });
 
     return {};
   } catch (error) {
@@ -288,16 +295,31 @@ export async function handleChannelModelConfigSubmission(
   }
 
   try {
-    const { slackChannelConfigRepository: channelConfigRepoForUpsert } = getSlackDb();
-    await (channelConfigRepoForUpsert as any).upsertByChannelId(submission.channelId, {
+    const channelConfigRepoForUpsert = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+    const saved = await channelConfigRepoForUpsert.upsertByChannelId(submission.channelId, {
       slackTeamId: submission.slackTeamId,
       preferredModel: submission.preferredModel,
       temperature: submission.temperature,
       maxTokens: submission.maxTokens,
+      // null clears the stored value; the interface types these fields as optional only.
       githubOwner: submission.githubOwner ?? null,
       githubRepo: submission.githubRepo ?? null,
       configuredBy: user.id,
-    });
+    } as Partial<ISlackChannelConfig>);
+    if (!saved) {
+      logger.warn('[Slack Interactive] Channel is API-posting enabled by another workspace', {
+        channelId: submission.channelId,
+        slackTeamId: submission.slackTeamId,
+        slackUserId: user.id,
+      });
+      return {
+        response_action: 'errors',
+        errors: {
+          model_block:
+            "This shared channel is enabled for API posting by the other workspace's organization, so its settings can only be changed from that workspace.",
+        },
+      };
+    }
 
     logger.info('[Slack Interactive] Channel model config saved', {
       channelId: submission.channelId,
@@ -347,8 +369,8 @@ export async function refreshAppHomeForAdmin(
       notebooks = appHomeData.notebooks;
       stats = appHomeData.stats;
 
-      const { McpServer: McpServerModel } = getSlackDb();
-      const githubMcpServer = await (McpServerModel as any).findOne({
+      const McpServerModel = getSlackDb().McpServer as mongoose.Model<IMcpServerDocument>;
+      const githubMcpServer = await McpServerModel.findOne({
         userId: dbUser.id,
         name: McpServerName.Github,
         enabled: true,
@@ -364,9 +386,9 @@ export async function refreshAppHomeForAdmin(
     // Load org defaults (if user has an org) and channel configs (by workspace)
     let orgDefaults: IModelConfig | undefined;
 
-    const { slackChannelConfigRepository: channelConfigRepoForRefresh } = getSlackDb();
-    const configs = await (channelConfigRepoForRefresh as any).findBySlackTeamId(slackTeamId);
-    const channelConfigs = configs.map((c: any) => ({
+    const channelConfigRepoForRefresh = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+    const configs = await channelConfigRepoForRefresh.findBySlackTeamId(slackTeamId);
+    const channelConfigs = configs.map(c => ({
       channelId: c.channelId,
       preferredModel: c.preferredModel,
       temperature: c.temperature,
@@ -376,9 +398,8 @@ export async function refreshAppHomeForAdmin(
     }));
 
     if (dbUser?.organizationId) {
-      const { Organization: OrgModelRefresh } = getSlackDb();
-      const org = await (OrgModelRefresh as any)
-        .findById(dbUser.organizationId)
+      const OrgModelRefresh = getSlackDb().Organization as mongoose.Model<IOrganizationDocument>;
+      const org = await OrgModelRefresh.findById(dbUser.organizationId)
         .select('preferredModel temperature maxTokens')
         .lean();
       if (org) {

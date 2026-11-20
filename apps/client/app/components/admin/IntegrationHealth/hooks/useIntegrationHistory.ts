@@ -23,5 +23,7 @@ export const useIntegrationHistory = (integration: IntegrationName | null, isExp
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error,
+    refetch: query.refetch,
+    isRefetching: query.isRefetching,
   };
 };

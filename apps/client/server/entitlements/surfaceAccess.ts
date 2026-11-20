@@ -1,5 +1,5 @@
 import type { SurfaceAccessUser } from '@bike4mind/common';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 import { premiumWorkspaceCopyEntitlements } from '@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated';
 
 /**
@@ -13,7 +13,7 @@ import { premiumWorkspaceCopyEntitlements } from '@client/app/premium-generated/
 export const surfaceAccessForRequest = (req: EntitlementRequest) => async (): Promise<SurfaceAccessUser> => ({
   isAdmin: req.user?.isAdmin,
   tags: req.user?.tags,
-  entitlements: await (await import('@server/entitlements')).getRequestEntitlements(req),
+  entitlements: await (await import('@bike4mind/server-utils/entitlements/index')).getRequestEntitlements(req),
 });
 
 /**

@@ -1,7 +1,7 @@
 import { fabFileRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
-import { buildFabFileAdapter } from '@server/files/loadAccessibleFabFile';
+import { buildFabFileAdapter } from '@bike4mind/server-utils/files/loadAccessibleFabFile';
 import { isOwnedGenerateUpload } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import type { Request } from 'express';

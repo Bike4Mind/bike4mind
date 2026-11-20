@@ -160,10 +160,10 @@ describe('ChatService app-control tools', () => {
     expect(codeTools.filter(name => name.startsWith('session_'))).toEqual([
       'session_list',
       'session_read',
-      'session_spawn',
       'session_send',
       'session_archive',
       'session_delete',
+      'session_spawn',
       'session_suggestion_update',
       'session_suggestion_dismiss',
     ]);
@@ -193,6 +193,40 @@ describe('ChatService app-control tools', () => {
     await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
     expect(settled('session_delete')[0]?.preview).toMatch(/No conversation with that id in this project/);
     // Still there: a refusal must not be a delete that merely reported badly.
+    expect(await store.get(theirs.id)).not.toBeNull();
+  });
+
+  it('names an out-of-project session on a send card but not on an archive or delete card', async () => {
+    const mine = await codeSession(projectA);
+    const theirs = await codeSession(projectB);
+    await store.rename(theirs.id, 'Elsewhere');
+    await store.setApprovalMode(mine.id, 'ask');
+
+    await service.send(mine.id, 'reach out');
+    const stream = await awaitStreamOf('reach out');
+    const tools = [
+      { id: 'c1', name: 'session_archive', arguments: JSON.stringify({ session_id: theirs.id }) },
+      { id: 'c2', name: 'session_send', arguments: JSON.stringify({ session_id: theirs.id, message: 'hello' }) },
+      { id: 'c3', name: 'session_delete', arguments: JSON.stringify({ session_id: theirs.id }) },
+    ];
+    stream.write(frame({ type: 'tool_use', tools }));
+    stream.write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        settled('session_archive').length === 1 &&
+        settled('session_send').length === 1 &&
+        settled('session_delete').length === 1,
+      { timeout: 5000, interval: 5 }
+    );
+
+    const detailOf = (name: string) =>
+      events.flatMap(event => (event.type === 'tool-start' && event.call.name === name ? [event.call] : []))[0]
+        ?.approvalDetail;
+    expect(detailOf('session_archive')).toContain(theirs.id);
+    expect(detailOf('session_archive')).not.toContain('Elsewhere');
+    expect(detailOf('session_delete')).toContain(theirs.id);
+    expect(detailOf('session_delete')).not.toContain('Elsewhere');
+    expect(detailOf('session_send')).toContain('Elsewhere');
     expect(await store.get(theirs.id)).not.toBeNull();
   });
 

@@ -2,6 +2,7 @@ import { ApiClient } from '../auth/ApiClient';
 import { ServerToolExecutor } from './ServerToolExecutor';
 import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
 import { logger } from '../utils/Logger';
+import { INSUFFICIENT_CREDITS_CODE, outOfCreditsToolResult } from './outOfCreditsToolResult';
 
 /** Optional WebSocket executor for server-side tools (bypasses CloudFront timeout) */
 let wsToolExecutor: WebSocketToolExecutor | null = null;
@@ -45,6 +46,7 @@ export async function executeTool(
       logger.debug(`[ToolRouter] Routing ${toolName} to server via WebSocket`);
       const result = await wsToolExecutor.execute(toolName, input);
       if (!result.success) {
+        if (result.errorCode === INSUFFICIENT_CREDITS_CODE) return outOfCreditsToolResult(toolName, result.error);
         return `Error executing ${toolName}: ${result.error || 'Tool execution failed'}`;
       }
       return typeof result.content === 'string' ? result.content : JSON.stringify(result.content ?? '');

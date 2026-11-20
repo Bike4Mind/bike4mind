@@ -17,6 +17,7 @@ const { mockAuthenticate, mockCreate, mockLoadFindOne } = vi.hoisted(() => ({
 }));
 
 // Run the .use() middlewares in order before the method handler, so the real optionalAuth executes.
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const mws: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
@@ -49,7 +50,7 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 
 // The enforceMFA half of the admission is covered in optionalAuth.test.ts. Only that check is made
 // inert here, so the real admitsOptionalAuthUser (and the shim that calls it) still runs below.
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async () => false,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
@@ -59,6 +60,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/common', () => ({
   CreateAnnotationRequestSchema: { safeParse: (b: unknown) => ({ success: true, data: b }) },
+}));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/services/publish', () => ({
   checkVisibility: vi.fn(),
@@ -108,6 +112,15 @@ describe('POST /api/publish/annotations/[publicId] - OAuth tokens cannot write',
 
   it('401s a pre-MFA (mfaPending) session and creates nothing', async () => {
     queueAuthResult({ id: 'u1', mfaPending: true });
+    const { res, promise } = post(undefined);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('401s a deletion-pending session and creates nothing', async () => {
+    queueAuthResult({ id: 'u1', deletion: { scheduledFor: new Date() } });
     const { res, promise } = post(undefined);
     await promise;
 

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { McpServer } from '@bike4mind/database/ai';
-import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
+import { revokeAtlassianGrant } from '@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant';
 
 const handler = baseApi().delete(async (req, res) => {
   try {

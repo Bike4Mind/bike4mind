@@ -7,8 +7,6 @@ export const useRegistrationInvitesStore = create<RegistrationInvitesState>(set 
   copied: false,
   operating: false,
   activeTab: 'available',
-  currentPage: 1,
-  itemsPerPage: 10,
   unusedSelected: [],
   usedSelected: [],
   multiSelected: [],
@@ -20,9 +18,7 @@ export const useRegistrationInvitesStore = create<RegistrationInvitesState>(set 
   setOpenDeleteWarning: (open: boolean) => set({ openDeleteWarning: open }),
   setCopied: (copied: boolean) => set({ copied }),
   setOperating: (operating: boolean) => set({ operating }),
-  setActiveTab: (tab: 'available' | 'used') => set({ activeTab: tab, currentPage: 1 }),
-  setCurrentPage: (page: number) => set({ currentPage: page }),
-  setItemsPerPage: (items: number) => set({ itemsPerPage: items, currentPage: 1 }),
+  setActiveTab: (tab: 'available' | 'used') => set({ activeTab: tab }),
   setUnusedSelected: selected =>
     set(state => ({
       unusedSelected: typeof selected === 'function' ? selected(state.unusedSelected) : selected,

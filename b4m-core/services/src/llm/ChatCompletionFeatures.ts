@@ -1,16 +1,35 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import type { AudioToolJobs } from './tools/implementation/audioGeneration';
+import {
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+} from '@bike4mind/utils/embeddingProviders';
+import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
+import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
+
+export type LimitEventRecord = {
+  userId: string;
+  kind: UserLimitEventKind;
+  model?: string;
+  details?: Record<string, string | number | boolean | null>;
+};
 import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
-  ChatModels,
+  isLowSignalNamingPrompt,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IConnection,
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IOrganizationDocument,
   IProjectDocument,
   ISessionDocument,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ModelInfo,
   Permission,
@@ -34,7 +53,7 @@ import {
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  ILatticeModel,
+  SettingValue,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
@@ -75,9 +94,11 @@ import {
   ModelBackend,
   type WorkspaceDeniedToolsTable,
   type WorkspaceSessionSettingsTable,
+  type CoreTutorialTurnHook,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -92,6 +113,7 @@ import {
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
+import type { ILatticeModelRepository } from '../latticeService/latticeModelService';
 import type { DecideToolFn } from './tools/base/types';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
@@ -111,15 +133,18 @@ import {
 } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import { retryOnceOnMongoNetworkError } from '../dataLakeService/retryOnceOnMongoNetworkError';
+import { isMongoNetworkError } from '@bike4mind/db-core';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
-  rankCandidateFilesByRelevance,
+  selectRelevanceCandidates,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
   type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import type { OperationalBillingAdapters } from '../billing/recordOperationalUsage';
 import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
@@ -154,10 +179,8 @@ import {
   BaseStorage,
   computeCosineSimilarity,
   computeVerbatimTokenBudget,
-  EmbeddingFactory,
   type FabFileNotice,
   fetchAndProcessPreviousMessages,
-  getProviderFromModel,
   getSettingsByNames,
   IQueueService,
   ITokenizer,
@@ -179,6 +202,7 @@ import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } 
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
+import type { CustomMcpToolHost } from './tools/customMcpTools';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 import { isObjectIdShaped } from './tools/base/objectId';
 import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
@@ -232,9 +256,26 @@ interface DatabaseAdapters {
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
   mcpServers: IMcpServerRepository;
+  /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
+  newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Required so every construction site wires the freeze check; the turn is refused before any reservation. */
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
+  /**
+   * Reads a key's prompt moderation exception. Optional: wired only where an API key can start a
+   * turn, and without it no exception ever applies.
+   */
+  userApiKeys?: Pick<IUserApiKeyRepository, 'findModerationException'>;
+  /**
+   * Records a refusal or a settlement that left the balance negative, for the admin user timeline
+   * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
+   * typecheck instead of silently skipping it. Must not throw.
+   */
+  recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;
+  /** Flows to ToolContext.db unchanged; see its doc there. */
+  operationalBilling?: OperationalBillingAdapters;
   agents: IAgentRepository;
   /**
    * Optional skill repository - present when the host wires `/api/skills`
@@ -262,22 +303,18 @@ interface DatabaseAdapters {
   };
   rapidReply?: {
     results: {
-      createResult: (data: any) => Promise<any>;
-      updateResult: (id: string, data: any) => Promise<any>;
-      updateResultByQuestId: (questId: string, data: any) => Promise<any>;
-      findByQuestId: (questId: string) => Promise<any>;
-      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<any>;
+      createResult: (data: Record<string, unknown>) => Promise<unknown>;
+      updateResult: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+      updateResultByQuestId: (questId: string, data: Record<string, unknown>) => Promise<unknown>;
+      findByQuestId: (questId: string) => Promise<RapidReplyResultRecord | null>;
+      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<RapidReplyResultRecord | null>;
     };
-    mappings: any;
+    mappings: unknown;
     settings: {
-      getSettings: () => Promise<any>;
+      getSettings: () => Promise<SettingValue<'RapidReplySettings'> | undefined>;
     };
   };
-  latticeModels?: {
-    create: (data: any) => Promise<ILatticeModel>;
-    findById: (id: string) => Promise<ILatticeModel | null>;
-    update: (data: any) => Promise<ILatticeModel | null>;
-  };
+  latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
   // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
   // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
@@ -382,10 +419,21 @@ const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
 };
 export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
 
+/** Fields this service reads from the stored rapid-reply document (packages/database RapidReplyResultModel). */
+export interface RapidReplyResultRecord {
+  id: string;
+  userId: string;
+  status: 'success' | 'failed' | 'timeout' | 'replaced';
+  rapidResponse: { content: string; latency: number; ttfvt?: number };
+  metrics?: Record<string, unknown>;
+}
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
+  /** The speech / sound-effect job functions the audio_generation tool bills through; unset leaves it unavailable. */
+  audioToolJobs?: AudioToolJobs;
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
@@ -409,6 +457,11 @@ export interface IChatCompletionServiceOptions {
    * the same reason as `workspaceDeniedTools`; the open-core value is the generated empty table.
    */
   workspaceSessionSettings: WorkspaceSessionSettingsTable;
+  /**
+   * Answers a turn on a session carrying a core tutorial marker, and only then. Optional: a host without
+   * core tutorials leaves it out and every marked session falls through to the model.
+   */
+  coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,
@@ -477,9 +530,17 @@ export interface IChatCompletionServiceOptions {
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
     getTools: () => Promise<MCPClient['tools']>;
-    callTool: (toolName: string, toolArgs: any) => Promise<any>;
+    callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  /**
+   * Custom remote connectors. Injected by the app tier (it owns policy, credentials and the call
+   * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
+   */
+  customMcp?: CustomMcpToolHost;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   logger: Logger;
   getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) => Record<string, unknown>;
   /**
@@ -490,6 +551,15 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Hosts with account allowances atomically admit a new plan before any provider or credit work. */
+  admitQuestStart: (user: IUserDocument, startId: string) => Promise<'subscriber' | 'free'>;
+  /** Gives back a free start admitted for a turn that failed before dispatch. Omitted -> the start stays spent. */
+  releaseQuestStart?: (user: IUserDocument, startId: string) => Promise<void>;
+  /**
+   * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
+   * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.
+   */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
   /**
    * Perform any cleanup or additional processing after the quest is completed.
    */
@@ -511,6 +581,12 @@ export interface IChatCompletionServiceOptions {
    * reply and must not advance the reply-diff baseline.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /**
+   * Optional observer of the turn's user-visible status lines ("Searching the web...", ...), fired for
+   * every non-silent, non-null status the turn sends. Out-of-band and best effort: a throw is logged
+   * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
   /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.
@@ -541,11 +617,16 @@ export interface IChatCompletionServiceOptions {
     requestId?: string; // Quest ID for correlation
   }) => Promise<void>;
   /**
-   * Secret key for deriving daily telemetry salts via HMAC.
-   * Reuses SECRET_ENCRYPTION_KEY - no dedicated secret needed.
+   * Secret key for deriving daily telemetry salts via HMAC. The host supplies it; the apps take it
+   * from `signingKey('telemetry-salt')` in server-utils/src/security/signingKeys.ts.
    * When undefined, falls back to a deterministic placeholder (dev-only).
    */
   telemetryHmacSecret?: string;
+  /**
+   * Key that signs web_search image URLs (`signingKey('search-image-url')` in the apps). When
+   * undefined, `telemetryHmacSecret` signs them, which is what hosts without a separate key rely on.
+   */
+  imageUrlSigningSecret?: string;
   /**
    * Whether the Global Privacy Control (GPC) signal was detected in the request.
    * When true, telemetry capture is skipped for this request regardless of user preference.
@@ -592,11 +673,11 @@ export type ChatCompletionContext = Pick<
   fabFilesToMessages: (
     fabFileIds: string[],
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
-  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[]; fileNotices: FabFileNotice[] }>;
+  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: IFabFileDocument[]; fileNotices: FabFileNotice[] }>;
 };
 
 export interface ChatCompletionFeature {
@@ -628,7 +709,7 @@ export interface ChatCompletionFeature {
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     /** Input-window-derived; deliberately NOT the model's output cap. */
@@ -675,7 +756,7 @@ export class MementoFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
@@ -721,7 +802,7 @@ export class MementoFeature implements ChatCompletionFeature {
     // that setting moved.
     //
     // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
-    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here used to be what made the
+    // neither. Passing `embeddingFactory.defaultModel` here used to be what made the
     // two modes disagree: the factory resolved by CREDENTIAL PRIORITY (an OpenAI key alone returns
     // ada-002) and never read the setting - see `resolveEmbeddingModelFallback` below, which says the
     // same thing about naming a space. That argument did not merely pick a floor, it picked the space
@@ -833,7 +914,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
@@ -1088,6 +1169,11 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
     if (session.isAutoNamed && conversationMessages.length !== 1) {
       return;
     }
+    // Same rule as the turn-start publish (ChatCompletionInvoke.dispatchTurnStartAutoName): a
+    // "Hello" turn, even with its reply, only names the notebook "Greeting". A later turn names it.
+    if (!session.isAutoNamed && isLowSignalNamingPrompt(quest.prompt ?? '', quest.fabFileIds?.length ?? 0)) {
+      return;
+    }
     try {
       // Publish to EventBridge; the event handler performs the actual auto-naming async
       await this.chatCompletion.autoNameSession(session.id, this.logger);
@@ -1178,22 +1264,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       return { shouldContinue: true };
     }
 
-    // Check if the model is compatible with QuestMaster
-    // Some models may not follow XML/JSON formatting instructions reliably
-    const incompatibleModels = [
-      // O-series reasoning models (don't support tool calling in streaming mode)
-      ChatModels.O1,
-      ChatModels.O1_PREVIEW,
-      ChatModels.O1_MINI,
-      ChatModels.O3_MINI,
-      // GPT-5 models WITHOUT tool support (supportsTools: false)
-      // Other GPT-5 models now use function calling via questMaster.ts
-      ChatModels.GPT5_CHAT_LATEST,
-      ChatModels.GPT5_1_CHAT_LATEST,
-      ChatModels.GPT5_2_CHAT_LATEST,
-    ];
-
-    if (incompatibleModels.includes(model as ChatModels)) {
+    if (!isQuestMasterCompatible(model)) {
       this.logger.log(
         `QuestMaster: Skipping for model ${model} as it may not be fully compatible with structured JSON output`
       );
@@ -1567,7 +1638,7 @@ export class ProjectFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     attachedFileTokenBudget: number
@@ -1857,6 +1928,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
+// Cap slots held for files the ANN cannot answer for yet (stamped within the mongot lag), so a
+// file uploaded and asked about at once is scored even when hits alone would fill the cap.
+const FORCED_RETRIEVAL_NOT_INDEXED_RESERVE = 10;
 // Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
 // many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
 // each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
@@ -1875,7 +1949,7 @@ type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
 };
 // The ANN candidate pick's outcome. annPickMs is null when no query was sent.
 type AnnCandidatePick<T> =
-  | { ranked: T[]; annPickMs: number }
+  | { ranked: T[]; notIndexedCut: number; annPickMs: number }
   | { ranked: null; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
@@ -2071,6 +2145,12 @@ interface ForcedRetrievalCoverage {
    * failure mode this whole feature exists to prevent.
    */
   filesWithheldReindexing: number;
+  /**
+   * Files stamped within VECTOR_SEARCH_READY_LAG_MS (too recent for the ANN) that the relevance pick
+   * still cut past the candidate cap, after the reserved slots. Unlike a by-name cut they return on
+   * their own once indexed.
+   */
+  filesNotYetIndexedCut: number;
   /**
    * Older generations of a document this lake also holds a newer generation of, dropped before the
    * chunk scan (see dataLakeService/supersession.ts). Reported with ids and the matching tier, not
@@ -2326,7 +2406,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByChunkBudget ||
       coverage.stoppedByCursorStall ||
       anyMismatch ||
-      coverage.filesWithheldReindexing > 0;
+      coverage.filesWithheldReindexing > 0 ||
+      coverage.filesNotYetIndexedCut > 0;
     const supersededOnly = !partial && coverage.filesSupersededCollapsed > 0;
     if (!partial && !supersededOnly) return false;
 
@@ -2373,14 +2454,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     if (coverage.filesWithheldReindexing > 0) {
       // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
-      // must not be sent to re-embed a document that is already re-embedding.
+      // must not be sent to re-embed a document that is already being indexed.
       reasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were withheld - ` +
+          'their passages are not searchable yet; they return on their own'
       );
       readerReasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were skipped. ` +
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were skipped. ` +
           'They return on their own.'
+      );
+    }
+    if (coverage.filesNotYetIndexedCut > 0) {
+      reasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are not searchable yet and the candidate ` +
+          'cap left them out; they become candidates on their own once indexed'
+      );
+      readerReasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are still being indexed and were not checked. ` +
+          'Try again in a minute.'
       );
     }
     if (coverage.filesSupersededCollapsed > 0) {
@@ -2567,7 +2658,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     embeddingModel: SupportedEmbeddingModel,
     relevanceSelectionAvailable: boolean,
     listingCutAtCap: boolean
-  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
+  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection; notIndexedCut: number }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) {
       if (listingCutAtCap) {
         await recordForcedRetrievalCutMetrics(
@@ -2575,20 +2666,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           this.logger
         );
       }
-      return { files, selection: 'all' };
+      return { files, selection: 'all', notIndexedCut: 0 };
     }
     const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
       : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
     if (pick.ranked) {
       await recordForcedRetrievalCutMetrics({ selection: 'relevance', annPickMs: pick.annPickMs }, this.logger);
-      return { files: pick.ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+      return { files: pick.ranked, selection: 'relevance', notIndexedCut: pick.notIndexedCut };
     }
     await recordForcedRetrievalCutMetrics(
       { selection: 'fileName', reason: pick.reason, annPickMs: pick.annPickMs },
       this.logger
     );
-    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+    return {
+      files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES),
+      selection: 'fileName',
+      notIndexedCut: 0,
+    };
   }
 
   /**
@@ -2662,12 +2757,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
         return { ranked: null, reason: 'no-hits', annPickMs: elapsedMs() };
       }
-      const ranked = rankCandidateFilesByRelevance(
+      const { files: ranked, notIndexedCut } = selectRelevanceCandidates(
         files,
         ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
-        now
+        now,
+        { cap: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES, notIndexedReserve: FORCED_RETRIEVAL_NOT_INDEXED_RESERVE }
       );
-      return { ranked, annPickMs: elapsedMs() };
+      return { ranked, notIndexedCut, annPickMs: elapsedMs() };
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(
@@ -2700,8 +2796,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
    * mid-ingest).
    *
-   * Read the BINDING, never `embeddingFactory.getDefaultEmbeddingModel()`. The factory reports
-   * Titan for any empty config, and `resolveEmbeddingConfig` returns an empty config for three
+   * Read the BINDING, never `embeddingFactory.defaultModel`. The factory reports
+   * Titan for any empty config, and `resolveEmbeddingCredentials` returns an empty config for three
    * different states - a genuine keyless substitution, an EXPIRED caller key, and a missing Ollama
    * base URL. Only the first is this deployment saying it holds no key; the other two are states the
    * resolver deliberately declines to substitute for, and `missing` is non-null on both. Deriving
@@ -2721,13 +2817,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * too, so the loud credential error survives instead of being quietly rerouted into a query
    * against a space the corpus was never written in.
    */
-  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
+  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingRuntime): Promise<SupportedEmbeddingModel> {
     const binding = this.chatCompletion.embeddingBinding;
     // The binding is the model this turn will actually embed with, so it is also the right thing to
     // fall back TO when the setting is unusable. `getDefaultEmbeddingModel()` only stands in if the
     // seam has not run (no production path reaches here before it; a unit test can).
     const factoryDefault =
-      binding?.model ?? embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+      binding?.model ?? embeddingFactory.defaultModel ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     let configured: unknown;
     // Scoped to the settings READ alone. Widening it to cover the decision below would let a
     // programming error there be swallowed as "could not read the setting" and silently answer
@@ -2765,8 +2861,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         binding !== undefined &&
         binding.missing === null &&
         binding.model !== binding.requested &&
-        getProviderFromModel(binding.model) === ModelBackend.Bedrock;
-      if (substitutedToKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
+        embeddingBackendForModel(binding.model) === ModelBackend.Bedrock;
+      if (substitutedToKeyless && embeddingBackendForModel(configured) !== ModelBackend.Bedrock) {
         this.logger.warn(
           `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +
             `embedding the query with keyless ${factoryDefault}, which is what this stage ingested with`
@@ -3008,7 +3104,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     this.publishedCitableKeys = new Set();
@@ -3311,14 +3407,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         votingFiles.length > 0 ? votingFiles : indexedFiles,
         fallbackModel
       );
-      const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+      const embeddingService = bindEmbeddingModel(embeddingFactory, embeddingModel);
       // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
       // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
       const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
       const [messageVector, contextVector] = await Promise.all([
-        embeddingService.generateEmbedding(query),
+        embedOne(embeddingService, query),
         followUp
-          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+          ? embedOne(embeddingService, followUp.context).catch(error => {
               this.logger.warn(
                 '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
                 error
@@ -3405,7 +3501,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
         return [...ordered, ...libraryRows];
       };
-      const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
+      const {
+        files: scanCandidates,
+        selection: candidateSelection,
+        notIndexedCut,
+      } = await this.selectForcedRetrievalCandidates(
         spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
@@ -3446,6 +3546,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         listingLimit,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
+        filesNotYetIndexedCut: notIndexedCut,
         filesSupersededCollapsed: supersession.count,
         superseded: supersession.sample,
         chunksScanned: 0,
@@ -3480,10 +3581,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           const want = Math.min(FORCED_RETRIEVAL_BATCH_CHUNK_CAP, remaining);
           // One row beyond what we will consume, so "exactly full" is distinguishable from
           // "more remains". Guessing from a full page reports truncation that never happened.
-          const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
-            limit: want + 1,
-            afterChunkId: cursor,
-          });
+          // Keyset-paged, so re-reading a page after a dropped socket is exact, not approximate.
+          const rows = await retryOnceOnMongoNetworkError(
+            () =>
+              db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
+                limit: want + 1,
+                afterChunkId: cursor,
+              }),
+            { label: '\u{1F512} Forced retrieval: chunk page read failed', logger: this.logger }
+          );
           if (rows.length === 0) break;
           const moreExist = rows.length > want;
           const usable = moreExist ? rows.slice(0, want) : rows;
@@ -4064,7 +4170,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // resolution itself is what threw) - a retrieval that threw must not look identical to one
       // that never ran.
       recordRetrieval('failed', attemptedDataLakeTags);
-      this.logger.error('🔒 Forced retrieval failed:', error);
+      // A Mongo network failure anywhere in this path (the chunk page read has already been retried
+      // once) is infrastructure, and the turn still answers (with the abstention below), so warn with
+      // the name only - the driver message carries the database host. Anything else is a bug in this
+      // path and stays at error with the full error.
+      if (isMongoNetworkError(error)) {
+        this.logger.warn(`\u{1F512} Forced retrieval failed: ${(error as Error).name}`);
+      } else {
+        this.logger.error('🔒 Forced retrieval failed:', error);
+      }
       return this.noContextMessages('unavailable');
     }
   }

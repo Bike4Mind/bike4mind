@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import type { ISessionAgentConfigDocument, RepositoryPatch } from '@bike4mind/common';
 import { z } from 'zod';
 

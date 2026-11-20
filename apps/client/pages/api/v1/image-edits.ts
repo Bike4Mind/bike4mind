@@ -6,15 +6,16 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageEdit } from '@server/imageGenerations/imageEdit';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getImageEdit } from '@bike4mind/server-utils/imageGenerations/imageEdit';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
-import { editImageContract } from '@bike4mind/common';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
+import { editImageContract, validateBflEditRegions, isFlux3ImageModel } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
@@ -23,6 +24,19 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const requestedOrgId = resolveBillingOrgInput(req.validated);
   const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+
+  if (isFlux3ImageModel(body.model) && body.fabFileIds.length)
+    return res.status(400).json({ error: 'FLUX 3 edits take no mask; omit fabFileIds' });
+
+  if (body.edit_regions?.length) {
+    if (!isFlux3ImageModel(body.model)) {
+      return res.status(400).json({ error: 'edit_regions are only supported on FLUX 3 models' });
+    }
+    const regionIssues = validateBflEditRegions(body.edit_regions);
+    if (regionIssues.length) {
+      return res.status(422).json({ error: regionIssues.join('; ') });
+    }
+  }
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Reject a session the caller can't write to before the service appends a quest to it.
@@ -38,6 +52,9 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
+    adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+    apiKeyId: req.apiKeyInfo?.keyId,
+    apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
     userId: req.user.id,
     body: {
       ...body,

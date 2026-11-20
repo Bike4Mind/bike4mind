@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { setAllowOrigin } from '@server/utils/allowOrigin';
 
 // A valid HTTP authority is a hostname (optionally :port) or a bracketed IPv6
 // literal; underscore is tolerated too (non-RFC, but seen in internal hostnames).
@@ -11,11 +12,6 @@ const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/;
 // the element keeps an index signature: without it, the emitters' literals fail
 // excess-property checking.
 export type OpenApiSpecInput = { servers?: ReadonlyArray<{ url?: string } & Record<string, unknown>> };
-
-// The type of the generated deploymentOpenApi.generated.ts. Both of its emitters
-// (generate-premium-glue.mjs and common's generateDeployment.ts) import it by name
-// rather than spelling the shape out, so the three cannot drift.
-export type DeploymentOpenApiSpec = OpenApiSpecInput & Record<string, unknown>;
 
 function specForRequest(req: NextApiRequest, specJson: string, placeholderUrl: string): string {
   const host = req.headers.host;
@@ -39,8 +35,8 @@ function specForRequest(req: NextApiRequest, specJson: string, placeholderUrl: s
   return JSON.stringify(spec);
 }
 
-function setCorsHeaders(res: NextApiResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function setCorsHeaders(req: NextApiRequest, res: NextApiResponse): void {
+  setAllowOrigin(req, res, '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
@@ -64,7 +60,7 @@ export function createOpenApiSpecHandler(spec: OpenApiSpecInput) {
   const placeholderUrl = spec.servers?.[0]?.url ?? '';
 
   return function handler(req: NextApiRequest, res: NextApiResponse) {
-    setCorsHeaders(res);
+    setCorsHeaders(req, res);
 
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Max-Age', '600');

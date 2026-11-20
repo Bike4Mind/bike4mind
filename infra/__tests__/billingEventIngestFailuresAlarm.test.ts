@@ -14,7 +14,10 @@ import { fileURLToPath } from 'url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ALARMS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/alarms.ts'), 'utf8');
-const EMITTER_SOURCE = readFileSync(path.join(REPO_ROOT, 'apps/client/server/analytics/emitActiveEvent.ts'), 'utf8');
+const EMITTER_SOURCE = readFileSync(
+  path.join(REPO_ROOT, 'packages/server-utils/src/analytics/emitActiveEvent.ts'),
+  'utf8'
+);
 
 const alarm = ALARMS_SOURCE.match(
   /new aws\.cloudwatch\.MetricAlarm\('billingEventIngestFailures', \{[\s\S]*?\n {2}\}\);/

@@ -12,15 +12,18 @@ import {
 import { secureParameters } from '@bike4mind/utils';
 import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
 import { CreditHolderType, type CurationOptions } from '@bike4mind/common';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { sendToClient } from '@server/websocket/utils';
-import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@server/utils/eventBus';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
-import { createCompletionMeter, createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import {
+  createCompletionMeter,
+  createRequestCompletionMeter,
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -66,7 +69,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   });
 
   if (!sessionId || !curationJobId) {
-    logger.error(`Invalid message: ${body}`);
+    logger.error('Invalid message: sessionId and curationJobId are required', {
+      sqsMessageId: event.Records[0].messageId,
+      hasSessionId: Boolean(sessionId),
+      hasCurationJobId: Boolean(curationJobId),
+    });
     return;
   }
 
@@ -138,8 +145,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('Initializing LLM service for executive summary generation...');
       try {
         // Get operations model with initialized LLM backend
-        const { OperationsModelService } = await import('@client/services/operationsModelService');
-        const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
+        const { llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when
         // present); the operations model runs on the platform key.

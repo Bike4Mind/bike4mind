@@ -3,9 +3,10 @@ import { userRepository } from '@bike4mind/database';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import crypto from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
 
 const OAUTH_TIMEOUT = 30000;
 
@@ -39,7 +40,7 @@ interface ResourceResponse {
  * - Duplicate code usage from browser retries
  */
 const handler = baseApi({ auth: false }).get(async (req, res) => {
-  const { code, state } = req.query;
+  const { code, state, error: providerError } = req.query;
 
   // Burn the browser-binding nonce cookie on every exit path.
   clearStateNonce(res);
@@ -54,14 +55,22 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     req
   );
 
+  // warn, not error: a provider error (the user declined consent) or a code-less hit on this public
+  // URL is an expected outcome, and error-level lines raise production alerts.
+  if (providerError) {
+    console.warn('[Atlassian Callback] Authorization not completed', { error: oauthProviderErrorCode(providerError) });
+    auditLogger.failure('oauth_error');
+    return res.redirect('/profile?tab=integrations&atlassian=error');
+  }
+
   if (!code || typeof code !== 'string') {
-    console.error('❌ Missing authorization code');
+    console.warn('[Atlassian Callback] Missing authorization code');
     auditLogger.failure('missing_code');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
   if (!state || typeof state !== 'string') {
-    console.error('❌ Missing state parameter');
+    console.warn('❌ Missing state parameter');
     auditLogger.failure('missing_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -85,7 +94,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
-    console.error('❌ Failed to parse state parameter:', parseError);
+    // warn, not error: a junk state is caller input (scanners, hand-edited URLs), not a server fault,
+    // and error-level lines raise production alerts. The audit row still records it.
+    console.warn('❌ Failed to parse state parameter:', parseError);
     auditLogger.failure('invalid_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }

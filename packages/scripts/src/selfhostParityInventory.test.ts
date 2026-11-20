@@ -511,6 +511,15 @@ describe('background trigger shapes', () => {
     ).toThrow(/unresolved target/);
   });
 
+  it('accepts a target that is storage rather than a function', () => {
+    const inventory = discoverParityInventory(
+      sources(
+        "const logs = new aws.cloudwatch.LogGroup('logs', {}); const rule = new aws.cloudwatch.EventRule('rule', {eventPattern:'{}'}); new aws.cloudwatch.EventTarget('target', {rule: rule.name, arn: logs.arn});"
+      )
+    );
+    expect(inventory.map(item => item.id)).toEqual(['eventRule:infra/test.ts:rule']);
+  });
+
   it('identifies a declaration built in a named factory by its site', () => {
     const [item] = discoverParityInventory(
       sources(
@@ -618,6 +627,22 @@ describe('handler sources', () => {
     );
     expect(inventory[0].handlerSources[0].status).toBe('overlayAbsent');
     expect(validateParityPolicy(inventory, [], {}).filter(error => error.startsWith('Hosted handler'))).toEqual([]);
+  });
+
+  it('skips only the reviewed data-named queue constructors and keeps the literal rule elsewhere', () => {
+    const pairs =
+      'const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs); const queue = new sst.aws.Queue(pair.name, pair.queueArgs);';
+    expect(discoverParityInventory({ 'infra/queues.ts': pairs })).toEqual([]);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(other.name, {});` })).toThrow(
+      /literal name required/
+    );
+    expect(() => discoverParityInventory({ 'infra/test.ts': pairs })).toThrow(/literal name required/);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': 'new sst.aws.Queue(pair.dlqName, {});' })).toThrow(
+      /stale DATA_NAMED_QUEUES entry pair\.name/
+    );
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(pair.name, {});` })).toThrow(
+      /entry pair\.name names 2 queues/
+    );
   });
 
   it('treats only ENOENT as absence when reading repository sources', () => {

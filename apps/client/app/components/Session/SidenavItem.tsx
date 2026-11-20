@@ -14,6 +14,8 @@ import {
   useToggleFavoriteSession,
   useUpdateSessionTags,
 } from '@client/app/hooks/data/sessions';
+import type { Theme } from '@mui/joy/styles';
+import { conversationRowSx } from '@client/app/components/layouts/Notebook/Sidenav/kit';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -77,6 +79,26 @@ import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionConfirmModal';
+
+const MENU_VIEWPORT_PADDING_PX = 8;
+
+// Shared by the sidebar (right-start) and header (bottom-start) actions menus, which can
+// be taller than the viewport. preventOverflow on both axes slides the menu back on screen
+// (the vertical axis is the main axis for right-start, the alt axis for bottom-start);
+// tether: false lets it cover its button, and MENU_SX scrolls whatever still doesn't fit.
+const MENU_MODIFIERS = [
+  {
+    name: 'preventOverflow',
+    options: { altAxis: true, tether: false, padding: MENU_VIEWPORT_PADDING_PX },
+  },
+];
+
+const MENU_SX = {
+  zIndex: 1400,
+  borderRadius: '10px',
+  maxHeight: `calc(100vh - ${2 * MENU_VIEWPORT_PADDING_PX}px)`,
+  overflowY: 'auto',
+} as const;
 
 /**
  * Classify message count into two tiers:
@@ -402,52 +424,35 @@ const SessionSidenavItem: FC<{
   );
 
   const boxStyles = useMemo(
-    () => (theme: any) => ({
-      borderRadius: '5px',
-      cursor: 'pointer',
-      backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
-      position: 'relative',
-      // Add left border indicator for active state
-      '&::before': isSelected
-        ? {
-            content: '""',
-            position: 'absolute',
-            left: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: '2px',
-            height: '80%',
-            backgroundColor: theme.palette.primary[500],
-            borderRadius: '1px',
-          }
-        : {},
-      '&:hover': {
-        backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
-        '& .item-actions:not(.isProcessing)': {
-          visibility: 'visible',
-          opacity: 1,
-        },
-      },
-      '& .item-actions:not(.isProcessing)': {
-        visibility: isSelected ? 'visible' : 'hidden',
-        opacity: isSelected ? 1 : 0,
-      },
-      // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
-      // would otherwise land on an invisible button.
-      '@media (hover: none)': {
-        '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
-      },
-      '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
-      // Header style
-      ...(location === 'header' && {
-        backgroundColor: 'transparent',
-        display: 'flex',
-        '&::before': {},
+    () => [
+      // The header shows the open notebook's title, not a list selection: no wash, no bar.
+      (theme: Theme) => conversationRowSx(theme, isSelected && location !== 'header'),
+      {
         '&:hover': {
-          backgroundColor: 'transparent',
+          '& .item-actions:not(.isProcessing)': {
+            visibility: 'visible',
+            opacity: 1,
+          },
         },
-      }),
-    }),
+        '& .item-actions:not(.isProcessing)': {
+          visibility: isSelected ? 'visible' : 'hidden',
+          opacity: isSelected ? 1 : 0,
+        },
+        // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
+        // would otherwise land on an invisible button.
+        '@media (hover: none)': {
+          '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+        },
+        '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+        // Header style
+        ...(location === 'header' && {
+          display: 'flex',
+          '&:hover': {
+            backgroundColor: 'transparent',
+          },
+        }),
+      },
+    ],
     [isSelected, location]
   );
 
@@ -557,13 +562,11 @@ const SessionSidenavItem: FC<{
             </Badge>
             <Menu
               className="menuSurface"
-              sx={{
-                zIndex: 1400,
-                borderRadius: '10px',
-              }}
+              sx={MENU_SX}
               variant={'outlined'}
               placement="bottom-start"
               direction="ltr"
+              modifiers={MENU_MODIFIERS}
             >
               {canUpdate && (
                 <MenuItem onClick={handleToggleFavoriteSession} className="sidenav-item-menuitem-favorite">
@@ -895,13 +898,11 @@ const SessionSidenavItem: FC<{
 
               <Menu
                 className="menuSurface"
-                sx={{
-                  zIndex: 1400,
-                  borderRadius: '10px',
-                }}
+                sx={MENU_SX}
                 variant={'outlined'}
                 placement="right-start"
                 direction="ltr"
+                modifiers={MENU_MODIFIERS}
               >
                 {canUpdate && (
                   <MenuItem onClick={handleToggleFavoriteSession} className="sidenav-item-menuitem-favorite">

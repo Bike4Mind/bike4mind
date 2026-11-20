@@ -8,11 +8,32 @@ import { TurnStatus } from './TurnStatus';
 import { MessageThread } from './MessageThread';
 import { Composer } from './Composer';
 import { useCostDisplayPreference } from './costDisplay';
+import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
 
 vi.mock('./PermissionsSettings', () => ({
   PermissionsSettings: () => null,
   permissionsSummary: () => 'Default permissions',
   usePermissions: () => [null, () => undefined, null, () => undefined],
+}));
+vi.mock('./LocalContextSettings', () => ({
+  LocalContextSettings: () => null,
+  localContextSummary: () => 'Auto',
+  useLocalContextSetting: () => [null, () => undefined, null],
+}));
+vi.mock('./AutoFixAttemptsSettings', () => ({
+  AutoFixAttemptsSettings: () => null,
+  autoFixAttemptsSummary: () => 'Up to 5 attempts per pull request',
+  useAutoFixAttempts: () => [null, () => undefined, null],
+}));
+vi.mock('./ModelServersSettings', () => ({
+  ModelServersSettings: () => null,
+  modelServersSummary: () => 'Only this computer',
+  useModelServers: () => [null, () => undefined, null],
+}));
+vi.mock('./CuratedListSettings', () => ({
+  CuratedListSettings: () => null,
+  curatedListSummary: () => 'Bundled',
+  useCuratedListSettings: () => [null, () => undefined],
 }));
 vi.mock('./useAppUpdate', async () => {
   const { initialUpdateState } = await import('@shared/update');
@@ -35,7 +56,8 @@ function CostSurfaces() {
         sessionId="s1"
         disabled={false}
         streaming={false}
-        usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, lastTurn: usage }}
+        // A low allowance, so the composer's credits ring (and its tooltip) is drawn at all.
+        usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, monthlyAllowance: 10_000, lastTurn: usage }}
         attachments={{
           attachments: [],
           busy: false,
@@ -43,6 +65,7 @@ function CostSurfaces() {
           dismissRejected: () => undefined,
           add: async () => undefined,
           attachImage: async () => undefined,
+          attachFilePath: async () => undefined,
           pick: async () => undefined,
           remove: () => undefined,
           clear: () => undefined,
@@ -73,6 +96,19 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
+    // SettingsScreen's menu-bar switch and notify scope read their preferences from main.
+    vi.stubGlobal('b4m', {
+      watch: {
+        getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        onPreferences: () => () => undefined,
+      },
+      attention: {
+        getNotifyScope: async () => 'agents',
+        setNotifyScope: async () => 'agents',
+        onNotifyScope: () => () => undefined,
+      },
+    });
     window.localStorage.clear();
     useCostDisplayPreference.setState({ showDollarCosts: false });
     Element.prototype.scrollIntoView = () => undefined;

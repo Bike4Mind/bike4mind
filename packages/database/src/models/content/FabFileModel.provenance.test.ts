@@ -39,6 +39,11 @@ describe('FabFile provenance fields persist', () => {
     expect(stored?.sourceMetadata).toEqual({ channel: 'C0123', messageTs: '1700000000.0001' });
   });
 
+  it('accepts every FabFileSourceType value, so a new member never needs a hand-edited schema list', () => {
+    const sourceTypePath = FabFile.schema.path('sourceType') as unknown as { enumValues: string[] };
+    expect(sourceTypePath.enumValues).toEqual(Object.values(FabFileSourceType));
+  });
+
   it('rejects a sourceType outside the enum', async () => {
     await expect(
       FabFile.create({

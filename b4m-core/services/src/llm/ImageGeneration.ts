@@ -6,6 +6,7 @@ import {
   ISessionDocument,
   OpenAIImageGenerationInput,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ImageModels,
   BFLSafetyToleranceSchema,
@@ -19,32 +20,32 @@ import {
   IAdminSettingsRepository,
   ModelInfo,
   IOrganizationRepository,
-  IOrganizationDocument,
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  type ApiKeyBillingOwnerType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
   PersistedSessionSummaryTrigger,
+  type PersistedCreditHold,
+  type ISpendFreezeRepository,
+  type BFLImageModel,
 } from '@bike4mind/common';
 import {
-  BFL_IMAGE_MODELS,
   XAI_IMAGE_MODELS,
-  GEMINI_IMAGE_MODELS,
   isBflImageModel,
-  isFlux2ImageModel,
+  takesBflInputImageList,
+  supportsBflOutputFormat,
   getMaxReferenceImages,
   isGPTImageModel,
   rejectsTransparentBackground,
-  clampImageQualityForModel,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
   MAX_REFERENCE_IMAGES,
   requiresImageInput,
-  insufficientCreditsError,
   getQuestErrorCode,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
@@ -65,13 +66,13 @@ import {
   TiktokenTokenizer,
   usdToCredits,
   usdToCreditsStochastic,
-  UnprocessableEntityError,
   OpenAIImageService,
   BFLImageService,
   XAIImageService,
   GeminiImageService,
   ImageEditResponse,
-  ImageModerationBlockedError,
+  ImageInputRejectedError,
+  logImageGenerationFailure,
   BaseStorage,
   getSettingsByNames,
   downloadImageAsBuffer,
@@ -88,41 +89,21 @@ import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { fromZodError } from 'zod-validation-error';
-import {
-  OMITTED_QUALITY_TIER,
-  OpenAICostInput,
-  OpenAIGPTImageInput,
-  OpenAIImageCostCalculator,
-} from './imageCostCalculator/OpenAIImageCostCalculator';
+import { resolveBilledImageQuality } from '../imageCost';
+import { OpenAICostInput, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
-import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
+import type { ImageCreditHolds } from './imageCreditHolds';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
-/**
- * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
- * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
- * unchanged for every other model family, none of which has a tier concept.
- *
- * Both callers below read this one function - validateUserCredits (the charge) and the
- * openaiParams dispatch (the render) - so the two cannot disagree.
- *
- * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
- * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
- * while the calculator has already held the medium price - and image credits are held once,
- * before the call, with no reconciliation pass to correct it. Pinning moves nobody's bill
- * (the pin IS the billed tier); a caller who wants OpenAI's dynamic effort asks for it with
- * an explicit 'auto', which bills at the ceiling. Do not restore the undefined here without
- * repricing the omitted case in OpenAIImageCostCalculator.normalizeInput.
- */
-function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
-  if (!isGPTImageModel(model)) return quality;
-  if (!quality) return OMITTED_QUALITY_TIER;
-  return clampImageQualityForModel(model, quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality);
-}
+/** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
+const bflPicksOutputFormat = (model: string): boolean => isBflImageModel(model) && !supportsBflOutputFormat(model);
 
 export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -150,8 +131,21 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
    * keeps the first run's files while quest.images shows the new render. Absent on messages queued before it existed.
    */
   generationId: z.string().optional(),
+  adminRoleWithheld: z.boolean().optional(),
+  /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
+  apiKeyId: z.string().optional(),
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
+
+const IMAGE_GENERATION_FEATURE_LABEL = 'image generation';
+
+/** Re-exported so the app wires the port without a new package subpath; ImageEdit takes the same port. */
+export type { ImageCreditHolds } from './imageCreditHolds';
 
 interface IImageGenerationServiceOptions {
   db: {
@@ -172,11 +166,25 @@ interface IImageGenerationServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
+  /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
+  creditHolds: ImageCreditHolds;
+  /** organizationId is the org this request bills, so its model policy applies. */
+  assertModelAdmission: (
+    user: string | IUserDocument,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
@@ -240,6 +248,8 @@ function lineageOf(
 export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
   private startImageGenerationProcess: IImageGenerationServiceOptions['startImageGenerationProcess'];
+  private creditHolds: ImageCreditHolds;
+  private assertModelAdmission: IImageGenerationServiceOptions['assertModelAdmission'];
   private wsHttpsUrl: string;
   private logEvent: IImageGenerationServiceOptions['logEvent'];
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
@@ -256,13 +266,17 @@ export class ImageGenerationService {
   constructor(options: IImageGenerationServiceOptions) {
     this.db = options.db;
     this.startImageGenerationProcess = options.startImageGenerationProcess;
+    this.creditHolds = options.creditHolds;
+    this.assertModelAdmission = options.assertModelAdmission;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.logEvent = options.logEvent;
     this.storage = options.storage;
     this.fabFileStorage = options.fabFileStorage;
     this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
-    this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
+    // The service is cached per container, so the tokenizer must not keep a request's logger;
+    // request-scoped calls go through withLogger(logger) instead.
+    this.tokenizer = new TiktokenTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
     this.invokeSessionAutoNaming = options.invokeSessionAutoNaming;
     this.invokeSummarizeSession = options.invokeSummarizeSession;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -291,7 +305,19 @@ export class ImageGenerationService {
     }
   }
 
-  public async invoke({ body, userId }: { body: z.infer<typeof GenerateImageIvokeParamsSchema>; userId: string }) {
+  public async invoke({
+    body,
+    userId,
+    adminRoleWithheld,
+    apiKeyId,
+    apiKeyBillingOwnerType,
+  }: {
+    adminRoleWithheld?: boolean;
+    apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+    body: z.infer<typeof GenerateImageIvokeParamsSchema>;
+    userId: string;
+  }) {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
@@ -315,6 +341,7 @@ export class ImageGenerationService {
       rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
+    await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -334,7 +361,7 @@ export class ImageGenerationService {
         safety_tolerance: rest.safety_tolerance,
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
-        output_format: rest.output_format,
+        output_format: bflPicksOutputFormat(model) ? undefined : rest.output_format,
         background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
@@ -460,6 +487,9 @@ export class ImageGenerationService {
           organizationId,
           intent,
           generationId: uuidv4(),
+          adminRoleWithheld,
+          apiKeyId,
+          apiKeyBillingOwnerType,
         })
       );
 
@@ -483,7 +513,7 @@ export class ImageGenerationService {
         }
       }
     } catch (error) {
-      Logger.globalInstance.error(`[DEBUG INVOKE] Error in image generation process:`, error);
+      logImageGenerationFailure(Logger.globalInstance, '[DEBUG INVOKE] Error in image generation process:', error);
 
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
@@ -511,26 +541,8 @@ export class ImageGenerationService {
     return quest;
   }
 
-  private async validateUserCredits(
-    user: IUserDocument,
-    modelInfo: ModelInfo,
-    n: number = 1,
-    input: CostInput,
-    logger: Logger,
-    organization?: IOrganizationDocument | null
-  ) {
-    let credits = user.currentCredits ?? 0;
-    let creditsSource: 'user' | 'organization' = 'user';
-
-    // If organization exists, use organization credits instead
-    if (organization) {
-      credits = organization.currentCredits ?? 0;
-      creditsSource = 'organization';
-      logger.updateMetadata({ creditsSource: 'organization', creditsSourceId: organization.id });
-    } else {
-      logger.updateMetadata({ creditsSource: 'user', creditsSourceId: user.id });
-    }
-
+  /** Prices a request; the balance and member-cap checks happen atomically in creditHolds.hold. */
+  private estimateCredits(modelInfo: ModelInfo, n: number = 1, input: CostInput, logger: Logger) {
     let usdCost = 0;
     // Input images are billed once per request, outside the `* n` (see getInputImageCost).
     let inputUsd = 0;
@@ -566,23 +578,7 @@ export class ImageGenerationService {
       throw new InternalServerError(`Unable to compute credit cost for model "${modelInfo.id}" (got ${usdCost}).`);
     }
 
-    if (credits < requiredCredits) {
-      const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw insufficientCreditsError(
-        `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
-      );
-    }
-
-    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
-    // shared pool. This is the only enforcement point - the settlement write
-    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
-    if (organization && isMemberCreditCapExceeded(organization, user.id, requiredCredits)) {
-      throw insufficientCreditsError(
-        `Your organization member credit limit has been reached for image generation. Contact your organization administrator.`
-      );
-    }
-
-    // requiredCredits only gates the request (rounded up); the final debit settles usdCost stochastically.
+    // requiredCredits is the rounded-up hold; the final debit settles usdCost stochastically.
     return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
@@ -641,7 +637,7 @@ export class ImageGenerationService {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
     const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
-    const workbenchFiles = isFlux2ImageModel(model)
+    const workbenchFiles = takesBflInputImageList(model)
       ? (fabFileIds ?? [])
           .map(id => fabFiles.find(file => file.id === id))
           .filter((file): file is IFabFileDocument => !!file)
@@ -649,7 +645,7 @@ export class ImageGenerationService {
     const workbenchImage = workbenchFiles.find(file => file.mimeType.startsWith('image'));
 
     const referenceImages = await this.resolveReferenceImages({
-      referenceImageFabFileIds: isFlux2ImageModel(model)
+      referenceImageFabFileIds: takesBflInputImageList(model)
         ? [
             ...workbenchFiles
               .filter(file => file.mimeType.startsWith('image') && file.id !== workbenchImage?.id)
@@ -756,11 +752,11 @@ export class ImageGenerationService {
     }
 
     const selectedReferenceImages =
-      isFlux2ImageModel(model) && fileImage?.id
+      takesBflInputImageList(model) && fileImage?.id
         ? referenceImages.filter(reference => reference.id !== fileImage.id)
         : referenceImages;
     if (
-      isFlux2ImageModel(model) &&
+      takesBflInputImageList(model) &&
       selectedReferenceImages.length + (fileImage?.filePath ? 1 : 0) > getMaxReferenceImages(model)
     ) {
       throw new BadRequestError(`At most ${getMaxReferenceImages(model)} input images may be supplied for ${model}`);
@@ -787,7 +783,7 @@ export class ImageGenerationService {
    * they did not describe, with nothing in the response to say why it looks wrong.
    *
    * Anchors are never carried forward from session history; only this explicit field produces
-   * them, except FLUX.2 also accepts the current workbench images as inputs.
+   * them, except FLUX.2 and FLUX 3 also accept the current workbench images as inputs.
    */
   private async resolveReferenceImages({
     referenceImageFabFileIds,
@@ -854,6 +850,9 @@ export class ImageGenerationService {
       sessionId,
       questId,
       userId,
+      adminRoleWithheld,
+      apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
       model,
       n = 1,
@@ -909,6 +908,8 @@ export class ImageGenerationService {
     // Persist status='running' + heartbeat updatedAt so a hung/killed render is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
     let stopHeartbeat: (() => void) | undefined;
+    // Cleared once settled; the finally returns a hold still set (a failure or an early return).
+    let creditHold: PersistedCreditHold | undefined;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
@@ -919,6 +920,7 @@ export class ImageGenerationService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
+      await this.assertModelAdmission(user, model, adminRoleWithheld, organizationId);
 
       // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
       // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
@@ -956,7 +958,8 @@ export class ImageGenerationService {
       let usageCostUsd = 0;
 
       // Encode the prompt to tokens
-      const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
+      const tokenizer = this.tokenizer.withLogger(logger);
+      const promptTokens = await tokenizer.encodeTokens(prompt, model);
 
       this.addStatusToQuest(quest, 'Preparing to paint...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -973,9 +976,13 @@ export class ImageGenerationService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        const isBFLModelForModeration = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-        if (!isBFLModelForModeration && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const isBFLModelForModeration = isBflImageModel(model);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (!isBFLModelForModeration && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 
@@ -987,7 +994,7 @@ export class ImageGenerationService {
         prompt,
         promptTokens,
         maxTokens: models.find(m => m.id === model)?.max_tokens,
-        tokenizer: this.tokenizer,
+        tokenizer,
         modelId: model,
         logger,
       });
@@ -1025,27 +1032,44 @@ export class ImageGenerationService {
       // the primary (if any) plus every resolved reference. With no primary the first reference
       // is promoted into its slot, which referenceImages already counts.
       if (adminSettingsEnforceCredits && model && !!this.db.creditTransactions) {
-        const { requiredCredits, usdCost } = await this.validateUserCredits(
-          user,
+        const { requiredCredits, usdCost } = this.estimateCredits(
           modelInfo,
           billedN,
           {
             model,
             size: effectiveSize,
-            quality: mapQualityForModel(model, quality),
+            quality: resolveBilledImageQuality(model, quality),
             inputImageCount: (fileImage?.filePath ? 1 : 0) + referenceImages.length,
           },
-          logger,
-          organization
+          logger
         );
+        // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
+        creditHold = await this.creditHolds.hold({
+          userId,
+          organizationId: organization ? organization.id : null,
+          requiredCredits,
+          featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
+          logger,
+          apiKeyId,
+          apiKeyBillingOwnerType,
+        });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Choose the appropriate service based on the model
-      const isBFLModel = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-      const isXAIModel = Object.values(XAI_IMAGE_MODELS).includes(model as any);
-      const isGeminiModel = Object.values(GEMINI_IMAGE_MODELS).includes(model as any);
+      const isBFLModel = isBflImageModel(model);
+      const isXAIModel = (XAI_IMAGE_MODELS as readonly string[]).includes(model);
+      const isGeminiModel = isGeminiImageModel(model);
 
       let service: OpenAIImageService | BFLImageService | XAIImageService | GeminiImageService;
       if (isBFLModel) {
@@ -1059,7 +1083,7 @@ export class ImageGenerationService {
       }
 
       let images: string[] = [];
-      if (XAI_IMAGE_MODELS.includes(model as any)) {
+      if (isXAIModel) {
         Logger.globalInstance.debug(`[DEBUG] === XAI IMAGE PROCESSING ===`);
 
         // XAI specific options - simplified for basic text-to-image generation
@@ -1069,12 +1093,12 @@ export class ImageGenerationService {
           n,
         });
 
-        images = await service.generate(truncatedPrompt, {
-          model: model as any,
+        images = await (service as XAIImageService).generate(truncatedPrompt, {
+          model,
           n,
           user: userId,
         });
-      } else if (GEMINI_IMAGE_MODELS.includes(model as any)) {
+      } else if (isGeminiModel) {
         Logger.globalInstance.debug(`[DEBUG] === GEMINI IMAGE PROCESSING ===`);
 
         // Gemini specific options
@@ -1136,7 +1160,7 @@ export class ImageGenerationService {
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
-              model: model as any,
+              model,
               aspect_ratio,
               output_format: nonWebpOutputFormat,
               safety_tolerance,
@@ -1164,7 +1188,7 @@ export class ImageGenerationService {
 
             // Store clarification metadata for potential future retry
             quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId, userId });
-            (quest.promptMeta as any).imageClarification = {
+            (quest.promptMeta as PromptMeta & { imageClarification?: Record<string, unknown> }).imageClarification = {
               clarificationId: clarificationResponse.clarificationId,
               question: clarificationResponse.question,
               originalPrompt: clarificationResponse.originalPrompt,
@@ -1200,7 +1224,7 @@ export class ImageGenerationService {
         } else {
           Logger.globalInstance.debug(`[DEBUG] Gemini generation: proceeding without input image`);
           images = await geminiService.generate(truncatedPrompt, {
-            model: model as any,
+            model,
             n,
             aspect_ratio,
             output_format: nonWebpOutputFormat,
@@ -1212,7 +1236,7 @@ export class ImageGenerationService {
             seed,
           });
         }
-      } else if (BFL_IMAGE_MODELS.includes(model as any)) {
+      } else if (isBFLModel) {
         Logger.globalInstance.debug(`[DEBUG] === BFL IMAGE PROCESSING ===`);
         // BFL specific options. Use isKontextModel (not requiresImageInput) so Fill,
         // which also requires an input image, is never misrouted through the Kontext
@@ -1293,7 +1317,7 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] ⚠️ No imageUrl available for base64 conversion`);
         }
 
-        const referenceImageData = isFlux2ImageModel(model)
+        const referenceImageData = takesBflInputImageList(model)
           ? await Promise.all(
               referenceImages.map(async reference => {
                 const url = await this.fabFileStorage.getSignedUrl(reference.filePath as string);
@@ -1315,8 +1339,7 @@ export class ImageGenerationService {
           if (!base64Image) {
             const errorMsg =
               '❌ Kontext models require an input image for transformation. Please either:\n1. Upload an image to the workbench, or\n2. Generate an image in this conversation first.\n\nTip: Try generating an image with a text-to-image model first (like Flux Pro or GPT-Image), then apply Kontext transformations.';
-            Logger.globalInstance.error(`[DEBUG] ❌ Kontext validation failed:`, errorMsg);
-            throw new UnprocessableEntityError(errorMsg);
+            throw new ImageInputRejectedError(errorMsg, { model, reason: 'missing_input_image' });
           }
 
           Logger.globalInstance.debug(`[DEBUG] ✅ Kontext validation passed, calling transform...`);
@@ -1326,25 +1349,24 @@ export class ImageGenerationService {
             safety_tolerance,
             prompt_upsampling,
             seed,
-            output_format: nonWebpOutputFormat,
+            output_format: nonWebpOutputFormat ?? undefined,
             aspect_ratio,
           };
 
           Logger.globalInstance.debug(`[DEBUG] Transform parameters:`, transformParams);
           Logger.globalInstance.debug(`[DEBUG] Prompt preview:`, truncatedPrompt.substring(0, 100) + '...');
 
-          try {
-            const transformedImage = await (service as any).transform(base64Image, truncatedPrompt, transformParams);
-            Logger.globalInstance.debug(`[DEBUG] ✅ Transform successful:`, {
-              resultType: typeof transformedImage,
-              resultLength: transformedImage?.length,
-              resultPreview: transformedImage?.substring(0, 100) + '...',
-            });
-            images = [transformedImage];
-          } catch (error) {
-            Logger.globalInstance.error(`[DEBUG] ❌ Transform failed:`, error);
-            throw error;
-          }
+          const transformedImage = await (service as BFLImageService).transform(
+            base64Image,
+            truncatedPrompt,
+            transformParams
+          );
+          Logger.globalInstance.debug(`[DEBUG] Transform successful:`, {
+            resultType: typeof transformedImage,
+            resultLength: transformedImage?.length,
+            resultPreview: transformedImage?.substring(0, 100) + '...',
+          });
+          images = [transformedImage];
         } else if (isBFLUltraModel) {
           // For Ultra models, use aspect_ratio
           images = await service.generate(truncatedPrompt, {
@@ -1365,9 +1387,9 @@ export class ImageGenerationService {
           images = await service.generate(truncatedPrompt, {
             ...resolveImageDimensions({ width, height, size: effectiveSize }, BFL_DIMENSION_BOUNDS),
             user: userId,
-            model: model as any,
+            model: model as BFLImageModel,
             safety_tolerance,
-            ...(isFlux2ImageModel(model)
+            ...(takesBflInputImageList(model)
               ? { reference_images: [...(base64Image ? [base64Image] : []), ...referenceImageData] }
               : { image_prompt: base64Image }),
             prompt_upsampling,
@@ -1420,8 +1442,8 @@ export class ImageGenerationService {
         }
 
         // Prepare OpenAI parameters with proper filtering for GPT-Image-1
-        const openaiParams: any = {
-          model: model as any,
+        const openaiParams: Parameters<OpenAIImageService['generate']>[1] = {
+          model,
           n,
           size: openAiSize as (typeof OPENAI_IMAGE_SIZES)[number] | undefined,
           user: userId,
@@ -1430,10 +1452,10 @@ export class ImageGenerationService {
         // Filter parameters based on model type
         if (isGPTImageModel(model)) {
           // GPT-Image models don't support 'style' or 'response_format' parameters.
-          // Same mapping validateUserCredits billed against, so the render matches the charge -
-          // including the omitted case, which mapQualityForModel pins rather than dropping.
+          // Same mapping estimateCredits billed against, so the render matches the charge -
+          // including the omitted case, which resolveBilledImageQuality pins rather than dropping.
           // The truthiness guard is kept for the unrecognized-value case only.
-          const mappedQuality = mapQualityForModel(model, quality);
+          const mappedQuality = resolveBilledImageQuality(model, quality);
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
           }
@@ -1473,13 +1495,18 @@ export class ImageGenerationService {
           n: openaiParams.n,
         });
 
-        images = await service.generate(truncatedPrompt, openaiParams);
+        images = await (service as OpenAIImageService).generate(truncatedPrompt, openaiParams);
       }
 
       const userAbility = this.abilityGetter(user);
 
       await this.logEvent(
-        { userId, type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE, metadata: { questId: quest.id, modelId: model } },
+        // as unknown: payload lacks the event type's required metadata and sends modelId, not model; typing it would change analytics
+        {
+          userId,
+          type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE,
+          metadata: { questId: quest.id, modelId: model },
+        } as unknown as LLMEventPayload,
         { ability: userAbility }
       );
 
@@ -1589,15 +1616,8 @@ export class ImageGenerationService {
       });
 
       // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
-      // (may be 0), replacing the rounded-up pre-flight figure.
-      const creditTransactions = this.db.creditTransactions;
-      const settlement =
-        adminSettingsEnforceCredits &&
-        typeof quest.creditsUsed === 'number' &&
-        Number.isFinite(quest.creditsUsed) &&
-        creditTransactions
-          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
-          : undefined;
+      // (may be 0), replacing the rounded-up hold.
+      const settlement = creditHold ? { credits: usdToCreditsStochastic(usageCostUsd) } : undefined;
       if (settlement) quest.creditsUsed = settlement.credits;
 
       await this.db.quests.update({
@@ -1639,28 +1659,17 @@ export class ImageGenerationService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful generation. A zero draw writes no ledger row; the usage event still lands.
-      if (settlement) {
-        if (settlement.credits > 0) {
-          await deductCreditsWithOrgSupport(
-            {
-              type: 'image_generation_usage',
-              user,
-              organization,
-              credits: settlement.credits,
-              sessionId,
-              questId,
-              model,
-            },
-            {
-              db: {
-                creditTransactions: settlement.creditTransactions,
-                users: this.db.users,
-                organizations: this.db.organizations,
-              },
-            }
-          );
-        }
+      // Settle the hold after successful generation: keep the draw, refund the rest. A zero draw writes no
+      // ledger row; the usage event still lands.
+      if (settlement && creditHold) {
+        // Charges never exceed the hold: any provider cost above the estimate is absorbed.
+        const creditsCharged = await this.creditHolds.settle(
+          creditHold,
+          settlement.credits,
+          { type: 'image_generation_usage', sessionId, questId, model, apiKeyId },
+          { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
+        );
+        creditHold = undefined;
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -1684,7 +1693,7 @@ export class ImageGenerationService {
             cacheWriteTokens: 0,
             units: billedN,
             costUsd: usageCostUsd,
-            creditsCharged: settlement.credits,
+            creditsCharged,
             status: 'ok',
             latencyMs: Date.now() - startTime,
           })
@@ -1705,14 +1714,14 @@ export class ImageGenerationService {
         ...(seed != null && { seed }),
         ...(safety_tolerance !== undefined && { safety_tolerance }),
         prompt_upsampling,
-        ...(output_format && { output_format }),
+        ...(output_format && !bflPicksOutputFormat(model) && { output_format }),
         ...(background && { background }),
       };
       const derivedFrom = lineageOf(imageSource, fileImage, referenceImages);
 
       // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
       await Promise.all(
-        storedImages.map(({ buffer, contentType }, index) =>
+        storedImages.map(({ buffer, contentType, path }, index) =>
           saveGeneratedImage(
             this.saveGeneratedAsset,
             {
@@ -1730,18 +1739,15 @@ export class ImageGenerationService {
               ...(derivedFrom.length > 0 && { derivedFrom }),
               sessionId,
               questId,
+              generatedOutputKey: path,
             },
             logger
           )
         )
       );
     } catch (error) {
-      if (error instanceof ImageModerationBlockedError) {
-        // The user's prompt was refused: expected, so keep it out of the error-level Slack alerts.
-        logger.warn('Image generation blocked by content policy:', { requestId: error.requestId });
-      } else {
-        logger.error('Error processing image generation:', error);
-      }
+      // Expected failures (content policy, provider timeout, unusable input) log at warn, out of the Slack alerts.
+      logImageGenerationFailure(logger, 'Error processing image generation:', error);
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';
@@ -1769,6 +1775,8 @@ export class ImageGenerationService {
       // Always stop the heartbeat, on success, error, or an early return (e.g. Gemini
       // clarification). The terminal write above owns the final status.
       stopHeartbeat?.();
+      if (creditHold)
+        await this.creditHolds.release(creditHold, { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger });
     }
   }
 }

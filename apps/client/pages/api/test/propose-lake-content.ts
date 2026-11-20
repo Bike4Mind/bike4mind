@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { dataLakeRepository, dataLakeProposalRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { Resource } from 'sst';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { Request } from 'express';
 
 /**
@@ -58,10 +58,8 @@ const handler = baseApi({ auth: false }).post(
       return res.status(403).json({ error: 'Proposal seeding is only available in development/preview' });
     }
 
-    // Guard 2: shared secret - SST secret locally/staging, env var on preview deploys.
-    const secret = req.headers['x-e2e-cleanup-secret'];
-    const expectedSecret = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
-    if (!expectedSecret || expectedSecret === 'not-configured' || secret !== expectedSecret) {
+    // Guard 2: E2E secret header
+    if (!isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) {
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 

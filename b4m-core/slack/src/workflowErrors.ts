@@ -12,15 +12,15 @@ export enum WorkflowErrorCategory {
 export interface WorkflowErrorOptions {
   message: string;
   category: WorkflowErrorCategory;
-  originalError?: any;
-  context?: Record<string, any>;
+  originalError?: unknown;
+  context?: Record<string, unknown>;
   userMessage?: string;
 }
 
 export class WorkflowError extends Error {
   public readonly category: WorkflowErrorCategory;
-  public readonly originalError?: any;
-  public readonly context: Record<string, any>;
+  public readonly originalError?: unknown;
+  public readonly context: Record<string, unknown>;
   public readonly userMessage: string;
 
   constructor(options: WorkflowErrorOptions) {
@@ -105,24 +105,26 @@ export async function withRetry<T>(
   throw lastError;
 }
 
-export function categorizeError(error: any): WorkflowError {
+export function categorizeError(error: unknown): WorkflowError {
   if (error instanceof WorkflowError) {
     return error;
   }
 
+  const e = error as { code?: unknown; message?: string; data?: { error?: unknown } } | null | undefined;
+
   // Handle known error types
-  if (error?.code === 'slack_web_api_platform_error') {
+  if (e?.code === 'slack_web_api_platform_error') {
     return new WorkflowError({
-      message: error.message,
+      message: e.message ?? '',
       category: WorkflowErrorCategory.INTERNAL_ERROR,
       originalError: error,
       userMessage: 'A Slack platform error occurred. Please try again.',
     });
   }
 
-  if (error?.data?.error === 'not_in_channel' || error?.data?.error === 'channel_not_found') {
+  if (e?.data?.error === 'not_in_channel' || e?.data?.error === 'channel_not_found') {
     return new WorkflowError({
-      message: error.message,
+      message: e.message ?? '',
       category: WorkflowErrorCategory.PERMISSION_DENIED,
       originalError: error,
       userMessage: 'The bot does not have access to the specified channel.',
@@ -131,7 +133,7 @@ export function categorizeError(error: any): WorkflowError {
 
   // Default to internal error
   return new WorkflowError({
-    message: error.message || 'Unknown error',
+    message: e?.message || 'Unknown error',
     category: WorkflowErrorCategory.INTERNAL_ERROR,
     originalError: error,
     userMessage: 'An unexpected system error occurred.',

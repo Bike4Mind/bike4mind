@@ -14,17 +14,83 @@ import {
   Project,
   UserActivityCounter,
 } from '../models';
-import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  InvitePermission,
+  IUserDocument,
+  Permission,
+  hasAdminPermission,
+  hasDeveloperUserTag,
+  readableGroupIds,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
+} from '@bike4mind/common';
 
 export type Ability = MongoAbility;
 
 /** The `can` of an `AbilityBuilder(createMongoAbility)`, which is what both callers hold. */
 type AllowFn = AbilityBuilder<MongoAbility>['can'];
 
+type ShareableSubject = Parameters<AllowFn>[1];
+
 /**
- * The shared user/group share arm, applied to every shareable resource.
+ * Who may READ a shareable. `shared` is every share arm (owner, user and group shares, isGlobalRead).
+ * `membership` is owner plus a users[] row that confers membership - the same predicate as
+ * OrganizationModel's orgMembershipFilter / orgAclRowConfersMembership, which the REST org routes
+ * scope by. Write, delete and share arms are the same for both.
+ */
+type ReadScope = 'shared' | 'membership';
+
+function applyShareableArms(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  resource: ShareableSubject,
+  readScope: ReadScope
+) {
+  const ownDocumentPermission: MongoQuery = { userId: user.id };
+
+  allow(Permission.create, resource);
+
+  if (readScope === 'shared') {
+    allow(Permission.read, resource, { isGlobalRead: true });
+  }
+  allow(Permission.update, resource, { isGlobalWrite: true });
+
+  [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
+    allow(permission, resource, ownDocumentPermission);
+
+    if (permission === Permission.read && readScope === 'membership') {
+      allow(permission, resource, {
+        users: { $elemMatch: { userId: user.id, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } },
+      });
+      return;
+    }
+
+    // $elemMatch on both arms so the id and the permission must hold on the SAME entry. Dotted
+    // `{ 'users.userId': ..., 'users.permissions': ... }` lets the two conditions be satisfied by
+    // different array elements: a doc shared with alice (share only) and bob (read) would grant
+    // alice read. The group arm has the same shape of cross-entry over-grant. Mirrors the
+    // $elemMatch the fabFile search query already uses (fabFileSearchQuery.ts).
+    const userWithPermissions: MongoQuery = {
+      users: { $elemMatch: { userId: user.id, permissions: permission } },
+    };
+    // Read also honours an org-owned key's granted groups (readableGroupIds); every other
+    // permission keeps the account's own memberships, so a key grant never confers write.
+    const groupIds = permission === Permission.read ? readableGroupIds(user) : (user.groups ?? []);
+    const groupWithPermissions: MongoQuery = {
+      groups: { $elemMatch: { groupId: { $in: groupIds }, permissions: permission } },
+    };
+    allow(permission, resource, userWithPermissions);
+
+    if (groupIds.length) {
+      allow(permission, resource, groupWithPermissions);
+    }
+  });
+}
+
+/**
+ * The shared user/group share arm, applied to every shareable resource except Organization (see
+ * applyOrganizationShareableRules).
  *
- * Called from BOTH ability builders - this one and apps/client/server/auth/ability.ts - so the two
+ * Called from BOTH ability builders - this one and packages/server-utils/src/auth/ability.ts - so the two
  * cannot drift. They previously kept hand-copied duplicates, which is how a cross-entry over-grant
  * (dotted `users.userId` + `users.permissions` instead of `$elemMatch`) and a missing `Project`
  * resource each survived in one copy while the other was correct.
@@ -37,38 +103,22 @@ type AllowFn = AbilityBuilder<MongoAbility>['can'];
 export function applySharedShareableRules(
   allow: AllowFn,
   user: Pick<IUserDocument, 'id' | 'groups'>,
-  resources: readonly Parameters<AllowFn>[1][]
+  resources: readonly ShareableSubject[]
 ) {
-  const ownDocumentPermission: MongoQuery = { userId: user.id };
+  resources.forEach(resource => applyShareableArms(allow, user, resource, 'shared'));
+}
 
-  resources.forEach(resource => {
-    allow(Permission.create, resource);
-
-    // Globals apply to every shareable type.
-    allow(Permission.read, resource, { isGlobalRead: true });
-    allow(Permission.update, resource, { isGlobalWrite: true });
-
-    [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
-      allow(permission, resource, ownDocumentPermission);
-
-      // $elemMatch on both arms so the id and the permission must hold on the SAME entry. Dotted
-      // `{ 'users.userId': ..., 'users.permissions': ... }` lets the two conditions be satisfied by
-      // different array elements: a doc shared with alice (share only) and bob (read) would grant
-      // alice read. The group arm has the same shape of cross-entry over-grant. Mirrors the
-      // $elemMatch the fabFile search query already uses (fabFileSearchQuery.ts).
-      const userWithPermissions: MongoQuery = {
-        users: { $elemMatch: { userId: user.id, permissions: permission } },
-      };
-      const groupWithPermissions: MongoQuery = {
-        groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
-      };
-      allow(permission, resource, userWithPermissions);
-
-      if (user.groups?.length) {
-        allow(permission, resource, groupWithPermissions);
-      }
-    });
-  });
+/**
+ * Organization's share arms: the same as applySharedShareableRules except that read is
+ * membership-only (no isGlobalRead, no group share), matching the REST org routes. Called from both
+ * ability builders with the Organization model each one imported.
+ */
+export function applyOrganizationShareableRules(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  organization: ShareableSubject
+) {
+  applyShareableArms(allow, user, organization, 'membership');
 }
 
 export function defineAbilitiesFor(user: IUserDocument | undefined) {
@@ -97,16 +147,18 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('update', AdminSettings);
       allow('delete', AdminSettings);
 
-      allow('create', ModalModel);
-      allow('update', ModalModel);
-      allow('delete', ModalModel);
-
       allow('read', Organization);
       allow('update', Organization);
       allow('delete', Organization);
 
       allow('read', UserActivityCounter);
       allow('update', UserActivityCounter);
+    }
+
+    if (hasAdminPermission(user, 'settings:manage')) {
+      allow('create', ModalModel);
+      allow('update', ModalModel);
+      allow('delete', ModalModel);
     }
 
     allow('read', UserActivityCounter, ownDocumentPermission);
@@ -120,10 +172,13 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow<MongoQuery>('read', AdminSettings, { isAdmin: false });
     }
 
-    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
+    applySharedShareableRules(allow, user, [Session, FabFile, Project]);
+    applyOrganizationShareableRules(allow, user, Organization);
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
+    // Mirrors the HTTP builder's FabFile export rule (packages/server-utils/src/auth/ability.ts).
+    allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
 
     // Accept and refuse invites
@@ -154,7 +209,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     // to a by-class `can(action, FeedbackModel)` check, which reports true as soon as any rule for
     // the action exists - so a feedback route must authorize against the fetched document instance
     // or narrow the query with accessibleBy(). A by-class check grants every non-admin the admin
-    // view. MUST STAY IN SYNC with the feedback rules in apps/client/server/auth/ability.ts.
+    // view. MUST STAY IN SYNC with the feedback rules in packages/server-utils/src/auth/ability.ts.
     allow(Permission.read, FeedbackModel, {
       userId: user.id,
     });
@@ -182,7 +237,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow(Permission.read, Prompt);
 
     // Prompt-library management: admin or developer (internal-staff bypass) - the
-    // SAME rule as the HTTP ability (apps/client/server/auth/ability.ts). Both
+    // SAME rule as the HTTP ability (packages/server-utils/src/auth/ability.ts). Both
     // definitions previously gated on the literal 'Analyst' tag with no admin
     // fallback; unified 2026-07-08 so the Slack/queue paths that consume this
     // db-core ability match the HTTP path and no longer depend on a retired tag.

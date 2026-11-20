@@ -6,7 +6,11 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { tagService } from '@bike4mind/services';
 import { fabFileRepository, fileTagRepository } from '@bike4mind/database';
-import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  assertFilesReadScope,
+  assertFilesWriteScope,
+  FILES_READ_OR_WRITE_SCOPES,
+} from '@bike4mind/server-utils/files/fileScopes';
 
 const tagCreateBodySchema = z.object({
   name: z.string().trim().min(1),

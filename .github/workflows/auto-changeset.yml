@@ -88,7 +88,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # Generate from the live title: a re-run of an old run carries a stale title in its payload.
-          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null || true)
+          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null) || PR_TITLE=""
           export PR_TITLE="${PR_TITLE:-$EVENT_TITLE}"
           # Run main's copies of the changeset scripts, never the PR head's: a branch cut before
           # they existed has none, and PR-head code stays out of the gate. The head copy is only

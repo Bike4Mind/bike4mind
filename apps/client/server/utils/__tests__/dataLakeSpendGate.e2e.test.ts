@@ -532,6 +532,7 @@ describe('token-per-minute window over the real cache counter', () => {
     dataLakeEmbeddingBudgetPerRunUsd: '5',
     dataLakeEmbeddingBudgetPerLakeUsd: '100',
     dataLakeEmbeddingBudgetPerPeriodUsd: '50',
+    dataLakeEmbeddingBudgetPerOwnerPeriodUsd: '50',
     dataLakeEmbeddingBudgetPeriodHours: '24',
     dataLakeEmbeddingMaxCallsPerMinute: '120',
     dataLakeEmbeddingMaxTokensPerMinute: maxTokensPerMinute,
@@ -566,7 +567,8 @@ describe('token-per-minute window over the real cache counter', () => {
         sleep: vi.fn().mockResolvedValue(undefined),
       });
 
-    await expect(call(600)).resolves.toBeUndefined();
+    // A grant hands back the resolved lake owner so the caller can release its window on failure.
+    await expect(call(600)).resolves.toEqual({ owner: { id: String(owner._id), type: 'User' } });
 
     // 600 + 600 > 1000, so the window has no room. Retryable: it drains on its own.
     let denial: unknown;

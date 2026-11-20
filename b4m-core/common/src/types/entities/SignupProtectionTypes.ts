@@ -1,0 +1,223 @@
+import { z } from 'zod';
+
+export type SignupObservation = { userId: string; email: string; domain: string; verifiedAt: Date };
+
+/** Hold reason for a domain found only on the aggregate disposable list (domainHoldReason in b4m-core/services). */
+export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
+/** Prefix of the hold reason for a freshly registered domain; the full reason names the configured age. */
+export const YOUNG_DOMAIN_HOLD_REASON_PREFIX = 'young-domain';
+
+/** Queue views of the Signup Domain Holds admin list; `pending` is `held_pending_review`. */
+export const SIGNUP_DOMAIN_HOLD_STATUS_FILTERS = ['pending', 'blocked', 'released', 'all'] as const;
+export type SignupDomainHoldStatusFilter = (typeof SIGNUP_DOMAIN_HOLD_STATUS_FILTERS)[number];
+
+/**
+ * Reason families of a hold, each matched as a prefix of `reason`. Must stay in sync with the reasons
+ * domainHoldReason (b4m-core/services/src/userService/domainIntelligence.ts) and detectSignupBurst
+ * (signupBurstDetector.ts) produce.
+ */
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTERS = {
+  'young-domain': YOUNG_DOMAIN_HOLD_REASON_PREFIX,
+  'disposable-aggregate': DISPOSABLE_AGGREGATE_HOLD_REASON,
+  'disposable-list': 'disposable-list',
+  'burner-mx': 'burner-mx',
+  'signup-burst': 'Verified signup burst',
+} as const;
+export type SignupDomainHoldReasonFilter = keyof typeof SIGNUP_DOMAIN_HOLD_REASON_FILTERS;
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS = Object.keys(SIGNUP_DOMAIN_HOLD_REASON_FILTERS) as [
+  SignupDomainHoldReasonFilter,
+  ...SignupDomainHoldReasonFilter[],
+];
+
+/**
+ * The automated policies that may decide a hold. The disposable-list rule only confirms; the advisory
+ * assessment confirms, and releases only when an operator turns auto-release on and its code guards
+ * pass. See apps/workers/src/cron/signupDomainHoldTriage.ts and
+ * apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
+ */
+export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule', 'advisory-decision'] as const;
+export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
+
+/** Bumped when the assessment question or its feature summary changes, so older verdicts are redone. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 2;
+export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
+export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
+/**
+ * PlatformDecisionFailureCode (packages/server-utils/src/decisions/platformDecision.ts) plus `summary_timeout`;
+ * must stay in sync with it.
+ */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [
+  'provider_not_configured',
+  'model_unavailable',
+  'provider_overloaded',
+  'provider_rejected',
+  'provider_error',
+  'malformed_response',
+  'refused',
+  'invalid_request',
+  'summary_timeout',
+] as const;
+export type SignupDomainHoldAssessmentFailure = (typeof SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES)[number];
+/** Failed assessments of one hold are retried up to this many times per policy version. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_MAX_ATTEMPTS = 3;
+
+/** The last advisory verdict on a hold; kept after an admin decision as history. */
+export const signupDomainHoldAssessmentSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('judged'),
+    policyVersion: z.number().int(),
+    judgment: z.enum(SIGNUP_DOMAIN_HOLD_JUDGMENTS),
+    confidence: z.number().min(0).max(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+  z.object({
+    outcome: z.literal('failed'),
+    policyVersion: z.number().int(),
+    failure: z.enum(SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES),
+    attempts: z.number().int().min(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+]);
+export type SignupDomainHoldAssessment = z.infer<typeof signupDomainHoldAssessmentSchema>;
+
+export const signupDomainReviewSchema = z.object({
+  domain: z.string(),
+  status: z.enum(['held_pending_review', 'blocked', 'released']),
+  reason: z.string(),
+  triggeredAt: z.date(),
+  cohortUserIds: z.array(z.string()),
+  sampleEmails: z.array(z.string()),
+  signupCount: z.number(),
+  /** The admin user id behind the last decision; absent while undecided or when a policy decided. */
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.date().optional(),
+  /** Set when an automated policy made the last decision; the next admin decision clears it. */
+  autoDecision: z
+    .object({
+      policy: z.enum(SIGNUP_DOMAIN_HOLD_AUTO_POLICIES),
+      decidedAt: z.date(),
+    })
+    .optional(),
+  assessment: signupDomainHoldAssessmentSchema.optional(),
+  /** Young-domain recheck (signupDomainHoldTriage): the registration date it last read for the domain. */
+  domainRegisteredAt: z.date().optional(),
+  /** When the recheck last looked the domain up, so a failed lookup is retried on a backoff. */
+  domainAgeCheckedAt: z.date().optional(),
+  /** When the recheck found the domain past the young-domain age; a hint for the admin, never a decision. */
+  domainAgedAt: z.date().optional(),
+});
+export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
+
+/** Refreshed disposable-domain lists; see apps/workers/src/cron/disposableDomainRefresh.ts for the URLs. */
+export type DisposableListSource = 'aggregate' | 'curated' | 'fakefilter' | 'tompec';
+/** What refused a signup email: a refreshed list, the admin blockedEmailDomains setting, or the bundled static list. */
+export type DisposableRefusalSource = DisposableListSource | 'admin' | 'static';
+export type DisposableRefusal = { domain: string; sources: DisposableRefusalSource[] };
+export type DisposableSourceStatus = {
+  source: DisposableListSource;
+  count: number;
+  lastSuccessAt?: Date;
+  lastError?: string;
+  lastErrorAt?: Date;
+};
+/** Cached RDAP/MX facts for one registrable domain. `failed` names the lookups that did not answer. */
+export type DomainIntel = {
+  domain: string;
+  registeredAt?: Date;
+  mxHosts: string[];
+  mxFlags: string[];
+  failed: ('rdap' | 'mx')[];
+  checkedAt: Date;
+  expiresAt: Date;
+};
+
+export type SignupProtectionRepository = {
+  observe: (signup: SignupObservation) => Promise<void>;
+  recent: (domain: string, since: Date) => Promise<SignupObservation[]>;
+  findReview: (domain: string) => Promise<SignupDomainReview | null>;
+  createHold: (review: SignupDomainReview) => Promise<boolean>;
+  /**
+   * Re-holds a domain the advisory assessment auto-released, when a later signup burst shows it is being
+   * farmed. False when it is not (or no longer) an automated release, e.g. an admin decided it since.
+   */
+  reholdWatched?: (review: SignupDomainReview) => Promise<boolean>;
+  isOrganizationDomain: (email: string) => Promise<boolean>;
+  // Optional so consumers without the refreshed lists or intel cache keep the list-only behaviour.
+  /** The union of refreshed-list sources over the given domain candidates. */
+  disposableSources?: (domains: string[]) => Promise<DisposableListSource[]>;
+  /** Null when absent or expired. */
+  findDomainIntel?: (domain: string) => Promise<DomainIntel | null>;
+  saveDomainIntel?: (intel: DomainIntel) => Promise<void>;
+};
+
+/** Free-credit pools with separate daily budgets: initial grants vs the daily activity drip. */
+export type SignupGrantPool = 'signup' | 'trickle';
+
+export type SignupGrantBudgetThreshold = 50 | 100 | 'missing' | 'drip_cap_default';
+
+/**
+ * Per-UTC-day spend counter for free grants, one per pool. Each method's `day` is the counter key:
+ * the service passes `<pool>:<YYYY-MM-DD>`.
+ */
+export type SignupGrantBudgetRepository = {
+  /**
+   * Adds `amount` to the day's spend only while it stays within `budget`, keyed by `transactionId`
+   * so a retried payout reserves once. Resolves the day's total after the reservation (`fresh` is
+   * false when `transactionId` already held one, so only the first holder may refund it), or null
+   * when the budget cannot cover it.
+   */
+  reserve: (
+    day: string,
+    transactionId: string,
+    amount: number,
+    budget: number
+  ) => Promise<{ spent: number; fresh: boolean } | null>;
+  /** Returns a reservation. A no-op when `transactionId` holds none, so it never double-refunds. */
+  refund: (day: string, transactionId: string, amount: number) => Promise<void>;
+  /** True only for the call that first sets the day's alert flag. */
+  markAlerted: (day: string, threshold: SignupGrantBudgetThreshold) => Promise<boolean>;
+  /** The day's spend; 0 when no row exists. */
+  getSpent: (day: string) => Promise<number>;
+};
+
+/**
+ * `missing` fires when the pool's setting is absent or invalid, which pauses the pool.
+ * `drip_cap_default` fires when the drip pays with no stored cap; `budget` then carries that default cap.
+ */
+export type SignupGrantBudgetAlert = {
+  pool: SignupGrantPool;
+  day: string;
+  threshold: SignupGrantBudgetThreshold;
+  spent: number;
+  budget: number;
+};
+
+export type SignupGrantBudget = {
+  repository: SignupGrantBudgetRepository;
+  notify?: (alert: SignupGrantBudgetAlert) => Promise<void>;
+  /**
+   * Queued gear/referral rewards (creditService.payCreditReward). A daily drip waits only when the trickle
+   * pool could no longer cover the oldest of them after the drip (queueHeadBlocks).
+   */
+  heldRewards?: { oldestHeldCredits(maxCredits?: number): Promise<number | null> };
+  /** Clock override for the budget's UTC day; tests only. */
+  now?: () => Date;
+};
+
+export type SignupProtection = {
+  repository: SignupProtectionRepository;
+  mode?: 'observe' | 'enforce';
+  notifyHold?: (review: SignupDomainReview) => Promise<void>;
+  /** Daily per-pool payout budgets for free signup grants; absent means no budget is enforced. */
+  grantBudget?: SignupGrantBudget;
+  /** Called on every disposable-email refusal so false positives surface per source. Must not throw. */
+  recordDisposableRefusal?: (refusal: DisposableRefusal) => Promise<void>;
+  /**
+   * True while an accountCampaign shadow detection names the account and no reviewer has graded it
+   * legitimate. The staged grant holds every release after the first tranche, except an admin's,
+   * until then (stagedSignupGrant.ts).
+   */
+  hasOpenAccountCampaign?: (userId: string) => Promise<boolean>;
+};

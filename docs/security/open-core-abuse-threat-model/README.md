@@ -71,14 +71,22 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
           -> Admin triage queue: GET /api/admin/moderation-incidents
           -> Human review: POST /api/admin/moderation-incidents/:id/verdict
                confirmed_csam  -> NCMEC CyberTip submitted -> reviewStatus = 'reported'
-               false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
+               false_positive  -> reviewStatus = 'false_positive' (the classifier was wrong;
+                                  no NCMEC submission)
+               no_action       -> reviewStatus = 'no_action' (correctly blocked, nothing
+                                  suggests a minor; no NCMEC submission). Only from
+                                  pending_review/absent.
                record_manual_report -> filed by hand on the CyberTipline web form
                                        -> reviewStatus = 'reported', reportChannel = 'manual'
-                                       (also from 'false_positive'; previousReviewStatus = 'false_positive')
+                                       (also from 'false_positive' or 'no_action';
+                                       previousReviewStatus keeps the earlier verdict)
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest
-first (`ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 })`).
+first (`ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 })`). With
+`status=closed` it returns incidents with a final verdict (`false_positive`, `no_action`,
+`reported`) newest first, paged with a `before=<createdAt>` cursor on the same index. Both
+closing verdicts count as reviewed, so the reminder sweep and pending-count alarm stop for them.
 
 ## NCMEC reporting flow
 
@@ -101,10 +109,12 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
 **Idempotency and concurrency:**
 - `claimForNcmecSubmission` atomically transitions `pending_review`/absent -> `confirmed_csam`.
   Only one concurrent admin request can claim a given incident; others receive 409.
-- `updateReviewStatus` uses `$nin: ['reported', 'confirmed_csam']` for `false_positive`
-  transitions, preventing a concurrent false_positive verdict from overriding an in-flight
-  NCMEC submission or a recorded report. The reverse is allowed only for
-  `record_manual_report`: a hand-filed tip overrides `false_positive`.
+- `updateReviewStatus` uses `$nin: ['reported', 'confirmed_csam', 'no_action']` for
+  `false_positive` transitions, preventing a concurrent false_positive verdict from overriding
+  an in-flight NCMEC submission, a recorded report or a `no_action` verdict. `markNoAction`
+  matches only `pending_review`/absent, the same predicate `claimForNcmecSubmission` uses, so
+  only one of them can win a race. The reverse is allowed only for `record_manual_report`: a
+  hand-filed tip overrides `false_positive` or `no_action`.
 - On NCMEC failure, the verdict route distinguishes two outcomes:
   - **Rejected** (`NcmecRejectedError`, non-2xx on `/submit`): no tip was filed; the route
     rolls back `confirmed_csam` -> `pending_review` and returns 502.
@@ -132,10 +142,10 @@ whenever the API is unavailable, an admin files the CyberTip by hand on the Cybe
 form and records it with `{ verdict: "record_manual_report", ncmecReportId }`. This moves the
 incident from `pending_review`/absent straight to `'reported'` in one atomic write, stores
 `reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
-credentials. It also overrides a `false_positive` verdict, because the tip already exists at
-NCMEC and the record must say so; `previousReviewStatus: 'false_positive'` keeps the earlier
-verdict visible, and `falsePositiveBy`/`falsePositiveAt` (written by the `false_positive`
-verdict and left untouched by the override) keep who made it and when. A second hand-filed tip
+credentials. It also overrides a `false_positive` or `no_action` verdict, because the tip
+already exists at NCMEC and the record must say so; `previousReviewStatus` keeps the earlier
+verdict visible, and `falsePositiveBy`/`falsePositiveAt` or `noActionBy`/`noActionAt` (written by
+that verdict and left untouched by the override) keep who made it and when. A second hand-filed tip
 on an already `reported` incident is refused and not stored; the 409 says so and the warn log
 keeps its id. The report id must be letters, digits and dashes only. It does not act on a
 `confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when

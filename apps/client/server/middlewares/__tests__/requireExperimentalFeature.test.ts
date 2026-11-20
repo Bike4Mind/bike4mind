@@ -12,13 +12,13 @@ const run = (user: unknown) => {
   const req = { user, requestId: 'req-1' } as unknown as Request;
   const res = makeRes();
   const next = vi.fn();
-  requireExperimentalFeature('enableQuestMasterV5')(req, res, next);
+  requireExperimentalFeature('enableMementosV2')(req, res, next);
   return { res, next };
 };
 
 describe('requireExperimentalFeature', () => {
   it('passes a user who opted in via the plain-object bag', () => {
-    const { next, res } = run({ preferences: { experimentalFeatures: { enableQuestMasterV5: true } } });
+    const { next, res } = run({ preferences: { experimentalFeatures: { enableMementosV2: true } } });
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -27,12 +27,12 @@ describe('requireExperimentalFeature', () => {
   // Map yields undefined silently, so a gate written the obvious way would deny
   // every opted-in user - the exact bug Mementos V2 shipped with once.
   it('passes a user whose bag is a hydrated Mongoose Map', () => {
-    const { next } = run({ preferences: { experimentalFeatures: new Map([['enableQuestMasterV5', true]]) } });
+    const { next } = run({ preferences: { experimentalFeatures: new Map([['enableMementosV2', true]]) } });
     expect(next).toHaveBeenCalled();
   });
 
   it('denies a user who has not opted in', () => {
-    const { next, res } = run({ preferences: { experimentalFeatures: { enableQuestMasterV5: false } } });
+    const { next, res } = run({ preferences: { experimentalFeatures: { enableMementosV2: false } } });
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'FEATURE_DISABLED' }));

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -10,7 +10,8 @@ import {
 } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
  * GET /api/data-lakes/:id/membership-duplicates
@@ -52,6 +53,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       logger: req.logger,
     });
 
+    if (plan.open.length > 0) {
+      const fileIds = plan.open.flatMap(g => g.members.map(m => m.fabFileId));
+      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-membership-duplicates' });
+    }
     return res.json(plan);
   });
 

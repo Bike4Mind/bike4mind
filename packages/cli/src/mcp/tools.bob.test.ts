@@ -141,7 +141,7 @@ describe('Bob tool catalog', () => {
   it('declares the seven Bob tools with their scopes', () => {
     const bob = TOOL_META.filter(t => t.name in BOB_TOOLS);
     expect(Object.fromEntries(bob.map(t => [t.name, t.scope]))).toEqual(BOB_TOOLS);
-    expect(TOOL_NAMES).toHaveLength(26);
+    expect(TOOL_NAMES).toHaveLength(27);
   });
 
   it.each(['bob_read_site', 'bob_compare_sites'])("%s says it spends the owner's credits and publishes", name => {
@@ -158,7 +158,7 @@ describe('Bob tool catalog', () => {
     expect(recheck).toContain('adds the reading to the existing report');
   });
 
-  it('lists all twenty-six tools over MCP', async () => {
+  it('lists all twenty-seven tools over MCP', async () => {
     const server = buildMcpServer({ baseURL: BASE, apiKey: 'b4m_live_key', version: '0.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const mcp = new Client({ name: 'test-client', version: '0.0.0' });

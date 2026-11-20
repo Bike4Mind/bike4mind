@@ -102,7 +102,9 @@
     "no_subscription": "کوئی سبسکرپشن نہیں",
     "x_members": "{{count}} ممبران",
     "x_credits": "{{count}} کریڈٹس",
-    "owner": "مالک"
+    "roles": {
+      "owner": "مالک"
+    }
   },
   "session": {
     "typeYourMessage": "اپنا پیغام یہاں لکھیں",

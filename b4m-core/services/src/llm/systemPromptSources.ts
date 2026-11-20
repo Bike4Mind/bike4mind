@@ -1,6 +1,7 @@
 import { IMessage, SystemPromptDetailSchema } from '@bike4mind/common';
 import type { z } from 'zod';
 import type { featureNames } from './ChatCompletionFeatures';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 /**
  * The system/context stack a completion is assembled from, as data rather than as an inline array
@@ -217,6 +218,8 @@ export function relocatePerTurnContext(
  * final payload by reference. Returns the input array unchanged when history is empty, when that
  * message did not survive the build, or when it cannot carry the flag safely - it is a system
  * message, or its neighbour shares its role, which the stamp would stop the adapter merging with.
+ * A tool_result message is the exception: history after a tool-calling turn ends in one, the
+ * current prompt follows as another user turn, and the API joins the two either way.
  */
 export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage: IMessage | undefined): IMessage[] {
   if (!lastHistoryMessage) return messages;
@@ -225,8 +228,19 @@ export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage:
   const anchor = messages[index];
   const next = messages[index + 1];
   if (anchor.role === 'system') return messages;
-  if (next && next.role === anchor.role) return messages;
+  if (next && next.role === anchor.role && !isToolResultMessage(anchor)) return messages;
   return messages.map((message, i) => (i === index ? { ...message, cache: true } : message));
+}
+
+// The stamp leaves this content an array with no text block, so the Anthropic adapter still merges a
+// following string prompt into it and the breakpoint stays on the last tool_result.
+function isToolResultMessage(message: IMessage): boolean {
+  return (
+    message.role === 'user' &&
+    Array.isArray(message.content) &&
+    message.content.length > 0 &&
+    message.content.every(block => (block as { type?: unknown }).type === 'tool_result')
+  );
 }
 
 /**
@@ -458,12 +472,30 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
- * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
- * `omitIdentityReminder`) - each has the same miss-a-site failure mode, and each should get a named
- * resolver here rather than a second inline derivation when a caller needs it on its own.
+ * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`) - each has the
+ * same miss-a-site failure mode, and each should get a named resolver here rather than a second
+ * inline derivation when a caller needs it on its own.
  */
 export function resolveSkipAutoOffers(body: { promptMode?: PromptMode; skipAutoOffers?: boolean }): boolean {
   return Boolean(body.promptMode) || body.skipAutoOffers === true;
+}
+
+/**
+ * How the adapters treat their model-identity line. `omitIdentityReminder`: `raw` promises an empty
+ * system parameter. `identityViaTool`: the `current_model_details` tool is offered, so the line is
+ * dropped while the adapter still sends tools, and comes back on any recursion that drops them.
+ * Read the FINAL offered list (after deny-list and the Ollama / non-tool-model trims), never the
+ * requested one, or a turn whose tool was stripped would have neither.
+ * `current_model_details` must stay in AUTO_ADDED_TOOL_NAMES (ChatCompletionProcess).
+ */
+export function resolveIdentityReminder(input: { promptMode?: PromptMode; offeredToolNames: readonly string[] }): {
+  omitIdentityReminder: boolean;
+  identityViaTool: boolean;
+} {
+  return {
+    omitIdentityReminder: input.promptMode === 'raw',
+    identityViaTool: input.offeredToolNames.includes(CURRENT_MODEL_DETAILS_TOOL_NAME),
+  };
 }
 
 /**

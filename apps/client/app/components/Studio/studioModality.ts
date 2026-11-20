@@ -9,9 +9,17 @@ export type StudioModality = (typeof STUDIO_MODALITIES)[number];
 export const isStudioModality = (value: string): value is StudioModality =>
   STUDIO_MODALITIES.some(modality => modality === value);
 
-/** The `/studio/$modality` param parser: an unknown modality is a 404, not an empty page. */
-export const parseStudioModality = (value: string): StudioModality => {
-  if (!isStudioModality(value)) throw notFound();
+// Media that exist only in the Create v2 layout. Their page decides between itself and a 404 once the flags load.
+export const STUDIO_V2_ONLY_MEDIA = ['image'] as const;
+export type StudioV2OnlyMedium = (typeof STUDIO_V2_ONLY_MEDIA)[number];
+export type StudioMedium = StudioV2OnlyMedium | StudioModality;
+
+export const isStudioV2OnlyMedium = (value: string): value is StudioV2OnlyMedium =>
+  STUDIO_V2_ONLY_MEDIA.some(medium => medium === value);
+
+/** The `/studio/$modality` param parser: an unknown medium is a 404, not an empty page. */
+export const parseStudioMedium = (value: string): StudioMedium => {
+  if (!isStudioModality(value) && !isStudioV2OnlyMedium(value)) throw notFound();
   return value;
 };
 

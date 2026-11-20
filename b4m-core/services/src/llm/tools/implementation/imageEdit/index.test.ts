@@ -1,3 +1,8 @@
+vi.mock('../../helpers/modelAdmission', () => ({
+  createToolModelAdmission: vi.fn(async () => ({ assert: vi.fn(async (_modelId: string) => {}) })),
+}));
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
@@ -187,20 +192,14 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
     expect(context.storage.getSignedUrl).toHaveBeenCalledWith('clean.png');
   });
 
-  it('resolves an unsigned fileUrl fallback as untrusted', async () => {
+  it('ignores a stored fileUrl and reports a file without filePath as inaccessible', async () => {
     const context = createFakeContextWithFabFile({
       mimeType: 'image/png',
       moderationStatus: 'clean',
       fileUrl: 'https://external.example/already-hosted.png',
     });
 
-    const resolved = await getImageFromFileId(VALID_FILE_ID, context);
-
-    expect(resolved).toEqual({
-      url: 'https://external.example/already-hosted.png',
-      fabFileId: expect.any(String),
-      trustConfiguredStorageOrigin: false,
-    });
+    await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow(/no accessible URL/);
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
   });
 });
@@ -257,6 +256,7 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
         prompt: EDIT.prompt,
         jobId: expect.any(String),
       },
+      generatedOutputKey: 'generated/stored-key.png',
     });
   });
 
@@ -405,6 +405,23 @@ describe('imageEditTool - credit gate names the rendered model', () => {
     expect(context.onStart).toHaveBeenCalledWith(
       'edit_image',
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_MINI })
+    );
+  });
+
+  it('bills the successor when a stale client sends the retired gpt-image-1 as editModel', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+      editModel: ImageModels.GPT_IMAGE_1,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
   });
 
@@ -760,7 +777,11 @@ describe('imageEditTool - OpenAI content-policy refusal logging', () => {
     const { toolFn } = imageEditTool.implementation(context, {} as GenerateImageToolCall);
     await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OpenAI image'), {
+      kind: 'moderation_blocked',
+      provider: 'openai',
+      requestId: 'req-1',
+    });
     expect(error).not.toHaveBeenCalled();
   });
 });
@@ -847,5 +868,25 @@ describe('imageEditTool - generation lineage', () => {
 
     expect(mockSaveFromTool).toHaveBeenCalledTimes(1);
     expect(mockSaveFromTool.mock.calls[0][1]).not.toHaveProperty('derivedFrom');
+  });
+});
+
+describe('imageEdit model admission', () => {
+  it('refuses before provider execution and admits the resolved transparent-image model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createToolModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const context = createFakeContext();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      editModel: ImageModels.GPT_IMAGE_2,
+    });
+    await expect(
+      toolFn({ prompt: 'transparent image', background: 'transparent', image: 'data:image/png;base64,AAAA' })
+    ).rejects.toBe(refusal);
+    expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_1_5);
   });
 });

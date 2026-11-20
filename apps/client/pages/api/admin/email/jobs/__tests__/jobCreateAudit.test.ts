@@ -10,8 +10,8 @@ const h = vi.hoisted(() => ({
   create: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, RouteFn> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   emailJobRepository: { create: h.create, listJobs: vi.fn() },
   emailTemplateRepository: { findById: h.findTemplate },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../index';
 

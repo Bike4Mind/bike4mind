@@ -5,18 +5,19 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   awaitsWorktree,
+  type BackgroundProcessInfo,
   type ChatSessionSummary,
   type ChatSpawnSuggestion,
   type ChatStreamEvent,
   type ChatQueueEvent,
 } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED, SHARED_CHECKOUT_PREAMBLE } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
-import { appWorktreeRoot, prefetchBase } from './project/workspace';
+import { appWorktreeRoot, prefetchBase, releaseBranchName, reserveBranchName } from './project/workspace';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { AccessStore } from './tools/AccessStore';
@@ -24,7 +25,7 @@ import { ApprovalGate } from './tools/ApprovalGate';
 
 // The real resolveWorkspace behind a gate, so a test can hold the worktree mid-cut and look at what
 // the session is meanwhile. Open by default.
-const gate = vi.hoisted(() => ({ hold: Promise.resolve() }));
+const gate = vi.hoisted(() => ({ hold: Promise.resolve(), fail: null as Error | null }));
 vi.mock('./project/workspace', async importOriginal => {
   const actual = await importOriginal<typeof import('./project/workspace')>();
   return {
@@ -32,6 +33,7 @@ vi.mock('./project/workspace', async importOriginal => {
     prefetchBase: vi.fn(actual.prefetchBase),
     resolveWorkspace: async (...args: Parameters<typeof actual.resolveWorkspace>) => {
       await gate.hold;
+      if (gate.fail) throw gate.fail;
       return actual.resolveWorkspace(...args);
     },
   };
@@ -89,6 +91,7 @@ describe('ChatService spawn placement', () => {
   beforeEach(async () => {
     vi.mocked(prefetchBase).mockClear();
     gate.hold = Promise.resolve();
+    gate.fail = null;
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
     // Bound per test: a previous service replying late must not push into this test's events.
@@ -142,11 +145,17 @@ describe('ChatService spawn placement', () => {
   }
 
   /** Ask for one spawn, the way a model does. */
-  function requestSpawn(stream: PassThrough, id: string, prompt: string, title: string): void {
+  function requestSpawn(
+    stream: PassThrough,
+    id: string,
+    prompt: string,
+    title: string,
+    extra: Record<string, unknown> = {}
+  ): void {
     stream.write(
       frame({
         type: 'tool_use',
-        tools: [{ id, name: 'session_spawn', arguments: JSON.stringify({ prompt, title }) }],
+        tools: [{ id, name: 'session_spawn', arguments: JSON.stringify({ prompt, title, ...extra }) }],
       })
     );
     stream.write(frame('[DONE]'));
@@ -279,8 +288,12 @@ describe('ChatService spawn placement', () => {
     return release;
   }
 
+  function postedSeeds(): string[] {
+    return post.mock.calls.map(call => String(call[1]?.messages?.[1]?.content ?? ''));
+  }
+
   function seedPosted(text: string): boolean {
-    return post.mock.calls.some(call => String(call[1]?.messages?.[1]?.content ?? '').includes(text));
+    return postedSeeds().some(seed => seed.includes(text));
   }
 
   it('gives the child a worktree of its own when the user starts it in one', async () => {
@@ -299,6 +312,138 @@ describe('ChatService spawn placement', () => {
     // its own, and the parent's are still where they were.
     expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  /** An orchestrating parent asks for one spawn, which starts without a card. */
+  async function delegate(
+    task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' },
+    /** null sends no isolation field, as a model that leaves the default does. */
+    isolation: 'shared' | 'worktree' | null = 'worktree'
+  ) {
+    const parent = await parentSession();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    requestSpawn(streams[0], 'call-1', task.prompt, task.title, isolation ? { isolation } : {});
+    await awaitSettled(1);
+    return { parent, call: settled()[0] };
+  }
+
+  it("runs a delegated agent in the parent's checkout by default, told not to commit or switch branches", async () => {
+    const { parent, call } = await delegate(undefined, null);
+
+    expect(call?.status).toBe('done');
+    const agent = await vi.waitUntil(async () => await child(), { timeout: 5000, interval: 10 });
+    expect(agent?.project?.workingDirectory).toBe(main);
+    expect(agent?.project?.workspaceBranch).toBe((await store.get(parent.id))?.project?.workspaceBranch);
+    const seed = await vi.waitUntil(() => postedSeeds().find(text => text.endsWith('do the thing')), {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(seed).toBe(`${SHARED_CHECKOUT_PREAMBLE}\n\ndo the thing`);
+  });
+
+  it('gives a delegated agent a worktree of its own in a repository when it asks for isolation', async () => {
+    const { parent, call } = await delegate();
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('It has its own worktree on agent/the-thing, cut from main');
+    await worktreeOf('agent/the-thing');
+    expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
+    expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('gives a delegated agent a fresh branch when an earlier attempt left its branch behind', async () => {
+    await git(main, ['branch', 'agent/the-thing']);
+
+    const { parent, call } = await delegate();
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('It has its own worktree on agent/the-thing-2, cut from main');
+    await worktreeOf('agent/the-thing-2');
+    expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('never runs a delegated agent in the parent directory when its worktree cannot be made', async () => {
+    gate.fail = new Error('git worktree add timed out after 5 min.');
+
+    const { parent } = await delegate();
+
+    const failed = await vi.waitUntil(() => events.find(event => event.type === 'spawn-failed'), {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(failed).toMatchObject({ sessionId: parent.id });
+    expect(failed.type === 'spawn-failed' ? failed.message : '').toContain(
+      'The worktree could not be created: git worktree add timed out after 5 min.'
+    );
+    await vi.waitUntil(async () => (await child()) === undefined, { timeout: 5000, interval: 10 });
+    expect(seedPosted('do the thing')).toBe(false);
+  });
+
+  /** The parent ends its turn after starting its agent, so only the agent's end is left to wake it. */
+  async function endParentTurn(): Promise<void> {
+    const stream = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    stream.write(frame({ type: 'content', text: 'Started it.' }));
+    stream.write(frame('[DONE]'));
+  }
+
+  async function agentsSettledWake(parentId: string): Promise<string> {
+    const wake = await vi.waitUntil(
+      async () => (await store.get(parentId))?.messages.find(message => message.automatic?.kind === 'agents-settled'),
+      { timeout: 5000, interval: 10 }
+    );
+    return wake.content;
+  }
+
+  it('wakes an Orchestrate parent when a delegated agent fails to get its worktree', async () => {
+    gate.fail = new Error('git worktree add timed out after 5 min.');
+    const { parent } = await delegate();
+    await endParentTurn();
+
+    const wake = await agentsSettledWake(parent.id);
+    expect(wake).toContain('"The thing"');
+    expect(wake).toContain(': failed.');
+  });
+
+  it('wakes an Orchestrate parent when a delegated agent is stopped while it is preparing', async () => {
+    const release = holdWorktrees();
+    const { parent } = await delegate();
+    const spawned = await vi.waitUntil(child, { timeout: 5000, interval: 10 });
+    await endParentTurn();
+    await vi.waitUntil(() => !service.isSessionBusy(parent.id), { timeout: 5000, interval: 5 });
+
+    service.stop(spawned.id);
+    release();
+
+    const wake = await agentsSettledWake(parent.id);
+    expect(wake).toContain(': stopped');
+  });
+
+  it('gives back the branch name a delegated spawn reserved when creating its session throws', async () => {
+    const create = store.create.bind(store);
+    vi.spyOn(store, 'create').mockImplementation((...args: Parameters<SessionStore['create']>) =>
+      args[1]?.origin ? Promise.reject(new Error('disk full')) : create(...args)
+    );
+
+    const { call } = await delegate();
+
+    expect(call?.status).toBe('error');
+    expect(await child()).toBeUndefined();
+    const again = reserveBranchName(main, 'agent/the-thing');
+    expect(again).not.toBeNull();
+    releaseBranchName(again!);
+  });
+
+  it('refuses a card branch another spawn is setting up, and its refusal frees nothing', async () => {
+    const delegated = reserveBranchName(main, 'agent/in-flight');
+
+    const { result } = await spawnWith({ placement: 'worktree', branch: 'agent/in-flight' });
+
+    expect(await child()).toBeUndefined();
+    expect(!result.ok && result.error).toMatch(/already setting up the branch agent\/in-flight/);
+    expect(reserveBranchName(main, 'agent/in-flight')).toBeNull();
+    releaseBranchName(delegated!);
   });
 
   it('starts nothing when the model only suggests, and leaves the tool call done', async () => {
@@ -446,6 +591,118 @@ describe('ChatService spawn placement', () => {
     expect(dependencies.maybeStart).not.toHaveBeenCalled();
     expect(seedPosted('do the thing')).toBe(false);
     expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
+  });
+
+  /** Internal bookkeeping a spawn must give back however it ends. */
+  function spawnBookkeeping(sessionId: string) {
+    const internals = service as unknown as {
+      spawnWatch: Map<string, unknown>;
+      launching: Set<string>;
+      launchInterrupts: Map<string, unknown>;
+    };
+    return {
+      watched: internals.spawnWatch.has(sessionId),
+      launching: internals.launching.has(sessionId),
+      interrupted: internals.launchInterrupts.has(sessionId),
+    };
+  }
+
+  /** A spawn held mid-cut, so the test can stop or delete it while it is still preparing. */
+  async function spawnHeldInWorktree(branch: string) {
+    const release = holdWorktrees();
+    const { parent } = await spawnWith({ placement: 'worktree', branch });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    return { release, parent, spawned };
+  }
+
+  it("tells a spawned agent's first turn that its install is running, even when the install is slow to start", async () => {
+    // Upstream, since a worktree is cut from the freshly fetched base rather than local main.
+    const source = join(container, '..', 'source');
+    await writeFile(join(source, 'package.json'), '{"name":"demo"}\n', 'utf8');
+    await writeFile(join(source, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    await git(source, ['add', 'package.json', 'pnpm-lock.yaml']);
+    await git(source, ['commit', '--quiet', '-m', 'lockfile']);
+    vi.mocked(dependencies.maybeStart).mockRestore();
+    const registry = (dependencies as unknown as { registry: BackgroundProcessRegistry }).registry;
+    let install: BackgroundProcessInfo | null = null;
+    vi.spyOn(registry, 'start').mockImplementation(async request => {
+      // Slower than the rest of the launch, so a launch that does not wait for the plan races past it.
+      await new Promise(resolve => setTimeout(resolve, 200));
+      install = {
+        id: 'inst0001',
+        sessionId: request.sessionId,
+        command: request.command,
+        cwd: request.cwd,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        bufferedChars: 0,
+        droppedChars: 0,
+      };
+      return install;
+    });
+    vi.spyOn(registry, 'get').mockImplementation(() => install);
+
+    await spawnWith({ placement: 'worktree', branch: 'agent/install-announced' });
+    const worktree = await worktreeOf('agent/install-announced');
+    await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
+
+    const first = post.mock.calls.find(call => String(call[1]?.messages?.[1]?.content ?? '').includes(worktree));
+    const prompt = JSON.stringify(first?.[1]?.messages ?? []);
+    expect(prompt).toContain('Dependencies are installing in the background (handle inst0001');
+    expect(prompt).toContain('wait_seconds=');
+  });
+
+  it('starts no turn and leaks nothing when the agent is deleted while preparing', async () => {
+    const { release, spawned } = await spawnHeldInWorktree('agent/prep-deleted');
+
+    await service.deleteSession(spawned.id);
+    release();
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(await store.get(spawned.id)).toBeNull();
+    expect(seedPosted('do the thing')).toBe(false);
+    expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
+    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, interrupted: false });
+  });
+
+  it('keeps an agent stopped while preparing, with its task handed back unsent', async () => {
+    const { release, parent, spawned } = await spawnHeldInWorktree('agent/prep-stopped');
+
+    service.stop(spawned.id);
+    release();
+    const worktree = await worktreeOf('agent/prep-stopped');
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+    await vi.waitUntil(() => queueEvents.some(event => event.sessionId === spawned.id && event.returned), {
+      timeout: 5000,
+      interval: 5,
+    });
+
+    expect(seedPosted(worktree)).toBe(false);
+    expect(queueEvents.find(event => event.sessionId === spawned.id && event.returned)?.returned).toMatchObject({
+      reason: 'stopped',
+      messages: [{ text: 'do the thing' }],
+    });
+    const kept = await store.get(spawned.id);
+    expect(kept?.messages.some(message => message.system && message.content.includes('do the thing'))).toBe(true);
+    expect((await listWorktrees(main)).some(entry => entry.path === worktree)).toBe(true);
+    expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
+    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, interrupted: false });
+
+    const round = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    round.write(frame({ type: 'content', text: 'ok' }));
+    round.write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        events.some(
+          event =>
+            event.type === 'message' &&
+            event.sessionId === parent.id &&
+            /was stopped by the user before it began/.test(event.message.content)
+        ),
+      { timeout: 5000, interval: 10 }
+    );
   });
 
   it('keeps other turns blocked until a failed spawn has been removed', async () => {
@@ -612,7 +869,7 @@ describe('ChatService spawn placement', () => {
     streams[0].write(
       frame({
         type: 'tool_use',
-        tools: [0, 1, 2, 3].map(index => ({
+        tools: Array.from({ length: MAX_CONCURRENT_SPAWNED + 1 }, (_unused, index) => ({
           id: `call-${index}`,
           name: 'session_spawn',
           arguments: JSON.stringify({ prompt: `task ${index}`, title: `Cap ${index}` }),
@@ -624,7 +881,7 @@ describe('ChatService spawn placement', () => {
       () => {
         const latest = events.findLast(event => event.type === 'spawn-suggestions');
         const pending = latest?.type === 'spawn-suggestions' ? latest.suggestions : [];
-        return pending.length === 4 ? pending : undefined;
+        return pending.length === MAX_CONCURRENT_SPAWNED + 1 ? pending : undefined;
       },
       { timeout: 5000, interval: 5 }
     );
@@ -635,11 +892,11 @@ describe('ChatService spawn placement', () => {
       )
     );
 
-    expect(results.filter(result => result.ok)).toHaveLength(3);
+    expect(results.filter(result => result.ok)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     expect(results.find(result => !result.ok)).toMatchObject({
       error: expect.stringMatching(/already running, which is the limit/),
     });
-    expect((await store.list()).filter(session => session.origin)).toHaveLength(3);
+    expect((await store.list()).filter(session => session.origin)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     release();
   });
 

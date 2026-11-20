@@ -29,6 +29,8 @@ import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
+const FILE_UPLOAD_CONCURRENCY = 5;
+
 export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
   const { onSuccess } = options;
   const queryClient = useQueryClient();
@@ -88,6 +90,8 @@ interface BulkDeleteResponse {
     deleted: string[];
     unshared: string[];
     notFound: string[];
+    /** Readable shared or read-only files the caller cannot remove individually. */
+    denied?: string[];
     /** @deprecated Use deleted/unshared instead */
     success?: string[];
     failed: {
@@ -112,7 +116,13 @@ export function useBulkDeleteFiles(options?: { onSuccess?: () => void; onError?:
       // and a batch that removed some files but also had errors isn't a clean success either.
       const removedSomething = data.results.deleted.length > 0 || data.results.unshared.length > 0;
       const hasFailures = data.results.failed.length > 0;
-      if (!removedSomething) {
+      const deniedCount = data.results.denied?.length ?? 0;
+      if (deniedCount > 0) {
+        toast.warning(
+          `${data.message}. Shared or read-only files remain visible. Contact the owner to change your access.`,
+          { duration: 8000 }
+        );
+      } else if (!removedSomething) {
         toast.error(data.message);
       } else if (hasFailures) {
         toast.warning(data.message);
@@ -279,16 +289,33 @@ export function useCreateFabFile(callbacks?: {
         fileSize: number;
       }[]
     ) => {
-      const result = await Promise.all(
-        data.map(async item => {
-          const { file, ...rest } = item;
-          const fabfile = await createFabFileOnServerWithUpload(rest, file);
-          return fabfile;
-        })
-      );
-
-      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-      return result;
+      const result: Awaited<ReturnType<typeof createFabFileOnServerWithUpload>>[] = [];
+      try {
+        for (let index = 0; index < data.length; index += FILE_UPLOAD_CONCURRENCY) {
+          const uploads = await Promise.allSettled(
+            data.slice(index, index + FILE_UPLOAD_CONCURRENCY).map(async item => {
+              const { file, ...parameters } = item;
+              return createFabFileOnServerWithUpload(parameters, file);
+            })
+          );
+          const failed = uploads.find(upload => upload.status === 'rejected');
+          if (failed) {
+            const created = result.length + uploads.filter(upload => upload.status === 'fulfilled').length;
+            if (created === 0) throw failed.reason;
+            // The toast reads this message; `cause` keeps the original error for inspection.
+            throw new Error(`Uploaded ${created} of ${data.length} files; ${getErrorMessage(failed.reason)}`, {
+              cause: failed.reason,
+            });
+          }
+          for (const upload of uploads) {
+            if (upload.status === 'fulfilled') result.push(upload.value);
+          }
+        }
+        return result;
+      } finally {
+        // A refused upload can follow successful files in the same group.
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+      }
     },
     onSuccess: files => {
       callbacks?.onSuccess?.(files);

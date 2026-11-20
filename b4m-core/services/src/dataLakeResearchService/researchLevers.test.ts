@@ -4,6 +4,7 @@ import {
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -16,14 +17,22 @@ import { normalizeResearchLevers } from './researchLevers';
 describe('normalizeResearchLevers', () => {
   it('fills every lever from the shared defaults when only a query is given', () => {
     expect(normalizeResearchLevers({ query: 'coastal erosion' })).toEqual({
+      source: 'search',
+      feedUrl: null,
       query: 'coastal erosion',
       maxResults: RESEARCH_MAX_RESULTS_DEFAULT,
       maxProposals: RESEARCH_MAX_PROPOSALS_DEFAULT,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      autoAdmitTrusted: false,
+      maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
       allowedDomains: [],
       blockedDomains: [],
       minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
       costCeilingMicroUsd: RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
       proposedTags: [],
+      itemRules: [],
     });
   });
 
@@ -155,11 +164,149 @@ describe('normalizeResearchLevers', () => {
     });
   });
 
+  describe('source tiers', () => {
+    it('keeps an allow list that normalizes to nothing unrestricted', () => {
+      const levers = normalizeResearchLevers({ query: 'q', allowedDomains: ['*.'] });
+      expect(levers.unlistedSources).toBe('review');
+      expect(levers.reviewDomains).toEqual([]);
+    });
+
+    it('maps a non-empty legacy allow list to the review list with other sites dropped', () => {
+      const levers = normalizeResearchLevers({ query: 'q', allowedDomains: ['https://Example.com/docs'] });
+      expect(levers).toMatchObject({
+        reviewDomains: ['example.com'],
+        unlistedSources: 'drop',
+        allowedDomains: ['example.com'],
+      });
+    });
+
+    it('normalizes both new lists', () => {
+      const levers = normalizeResearchLevers({
+        query: 'q',
+        trustedDomains: ['https://example.com/docs'],
+        reviewDomains: ['*.Review.example'],
+        unlistedSources: 'review',
+      });
+      expect(levers.trustedDomains).toEqual(['example.com']);
+      expect(levers.reviewDomains).toEqual(['review.example']);
+    });
+
+    it('caps both new lists', () => {
+      const many = Array.from({ length: RESEARCH_DOMAIN_LIST_MAX + 10 }, (_v, i) => `d${i}.com`);
+      const levers = normalizeResearchLevers({ query: 'q', trustedDomains: many, reviewDomains: many });
+      expect(levers.trustedDomains).toHaveLength(RESEARCH_DOMAIN_LIST_MAX);
+      expect(levers.reviewDomains).toHaveLength(RESEARCH_DOMAIN_LIST_MAX);
+    });
+
+    it('fails closed on a stored unlistedSources that is not a valid value', () => {
+      const bad = 'bogus' as unknown as 'review';
+      expect(
+        normalizeResearchLevers({ query: 'q', reviewDomains: ['a.com'], unlistedSources: bad }).unlistedSources
+      ).toBe('drop');
+      expect(normalizeResearchLevers({ query: 'q', unlistedSources: bad }).unlistedSources).toBe('review');
+    });
+
+    it('derives allowedDomains for both unlistedSources values', () => {
+      const lists = { query: 'q', trustedDomains: ['t.com'], reviewDomains: ['r.com'] };
+      expect(normalizeResearchLevers({ ...lists, unlistedSources: 'drop' }).allowedDomains).toEqual(['t.com', 'r.com']);
+      expect(normalizeResearchLevers({ ...lists, unlistedSources: 'review' }).allowedDomains).toEqual([]);
+    });
+
+    it('does not throw on drop with empty lists, so a stored config can still run', () => {
+      const levers = normalizeResearchLevers({ query: 'q', unlistedSources: 'drop' });
+      expect(levers).toMatchObject({ unlistedSources: 'drop', allowedDomains: [] });
+    });
+  });
+
+  describe('auto-admit levers', () => {
+    it('defaults to off with the default cap', () => {
+      expect(normalizeResearchLevers({ query: 'q' })).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
+    });
+
+    it('turns on only for a strict true', () => {
+      const coerce = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', autoAdmitTrusted: value as boolean }).autoAdmitTrusted;
+      expect(coerce(true)).toBe(true);
+      expect(coerce('true')).toBe(false);
+      expect(coerce(1)).toBe(false);
+      expect(coerce(undefined)).toBe(false);
+    });
+
+    it('clamps the cap to 1..25 and falls back on a non-number', () => {
+      const cap = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', maxAutoAdmits: value as number }).maxAutoAdmits;
+      expect(cap(0)).toBe(1);
+      expect(cap(999)).toBe(25);
+      expect(cap(7.9)).toBe(7);
+      expect(cap('x')).toBe(3);
+    });
+
+    it('does not clamp the cap against maxProposals', () => {
+      expect(normalizeResearchLevers({ query: 'q', maxProposals: 2, maxAutoAdmits: 10 }).maxAutoAdmits).toBe(10);
+    });
+  });
+
+  describe('item rules', () => {
+    it('defaults to none', () => {
+      expect(normalizeResearchLevers({ query: 'q' }).itemRules).toEqual([]);
+    });
+
+    it('trims, drops empties and bad actions, and dedupes case-insensitively', () => {
+      const rules = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [
+          { condition: ' Published by Acme ', action: 'block' },
+          { condition: 'published by acme', action: 'block' },
+          { condition: '', action: 'review' },
+          { condition: 'x', action: 'admit' as never },
+        ],
+      }).itemRules;
+      expect(rules).toEqual([{ condition: 'Published by Acme', action: 'block' }]);
+    });
+
+    it('clamps count and length without throwing', () => {
+      const many = Array.from({ length: 12 }, (_, i) => ({ condition: `r${i}`, action: 'review' as const }));
+      expect(normalizeResearchLevers({ query: 'q', itemRules: many }).itemRules).toHaveLength(10);
+      const long = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [{ condition: 'y'.repeat(500), action: 'block' }],
+      });
+      expect(long.itemRules[0].condition).toHaveLength(300);
+    });
+  });
+
   it('trims and dedupes proposed tags without touching the reserved namespace', () => {
     // Reserved-namespace stripping belongs to the queue door; duplicating it here is how the two
     // copies drift.
     expect(
       normalizeResearchLevers({ query: 'q', proposedTags: [' research ', 'research', 'datalake:x'] }).proposedTags
     ).toEqual(['research', 'datalake:x']);
+  });
+});
+
+describe('normalizeResearchLevers - feed source', () => {
+  it('keeps a trimmed feed url only for a feed config', () => {
+    const feed = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '  https://example.com/f.xml ' });
+    expect(feed.source).toBe('feed');
+    expect(feed.feedUrl).toBe('https://example.com/f.xml');
+  });
+
+  it('nulls the url on a search config and keeps the query', () => {
+    const search = normalizeResearchLevers({ query: 'q', source: 'search', feedUrl: 'https://example.com/f.xml' });
+    expect(search.source).toBe('search');
+    expect(search.feedUrl).toBeNull();
+    expect(search.query).toBe('q');
+  });
+
+  it('treats anything but the exact feed value as search', () => {
+    expect(normalizeResearchLevers({ query: 'q', source: 'Feed' as never }).source).toBe('search');
+    expect(normalizeResearchLevers({ query: 'q' }).source).toBe('search');
+  });
+
+  it('caps an oversized url and does not throw on an empty or malformed one', () => {
+    const long = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: `https://e.com/${'a'.repeat(5000)}` });
+    expect(long.feedUrl?.length).toBe(2048);
+    expect(normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '   ' }).feedUrl).toBeNull();
+    expect(() => normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: 'not a url' })).not.toThrow();
   });
 });

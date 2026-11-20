@@ -1,0 +1,138 @@
+import { describe, expect, it } from 'vitest';
+import { accountLinkKeys, emailPatternSignals, groupLinkedAccounts, sharedLinkKinds } from './accountLinkSignals';
+
+describe('emailPatternSignals', () => {
+  it('reads a plus-addressed webmail address with a random-looking tag', () => {
+    expect(emailPatternSignals('jordan+x7k2q9r8@outlook.com')).toEqual({
+      plusAddressed: true,
+      randomLookingPlusTag: true,
+      generatedLocalPart: false,
+      consumerMailDomain: true,
+    });
+  });
+
+  it('does not call a word tag or a plain address random', () => {
+    expect(emailPatternSignals('jordan+newsletter@gmail.com')).toMatchObject({
+      plusAddressed: true,
+      randomLookingPlusTag: false,
+    });
+    expect(emailPatternSignals('jordan@acme-labs.io')).toEqual({
+      plusAddressed: false,
+      randomLookingPlusTag: false,
+      generatedLocalPart: false,
+      consumerMailDomain: false,
+    });
+  });
+
+  it.each([
+    ['jordan+x7k2q9r8@example.test', false, false],
+    ['jordan+x7k2q9@outlook.com', true, false],
+    ['jordan+work2024@outlook.com', true, false],
+    ['jordan+shopping@gmail.com', true, false],
+    ['jordan+usafnzdxsh@googlemail.com', true, true],
+    ['jordan+@gmail.com', false, false],
+    ['jordan+x7k2q9r8@me.com', true, true],
+  ])('uses canonical plus-tag semantics for %s', (email, plusAddressed, randomLookingPlusTag) => {
+    expect(emailPatternSignals(email)).toMatchObject({ plusAddressed, randomLookingPlusTag });
+  });
+
+  it('flags a hex-counter local part, ignoring the tag', () => {
+    expect(emailPatternSignals('user28af6a+1@gmail.com')?.generatedLocalPart).toBe(true);
+  });
+
+  it('treats every personal mail provider common knows as webmail', () => {
+    for (const domain of ['inbox.com', 'hushmail.com', 'runbox.com', 'yahoo.co.jp']) {
+      expect(emailPatternSignals(`someone@${domain}`)?.consumerMailDomain, domain).toBe(true);
+    }
+  });
+
+  it('returns null for no address or an unusable one', () => {
+    expect(emailPatternSignals(null)).toBeNull();
+    expect(emailPatternSignals('not-an-email')).toBeNull();
+  });
+});
+
+describe('sharedLinkKinds', () => {
+  const base = { email: null, signupIp: null, signupJa4: null };
+
+  it('links plus-tag and Gmail-dot aliases of one mailbox', () => {
+    expect(sharedLinkKinds({ ...base, email: 'j.doe+a1@gmail.com' }, { ...base, email: 'jdoe@gmail.com' })).toEqual([
+      'mailbox',
+    ]);
+  });
+
+  it('links a shared company domain but never a shared webmail domain', () => {
+    expect(sharedLinkKinds({ ...base, email: 'a@acme-labs.io' }, { ...base, email: 'b@acme-labs.io' })).toEqual([
+      'mailDomain',
+    ]);
+    expect(sharedLinkKinds({ ...base, email: 'a@gmail.com' }, { ...base, email: 'b@gmail.com' })).toEqual([]);
+    expect(sharedLinkKinds({ ...base, email: 'a@hotmail.co.uk' }, { ...base, email: 'b@hotmail.co.uk' })).toEqual([]);
+  });
+
+  it('never links a shared privacy-relay domain', () => {
+    for (const domain of [
+      'privaterelay.appleid.com',
+      'mozmail.com',
+      'simplelogin.com',
+      'addy.io',
+      'protonmail.ch',
+      'fastmail.fm',
+    ]) {
+      expect(sharedLinkKinds({ ...base, email: `a@${domain}` }, { ...base, email: `b@${domain}` })).toEqual([]);
+    }
+  });
+
+  it('links a shared signup IP, with a shared JA4 beside it, and never on two unknowns', () => {
+    expect(
+      sharedLinkKinds(
+        { ...base, signupIp: '198.51.100.4', signupJa4: 'ja4_a' },
+        { ...base, signupIp: '198.51.100.4', signupJa4: 'ja4_a' }
+      )
+    ).toEqual(['signupIp', 'ja4']);
+    expect(sharedLinkKinds(base, base)).toEqual([]);
+  });
+
+  it('never links on a shared JA4 alone', () => {
+    expect(sharedLinkKinds({ ...base, signupJa4: 'ja4_a' }, { ...base, signupJa4: 'ja4_a' })).toEqual([]);
+  });
+});
+
+describe('groupLinkedAccounts', () => {
+  it('joins accounts transitively and leaves unrelated ones alone', () => {
+    const groups = groupLinkedAccounts([
+      { id: 'a', email: 'x+1@outlook.com', signupIp: '198.51.100.4', signupJa4: null },
+      { id: 'b', email: 'solo@gmail.com', signupIp: '192.0.2.9', signupJa4: null },
+      { id: 'c', email: 'x+2@outlook.com', signupIp: null, signupJa4: 'ja4_z' },
+      { id: 'd', email: 'other@gmail.com', signupIp: null, signupJa4: 'ja4_z' },
+    ]);
+    expect(groups).toEqual([
+      { memberIds: ['a', 'c'], kinds: ['mailbox'] },
+      { memberIds: ['b'], kinds: [] },
+      { memberIds: ['d'], kinds: [] },
+    ]);
+  });
+});
+
+describe('truncated signup IPs and ISP mail domains', () => {
+  it('does not link two accounts whose signup IP is a retention-truncated prefix', () => {
+    const a = { email: 'one@acme-labs.io', signupIp: '198.51.100.0', signupJa4: null };
+    const b = { email: 'two@other-corp.io', signupIp: '198.51.100.0', signupJa4: null };
+    expect(sharedLinkKinds(a, b)).toEqual([]);
+  });
+
+  it('keys a truncated IP to null and keeps a full one', () => {
+    const base = { email: 'one@acme-labs.io', signupJa4: null };
+    expect(accountLinkKeys({ ...base, signupIp: '198.51.100.0' }).signupIp).toBeNull();
+    expect(accountLinkKeys({ ...base, signupIp: '198.51.100.7' }).signupIp).toBe('198.51.100.7');
+  });
+
+  it('does not link two accounts on a shared ISP mail domain', () => {
+    const a = { email: 'alice@comcast.net', signupIp: null, signupJa4: null };
+    const b = { email: 'bob@comcast.net', signupIp: null, signupJa4: null };
+    expect(sharedLinkKinds(a, b)).toEqual([]);
+  });
+
+  it('gives no mail domain key for a regional webmail domain', () => {
+    expect(accountLinkKeys({ email: 'a@t-online.de', signupIp: null, signupJa4: null }).mailDomain).toBeNull();
+  });
+});

@@ -4,6 +4,7 @@ import {
   IProjectRepository,
   ISessionRepository,
   IUserDocument,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -12,6 +13,7 @@ import { distinctIdCount } from '../utils/objectIds';
 const createProjectSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  organizationId: z.string().optional(),
   sessionIds: z.array(z.string()).optional(),
   fileIds: z.array(z.string()).optional(),
 });
@@ -34,7 +36,7 @@ export const createProject = async (
   adapters: CreateProjectAdapters
 ) => {
   const { db } = adapters;
-  const { name, description, sessionIds, fileIds } = secureParameters(params, createProjectSchema);
+  const { name, description, organizationId, sessionIds, fileIds } = secureParameters(params, createProjectSchema);
   const userId = actor.id;
 
   // Resolved through the caller's access predicate before persisting, same shape as addFiles.ts:
@@ -42,14 +44,14 @@ export const createProject = async (
   // tools expose and share-grant another user's file the moment the project is created.
   let resolvedFileIds: string[] = [];
   if (fileIds && fileIds.length > 0) {
-    const files = await db.fabFiles.shareable.findAllAccessibleByIds(actor, fileIds);
+    const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(actor), fileIds);
     if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
     resolvedFileIds = files.map(file => file.id);
   }
 
   let resolvedSessionIds: string[] = [];
   if (sessionIds && sessionIds.length > 0) {
-    const sessions = await db.sessions.shareable.findAllAccessibleByIds(actor, sessionIds);
+    const sessions = await db.sessions.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(actor), sessionIds);
     if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
     resolvedSessionIds = sessions.map(session => session.id);
   }
@@ -58,6 +60,7 @@ export const createProject = async (
     name,
     description: description ?? '',
     userId,
+    organizationId,
 
     sessionIds: resolvedSessionIds,
     fileIds: resolvedFileIds,

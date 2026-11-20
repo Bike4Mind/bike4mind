@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // The module calls initializeSlackPackage() at import time, which wires the real server
 // dependency graph (sst Resource, ability, storage, ...). Nothing here needs it.
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
 // Deliberately NOT mocking verifyOrgOwner, matching the sibling index.test.ts: the behaviour the
 // gate swap changes lives INSIDE the helper, so mocking it would assert the mock. Stubbing the
@@ -56,7 +56,7 @@ vi.mock('@bike4mind/slack', () => ({
 // issueStateNonce SETS A COOKIE on the response, so it is a side effect a refused caller must
 // never trigger - not merely a value the handler happens not to use.
 const mockIssueStateNonce = vi.fn();
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   issueStateNonce: (...args: unknown[]) => mockIssueStateNonce(...args),
   NONCE_SLOT: { orgSlackConnect: 'org-slack-connect' },
 }));

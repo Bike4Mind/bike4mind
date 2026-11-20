@@ -2,6 +2,7 @@ import { resolveSettingDefinition, SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import type { Request, RequestHandler } from 'express';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Single source of truth for coercing an admin-setting value into a boolean.
@@ -49,7 +50,7 @@ export const requireFeature =
 
       next();
     } catch (error) {
-      console.error(`Error checking ${label}:`, error);
+      Logger.error(`Error checking ${label}`, { error });
       // Fail closed - deny access on error to be safe
       return res.status(500).json({
         error: 'Unable to verify feature access',

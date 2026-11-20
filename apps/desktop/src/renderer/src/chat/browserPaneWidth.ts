@@ -1,4 +1,4 @@
-import { BROWSER_PANE_MAX_FRACTION, BROWSER_PANE_WIDTH } from './agentBrowser';
+import { BROWSER_PANE_WIDTH } from './agentBrowser';
 
 /**
  * How wide the user has dragged the agent's browser, remembered per machine and not per
@@ -17,17 +17,26 @@ export const BROWSER_PANE_MIN_WIDTH = 320;
 export const CONVERSATION_MIN_WIDTH = 400;
 
 /**
+ * The share of the window the pane gets when it and the conversation cannot both fit, and before
+ * the layout has been measured. The pane yields first there; see browserPaneMaxWidth.
+ */
+const BROWSER_PANE_CRAMPED_FRACTION = 0.42;
+
+/**
  * The widest the pane may be in the current layout.
  *
  * `shared` is the width the pane and the conversation split between them: the window less the
- * fixed columns (sidebar, background tasks) whatever those are at the moment. The conversation
- * keeps CONVERSATION_MIN_WIDTH of it, but never at the cost of the pane going under its own
- * minimum - when the two cannot both fit, the window fraction is what still holds.
+ * fixed columns (sidebar, background tasks) whatever those are at the moment, or infinite before
+ * anything has been measured. When both fit, the conversation keeping CONVERSATION_MIN_WIDTH of
+ * it is the only cap, so a wide window can give the page a desktop layout. When they cannot both
+ * fit, the pane yields first: the window fraction holds, never above the pane's own minimum.
  */
 export function browserPaneMaxWidth(viewport: number, shared: number): number {
-  const byFraction = Math.floor(viewport * BROWSER_PANE_MAX_FRACTION);
-  const byConversation = Math.max(BROWSER_PANE_MIN_WIDTH, Math.floor(shared - CONVERSATION_MIN_WIDTH));
-  return Math.max(0, Math.min(byFraction, byConversation));
+  const byFraction = Math.floor(viewport * BROWSER_PANE_CRAMPED_FRACTION);
+  if (!Number.isFinite(shared)) return Math.max(0, byFraction);
+  const byConversation = Math.floor(shared - CONVERSATION_MIN_WIDTH);
+  if (byConversation >= BROWSER_PANE_MIN_WIDTH) return byConversation;
+  return Math.max(0, Math.min(byFraction, BROWSER_PANE_MIN_WIDTH));
 }
 
 /** The maximum wins over the minimum, so a window too small for both still lays out. */

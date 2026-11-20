@@ -2,16 +2,26 @@
  * Email verification helper utilities
  */
 import { requireEnv } from '@bike4mind/common';
+import { escapeHtml } from '@bike4mind/utils/escapeHtml';
+
+// Re-exported so the email builders keep importing their escaper from here.
+export { escapeHtml };
 
 /**
- * Generates a verification link for email verification
+ * Generates a verification link for email verification. The email-change mailer reuses it with the
+ * path swapped to /verify-change.
+ *
+ * The token rides in the URL fragment, not the query: a browser never sends the fragment to a server,
+ * so the token stays out of access logs, edge logs and Referer headers. The client route takes it out
+ * of the address before it calls the API (apps/client/app/utils/emailLinkToken.ts), and still accepts
+ * the older `?token=` form from links already sent.
  * @param token - The verification token
  * @returns The full verification link URL
  */
 export const generateVerificationLink = (token: string): string => {
   // APP_URL is set per-deployment by infra; no brand fallback.
   const baseUrl = requireEnv('APP_URL', process.env.APP_URL);
-  return `${baseUrl}/verify-email?token=${token}`;
+  return `${baseUrl}/verify-email#token=${encodeURIComponent(token)}`;
 };
 
 /**
@@ -22,20 +32,6 @@ export const generateVerificationLink = (token: string): string => {
 export const getLogoUrl = (): string => {
   return process.env.LOGO_URL ?? '';
 };
-
-/**
- * HTML escaper for every value interpolated into a transactional-email body: escapes & < > " ',
- * so the result is safe both as element text and inside a quoted attribute. Apply it to anything
- * a user or operator can influence (usernames, names, emails, org and file names); never to a
- * plain-text subject, which is not HTML.
- */
-export const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 
 /**
  * Build the brand logo `<img>` for transactional emails, with both `alt` and `src` HTML-escaped.

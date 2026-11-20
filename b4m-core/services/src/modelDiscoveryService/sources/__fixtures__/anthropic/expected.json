@@ -57,7 +57,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -85,7 +87,9 @@
     },
     "pricing": {
       "inputPerMTok": 3,
-      "outputPerMTok": 15
+      "outputPerMTok": 15,
+      "cacheReadPerMTok": 0.3,
+      "cacheWritePerMTok": 3.75
     }
   },
   {
@@ -106,7 +110,9 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 10
+      "outputPerMTok": 10,
+      "cacheReadPerMTok": 0.2,
+      "cacheWritePerMTok": 2.5
     }
   }
 ]

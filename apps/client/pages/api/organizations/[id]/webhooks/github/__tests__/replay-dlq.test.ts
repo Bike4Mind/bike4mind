@@ -35,7 +35,10 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 vi.mock('sst', () => ({ Resource: {} }));
 // Only `verifyOrgOwner` is exported, so a route reverted to another org gate would fail loudly here.
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 await import('../replay-dlq');
 
@@ -62,5 +65,6 @@ describe('POST /api/organizations/[id]/webhooks/github/replay-dlq', () => {
     expect(h.findDeliveries).not.toHaveBeenCalled();
     expect(h.sqsSend).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

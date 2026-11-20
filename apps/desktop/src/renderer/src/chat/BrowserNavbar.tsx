@@ -9,7 +9,7 @@ import Typography from '@mui/joy/Typography';
 import type { CookieImportState } from '@shared/browserCookies';
 import { resolveAddress } from '@shared/browserUrl';
 import type { BrowserGoAction, BrowserPaneState } from '@shared/ipc';
-import { BrowserCookiesMenu } from './BrowserCookiesMenu';
+import { BrowserMenu } from './BrowserMenu';
 import { ArrowLeftIcon, ArrowRightIcon, ReloadIcon, WarningIcon } from './icons';
 
 /**
@@ -35,6 +35,8 @@ export function BrowserNavbar({
   onNavigate,
   onGo,
   onCookieState,
+  historyEnabled,
+  onHistory,
 }: {
   state: BrowserPaneState;
   cookies: CookieImportState;
@@ -43,6 +45,8 @@ export function BrowserNavbar({
   onNavigate: (url: string) => void;
   onGo: (action: BrowserGoAction) => void;
   onCookieState: (state: CookieImportState) => void;
+  historyEnabled: boolean | null;
+  onHistory: (enabled: boolean) => void;
 }) {
   const [draft, setDraft] = useState(state.url);
   const [typedError, setTypedError] = useState('');
@@ -136,6 +140,7 @@ export function BrowserNavbar({
             // Escape puts back where the page actually is, which is the only way out of a
             // half-typed address that does not navigate somewhere by accident.
             if (event.key === 'Escape') {
+              event.preventDefault();
               editing.current = false;
               setTypedError('');
               setDraft(state.url);
@@ -146,7 +151,12 @@ export function BrowserNavbar({
           // On the field itself rather than on Joy's wrapper, so what finds it has its value.
           slotProps={{ input: { ref: addressRef, 'aria-label': 'Address', 'data-testid': 'chat-browser-url' } }}
         />
-        <BrowserCookiesMenu state={cookies} onState={onCookieState} />
+        <BrowserMenu
+          state={cookies}
+          onState={onCookieState}
+          historyEnabled={historyEnabled}
+          onHistory={onHistory}
+        />
       </Stack>
       {cookies.sites.length > 0 && (
         <Stack

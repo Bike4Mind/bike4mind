@@ -4,7 +4,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
 interface MobileTopBarProps {
   title: string;
-  onClose: () => void;
+  /** Omit for a screen that cannot be closed (e.g. the file browser rendered inline); hides the back button. */
+  onClose?: () => void;
   rightContent?: React.ReactNode;
 }
 
@@ -32,27 +33,29 @@ export const MobileTopBar: React.FC<MobileTopBarProps> = ({ title, onClose, righ
           gap: 1,
         }}
       >
-        <IconButton
-          variant="plain"
-          onClick={onClose}
-          sx={{
-            width: '24px',
-            height: '24px',
-            minWidth: '24px',
-            minHeight: '24px',
-            justifyContent: 'flex-start',
-            alignItems: 'center',
-            p: 0,
-            '& .MuiSvgIcon-root': {
-              fontSize: '16px',
-            },
-            '&:hover': {
-              backgroundColor: 'transparent',
-            },
-          }}
-        >
-          <ArrowBackIcon />
-        </IconButton>
+        {onClose && (
+          <IconButton
+            variant="plain"
+            onClick={onClose}
+            sx={{
+              width: '24px',
+              height: '24px',
+              minWidth: '24px',
+              minHeight: '24px',
+              justifyContent: 'flex-start',
+              alignItems: 'center',
+              p: 0,
+              '& .MuiSvgIcon-root': {
+                fontSize: '16px',
+              },
+              '&:hover': {
+                backgroundColor: 'transparent',
+              },
+            }}
+          >
+            <ArrowBackIcon />
+          </IconButton>
+        )}
         <Typography sx={{ color: 'text.primary', fontSize: '14px', fontWeight: '500' }}>{title}</Typography>
       </Box>
       {rightContent && <Box>{rightContent}</Box>}

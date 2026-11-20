@@ -1,4 +1,13 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -6,13 +15,16 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
   type ChatUsage,
 } from '@shared/chat';
+import { modelEditSummary } from '@shared/modelEdit';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
@@ -22,11 +34,14 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
-import { automaticSummary, displayText, relaySummary } from './relayRows';
+import { SelectionActions } from './SelectionActions';
+import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
+import { MentionedText, SessionLink } from './SessionLink';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
+import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -90,6 +105,7 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
       </Stack>
     );
   }
+  if (reason === SERVER_CREDENTIALS_STOP) return <ServerCredentialsRow />;
   if (reason === 'aborted') {
     return (
       <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
@@ -100,6 +116,46 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
   return null;
 }
 
+function ServerCredentialsRow() {
+  const navigate = useNavigate();
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+      <Chip size="sm" color="warning" variant="soft" data-testid="chat-server-credentials-chip">
+        The model server wants new credentials
+      </Chip>
+      <Button
+        size="sm"
+        variant="soft"
+        color="primary"
+        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        data-testid="chat-server-credentials-btn"
+      >
+        Open Model servers
+      </Button>
+    </Stack>
+  );
+}
+
+const messageTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'always' });
+const messageTimeUnits = [
+  ['year', 365 * 24 * 60 * 60],
+  ['month', 30 * 24 * 60 * 60],
+  ['week', 7 * 24 * 60 * 60],
+  ['day', 24 * 60 * 60],
+  ['hour', 60 * 60],
+  ['minute', 60],
+] as const;
+
+function showMessageTime(event: MouseEvent<HTMLElement>, createdAt: string) {
+  const seconds = Math.max(0, (Date.now() - Date.parse(createdAt)) / 1000);
+  const unit = messageTimeUnits.find(([, length]) => seconds >= length);
+  event.currentTarget.title = Number.isNaN(seconds)
+    ? ''
+    : unit
+      ? messageTimeFormatter.format(-Math.floor(seconds / unit[1]), unit[0])
+      : 'just now';
+}
+
 /**
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
@@ -108,7 +164,11 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
  * not the expanded body folded away under it.
  */
 const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
-  const attachments = message.attachments ?? [];
+  // A point-and-edit turn shows its parts as a chip; its close-up went to the model, not the bubble.
+  const modelEdit = modelEditSummary(message.notes);
+  const attachments = (message.attachments ?? []).filter(
+    attachment => !(modelEdit?.closeup && attachment.kind === 'image' && attachment.name === modelEdit.closeup)
+  );
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
   const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
@@ -121,6 +181,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
         color="primary"
         sx={{ px: 2, py: 1.25, borderRadius: 'lg', maxWidth: '85%', minWidth: 0 }}
         data-testid="chat-message-user"
+        onMouseEnter={event => showMessageTime(event, message.createdAt)}
       >
         {/* Above the text, matching the composer: what was handed over, then what was asked
             about it. Not removable here - the turn has been sent. */}
@@ -128,6 +189,17 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
           <Box sx={{ mb: message.content ? 1 : 0 }}>
             <AttachmentRow sessionId={sessionId} attachments={attachments} />
           </Box>
+        )}
+        {modelEdit && modelEdit.parts.length > 0 && (
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="primary"
+            sx={{ mb: 0.75, maxWidth: '100%' }}
+            data-testid="chat-message-model-edit-chip"
+          >
+            Editing: {modelEdit.parts.join(', ')}
+          </Chip>
         )}
 
         {/* A skill turn shows the INVOCATION, because that is the sentence the user wrote. The
@@ -173,7 +245,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
               sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
               data-testid="chat-message-user-text"
             >
-              <LinkifiedText text={message.content} />
+              <MentionedText text={message.content} />
             </Typography>
           )
         )}
@@ -199,13 +271,21 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * thread above - is a render per mouse move across a transcript that can be hundreds of turns
  * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
  *
- * Nothing at all when the server reported no credits. Absent is not zero - a turn that failed,
- * and every reply stored before this was captured, would otherwise claim to have been free.
+ * Credits show only when the server reported them. Absent is not zero - a turn that failed,
+ * and every reply stored before credits were captured, would otherwise claim to have been free.
+ * A self-hosted reply shows its generation speed in the same place. Nothing at all when neither
+ * is there.
  */
 function ReplyCost({ usage }: { usage?: ChatUsage }) {
   const showDollars = useShowDollarCosts();
+  const showRate = useShowTokenRate();
   const credits = formatCreditsSpent(usage);
-  if (!credits) return null;
+  const rate = showRate ? formatTokenRate(usage?.rate) : null;
+  if (!credits && !rate) return null;
+  const details = [
+    describeReplyCost(usage, showDollars),
+    rate ? describeTokenRate(usage?.rate, usage?.outputTokens) : null,
+  ].filter((line): line is string => line !== null);
 
   return (
     <Typography
@@ -214,11 +294,13 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       className={REPLY_COST_CLASS}
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
-      title={describeReplyCost(usage, showDollars) ?? undefined}
+      title={details.length > 0 ? details.join('\n') : undefined}
       sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
       data-testid="chat-message-cost"
     >
       {credits}
+      {credits && rate && ' \xb7 '}
+      {rate && <span data-testid="chat-message-rate">{rate}</span>}
     </Typography>
   );
 }
@@ -277,8 +359,18 @@ const AssistantTurn = memo(function AssistantTurn({
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
         ...revealCopyButtonSx,
+        borderRadius: 'sm',
+        transition: 'box-shadow 0.4s ease-out, background-color 0.4s ease-out',
+        '&[data-report-highlight]': {
+          boxShadow: '0 0 0 6px var(--joy-palette-warning-softBg)',
+          bgcolor: 'warning.softBg',
+        },
       }}
       data-testid="chat-message-assistant"
+      onMouseEnter={event => showMessageTime(event, message.createdAt)}
+      // The orchestrator's "Read the report" scrolls to and highlights the one with its summary's id.
+      data-assistant-reply
+      data-message-id={message.id}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
@@ -350,6 +442,7 @@ const AssistantTurn = memo(function AssistantTurn({
  * the model said. Both would be a lie about where the text came from.
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
+  if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
   return (
     <Sheet
       variant="soft"
@@ -368,6 +461,30 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
 });
 
 /**
+ * The note a side chat opens with: which conversation it branched from, linked so the user can
+ * go back, and the passage it is about. The model's copy (`content`) also carries an excerpt of
+ * that conversation, which the user has already read there.
+ */
+function SideChatOpening({ message, from }: { message: ChatMessage; from: { sessionId: string; title: string } }) {
+  return (
+    <Sheet
+      variant="soft"
+      color="neutral"
+      sx={{ px: 2, py: 1.25, borderRadius: 'md' }}
+      data-testid="chat-message-side-chat-opening"
+    >
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
+        Side chat from{' '}
+        <SessionLink sessionId={from.sessionId} testId="side-chat-parent-link">
+          {from.title}
+        </SessionLink>
+      </Typography>
+      <ReplyMarkdown text={displayText(message)} />
+    </Sheet>
+  );
+}
+
+/**
  * A message another conversation sent here with session_send.
  *
  * Drawn as a collapsed row rather than as a turn, for the reason a tool call is: it is how this
@@ -378,7 +495,22 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
  * full text one click away.
  */
 const RelayTurn = memo(function RelayTurn({ message }: { message: ChatMessage }) {
-  return <CollapsedTurn message={message} summary={relaySummary(message)} kind="relay" />;
+  const { lead, sender, tail } = relaySummaryParts(message);
+  const fromSessionId = message.relay?.fromSessionId;
+  const summary = (
+    <>
+      {lead}
+      {fromSessionId ? (
+        <SessionLink sessionId={fromSessionId} testId="relay-sender-link">
+          {sender}
+        </SessionLink>
+      ) : (
+        sender
+      )}
+      {tail}
+    </>
+  );
+  return <CollapsedTurn message={message} summary={summary} kind="relay" />;
 });
 
 /**
@@ -396,7 +528,7 @@ function CollapsedTurn({
   kind,
 }: {
   message: ChatMessage;
-  summary: string;
+  summary: ReactNode;
   kind: 'relay' | 'automatic';
 }) {
   const [open, setOpen] = useState(false);
@@ -547,6 +679,18 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
 const PIN_THRESHOLD_PX = 48;
 
 /**
+ * The prompts the last message is waiting on, as one comparable value; empty when there are none.
+ * JSON rather than a joined string, so no character an approval id might hold can make two sets
+ * of prompts compare equal.
+ */
+export function awaitingApprovalKey(message: ChatMessage | undefined): string {
+  const ids = (message?.toolCalls ?? [])
+    .filter(call => call.status === 'awaiting-approval' && call.approvalId)
+    .map(call => call.approvalId);
+  return ids.length > 0 ? JSON.stringify(ids) : '';
+}
+
+/**
  * How far above the viewport the next window starts mounting, so older turns are in place before
  * a reader scrolling up reaches them rather than as they arrive.
  */
@@ -644,6 +788,8 @@ export function MessageThread({
   onContinue,
   status,
   footer,
+  onReplyToSelection,
+  onSideChatFromSelection,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -676,6 +822,10 @@ export function MessageThread({
    * what this conversation set going, so it reads as the last thing that happened in it.
    */
   footer?: ReactNode;
+  /** Quote text the user highlighted in one message into the composer. Both or neither. */
+  onReplyToSelection?: (text: string) => void;
+  /** Branch a side chat about text the user highlighted in one message. */
+  onSideChatFromSelection?: (text: string) => void;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -683,6 +833,7 @@ export function MessageThread({
   const pinned = useRef(true);
   const last = messages[messages.length - 1];
   const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
+  const awaiting = awaitingApprovalKey(last);
   const empty = messages.length === 0;
   // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
   // draw their own divider there, which is what a conversation compacted twice should look like.
@@ -724,6 +875,15 @@ export function MessageThread({
     if (last?.role === 'user') pinned.current = true;
     if (pinned.current) bottom.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, lastContent]);
+
+  // A turn parked on a prompt shows nothing else until it is answered, so the prompt is brought
+  // into view however far up the reader was. Its own key because a call turning into a prompt
+  // changes neither the message count nor its length, which is all the effect above watches.
+  useLayoutEffect(() => {
+    if (!awaiting) return;
+    pinned.current = true;
+    bottom.current?.scrollIntoView({ block: 'end' });
+  }, [awaiting]);
 
   // Content that grows or a viewport that shrinks with no new text (a plan panel, a queued
   // banner, a taller composer) would otherwise leave the foot of the reply behind the composer.
@@ -788,6 +948,9 @@ export function MessageThread({
             scrolled past rather than brought into view. */}
         <div ref={bottom} />
       </Stack>
+      {onReplyToSelection && onSideChatFromSelection && (
+        <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
+      )}
     </Box>
   );
 }

@@ -7,6 +7,7 @@ import {
   isFinalDeliveryAttempt,
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC,
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
 } from './sqsDelivery';
@@ -90,6 +91,10 @@ describe('per-queue delivery constants', () => {
 
   it('matches infra/queues.ts dlq.retry for fabFileVectorizeQueue', () => {
     expect(FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT).toBe(retryFromInfra('fabFileVectorizeQueue'));
+  });
+
+  it('matches infra/queues.ts visibilityTimeout for fabFileVectorizeQueue', () => {
+    expect(FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC).toBe(visibilityTimeoutSecFromInfra('fabFileVectorizeQueue'));
   });
 
   it('matches infra/queues.ts dlq.retry for generationCallbackQueue', () => {

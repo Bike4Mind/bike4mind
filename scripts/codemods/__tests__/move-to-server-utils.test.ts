@@ -230,6 +230,7 @@ describe('move-to-server-utils', () => {
       toMove('apps/client/config/activityType.ts'),
       toMove('apps/client/services/teamPlanSettings.ts'),
       toMove('apps/client/app/utils/chartSchemas.ts'),
+      toMove('apps/client/app/constants/apiKeyScopes.ts'),
       toMove('apps/client/server/utils/errors.ts'),
     ];
     const rewriteOutside = (source: string, file: string) => rewriteSource(source, file, OUTSIDE);
@@ -241,6 +242,7 @@ describe('move-to-server-utils', () => {
         'packages/server-utils/src/config/activityType',
         'packages/server-utils/src/services/teamPlanSettings',
         'packages/server-utils/src/app/utils/chartSchemas',
+        'packages/server-utils/src/app/constants/apiKeyScopes',
         'packages/server-utils/src/utils/errors',
       ]);
     });
@@ -260,6 +262,11 @@ describe('move-to-server-utils', () => {
         'apps/client/app/components/Chart/Chart.tsx',
         "import { c } from '../../utils/chartSchemas';",
         "import { c } from '@bike4mind/server-utils/app/utils/chartSchemas';",
+      ],
+      [
+        'apps/client/app/components/ApiKeys/ScopePicker.tsx',
+        "import { s } from '@client/app/constants/apiKeyScopes';",
+        "import { s } from '@bike4mind/server-utils/app/constants/apiKeyScopes';",
       ],
       [
         'apps/client/pages/api/activity.test.ts',
@@ -412,6 +419,36 @@ describe('move-to-server-utils', () => {
       run(root, args);
       expect(read('packages/server-utils/src/memory/factCipher.ts')).toBe("import { s } from '../security/index';\n");
       expect(run(root, args)).toEqual({ changed: [], warnings: [] });
+    });
+
+    it('accepts a relative import of a non-source asset git-moved alongside its importer', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('packages/server-utils/src/memory/fields.json', '{}\n');
+
+      expect(run(root, ['apps/client/server/memory/factCipher.ts']).warnings).toEqual([]);
+      expect(read('packages/server-utils/src/memory/factCipher.ts')).toBe("import fields from './fields.json';\n");
+    });
+
+    it('throws when a moved file imports a non-source asset left behind in apps/', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('apps/client/server/memory/fields.json', '{}\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+    });
+
+    it('throws when a left-behind asset only has a same-named copy in the package', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('packages/server-utils/src/memory/fields.json', '{}\n');
+      write('apps/client/server/memory/fields.json', '{}\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+    });
+
+    it('throws when the package path an asset specifier names is a directory, not a file', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import cfg from './cfg.config';\n");
+      write('packages/server-utils/src/memory/cfg.config/a.ts', 'export {};\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
     });
 
     it('writes nothing when a moved file still imports a file left in apps/', () => {

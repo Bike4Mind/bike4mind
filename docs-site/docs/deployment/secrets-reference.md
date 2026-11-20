@@ -122,7 +122,7 @@ This key **cannot** be configured via the Admin UI because it encrypts secrets s
 
 **Format requirement:** Must be exactly 64 hexadecimal characters (32 bytes for AES-256-GCM encryption). The `openssl rand -hex 32` command generates exactly this format.
 
-:::warning If This Key Is Lost or Changed
+:::warning If This Key Is Lost, or Changed Without Keeping the Previous Key
 - All stored OAuth tokens become undecryptable
 - Users must re-authenticate with **all** connected services (Google, Slack, Atlassian, etc.)
 - All API credentials configured via Admin UI must be re-entered
@@ -138,6 +138,23 @@ During domain migration:
 - **DO NOT rotate** `JWT_SECRET` — breaks OAuth state tokens
 - **DO NOT rotate** `SECRET_ENCRYPTION_KEY` — requires re-encrypting stored tokens
 :::
+
+---
+
+## Signing Secret (Optional)
+
+Signed image URLs, hashed telemetry identifiers and purge receipts use their own secret instead of `SECRET_ENCRYPTION_KEY`. Each purpose derives a separate key from the one secret. Both secrets default to `not-configured`; while `HMAC_SIGNING_SECRET` is unset, signatures keep using `SECRET_ENCRYPTION_KEY`.
+
+| Secret | Description | Format | How to Generate |
+|--------|-------------|--------|-----------------|
+| `HMAC_SIGNING_SECRET` | Root secret for signatures; per-purpose keys are derived from it | Any string (64 hex characters recommended) | `openssl rand -hex 32` |
+| `HMAC_SIGNING_SECRET_PREVIOUS` | The secret that signed older values while they are still honoured (see below) | Same as above | The old value of the secret being replaced |
+
+```bash
+pnpm sst secret set HMAC_SIGNING_SECRET "$(openssl rand -hex 32)" --stage <stage>
+```
+
+When you set `HMAC_SIGNING_SECRET` for the first time, copy the secret that signed existing values into `HMAC_SIGNING_SECRET_PREVIOUS`. That is the value of `SECRET_ENCRYPTION_KEY` for a stage that never had a dedicated secret; leave `SECRET_ENCRYPTION_KEY` itself unchanged, since it still encrypts stored data. Values signed with the previous secret keep verifying while it stays set, and new values are signed with the new one. Keep it set for at least 90 days: telemetry export and deletion find a user's records only under the keys still configured, and telemetry is kept for 90 days. Once nothing signed with the old secret needs to verify, clear `HMAC_SIGNING_SECRET_PREVIOUS`.
 
 ---
 
@@ -203,6 +220,23 @@ Callback URLs:
 
 Callback URL: `https://app.yourdomain.com/api/auth/github/callback`
 
+### Sign in with Apple
+
+| Secret | Description |
+|--------|-------------|
+| `APPLE_CLIENT_ID` | Sign in with Apple Services ID (leave unset to disable Sign in with Apple) |
+| `APPLE_TEAM_ID` | Apple Developer team ID |
+| `APPLE_KEY_ID` | Key ID of the Sign in with Apple private key |
+| `APPLE_PRIVATE_KEY` | Contents of the `.p8` private key (PEM) |
+
+Callback URL: `https://app.yourdomain.com/api/auth/apple/callback`
+
+Sign in with Apple stays off unless all four secrets are set and the private key is a valid EC key. In the Apple Developer account, register a Services ID, add the callback URL above as its return URL, and create a Sign in with Apple key. Set the key with its contents, not its file path: `pnpm sst secret set APPLE_PRIVATE_KEY "$(cat AuthKey_XXXX.p8)" --stage <stage>`.
+
+:::note Private email relay
+People who choose Hide My Email get an address at `privaterelay.appleid.com`. Apple only forwards mail to these addresses from sender domains or addresses registered under your Apple Developer account's email source configuration. Register the domain your stage sends mail from, or these users will not receive one-time codes, billing or notification emails.
+:::
+
 ### Okta (Enterprise SSO)
 
 | Secret | Description | Example |
@@ -235,6 +269,44 @@ Callback URL: `https://app.yourdomain.com/api/auth/okta/callback`
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
 
 Webhook URL: `https://app.yourdomain.com/api/stripe/webhook`
+
+---
+
+## Push Notifications (Optional)
+
+APNs push delivery for first-party native clients, using token-based (`.p8`) authentication. Each secret defaults to `not-configured`; leave any one of them unset and push is off end to end (no events are published and the delivery handler no-ops).
+
+| Secret | Description |
+|--------|-------------|
+| `APNS_KEY_ID` | Key ID of the APNs authentication key |
+| `APNS_TEAM_ID` | Apple Developer team ID |
+| `APNS_KEY` | Contents of the `.p8` private key (PEM; newlines may be escaped as `\n`) |
+| `APNS_TOPIC` | Bundle ID of the native client, sent as `apns-topic` |
+
+```bash
+pnpm sst secret set APNS_KEY_ID <key-id> --stage <stage>
+pnpm sst secret set APNS_TEAM_ID <team-id> --stage <stage>
+pnpm sst secret set APNS_KEY "$(cat AuthKey_<key-id>.p8)" --stage <stage>
+pnpm sst secret set APNS_TOPIC <bundle-id> --stage <stage>
+```
+
+A wrong key, team, key ID or topic is logged at error level by the delivery handler as a server configuration error; registered device tokens are not deleted because of it.
+
+### Android (FCM)
+
+Android devices are notified through Firebase Cloud Messaging (HTTP v1 API), independently of APNs: either provider alone is enough for push to be on, and a provider left unset only turns off its own platform.
+
+| Secret | Description |
+|--------|-------------|
+| `FCM_SERVICE_ACCOUNT` | The Firebase service account JSON (Project settings -> Service accounts -> Generate new private key), verbatim. Defaults to `not-configured` |
+
+```bash
+pnpm sst secret set FCM_SERVICE_ACCOUNT "$(cat <service-account>.json)" --stage <stage>
+```
+
+The service account needs permission to send FCM messages (the Firebase Admin SDK service account has it; for a custom one, grant the Firebase Cloud Messaging Admin role and enable the Firebase Cloud Messaging API on the project). A malformed JSON value, a wrong project or a rejected credential is logged at error level by the delivery handler as a server configuration error; registered device tokens are deleted only when FCM answers `UNREGISTERED`.
+
+The Android app must be built against the same Firebase project as the service account; its client config is supplied at build time and is not kept in version control.
 
 ---
 
@@ -340,30 +412,59 @@ pnpm sst secret set MAIN_DB_TYPE DocumentDB --stage <stage>
 |--------|-------------|--------|
 | `SESSION_SECRET` | Suspected compromise | All users logged out |
 | `JWT_SECRET` | Suspected compromise | All API tokens invalidated |
-| `SECRET_ENCRYPTION_KEY` | Key compromise, compliance requirement | All OAuth integrations require re-authentication |
+| `SECRET_ENCRYPTION_KEY` | Key compromise, compliance requirement | None when you follow the rotation procedure below |
 
 ### SECRET_ENCRYPTION_KEY Rotation
 
-:::danger Rotation Invalidates All Stored Secrets
-Rotating `SECRET_ENCRYPTION_KEY` makes all previously encrypted data unreadable. This is a destructive operation that requires users to re-authenticate with all OAuth providers and re-enter all Admin UI-configured credentials.
-:::
+You rotate this key without disconnecting integrations by keeping the old key readable while stored values move to the new one. The app reads every stored value with `SECRET_ENCRYPTION_KEY` first and `SECRET_ENCRYPTION_KEY_PREVIOUS` second, and always writes with `SECRET_ENCRYPTION_KEY`.
+
+Reading a value does not re-encrypt it. A stored value moves to the new key only when the re-encrypt command rewrites it, so the previous key must stay configured until that command has verified every value.
 
 **When rotation may be required:**
 - Key compromise (suspected or confirmed)
 - Personnel changes (principle of least privilege)
 - Compliance requirements mandating periodic rotation
 
-**Emergency rotation procedure:**
+**Rotation procedure:**
 
-1. **Notify users** - Warn about upcoming integration disconnection
-2. **Generate new key:** `openssl rand -hex 32`
-3. **Set new secret:**
+1. **Keep the old key readable, then set the new one:**
    ```bash
-   pnpm sst secret set SECRET_ENCRYPTION_KEY "<new-key>" --stage <stage>
+   pnpm sst secret set SECRET_ENCRYPTION_KEY_PREVIOUS "<current-key>" --stage <stage>
+   pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)" --stage <stage>
    ```
-4. **Deploy** to apply the new key
-5. **Users re-authenticate** - Each user must reconnect their OAuth integrations
-6. **Re-enter Admin UI secrets** - All API keys configured via Admin UI must be re-entered
+2. **Deploy** so every function and service loads both keys.
+3. **Preview the re-encrypt**, which writes nothing:
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --dry-run
+   ```
+4. **Run the re-encrypt.** It rewrites each value that is still under the previous key. You can stop it and run it again; a second run rotates 0:
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets
+   ```
+5. **Verify with the new key alone:**
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --verify
+   ```
+6. **Clear the previous key** only after verify exits `0`, then deploy again:
+   ```bash
+   pnpm sst secret set SECRET_ENCRYPTION_KEY_PREVIOUS "not-configured" --stage <stage>
+   ```
+
+The command prints one line of counts per stored field and a total. It never prints a stored value or a document id.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Every stored value is under the current key |
+| `1` | Some values changed while they were being rewritten (`conflicts`): run the command again. Or no configured key opens some values (`unreadable`): a rerun does not change those, so find out why before you clear the previous key |
+| `2` | Usage or connection error, or no encrypted values were found (wrong or empty database) |
+
+:::warning Do Not Clear the Previous Key Early
+Until verify exits `0`, some stored values can only be read with `SECRET_ENCRYPTION_KEY_PREVIOUS`. Clearing it before then makes those values unreadable.
+:::
+
+:::note One Rotation at a Time
+Do not rotate `JWT_SECRET` and `SECRET_ENCRYPTION_KEY` in the same window. Finish one, including verify, before you start the other.
+:::
 
 ### If SECRET_ENCRYPTION_KEY Is Compromised
 

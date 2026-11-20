@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IMessage } from '@bike4mind/common';
-import { normalizeToolUseInputs, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
+import {
+  ensureToolPairingIntegrity,
+  normalizeToolUseInputs,
+  stripAllToolBlocks,
+  stripToolDependentMessages,
+} from './toolPairingUtils';
 
 describe('stripToolDependentMessages', () => {
   const imagePrompt: IMessage = {
@@ -143,5 +148,148 @@ describe('stripAllToolBlocks', () => {
       { role: 'user', content: '[Tool results removed during error recovery]' },
     ]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('3 server tool blocks'));
+  });
+});
+
+const toolUse = (id: string) => ({ type: 'tool_use', id, name: 'lookup', input: {} });
+const toolResult = (id: string) => ({ type: 'tool_result', tool_use_id: id, content: 'ok' });
+
+const asMessages = (messages: unknown[]) => messages as IMessage[];
+
+describe('ensureToolPairingIntegrity adjacency', () => {
+  it('keeps a tool_result directly after its tool_use', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+    ]);
+
+    expect(ensureToolPairingIntegrity(messages)).toEqual(messages);
+  });
+
+  it('replaces a leading user message that only holds a tool_result whose tool_use appears later', () => {
+    const messages = asMessages([
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+    ]);
+
+    const result = ensureToolPairingIntegrity(messages);
+
+    expect(result[0]).toEqual({ role: 'user', content: '[Tool results removed during adjacency repair]' });
+    expect(result.slice(1)).toEqual(messages.slice(1));
+  });
+
+  it('strips a tool_result separated from its tool_use by another message but keeps sibling content', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: [{ type: 'text', text: 'again' }, toolResult('a')] },
+    ]);
+
+    const result = ensureToolPairingIntegrity(messages);
+
+    expect(result[4].content).toEqual([{ type: 'text', text: 'again' }]);
+    expect(result.slice(0, 4)).toEqual(messages.slice(0, 4));
+  });
+
+  it('keeps only the tool_result blocks that match the preceding assistant message', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('b')] },
+      { role: 'user', content: [toolResult('a'), toolResult('b')] },
+      { role: 'assistant', content: [toolUse('c')] },
+      { role: 'user', content: [toolResult('c'), toolResult('a')] },
+    ]);
+
+    const result = ensureToolPairingIntegrity(messages);
+
+    expect(result[4].content).toEqual([toolResult('c')]);
+  });
+
+  it('warns once for each repaired message', () => {
+    const logger = { log: vi.fn(), warn: vi.fn() };
+    const messages = asMessages([
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: [toolResult('a')] },
+    ]);
+
+    ensureToolPairingIntegrity(messages, logger);
+
+    const adjacencyWarnings = logger.warn.mock.calls
+      .map(([message]) => String(message))
+      .filter(message => message.includes('with no matching tool_use in the preceding message'));
+    expect(adjacencyWarnings).toHaveLength(2);
+    expect(adjacencyWarnings[0]).toContain('message 0');
+    expect(adjacencyWarnings[1]).toContain('message 4');
+  });
+});
+
+describe('ensureToolPairingIntegrity duplicate tool ids', () => {
+  it('drops a tool_use and tool_result repeating an id within one round', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+
+    expect(ensureToolPairingIntegrity(messages)).toEqual(
+      asMessages([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [toolUse('a')] },
+        { role: 'user', content: [toolResult('a')] },
+      ])
+    );
+  });
+
+  it('replaces a later round that repeats an earlier tool_use id with placeholders', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+    ]);
+
+    const result = ensureToolPairingIntegrity(messages);
+
+    expect(result.slice(0, 3)).toEqual(messages.slice(0, 3));
+    expect(result[3]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: '[Tool calls removed during message repair]' }],
+    });
+    expect(result[4]).toEqual({ role: 'user', content: '[Tool results removed during adjacency repair]' });
+  });
+
+  it('warns once with the number of removed blocks', () => {
+    const logger = { log: vi.fn(), warn: vi.fn() };
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+
+    ensureToolPairingIntegrity(messages, logger);
+
+    const duplicateWarnings = logger.warn.mock.calls.filter(([msg]) => String(msg).includes('Removed 2 tool block(s)'));
+    expect(duplicateWarnings).toHaveLength(1);
+  });
+
+  it('leaves the input array untouched', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+    const snapshot = structuredClone(messages);
+
+    ensureToolPairingIntegrity(messages);
+
+    expect(messages).toEqual(snapshot);
   });
 });

@@ -11,7 +11,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: (keys: unknown) => keys,
   getAvailableModels: (...args: unknown[]) => getAvailableModels(...args),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services-core', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({ openai: 'sk-openai' })) },
 }));
 const settings = vi.hoisted(() => ({ enforceCredits: false }));
@@ -65,6 +65,7 @@ describe('buildSlackModelOptionsFromDashboard', () => {
       'Moonshot (Kimi)',
       'DeepSeek',
       'Ollama',
+      'Local model server',
       'AWS',
       'Black Forest Labs',
       'Voyage AI',

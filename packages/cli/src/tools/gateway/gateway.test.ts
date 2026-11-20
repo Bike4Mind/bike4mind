@@ -19,13 +19,15 @@ vi.mock('../../llm/ToolRouter', async importOriginal => {
   };
 });
 
-import { wrapToolWithPermission } from './gateway.js';
+import { SESSION_ENDED_MESSAGE, wrapToolWithPermission } from './gateway.js';
 import { PermissionManager } from '../../utils/PermissionManager.js';
 import { ToolCatalog } from './toolCatalog.js';
 import { PermissionDeniedError } from '@bike4mind/common';
 import { useCliStore } from '../../store/index.js';
 import { __resetHostAllowlistCacheForTests } from './stages/hostAllowlist.js';
 import { executeTool } from '../../llm/ToolRouter';
+import { createPeerTools } from '../peerTools.js';
+import type { PeerService } from '../../peers/PeerService.js';
 import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
 
 function tool(name: string, fn?: (args: any) => Promise<string>): ICompletionOptionTools {
@@ -778,5 +780,119 @@ describe('wrapToolWithPermission: session approval scope', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: undefined });
     expect(pm.isSessionTrusted('git_commit')).toBe(true);
+  });
+});
+
+describe('wrapToolWithPermission: a call whose session has ended', () => {
+  function wrapInSession(t: ICompletionOptionTools, prompt: unknown, pm: PermissionManager, ended: { value: boolean }) {
+    return wrapToolWithPermission(t, {
+      permissionManager: pm,
+      showPermissionPrompt: prompt as never,
+      agentContext: { currentAgent: null },
+      configStore: {},
+      apiClient: {} as never,
+      isCancelled: () => ended.value,
+    });
+  }
+
+  it('neither runs nor records trust for a prompt answered after the session ended', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const ended = { value: false };
+    const prompt = vi.fn(async () => {
+      ended.value = true;
+      return { action: 'allow-session' };
+    });
+    const fn = vi.fn(async () => 'ran');
+
+    const result = await wrapInSession(tool('git_commit', fn), prompt, pm, ended).toolFn({ message: 'x' });
+
+    expect(result).toBe(SESSION_ENDED_MESSAGE);
+    expect(fn).not.toHaveBeenCalled();
+    expect(pm.isSessionTrusted('git_commit')).toBe(false);
+  });
+
+  it('does not run a call that needs no prompt once the session ended', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    pm.trustToolForSession('git_commit');
+    const fn = vi.fn(async () => 'ran');
+    const ended = { value: false };
+    const wrapped = wrapInSession(tool('git_commit', fn), vi.fn(), pm, ended);
+
+    expect(await wrapped.toolFn({ message: 'x' })).toBe('ran');
+    ended.value = true;
+    expect(await wrapped.toolFn({ message: 'y' })).toBe(SESSION_ENDED_MESSAGE);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('peer send exact-payload approval', () => {
+  const recipient = {
+    id: 'peer',
+    generation: 'generation',
+    threadId: 'thread',
+    name: 'worker',
+    accountId: 'account',
+    projectId: 'project',
+  };
+  function peerTool(approve: (target: string, text: string) => Promise<boolean>) {
+    const send = vi.fn(async () => ({ ok: true }));
+    const service = {
+      prepareSendTarget: async () => recipient,
+      captureSendContext: () => ({ origin: 'agent', turnToken: 'test-turn' }),
+      send,
+    } as unknown as PeerService;
+    return { send, definition: createPeerTools(() => service, approve)[1] };
+  }
+
+  afterEach(() => setLiveMode('normal'));
+
+  it.each(['normal', 'auto-accept'] as const)('asks exactly once for each payload in %s mode', async mode => {
+    await setLiveMode(mode);
+    const approve = vi.fn(async () => true);
+    const prompt = vi.fn();
+    const { send, definition } = peerTool(approve);
+    const wrapped = wrap(definition, prompt, new PermissionManager(new ToolCatalog(), [], []));
+    await wrapped.toolFn({ target: 'peer', text: 'first exact payload' });
+    await wrapped.toolFn({ target: 'peer', text: 'second exact payload' });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(approve).toHaveBeenNthCalledWith(1, expect.stringContaining('generation generation'), 'first exact payload');
+    expect(approve).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('generation generation'),
+      'second exact payload'
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps plan-mode execution blocked before the send gate', async () => {
+    await setLiveMode('plan');
+    const approve = vi.fn(async () => true);
+    const { send, definition } = peerTool(approve);
+    const wrapped = wrap(definition, vi.fn(), new PermissionManager(new ToolCatalog(), [], []));
+    expect(await wrapped.toolFn({ target: 'peer', text: 'blocked' })).toMatch(/blocked while plan mode is active/);
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit tool denial and does not reach the send gate', async () => {
+    await setLiveMode('normal');
+    const approve = vi.fn(async () => true);
+    const { send, definition } = peerTool(approve);
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const wrapped = wrap(definition, prompt, new PermissionManager(new ToolCatalog(), [], ['peer_send']));
+    await expect(wrapped.toolFn({ target: 'peer', text: 'blocked' })).rejects.toThrow();
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact-payload denial effective in auto-accept mode', async () => {
+    await setLiveMode('auto-accept');
+    const approve = vi.fn(async () => false);
+    const { send, definition } = peerTool(approve);
+    const wrapped = wrap(definition, vi.fn(), new PermissionManager(new ToolCatalog(), [], []));
+    expect(await wrapped.toolFn({ target: 'peer', text: 'private' })).toContain('denied');
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
   });
 });

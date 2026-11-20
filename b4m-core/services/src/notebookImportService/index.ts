@@ -11,6 +11,7 @@ import {
   ImportResult,
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
+  CURRENT_EXPORT_VERSION,
 } from '../notebookExportService/types';
 import {
   ArtifactTypeSchema,
@@ -24,6 +25,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '../fabFileService/create';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
 import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
+import { readNotebookBundle, type BundleRead } from '../notebookExportService/bundle';
 
 /** A notebook the import can address: found by name, or just created. */
 interface NotebookRef {
@@ -88,7 +90,7 @@ export interface NotebookImportAdapters {
    * where the id comes from the export rather than being minted, so it can already be taken.
    *
    * Deliberately not named `artifactExists`, which is what the same question is called in
-   * apps/client/server/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
+   * packages/server-utils/src/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
    * and MUST stay that narrow, because that module tells a real collision apart from a repairable
    * orphan by exactly that difference. Two ports, one name, opposite safety properties.
    */
@@ -205,7 +207,7 @@ export type NotebookImportAdaptersStayNarrowed = Expect<
 /**
  * Fails typecheck if `adminSettings` is made optional again. Both tsconfigs exclude *.test.ts and
  * every test construction casts its adapters, so without this the required-ness is enforced by the
- * single typechecked construction in apps/client/server/s3/notebookImportComplete.ts - and a caller
+ * single typechecked construction in packages/server-utils/src/s3/notebookImportComplete.ts - and a caller
  * that omits it falls back to MAX_FILE_SIZE_DEFAULT_MB, silently admitting what the upload door
  * refuses.
  */
@@ -217,10 +219,23 @@ export type NotebookImportAdminSettingsStayRequired = Expect<
  * One instance per import. The admission state below is per-import instance state, and
  * `importNotebooks` resets it on entry, so sharing one instance across concurrent imports would let
  * one run zero another run's accumulator. The live caller builds a fresh service per S3 event
- * (apps/client/server/s3/notebookImportComplete.ts).
+ * (packages/server-utils/src/s3/notebookImportComplete.ts).
  */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  async importBundle(targetUserId: string, read: BundleRead, options: NotebookImportOptions): Promise<ImportResult> {
+    let data: NotebookExportFormat;
+    try {
+      data = await readNotebookBundle(read);
+    } catch (error) {
+      this.adapters.logger.error('Notebook bundle read failed', { targetUserId, error });
+      const message = error instanceof Error ? error.message : 'Invalid notebook bundle';
+      throw new NotebookImportError(message, 'INVALID_FORMAT', error);
+    }
+    // The bundle is already rebuilt into the v1 shape; v2 is only accepted through this entry point.
+    return this.importNotebooks(targetUserId, { ...data, exportVersion: CURRENT_EXPORT_VERSION }, options);
+  }
 
   /**
    * Import issues surfaced to the caller: per-attachment failures, plus notebook-level notices like

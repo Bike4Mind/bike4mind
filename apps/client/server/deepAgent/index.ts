@@ -44,14 +44,10 @@ export {
   buildSystemApiKeyTable,
   type ResolvedBackend,
 } from '@bike4mind/server-utils/deepAgent/resolveBackend';
-export { createDeepAgentToolMaterializer, type DeepAgentToolMaterializerConfig } from './toolMaterializer';
 export {
-  dispatch as deepAgentWakeDispatch,
-  processWake,
-  buildDefaultWakeDeps,
-  WakePayloadSchema,
-  type WakePayload,
-} from './wakeHandler';
+  createDeepAgentToolMaterializer,
+  type DeepAgentToolMaterializerConfig,
+} from '@bike4mind/server-utils/deepAgent/toolMaterializer';
 export {
   enrollDeepAgent,
   enrollDeepAgentWithDefaults,
@@ -74,7 +70,7 @@ export {
   loadLinkedAgentContext,
   type CreateMissionInput,
   type CreateMissionResult,
-} from './missions';
+} from '@bike4mind/server-utils/deepAgent/missions';
 export {
   bridgeWakeToSession,
   bridgeReviewToSession,

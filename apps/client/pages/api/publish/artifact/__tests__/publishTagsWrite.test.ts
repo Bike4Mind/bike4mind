@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -71,7 +75,7 @@ vi.mock('@server/services/publish', async importOriginal => {
     buildPublishUrlPath: () => '/p/u/owner1/s',
     invalidatePublishCdn: () => undefined,
     toCacheTarget: () => ({}),
-    mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
+    mintDraftUploadUrl: () => Promise.resolve({ url: 'https://example.invalid/put' }),
     consumePublishAction: () => Promise.resolve({ refund: () => Promise.resolve() }),
   };
 });

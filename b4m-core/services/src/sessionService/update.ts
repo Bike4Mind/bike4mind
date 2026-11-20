@@ -85,6 +85,7 @@ export const updateSession = async (
     propagateToProjects,
     lakeScope,
     includeLibraryFiles,
+    promptCacheTtl,
     knowledgeIdsMode,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
@@ -173,6 +174,9 @@ export const updateSession = async (
   }
   if (includeLibraryFiles !== undefined) {
     update.includeLibraryFiles = includeLibraryFiles;
+  }
+  if (promptCacheTtl !== undefined) {
+    update.promptCacheTtl = promptCacheTtl;
   }
   // The stored pair is always written together, never one half: `lakeScopeExplicit` is the only
   // thing separating "grounds on no lake" from "never chose", and leaving a stale flag beside a

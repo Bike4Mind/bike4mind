@@ -99,6 +99,28 @@ describe('OpenAIBackend reasoning_effort gate for GPT-5.4 + tools (#8920)', () =
     expect(params?.reasoning_effort).toBe('medium');
   });
 
+  it('sends reasoning_effort for the gpt-5 dated snapshot like the gpt-5 alias', async () => {
+    for (const model of [ChatModels.GPT5, ChatModels.GPT5_2025_08_07]) {
+      const { backend, getCaptured } = buildBackend();
+
+      await runComplete(backend, model, { reasoningEffort: 'medium' });
+
+      expect(getCaptured()?.reasoning_effort, model).toBe('medium');
+    }
+  });
+
+  it('sends max_completion_tokens, not max_tokens, for the gpt-5 dated snapshot', async () => {
+    for (const model of [ChatModels.GPT5, ChatModels.GPT5_2025_08_07]) {
+      const { backend, getCaptured } = buildBackend();
+
+      await runComplete(backend, model, { stream: true, maxTokens: 1234 });
+
+      const params = getCaptured();
+      expect(params, model).toHaveProperty('max_completion_tokens');
+      expect(params, model).not.toHaveProperty('max_tokens');
+    }
+  });
+
   it('still sends reasoning_effort for the GPT-5.4 Mini snapshot when no tools are present', async () => {
     const { backend, getCaptured } = buildBackend();
 

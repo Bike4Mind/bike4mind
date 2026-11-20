@@ -3,6 +3,7 @@ import { internalErrorResult } from '@workers/cli/defineLambdaRoute';
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 // Register global error handlers for network-error observability
 registerLambdaErrorHandlers();
@@ -21,7 +22,7 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   try {
     return await handleToolRequest(event, { requestId });
   } catch (error) {
-    console.error('[CLI_TOOLS] Handler error:', { requestId }, error);
+    Logger.error('[CLI_TOOLS] Handler error', { requestId, error });
     return internalErrorResult(requestId);
   }
 };

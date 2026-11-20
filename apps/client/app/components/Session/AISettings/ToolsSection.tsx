@@ -4,6 +4,7 @@ import CompareIcon from '@mui/icons-material/Compare';
 import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
 import AudioIcon from '@mui/icons-material/GraphicEq';
@@ -40,7 +41,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerResponse } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerResponse, type McpConnectionListEntry } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -57,6 +58,11 @@ import {
   filterToolsForDisplay,
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import {
+  isComposerConnectionOn,
+  toggleComposerConnection,
+} from '@client/app/components/integrations/customMcp/customMcpModel';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -322,6 +328,11 @@ const ToolsSection = ({
     isPending: isLoadingMcpServers,
     isFetching: isFetchingMcpServers,
   } = useMcpServers();
+  // Custom MCP connectors: the user's own start on and a platform connector starts off
+  // (see isComposerConnectionOn).
+  const { offered: customConnections } = useComposerMcpConnections();
+  const disabledMcpConnections = useLLM(state => state.disabledMcpConnections) ?? [];
+  const enabledPlatformMcpConnections = useLLM(state => state.enabledPlatformMcpConnections) ?? [];
 
   // Must stay above the unsupported-model early return further down, which cuts off hooks.
   const isMobile = useIsMobile();
@@ -376,6 +387,7 @@ const ToolsSection = ({
   const modelSupportsThinking = useMemo(() => {
     return modelInfo?.can_think === true;
   }, [modelInfo?.can_think]);
+  const thinkingAlwaysOn = modelSupportsThinking && modelInfo?.thinkingAlwaysOn === true;
 
   const availableMcpServers = useMemo(
     () => mcpServersData.filter((server: IMcpServerResponse) => server.enabled !== false),
@@ -433,6 +445,11 @@ const ToolsSection = ({
     const next = currentlyEnabled ? baseline.filter(name => name !== serverName) : [...baseline, serverName];
     setLLM({ enabledMcpServers: next });
   };
+
+  const connectionChoices = { disabledMcpConnections, enabledPlatformMcpConnections };
+  const isConnectionOn = (connection: McpConnectionListEntry) => isComposerConnectionOn(connection, connectionChoices);
+  const toggleConnection = (connection: McpConnectionListEntry) =>
+    setLLM(toggleComposerConnection(connection, connectionChoices));
 
   const getMcpServerLabel = (serverName: string) => {
     switch (serverName) {
@@ -578,7 +595,9 @@ const ToolsSection = ({
   // than excluded here, so the number reflects everything the user has toggled on
   // and can actually use. MCP servers have no toolAvailability entry, so nothing to
   // filter for them.
-  const enabledMcpServerCount = visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length;
+  const enabledMcpServerCount =
+    visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length +
+    customConnections.filter(isConnectionOn).length;
   // Feature-gated switches that live outside the `tools` array (each has its own LLM
   // state flag) but appear in this panel, so they count like any other tool. Must stay
   // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
@@ -944,6 +963,33 @@ const ToolsSection = ({
               </ToolContainer>
             </Grid>
           ))}
+          {customConnections.map(connection => (
+            <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
+              <ToolContainer sx={toolContainerSx}>
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                >
+                  <HubOutlinedIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={connection.displayName}
+                    description={
+                      connection.ownerType === 'platform'
+                        ? `Connector set up by an admin on ${connection.urlHost}`
+                        : `Custom connector on ${connection.urlHost}`
+                    }
+                  />
+                </Box>
+                <SquareSlideToggle
+                  data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
+                  onChange={() => toggleConnection(connection)}
+                  checked={isConnectionOn(connection)}
+                />
+              </ToolContainer>
+            </Grid>
+          ))}
           {/* Prompt Enhancement */}
           <Grid xs={12} className="tool-item tool-item-prompt-enhancement">
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">
@@ -1251,14 +1297,16 @@ const ToolsSection = ({
                 <ToolLabel
                   name="Thinking"
                   description={
-                    modelSupportsThinking
-                      ? 'Reasons step-by-step before responding; tune the token budget for longer chains'
-                      : 'Not supported by the selected model'
+                    thinkingAlwaysOn
+                      ? 'This model always thinks before responding'
+                      : modelSupportsThinking
+                        ? 'Reasons step-by-step before responding; tune the token budget for longer chains'
+                        : 'Not supported by the selected model'
                   }
                   dim={!modelSupportsThinking}
                 />
               </Box>
-              {(thinking?.enabled ?? true) && modelSupportsThinking && (
+              {(thinking?.enabled ?? true) && modelSupportsThinking && !thinkingAlwaysOn && (
                 <Box
                   sx={{
                     display: 'flex',
@@ -1302,18 +1350,25 @@ const ToolsSection = ({
                 </Box>
               )}
               <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, order: { xs: 1, sm: 2 } }}>
-                <SquareSlideToggle
-                  onChange={e =>
-                    setLLM({
-                      thinking: {
-                        enabled: e.target.checked,
-                        budget_tokens: thinking?.budget_tokens ?? 16000,
-                      },
-                    })
-                  }
-                  checked={thinking?.enabled ?? false}
-                  disabled={!modelSupportsThinking}
-                />
+                {thinkingAlwaysOn ? (
+                  <Typography level="body-sm" data-testid="tools-thinking-always-on">
+                    Always on
+                  </Typography>
+                ) : (
+                  <SquareSlideToggle
+                    onChange={e =>
+                      setLLM({
+                        thinking: {
+                          enabled: e.target.checked,
+                          budget_tokens: thinking?.budget_tokens ?? 16000,
+                        },
+                      })
+                    }
+                    checked={thinking?.enabled ?? false}
+                    disabled={!modelSupportsThinking}
+                    data-testid="tools-thinking-toggle-btn"
+                  />
+                )}
               </Box>
             </ToolContainer>
           </Grid>

@@ -7,41 +7,58 @@ const h = vi.hoisted(() => ({
   createUser: vi.fn(),
   publish: vi.fn(),
   emitSignupFunnelEvents: vi.fn(),
-  recordSyntheticIdentity: vi.fn(),
+  recordAccountLane: vi.fn(),
   recordAdminAction: vi.fn(),
+  requirePackage: vi.fn(),
+  findPackage: vi.fn(),
+  reserve: vi.fn(),
+  claim: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return {};
-    },
-  }),
+  baseApi: () => {
+    const chain = {
+      use: () => chain,
+      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+        h.handler = fn;
+        return {};
+      },
+    };
+    return chain;
+  },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
-vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { update: h.update, claimFreeCreditGrant: h.claim },
+  grantPackageRepository: { reserveRedemption: h.reserve, findById: h.findPackage },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@bike4mind/services', () => ({
+  userService: { createUser: h.createUser },
+  referService: { requireActiveGrantPackage: h.requirePackage },
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
-  recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),
+  recordAccountLane: (...args: unknown[]) => h.recordAccountLane(...args),
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@client/lib/entitlements/managedUserTags', () => ({ isManagedTag: (tag: string) => tag === 'managed' }));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => h.recordAdminAction(...args),
 }));
 
 await import('../bulk-create-users');
 
-const makeReq = (users: unknown[]) => ({
-  body: { users },
+const makeReq = (users: unknown[], extra: Record<string, unknown> = {}) => ({
+  body: { users, ...extra },
   user: { id: 'admin-1', isAdmin: true },
   ability: {},
 });
@@ -50,7 +67,7 @@ describe('POST /api/admin/bulk-create-users', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: 'a@b.test', storageLimit: 1000 });
-    h.recordSyntheticIdentity.mockResolvedValue(false);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: false });
     h.recordAdminAction.mockResolvedValue(null);
   });
 
@@ -74,6 +91,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 2,
             failedCount: 1,
             createdUserIds: expect.arrayContaining(['new-1', 'new-2']),
+            grantPackageId: null,
             credits: 0,
             startingCreditsTotal: 0,
             startingCreditsByUserId: { 'new-1': 0, 'new-2': 0 },
@@ -111,7 +129,7 @@ describe('POST /api/admin/bulk-create-users', () => {
     });
 
     it.each([
-      ['synthetic identity', h.recordSyntheticIdentity],
+      ['account lane', h.recordAccountLane],
       ['signup funnel', h.emitSignupFunnelEvents],
       ['profile update', h.update],
     ] as const)('audits a persisted account and credits when %s fails', async (_step, failingOperation) => {
@@ -128,6 +146,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 1,
             failedCount: 1,
             createdUserIds: ['new-1'],
+            grantPackageId: null,
             credits: 50,
             startingCreditsTotal: 50,
             startingCreditsByUserId: { 'new-1': 50 },
@@ -197,16 +216,34 @@ describe('POST /api/admin/bulk-create-users', () => {
   it('passes a synthetic classification into the signup emitter', async () => {
     const user = { id: 'new-synthetic', email: 'seed@test.example', name: 'Seed', storageLimit: 1000 };
     h.createUser.mockResolvedValue(user);
-    h.recordSyntheticIdentity.mockResolvedValue(true);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: true, isInternal: false });
 
     await h.handler!(makeReq([{ email: 'seed@test.example' }]), {
       status: vi.fn().mockReturnThis(),
       json: vi.fn(),
     });
 
-    expect(h.recordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(h.recordAccountLane).toHaveBeenCalledWith(user);
     expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'new-synthetic', isSynthetic: true }) })
+    );
+  });
+
+  it('passes an internal classification into the signup emitter', async () => {
+    const user = { id: 'new-staff', email: 'a@staff.example', name: 'Staff', storageLimit: 1000 };
+    h.createUser.mockResolvedValue(user);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: true });
+
+    await h.handler!(makeReq([{ email: 'a@staff.example' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    expect(h.recordAccountLane).toHaveBeenCalledWith(user);
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: expect.objectContaining({ id: 'new-staff', isSynthetic: false, isInternal: true }),
+      })
     );
   });
 
@@ -268,5 +305,141 @@ describe('POST /api/admin/bulk-create-users', () => {
     expect(usernames).toContain('jo');
     expect(usernames.find(u => u !== 'jo')).toMatch(/^user-[0-9a-f]{8}$/);
     expect(h.createUser.mock.calls.every(([params]) => params.allowReservedUsername === undefined)).toBe(true);
+  });
+
+  describe('seed check for a delegated admin', () => {
+    const res = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
+    const delegateReq = (users: unknown[], extra: Record<string, unknown> = {}) => ({
+      ...makeReq(users, extra),
+      user: { id: 'delegate-1', isAdmin: false, adminPermissions: ['settings:manage'] },
+    });
+
+    it('refuses a grant package with credits and creates no rows', async () => {
+      h.requirePackage.mockResolvedValue({ id: 'pkg-1', credits: 250, storageMb: 400, active: true });
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res())
+      ).rejects.toThrow('Missing permission: credits:adjust');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a row with starting credits and creates no rows', async () => {
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', startingCredits: 10 }]), res())
+      ).rejects.toThrow('Missing permission: credits:adjust');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a managed tag on a single row and creates no rows', async () => {
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', tags: ['managed'] }]), res())
+      ).rejects.toThrow('Only full administrators can assign managed tags');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('creates rows with no credits and no managed tags', async () => {
+      await h.handler!(delegateReq([{ email: 'a@b.test', tags: ['beta'] }]), res());
+      expect(h.createUser).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('grant package', () => {
+    const res = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
+    const pkg = { id: 'pkg-1', credits: 250, storageMb: 400, active: true };
+    beforeEach(() => {
+      h.claim.mockResolvedValue(true);
+    });
+
+    it('creates each row with the package amounts and reserves one redemption per account', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 9 }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ initialCredits: 250, record: expect.objectContaining({ storageLimit: 400 }) }),
+        expect.anything()
+      );
+      expect(h.reserve).toHaveBeenCalledWith('pkg-1', 'new-1');
+      // A package grant is not a purchase, so no write may stamp the paid-standing field.
+      const writes = [...h.createUser.mock.calls.map(([params]) => params), ...h.update.mock.calls.map(([u]) => u)];
+      expect(JSON.stringify(writes)).not.toContain('lastCreditsPurchasedAt');
+    });
+
+    it('stamps the package on the user, merges package and row tags, and audits the package', async () => {
+      h.requirePackage.mockResolvedValue({ ...pkg, tags: ['promo', 'x'] });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      await h.handler!(makeReq([{ email: 'a@b.test', tags: ['x', 'y'] }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).toHaveBeenCalledWith({ id: 'new-1', grantPackageId: 'pkg-1' });
+      expect(h.update).toHaveBeenLastCalledWith({ id: 'new-1', tags: ['promo', 'x', 'y'] });
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ grantPackageId: 'pkg-1' }) })
+      );
+    });
+
+    it('never stamps the package on a row the caps refused', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.reserve.mockResolvedValue({ outcome: 'refused', reason: 'daily_cap' });
+      await h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).not.toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
+    });
+
+    it('fails a row whose inbox already took a package grant', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a' })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'a+1@b.test', name: 'a' });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      h.claim.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const r = res();
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'a+1@b.test' }], { grantPackageId: 'pkg-1' }), r);
+      const { results } = r.json.mock.calls[0][0] as { results: { success: boolean; error?: string }[] };
+      expect(results.map(row => row.success)).toEqual([true, false]);
+      expect(results[1].error).toBe('This inbox has already received a signup grant');
+      expect(h.reserve).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a capped row as a failure without failing the batch', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a' })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'c@b.test', name: 'c' });
+      h.reserve
+        .mockResolvedValueOnce({ outcome: 'reserved', release: vi.fn() })
+        .mockResolvedValueOnce({ outcome: 'refused', reason: 'total_cap' });
+      const r = res();
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'c@b.test' }], { grantPackageId: 'pkg-1' }), r);
+      const { results } = r.json.mock.calls[0][0] as { results: { success: boolean; error?: string }[] };
+      expect(results.map(row => row.success)).toEqual([true, false]);
+      expect(results[1].error).toBe('This invite code has reached its signup limit');
+      expect(h.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects the batch before creating anyone when the package is unknown or inactive', async () => {
+      h.requirePackage.mockRejectedValue(new Error('Grant package is inactive'));
+      await expect(h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res())).rejects.toThrow(
+        'Grant package is inactive'
+      );
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects the batch before creating anyone when the package has expired', async () => {
+      const { referService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      h.requirePackage.mockImplementation(referService.requireActiveGrantPackage);
+      h.findPackage.mockResolvedValue({ ...pkg, expiresAt: new Date(Date.now() - 60_000) });
+
+      await expect(
+        h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'c@b.test' }], { grantPackageId: 'pkg-1' }), res())
+      ).rejects.toThrow('Grant package has expired');
+      expect(h.findPackage).toHaveBeenCalledWith('pkg-1');
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.reserve).not.toHaveBeenCalled();
+      expect(h.publish).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty package id', async () => {
+      await expect(h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: '' }), res())).rejects.toThrow(
+        'Invalid grant package id'
+      );
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
   });
 });

@@ -8,9 +8,10 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: { findOne: () => ({ lean: async () => ({ _id: 'file-1', moderationStatus: 'clean' }) }) },
   fabFileRepository: { shareable: { findAccessibleById: async () => true } },
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
   resolveAccessibleLakes: vi.fn(async () => []),
-  isFileInAccessibleLake: vi.fn(),
+  grantingLakes: vi.fn(() => []),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),

@@ -9,10 +9,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: (...a: unknown[]) => mockVerifyEmbedApiKey(...a),
 }));
 
@@ -31,7 +31,7 @@ vi.mock('@server/entitlements/embedKeyEntitlement', () => ({
 // Real parseEmbedOrigin from @bike4mind/common - the CSP filter is exercised
 // against the actual canonicalizer, not a stub.
 import handler from '../serve';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {

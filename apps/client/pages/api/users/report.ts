@@ -2,7 +2,7 @@ import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { counterService } from '@bike4mind/services';
 import { CounterLog } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, UnprocessableEntityError, InternalServerError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ReportQueryParamsSchema } from '../../../types/api';

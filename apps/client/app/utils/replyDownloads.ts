@@ -5,7 +5,7 @@ import {
   SEARCH_RESULT_CARDS_LANGUAGE,
   LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
-import { parseArtifacts } from './artifactParser';
+import { parseArtifacts } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { COMMON_FILE_FORMATS, detectFileFormat, getFormatByMimeType, FileFormatOption } from './fileFormatUtils';
 
 export interface ReplyDownload {

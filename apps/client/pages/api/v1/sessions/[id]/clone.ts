@@ -1,9 +1,10 @@
 import { sessionService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   agentRepository,
   fabFileRepository,
+  organizationRepository,
   projectRepository,
   questRepository,
   Session,
@@ -12,10 +13,10 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const handler = nextRouteForContract(sessionCloneContract, {
   rateLimit: rateLimit({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' }),
@@ -43,6 +44,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
           users: userRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          organizations: organizationRepository,
           agents: agentRepository,
         },
         // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of
@@ -56,7 +58,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
         // handful of reads inside the transaction this route opens. That is the intended trade - the
         // alternative is persisting an unreachable scope, which is permanent once non-empty.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+          (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
         resolveSurfaceAccess: copySurfaceAccessForRequest(req),
         workspaceSessionSettings: premiumWorkspaceSessionSettings,
       }

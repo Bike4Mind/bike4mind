@@ -14,7 +14,7 @@ import { IMongoDocument } from './common';
  * Two axes, not one flat enum, mirroring the gate's actual throw/return sites:
  * - `stopped` - a human must change a lever (the switch is off, or a lever is set to 0).
  * - `throttled` - resolves on its own (a saturated rate window stayed full past the wait budget).
- * - `budget_exhausted` - a reserve-first budget denied the call (run/lake/period).
+ * - `budget_exhausted` - a reserve-first budget denied the call (run/lake/owner/period).
  * - `approaching_cap` - a granted call crossed the warn threshold of a budget that has not
  *   denied anything yet.
  */
@@ -27,7 +27,7 @@ export const DATA_LAKE_SPEND_NOTIFICATION_KINDS = [
 export type DataLakeSpendNotificationKind = (typeof DATA_LAKE_SPEND_NOTIFICATION_KINDS)[number];
 
 /** Which lever/meter the notification is about. */
-export const DATA_LAKE_SPEND_NOTIFICATION_SCOPES = ['switch', 'rate', 'run', 'lake', 'period'] as const;
+export const DATA_LAKE_SPEND_NOTIFICATION_SCOPES = ['switch', 'rate', 'run', 'lake', 'owner', 'period'] as const;
 export type DataLakeSpendNotificationScope = (typeof DATA_LAKE_SPEND_NOTIFICATION_SCOPES)[number];
 
 /** Fraction of budget (0..1) that triggers an `approaching_cap` notice. User-confirmed at the ticket gate. */

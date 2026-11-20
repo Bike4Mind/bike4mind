@@ -10,6 +10,7 @@ import type { IntegrationDemand, IntegrationRequester } from '@bike4mind/common'
 // behind them are covered by pages/api/admin/integrations/demand/__tests__/demand.e2e.test.ts.
 const m = vi.hoisted(() => ({
   useIntegrationDemand: vi.fn(),
+  useSearch: vi.fn(),
   useIntegrationRequesters: vi.fn(),
   fetchAllRequesterEmails: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), warning: vi.fn(), error: vi.fn() },
@@ -21,6 +22,7 @@ vi.mock('@client/app/hooks/data/integrationDemand', async importOriginal => ({
   useIntegrationRequesters: m.useIntegrationRequesters,
   fetchAllRequesterEmails: m.fetchAllRequesterEmails,
 }));
+vi.mock('@tanstack/react-router', () => ({ useSearch: m.useSearch, useNavigate: () => vi.fn() }));
 vi.mock('sonner', () => ({ toast: m.toast }));
 
 import IntegrationDemandTab from './IntegrationDemandTab';
@@ -90,6 +92,7 @@ const deferred = <T,>() => {
 describe('IntegrationDemandTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    m.useSearch.mockReturnValue({});
     writeText.mockResolvedValue(undefined);
     // fireEvent rather than userEvent throughout: userEvent installs its own clipboard stub.
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -101,6 +104,14 @@ describe('IntegrationDemandTab', () => {
       ])
     );
     m.useIntegrationRequesters.mockReturnValue(requestersState([]));
+  });
+
+  it('applies integration search and stage from URL state to real query rows', () => {
+    m.useSearch.mockReturnValue({ demandQuery: 'hub', demandStage: 'planned' });
+    renderTab();
+    expect(screen.getByTestId('admin-integration-demand-row-hubspot')).toBeVisible();
+    expect(screen.queryByTestId('admin-integration-demand-row-github')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-integration-demand-row-retired-connector')).not.toBeInTheDocument();
   });
 
   it('lists one row per integration in the order served, with its stage and totals', () => {

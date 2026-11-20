@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createHash } from 'node:crypto';
 import { PUBLISH_QUOTAS, TooManyRequestsError } from '@bike4mind/common';
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
+}));
 
 /**
  * Storage quota and the daily publish allowance on the two routes that rewrite a live page in place.
@@ -16,6 +24,7 @@ const m = vi.hoisted(() => ({
   annotationsLean: vi.fn(),
   updateMany: vi.fn(),
   download: vi.fn(),
+  remove: vi.fn(),
   upload: vi.fn(),
   consume: vi.fn(),
   refund: vi.fn(),
@@ -27,12 +36,12 @@ const m = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getPublishedArtifactsStorage: () => ({ download: m.download, upload: m.upload }),
+  getPublishedArtifactsStorage: () => ({ download: m.download, upload: m.upload, delete: m.remove }),
 }));
 vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({
   enqueuePublishThumbnail: () => Promise.resolve(),
@@ -62,10 +71,26 @@ vi.mock('@server/services/publish', async () => {
     consumePublishAction: m.consume,
   };
 });
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: () => m.getModel(),
   },
+}));
+
+// Billing is covered in revise.metering.test.ts; here the meter always reserves, then the raw backend runs.
+vi.mock('@bike4mind/services', () => ({
+  meterCompletionBackend: (
+    llm: { complete: (...args: unknown[]) => unknown },
+    meter: (...args: unknown[]) => Promise<unknown>
+  ) => ({
+    complete: async (...args: unknown[]) => {
+      await meter();
+      return llm.complete(...args);
+    },
+  }),
+}));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: () => async () => ({}),
 }));
 
 import reviseHandler from '../revise';
@@ -141,6 +166,7 @@ beforeEach(() => {
   m.aggregate.mockResolvedValue([{ totalBytes: 0 }]);
   m.annotationsLean.mockResolvedValue([{ body: 'Make it longer', authorDisplayName: 'Reviewer' }]);
   m.upload.mockResolvedValue(undefined);
+  m.remove.mockResolvedValue(undefined);
   m.refund.mockResolvedValue(undefined);
   m.consume.mockResolvedValue({ refund: m.refund });
   m.validate.mockReturnValue({ valid: true, violations: [] });
@@ -313,8 +339,8 @@ describe('revise - daily publish allowance', () => {
 
   it('keeps the action when the page was written but its record update fails', async () => {
     const dbDown = new Error('database unavailable');
-    m.updateOne.mockImplementation((filter: object) =>
-      'revisingAt' in filter ? Promise.resolve({}) : Promise.reject(dbDown)
+    m.updateOne.mockImplementation((_filter: unknown, update: { $set?: { manifest?: unknown } }) =>
+      update.$set?.manifest ? Promise.reject(dbDown) : Promise.resolve({})
     );
 
     await expect(run(reviseHandler)).rejects.toBe(dbDown);
@@ -505,5 +531,37 @@ describe('archived versions', () => {
     expect(res.statusCode).toBe(200);
     expect(m.aggregate).not.toHaveBeenCalled();
     expect(pushedVersions()).toEqual([]);
+  });
+});
+
+describe('immutable index compatibility', () => {
+  it.each([
+    { name: 'revise', handler: reviseHandler },
+    { name: 'restore', handler: restoreHandler },
+  ])('$name reads the committed payload and clears its pointer when writing canonical HTML', async ({ handler }) => {
+    const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+    m.findOneLean.mockResolvedValue({ ...artifact(), indexObjectPath });
+    const result = await run(handler);
+    expect(result.statusCode).toBe(200);
+    expect(m.download).toHaveBeenCalledWith(`${PREFIX}${indexObjectPath}`);
+    expect(m.lock.mock.calls[0][0]).toMatchObject({ sha256Index: 'sha-current', indexObjectPath });
+    expect(recordWrites()[0][1]).toMatchObject({ $unset: { indexObjectPath: 1 } });
+    expect(m.remove).toHaveBeenCalledWith(`${PREFIX}${indexObjectPath}`);
+  });
+});
+
+it.each([
+  { name: 'revise', handler: reviseHandler },
+  { name: 'restore', handler: restoreHandler },
+])('$name rejects a lost content/lock generation before retiring its old payload', async ({ handler }) => {
+  m.updateOne.mockResolvedValueOnce({ matchedCount: 0 });
+  const result = await run(handler);
+  expect(result.statusCode).toBe(409);
+  const filter = recordWrites()[0][0];
+  expect(filter).toMatchObject({
+    publicId: 'pub1',
+    sha256Index: 'sha-current',
+    indexObjectPath: null,
+    revisingAt: expect.any(Date),
   });
 });

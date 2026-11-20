@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
+import { VIEWER_SANDBOX } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 const {
   mockArtifactFindOne,
@@ -49,7 +49,7 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 // Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
@@ -71,8 +71,13 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 // real Mongo. liveShareTokens mirrors the real fold (legacy scalar first, revoked entries out).
 vi.mock('@bike4mind/database', () => ({
   shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
-  liveShareTokens: (a: { shareToken?: string | null; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
-    const live = (a.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+  liveShareTokens: (a: {
+    shareToken?: string | null;
+    shareTokens?: { token?: string; revokedAt?: Date | null; expiresAt?: Date | null }[];
+  }) => {
+    const live = (a.shareTokens ?? []).filter(
+      e => !!e?.token && !e.revokedAt && (!e.expiresAt || e.expiresAt > new Date())
+    );
     const legacy = a.shareToken;
     return legacy && !live.some(e => e.token === legacy) ? [{ token: legacy, revokedAt: null }, ...live] : live;
   },
@@ -110,6 +115,7 @@ type RunOpts = {
   sign?: boolean;
   fetchDest?: string;
   fetchMode?: string;
+  accept?: string;
 };
 const run = (
   segments: string[],
@@ -129,6 +135,7 @@ const run = (
     sign,
     fetchDest,
     fetchMode,
+    accept,
   }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
@@ -147,6 +154,7 @@ const run = (
   if (userAgent) headers['user-agent'] = userAgent;
   if (fetchDest) headers['sec-fetch-dest'] = fetchDest;
   if (fetchMode) headers['sec-fetch-mode'] = fetchMode;
+  if (accept) headers.accept = accept;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -390,20 +398,24 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(mockDownload).not.toHaveBeenCalled(); // shell carries no secret, no storage read
   });
 
-  it('drops an oversized gated asset and reports it via header (no silent truncation)', async () => {
+  it('drops an oversized gated non-media asset and reports it via header (no silent truncation)', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({
         visibility: 'private',
         ownerId: 'owner1',
         manifest: [
           { path: 'index.html', mimeType: 'text/html' },
-          { path: 'huge.png', mimeType: 'image/png' },
+          { path: 'huge.css', mimeType: 'text/css' },
         ],
       })
     );
     const huge = Buffer.alloc(3 * 1024 * 1024 + 1); // > PER_ASSET_MAX_BYTES
     mockDownload.mockImplementation((key: string) =>
-      Promise.resolve(key.endsWith('index.html') ? Buffer.from(`<html><body><img src="huge.png"></body></html>`) : huge)
+      Promise.resolve(
+        key.endsWith('index.html')
+          ? Buffer.from(`<html><head><link rel="stylesheet" href="huge.css"></head><body></body></html>`)
+          : huge
+      )
     );
 
     const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
@@ -411,9 +423,9 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
-    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.png');
+    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.css');
     const data = res._getData() as string;
-    expect(data).not.toContain('data:image/png;base64,'); // huge asset was not inlined
+    expect(data).not.toContain('href=&quot;huge.css&quot;'); // link removed, not left to 404
   });
 
   it('admin views any gated bundle', async () => {
@@ -1727,6 +1739,14 @@ describe('GET /api/publish/serve - comment pin bridge', () => {
 });
 
 describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it.each([':path*', 'x'.repeat(65)])('404s the malformed token %j without a database lookup', async token => {
+    mockArtifactFindOne.mockClear();
+    const { res, promise } = run(['a', token]);
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockArtifactFindOne).not.toHaveBeenCalled();
+  });
+
   it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
@@ -1774,6 +1794,45 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
     expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
   });
 
+  describe('link expiry', () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const entryId = 'entry-tok123';
+    // Stands in for shareTokenFilter's Mongo semantics (pinned against real Mongo in
+    // PublishedArtifactModel.shareToken.test.ts): the row resolves only while the entry is live.
+    function serveIfLive(expiresAt: Date | null | undefined) {
+      const artifact = bundle({
+        shareTokens: [{ _id: entryId, token: 'tok123', createdAt: new Date(), revokedAt: null, expiresAt }],
+      });
+      mockArtifactFindOne.mockImplementation(() => {
+        const entry = artifact.shareTokens[0];
+        return !entry.expiresAt || entry.expiresAt > new Date() ? artifact : null;
+      });
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+    }
+
+    it('404s an expired link', async () => {
+      serveIfLive(new Date(Date.now() - HOUR_MS));
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(404);
+    });
+
+    it.each([
+      ['an unexpired', new Date(Date.now() + HOUR_MS)],
+      ['a no-expiry', null],
+    ])('serves %s link and counts the view against its entry', async (_label, expiresAt) => {
+      serveIfLive(expiresAt);
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ arrayFilters: [{ 'entry._id': entryId }] })
+      );
+    });
+  });
+
   it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
     mockArtifactFindOne.mockReturnValue(null);
 
@@ -1782,6 +1841,47 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
 
     expect(res._getStatusCode()).toBe(404);
     expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  describe('not-found page for a browser', () => {
+    const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+    const notFoundBody = async (segments: string[], accept?: string) => {
+      const { res, promise } = run(segments, { accept });
+      await promise;
+      return res;
+    };
+
+    it('renders the same HTML 404 for an unknown or revoked token, a malformed token and a removed owner', async () => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const unknown = await notFoundBody(['a', 'gone'], BROWSER_ACCEPT);
+      const malformed = await notFoundBody(['a', ':path*'], BROWSER_ACCEPT);
+      mockArtifactFindOne.mockReturnValue(bundle({ shareToken: 'tok' }));
+      mockUserFindById.mockReturnValueOnce(null);
+      const ownerGone = await notFoundBody(['a', 'tok'], BROWSER_ACCEPT);
+
+      for (const res of [unknown, malformed, ownerGone]) {
+        expect(res._getStatusCode()).toBe(404);
+        expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+        expect(res.getHeader('Cache-Control')).toBe('no-store');
+        expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+        expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+        expect(res.getHeader('Vary')).toBe('Accept');
+        expect(res._getData()).toContain('This link is no longer available');
+      }
+      // Byte-identical, so the page never hints which case it was.
+      expect(malformed._getData()).toBe(unknown._getData());
+      expect(ownerGone._getData()).toBe(unknown._getData());
+      expect(unknown._getData()).not.toMatch(/revoked|expired|gone/i);
+    });
+
+    it.each([undefined, '*/*', 'application/json'])('keeps the JSON body for Accept %j', async accept => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const res = await notFoundBody(['a', 'gone'], accept);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toEqual({ error: 'Not found' });
+      expect(res.getHeader('Vary')).toBe('Accept');
+      expect(res.getHeader('Cache-Control')).toBe('no-store');
+    });
   });
 
   it('serves a bundle asset through the token path with no-store + noindex', async () => {
@@ -1871,7 +1971,7 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
   });
 
   it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(passphraseGated());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Secret page</h1></body></html>'));
 
@@ -1893,7 +1993,7 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
   });
 
   it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(passphraseGated());
 
     const token = signGateToken({ publicId: 'someOtherArtifact' });
@@ -2007,7 +2107,7 @@ describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () =>
   });
 
   it('passphrase-gated share link WITH proof serves, inlining assets (proof cookie cannot ride opaque-origin fetches)', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(
       bundle({
         accessGate: { kind: 'passphrase' },
@@ -2063,7 +2163,7 @@ describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () =>
     });
 
     it('serves it once the proof cookie is presented', async () => {
-      const { signGateToken } = await import('@server/services/publish/publishGateToken');
+      const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
       mockArtifactFindOne.mockReturnValue(privateShared());
       mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Private</h1></body></html>'));
 
@@ -2904,7 +3004,7 @@ describe('GET /api/publish/serve - export affordances on the viewer surfaces (is
   });
 
   it('offers the links on a passphrase-verified page - the proof cookie rides the navigation', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(publicReply({ accessGate: { kind: 'passphrase' } }));
     const { res, promise } = run(['r', 'rexp'], { cookie: `b4m_pg_rexp=${signGateToken({ publicId: 'rexp' })}` });
     await promise;
@@ -3420,7 +3520,7 @@ describe('GET /api/publish/serve - multi-page bundles', () => {
   const gated = (over: Record<string, unknown> = {}) =>
     bundle({ accessGate: { kind: 'passphrase' }, manifest: PAGES, commentPolicy: 'open', ...over });
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
   const storage: Record<string, string> = {
@@ -3576,7 +3676,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   const gated = (over: Record<string, unknown> = {}) =>
     bundle({ accessGate: { kind: 'passphrase' }, manifest: FILES, ...over });
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
   const signedKey = (url: string) => new URL(url).pathname.slice(1);
@@ -3764,7 +3864,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   });
 
   it('caps media links in a gated render at the remaining proof lifetime', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
@@ -3817,6 +3917,38 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
     expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('media/clip.mp4');
+  });
+
+  it('keeps a stylesheet listed after the images and sends the overflow images to signed URLs', async () => {
+    const images = Array.from({ length: 10 }, (_, i) => `slides/${i}.png`);
+    mockArtifactFindOne.mockReturnValue(
+      gated({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          ...images.map(path => ({ path, mimeType: 'image/png' })),
+          { path: 'style.css', mimeType: 'text/css' },
+        ],
+      })
+    );
+    mockDownload.mockImplementation((key: string) => {
+      if (key.endsWith('index.html')) {
+        const imgs = images.map(path => `<img src="${path}">`).join('');
+        return Promise.resolve(
+          Buffer.from(`<html><head><link rel="stylesheet" href="style.css"></head><body>${imgs}</body></html>`)
+        );
+      }
+      if (key.endsWith('.css')) return Promise.resolve(Buffer.from('.slide{color:red}'.repeat(9000))); // ~150 KB
+      return Promise.resolve(Buffer.alloc(560 * 1024)); // six fill the budget, leaving no room for the CSS
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proofCookie(), fetchDest: 'document' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+    expect(res._getData() as string).toContain('.slide{color:red}');
+    const signedPngs = mockGetSignedUrl.mock.calls.filter(([key]) => String(key).endsWith('.png'));
+    expect(signedPngs.length).toBeGreaterThan(0);
+    expect(mockGetSignedUrl.mock.calls.some(([key]) => String(key).endsWith('.css'))).toBe(false);
   });
 
   describe('a gated render where storage cannot sign for the browser', () => {
@@ -3974,7 +4106,7 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
     bundle({ thumbnail: { key: THUMB_KEY, versionId: THUMB_VERSION, renderedAt: new Date() }, ...over });
 
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
 
@@ -4049,4 +4181,68 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
     expect(res._getStatusCode()).not.toBe(200);
     expect(mockDownload).not.toHaveBeenCalledWith(THUMB_KEY);
   });
+});
+
+describe('GET /api/publish/serve - immutable current index', () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  it('serves the committed payload instead of a legacy canonical object', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+    mockDownload.mockImplementation(async (key: string) => {
+      if (key !== `user/scope123/my-slug/${indexObjectPath}`) throw new Error('Wrong live payload');
+      return Buffer.from('<html><head></head><body>COMMITTED_PAYLOAD</body></html>');
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toContain('COMMITTED_PAYLOAD');
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+  it('keeps an archived version separate from the current payload', async () => {
+    const oldSha = 'a'.repeat(64);
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ indexObjectPath, sha256Index: 'b'.repeat(64), versions: [{ sha256Index: oldSha }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ARCHIVED_PAYLOAD</body></html>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1', v: oldSha });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/versions/${oldSha}.html`);
+    expect(mockDownload).not.toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+});
+
+it('downloads the committed index payload even when a losing publisher left different canonical bytes', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  mockDownload.mockImplementation(async (key: string) =>
+    Buffer.from(key.endsWith(indexObjectPath) ? 'WINNER_BYTES' : 'LOSER_BYTES')
+  );
+  const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true });
+  await promise;
+  expect(res._getStatusCode()).toBe(200);
+  expect(Buffer.from(res._getData()).toString()).toBe('WINNER_BYTES');
+  expect(res.getHeader('Content-Disposition')).toBe('attachment');
+  expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+});
+
+it('signs the committed revision for an explicitly downloaded index', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  const origin = 'https://objects.example.test';
+  signing.enabled = true;
+  mockBrowserSigningOrigin.mockResolvedValue(origin);
+  mockGetSignedUrl.mockImplementation(async (key: string) => `${origin}/${key}?sig=test`);
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  try {
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true, sign: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      `user/scope123/my-slug/${indexObjectPath}`,
+      'get',
+      expect.any(Object)
+    );
+    expect(res._getJSONData().url).toContain(indexObjectPath);
+  } finally {
+    signing.enabled = false;
+  }
 });

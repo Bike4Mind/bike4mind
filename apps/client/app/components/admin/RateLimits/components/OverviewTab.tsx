@@ -1,9 +1,10 @@
 import React from 'react';
-import { Box, Card, CardContent, Chip, Grid, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Sheet, Stack, Table, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { RATE_LIMIT_INTEGRATIONS } from '@bike4mind/common';
 import type { ChartData, RateLimitSnapshot } from '../types';
+import { EmptyState, SectionCard, StatusChip } from '../../shared';
 
 const INTEGRATION_COLORS: Record<string, string> = {
   github: '#8884d8',
@@ -27,9 +28,11 @@ function formatResetTime(resetAt: string): string {
 interface OverviewTabProps {
   chartData: ChartData;
   snapshots: RateLimitSnapshot[];
+  /** The empty state's call to action. */
+  emptyAction: React.ReactNode;
 }
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots }) => {
+export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots, emptyAction }) => {
   const theme = useTheme();
 
   const recentThrottled = snapshots.filter(s => s.wasThrottled).slice(0, 20);
@@ -40,55 +43,54 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots }
   );
 
   return (
-    <Box>
-      {/* Integration summary cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {chartData.integrationSummaries.map(summary => (
-          <Grid key={summary.integration} xs={12} sm={6} md={3}>
-            <Card variant="outlined">
-              <CardContent>
-                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                  <Typography level="title-sm" sx={{ textTransform: 'capitalize' }}>
-                    {summary.integration}
-                  </Typography>
-                  <Stack direction="row" spacing={0.5}>
-                    {summary.avgUsagePercent >= 80 && (
-                      <Chip size="sm" color="warning" variant="soft">
-                        Near Limit
-                      </Chip>
-                    )}
-                    {summary.throttledCount > 0 && (
-                      <Chip size="sm" color="danger" variant="soft">
-                        Throttled
-                      </Chip>
-                    )}
-                  </Stack>
+    <Stack gap={2}>
+      {chartData.integrationSummaries.length > 0 && (
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))' }}>
+          {chartData.integrationSummaries.map(summary => (
+            <SectionCard
+              key={summary.integration}
+              title={summary.integration.charAt(0).toUpperCase() + summary.integration.slice(1)}
+              body="custom"
+              data-testid={`rate-limit-integration-${summary.integration}`}
+              action={
+                <Stack direction="row" gap={0.5}>
+                  {summary.avgUsagePercent >= 80 && <StatusChip tone="warn" label="Near limit" />}
+                  {summary.throttledCount > 0 && <StatusChip tone="bad" label="Throttled" />}
                 </Stack>
-                <Typography level="h3">
+              }
+            >
+              <Stack gap={0.5} sx={{ px: 2, py: 1.75 }}>
+                <Typography
+                  sx={{ color: 'admin.ink', fontSize: 22, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
+                >
                   {summary.latestRemaining !== null ? summary.latestRemaining : '--'}
-                  <Typography level="body-sm" component="span">
+                  <Typography level="body-sm" component="span" sx={{ color: 'admin.inkMuted', fontWeight: 400 }}>
                     {summary.latestLimit !== null ? ` / ${summary.latestLimit}` : ''}
                   </Typography>
                 </Typography>
-                <Typography level="body-xs" color={summary.avgUsagePercent > 80 ? 'warning' : 'neutral'}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   {summary.avgUsagePercent}% avg usage | {summary.throttledCount} throttled
                 </Typography>
                 {summary.latestResetAt && new Date(summary.latestResetAt) > new Date() && (
-                  <Typography level="body-xs" color="primary">
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                     {formatResetTime(summary.latestResetAt)}
                   </Typography>
                 )}
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
+              </Stack>
+            </SectionCard>
+          ))}
+        </Box>
+      )}
 
       {/* Usage over time chart */}
       {chartData.usageTimeSeries.length > 0 && (
-        <Sheet data-testid="rate-limit-chart-container" variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 'sm' }}>
-          <Typography level="title-md" sx={{ mb: 2 }}>
-            Usage % Over Time
+        <Sheet
+          data-testid="rate-limit-chart-container"
+          variant="outlined"
+          sx={{ p: 2, borderRadius: 'lg', bgcolor: 'admin.surface', borderColor: 'admin.border' }}
+        >
+          <Typography level="title-md" sx={{ mb: 2, color: 'admin.ink' }}>
+            Usage over time (%)
           </Typography>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData.usageTimeSeries}>
@@ -114,9 +116,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots }
 
       {/* Throttled events table */}
       {recentThrottled.length > 0 && (
-        <Sheet data-testid="rate-limit-throttled-table" variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
-          <Typography level="title-md" sx={{ mb: 2 }}>
-            Recent Throttled Events (429s)
+        <Sheet
+          data-testid="rate-limit-throttled-table"
+          variant="outlined"
+          sx={{ p: 2, borderRadius: 'lg', bgcolor: 'admin.surface', borderColor: 'admin.border' }}
+        >
+          <Typography level="title-md" sx={{ mb: 2, color: 'admin.ink' }}>
+            Recent throttled events (429s)
           </Typography>
           <Table size="sm" stripe="odd">
             <thead>
@@ -147,15 +153,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots }
 
       {/* Empty state */}
       {snapshots.length === 0 && (
-        <Box data-testid="rate-limit-empty-state" sx={{ textAlign: 'center', py: 6 }}>
-          <Typography level="h4" color="neutral">
-            No rate limit data yet
-          </Typography>
-          <Typography level="body-sm" color="neutral">
-            Rate limit snapshots will appear here after MCP tool calls are made.
-          </Typography>
+        <Box data-testid="rate-limit-empty-state">
+          <EmptyState
+            title="No rate limit data yet"
+            description="Rate limit snapshots will appear here after MCP tool calls are made."
+            action={emptyAction}
+          />
         </Box>
       )}
-    </Box>
+    </Stack>
   );
 };

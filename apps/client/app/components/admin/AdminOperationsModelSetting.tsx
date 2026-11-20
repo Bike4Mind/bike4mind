@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Card,
   FormControl,
   FormLabel,
   Select,
@@ -23,6 +22,8 @@ import ErrorIcon from '@mui/icons-material/Error';
 import { toast } from 'sonner';
 import type { ModelBackend } from '@bike4mind/common';
 import { backendLabel } from '@client/app/utils/agentOpsModels';
+import { useSettingsDraft } from './SettingsDraftProvider';
+import { SettingsSection } from './shared/SettingsSection';
 
 interface OperationsModelConfig {
   modelId: string;
@@ -81,20 +82,40 @@ export const AdminOperationsModelSetting: React.FC = () => {
       toast.success(
         `Operations model updated to ${data.activeModel.name}, ${data.activeModel.imageModelName} & ${data.activeModel.speechModelName}`
       );
-      queryClient.invalidateQueries({ queryKey: ['operationsModel'] });
+      return queryClient.invalidateQueries({ queryKey: ['operationsModel'] });
     },
     onError: (error: Error) => {
       toast.error(`Failed to update operations model: ${error.message}`);
     },
   });
 
-  const currentModelInfo = models?.find(m => m.id === selectedModel);
-  const currentImageModelInfo = models?.find(m => m.id === selectedImageModel);
+  const draft = useSettingsDraft(
+    'operations-model-config',
+    currentConfig ?? {
+      modelId: '',
+      imageModelId: '',
+      speechModelId: '',
+    },
+    {
+      name: 'Operations models',
+      save: config => updateMutation.mutateAsync(config),
+      blocked: config =>
+        !config.modelId || !config.imageModelId || !config.speechModelId
+          ? 'Choose text, image and speech models before saving.'
+          : undefined,
+    }
+  );
+  const modelId = draft.staged ? draft.value.modelId : selectedModel;
+  const imageModelId = draft.staged ? draft.value.imageModelId : selectedImageModel;
+  const speechModelId = draft.staged ? draft.value.speechModelId : selectedSpeechModel;
+
+  const currentModelInfo = models?.find(m => m.id === modelId);
+  const currentImageModelInfo = models?.find(m => m.id === imageModelId);
 
   const speechModels = models?.filter(m => m.type === 'speech-to-text') || [];
   const allSpeechModels = [...speechModels];
 
-  const currentSpeechModelInfo = allSpeechModels.find(m => m.id === selectedSpeechModel);
+  const currentSpeechModelInfo = allSpeechModels.find(m => m.id === speechModelId);
 
   const isDirty =
     selectedModel !== currentConfig?.modelId ||
@@ -159,26 +180,26 @@ export const AdminOperationsModelSetting: React.FC = () => {
 
   if (configLoading) {
     return (
-      <Card variant="outlined" sx={{ mb: 2, p: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
+      <SettingsSection sx={{ mb: 2, p: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
         <CircularProgress size="sm" />
         <Typography>Loading operations model configuration...</Typography>
-      </Card>
+      </SettingsSection>
     );
   }
 
   if (error) {
     console.error(error);
     return (
-      <Card variant="outlined" sx={{ mb: 2, p: 3 }}>
+      <SettingsSection>
         <Alert color="danger" startDecorator={<ErrorIcon />}>
           Failed to load operations model configuration
         </Alert>
-      </Card>
+      </SettingsSection>
     );
   }
 
   return (
-    <Card variant="outlined" sx={{ mb: 2, p: 3 }}>
+    <SettingsSection>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <SmartToyIcon sx={{ mr: 1, color: 'primary.plainColor' }} />
         <Typography level="h4">Operations Model</Typography>
@@ -197,11 +218,13 @@ export const AdminOperationsModelSetting: React.FC = () => {
       <FormControl sx={{ mb: 2 }}>
         <FormLabel>Primary Operations Model</FormLabel>
         <Select
-          value={selectedModel}
+          value={modelId}
+          disabled={draft.pending}
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              setSelectedModel(value);
+              if (draft.staged) draft.setValue(previous => ({ ...previous, modelId: value }));
+              else setSelectedModel(value);
             }
           }}
           placeholder="Choose a model..."
@@ -229,11 +252,13 @@ export const AdminOperationsModelSetting: React.FC = () => {
       <FormControl sx={{ mb: 3 }}>
         <FormLabel>Image Generation Model</FormLabel>
         <Select
-          value={selectedImageModel}
+          value={imageModelId}
+          disabled={draft.pending}
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              setSelectedImageModel(value);
+              if (draft.staged) draft.setValue(previous => ({ ...previous, imageModelId: value }));
+              else setSelectedImageModel(value);
             }
           }}
           placeholder="Choose an image model..."
@@ -261,11 +286,13 @@ export const AdminOperationsModelSetting: React.FC = () => {
       <FormControl sx={{ mb: 3 }}>
         <FormLabel>Speech-to-Text Model</FormLabel>
         <Select
-          value={selectedSpeechModel}
+          value={speechModelId}
+          disabled={draft.pending}
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              setSelectedSpeechModel(value);
+              if (draft.staged) draft.setValue(previous => ({ ...previous, speechModelId: value }));
+              else setSelectedSpeechModel(value);
             }
           }}
           placeholder="Choose a speech model..."
@@ -331,26 +358,28 @@ export const AdminOperationsModelSetting: React.FC = () => {
         </Alert>
       )}
 
-      <Box sx={{ display: 'flex', gap: 1 }}>
-        <Button
-          color="success"
-          disabled={!isDirty || !selectedModel || !selectedImageModel || !selectedSpeechModel}
-          loading={updateMutation.isPending}
-          onClick={handleSave}
-          startDecorator={<SaveIcon />}
-        >
-          Save Operations Model
-        </Button>
+      {!draft.staged && (
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            color="success"
+            disabled={!isDirty || !selectedModel || !selectedImageModel || !selectedSpeechModel}
+            loading={updateMutation.isPending}
+            onClick={handleSave}
+            startDecorator={<SaveIcon />}
+          >
+            Save Operations Model
+          </Button>
 
-        <Button variant="outlined" color="neutral" disabled={!isDirty} onClick={handleReset}>
-          Reset
-        </Button>
-      </Box>
+          <Button variant="outlined" color="neutral" disabled={!isDirty} onClick={handleReset}>
+            Reset
+          </Button>
+        </Box>
+      )}
 
       <Typography level="body-xs" sx={{ mt: 2, color: 'text.secondary' }}>
         <strong>Note:</strong> Changes take effect immediately for new operations. Existing background jobs will
         complete with their current model.
       </Typography>
-    </Card>
+    </SettingsSection>
   );
 };

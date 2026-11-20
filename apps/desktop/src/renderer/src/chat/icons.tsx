@@ -60,6 +60,34 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** A pager step: back to the previous item, or on to the next. */
+export function PagerIcon({ direction }: { direction: 'previous' | 'next' }) {
+  return (
+    <Glyph>
+      <path d={direction === 'previous' ? 'M10 4L6 8l4 4' : 'M6 4l4 4-4 4'} />
+    </Glyph>
+  );
+}
+
+/** Following whatever needs attention: a ring around a dot. */
+export function FollowIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="5" />
+      <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+    </Glyph>
+  );
+}
+
+/** Sessions branching off another one: a stem turning into an arrow. */
+export function SubSessionsIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.5 2.5v5.25A2.75 2.75 0 0 0 7.25 10.5h5.25M10 8l2.5 2.5L10 13" />
+    </Glyph>
+  );
+}
+
 /** Disclosure for a row that expands downward in place: points down closed, up open. */
 export function DisclosureIcon({ open }: { open: boolean }) {
   return (
@@ -126,10 +154,18 @@ export function FolderPlusIcon() {
   );
 }
 
-/** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
-export function ServerIcon() {
+export function PaperclipIcon() {
   return (
     <Glyph>
+      <path d="M13 7.6l-5 5a3.2 3.2 0 01-4.5-4.5l5.4-5.4a2.1 2.1 0 013 3l-5.3 5.3a1 1 0 01-1.5-1.5l4.8-4.8" />
+    </Glyph>
+  );
+}
+
+/** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
+export function ServerIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
       <rect x="2.5" y="3" width="11" height="4" rx="1.2" />
       <rect x="2.5" y="9" width="11" height="4" rx="1.2" />
       <path d="M5 5h.01M5 11h.01" />
@@ -224,6 +260,131 @@ export function PanelRightIcon() {
   );
 }
 
+/** The Tavern view: a tankard. */
+export function TavernIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 4.5h7v8a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1z" />
+      <path d="M10.5 6.5h1.5a1.5 1.5 0 0 1 0 3h-1.5" />
+      <path d="M3.5 4.5c0-1.5 1.2-2 2-1.5.6-1 2.4-1 3 0 .8-.5 2 0 2 1.5" />
+    </Glyph>
+  );
+}
+
+/** The orchestrating conversation itself, beside the agents it runs. */
+export function ConversationIcon() {
+  return (
+    <Glyph>
+      <path d="M13.5 7.5c0 2.5-2.5 4.5-5.5 4.5a6.5 6.5 0 0 1-2-.3L3 13l.8-2.5a4.2 4.2 0 0 1-1.3-3C2.5 5 5 3 8 3s5.5 2 5.5 4.5z" />
+    </Glyph>
+  );
+}
+
+/** Agents run from one conversation: a hub and the three it hands work to. */
+export function AgentsIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8.5" r="1.75" />
+      <circle cx="3.25" cy="3.75" r="1.25" />
+      <circle cx="12.75" cy="3.75" r="1.25" />
+      <circle cx="8" cy="13.75" r="1.25" />
+      <path d="M4.2 4.7l2.5 2.5M11.8 4.7l-2.5 2.5M8 10.25v2.25" />
+    </Glyph>
+  );
+}
+
+/** The Board view: three columns. */
+export function BoardIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="3" height="10" rx="1" />
+      <rect x="6.5" y="3" width="3" height="7" rx="1" />
+      <rect x="11" y="3" width="3" height="4.5" rx="1" />
+    </Glyph>
+  );
+}
+
+/** The Table view: a header and rows. */
+export function TableIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <path d="M2 6.5h12M2 9.75h12M6 6.5v6.5" />
+    </Glyph>
+  );
+}
+
+/** The Tile Wall view: an even grid of tiles. */
+export function TileWallIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="2.5" width="5" height="5" rx="1" />
+      <rect x="9" y="2.5" width="5" height="5" rx="1" />
+      <rect x="2" y="8.5" width="5" height="5" rx="1" />
+      <rect x="9" y="8.5" width="5" height="5" rx="1" />
+    </Glyph>
+  );
+}
+
+/** The Aquarium view: a fish. */
+export function AquariumIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 8c2-3 6-3.5 8.5 0-2.5 3.5-6.5 3-8.5 0z" />
+      <path d="M11 8l2.5-2v4z" />
+    </Glyph>
+  );
+}
+
+/** The Swimlanes view: stacked, indented lanes. */
+export function SwimlanesIcon() {
+  return (
+    <Glyph>
+      <path d="M2 3.5h12M4.5 8h9.5M7 12.5h7" />
+    </Glyph>
+  );
+}
+
+/** The Constellation view: a hub linked to satellites. */
+export function ConstellationIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="1.75" />
+      <circle cx="3" cy="3.5" r="1" />
+      <circle cx="13" cy="4.5" r="1" />
+      <circle cx="11.5" cy="13" r="1" />
+      <path d="M6.7 6.7 3.7 4.2M9.7 7 12.3 5M9.2 9.5l1.6 2.7" />
+    </Glyph>
+  );
+}
+
+/** The Transit view: a line with stops. */
+export function TransitIcon() {
+  return (
+    <Glyph>
+      <path d="M1.5 8h13" />
+      <circle cx="3.5" cy="8" r="1.5" />
+      <circle cx="8" cy="8" r="1.5" />
+      <circle cx="12.5" cy="8" r="1.5" />
+    </Glyph>
+  );
+}
+
+/**
+ * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
+ * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.
+ */
+export function AgentStageIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1" />
+      <rect x="9" y="2.25" width="4.75" height="4.75" rx="1" />
+      <rect x="2.25" y="9" width="4.75" height="4.75" rx="1" />
+      <rect x="9" y="9" width="4.75" height="4.75" rx="1" />
+    </Glyph>
+  );
+}
+
 /** Widen the task panel, or put it back: arrows out when narrow, in when already wide. */
 export function ExpandIcon({ expanded }: { expanded: boolean }) {
   return (
@@ -311,11 +472,42 @@ export function GlobeIcon() {
   );
 }
 
+export function PhoneIcon() {
+  return (
+    <Glyph>
+      <rect x="4.5" y="1.75" width="7" height="12.5" rx="1.75" />
+      <path d="M7 12h2" />
+    </Glyph>
+  );
+}
+
+/** An isometric cube, for the 3D model pane. */
+export function CubeIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
+    </Glyph>
+  );
+}
+
 export function TerminalIcon() {
   return (
     <Glyph>
       <rect x="2" y="3" width="12" height="10" rx="1.5" />
       <path d="M4.75 6.25 6.75 8l-2 1.75M8.25 10h3" />
+    </Glyph>
+  );
+}
+
+/** The header's Panes menu: four tiles, one per pane it can open beside the conversation. */
+export function PanesIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1.1" />
+      <rect x="9" y="2.25" width="4.75" height="4.75" rx="1.1" />
+      <rect x="2.25" y="9" width="4.75" height="4.75" rx="1.1" />
+      <rect x="9" y="9" width="4.75" height="4.75" rx="1.1" />
     </Glyph>
   );
 }
@@ -356,6 +548,15 @@ export function UserIcon() {
   );
 }
 
+export function BillingIcon() {
+  return (
+    <Glyph>
+      <rect x="1.75" y="3" width="12.5" height="10" rx="1.75" />
+      <path d="M2 6.25h12M4 10h3" />
+    </Glyph>
+  );
+}
+
 /** Leaving: a door with an arrow walking out of it. */
 export function SignOutIcon() {
   return (
@@ -379,6 +580,16 @@ export function SlidersIcon() {
       <circle cx="5.75" cy="4.5" r="1.4" />
       <circle cx="10.25" cy="8" r="1.4" />
       <circle cx="6.75" cy="11.5" r="1.4" />
+    </Glyph>
+  );
+}
+
+/** Models: a chip, for the models that run on this computer. */
+export function ModelsIcon() {
+  return (
+    <Glyph>
+      <rect x="4" y="4" width="8" height="8" rx="1.2" />
+      <path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2" />
     </Glyph>
   );
 }
@@ -424,6 +635,182 @@ export function ExternalLinkIcon() {
   return (
     <Glyph>
       <path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a framed picture, a sun over a hill. */
+export function ImageIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <circle cx="6" cy="6.5" r="1.1" />
+      <path d="M2.75 11.5 6.5 8.25l2.25 2 1.75-1.5 3 2.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a film frame with a play triangle. */
+export function VideoIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="3.5" width="11" height="9" rx="1.5" />
+      <path d="M7 6.25v3.5L10 8z" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a speech bubble carrying a short waveform. */
+export function VoiceIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M6 6v2M8 5v4M10 6v2" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a speaker sending out two arcs. */
+export function SoundIcon() {
+  return (
+    <Glyph>
+      <path d="M2.75 6.25h2L8 3.5v9l-3.25-2.75h-2z" />
+      <path d="M10.25 6a3 3 0 0 1 0 4M12 4.25a5.5 5.5 0 0 1 0 7.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a pair of beamed notes. */
+export function MusicIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.75" cy="11.75" r="1.75" />
+      <circle cx="11.25" cy="10.25" r="1.75" />
+      <path d="M6.5 11.75V4.5l6.5-1.75v7.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a pen nib writing a line. */
+export function PenIcon() {
+  return (
+    <Glyph>
+      <path d="M10.25 3.25 12.75 5.75 6 12.5H3.5V10z" />
+      <path d="M9 13.25h4" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a question in a speech bubble. */
+export function AskIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M6.6 5.9a1.45 1.45 0 1 1 2 1.35c-.4.2-.6.45-.6.9" />
+      <path d="M8 9.4v.05" />
+    </Glyph>
+  );
+}
+
+export function DocumentIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h5l3 3v9.5H4z" />
+      <path d="M9 1.75v3h3M6 8h4M6 10.5h4" />
+    </Glyph>
+  );
+}
+
+/** A hosted model, as opposed to one on this computer or a saved server (ServerIcon). */
+export function CloudIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .4-5.47 4 4 0 0 0-7.6-.9A3.2 3.2 0 0 0 4.75 12.5z" />
+    </Glyph>
+  );
+}
+
+/** The model pane's wireframe toggle: a cube drawn as edges only, hidden ones included. */
+export function WireframeIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
+      <path d="M8 1.75v6.5M2.25 11 8 8.25l5.75 2.75" strokeDasharray="1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's measure tool: a ruler laid across, with ticks. */
+export function MeasureIcon() {
+  return (
+    <Glyph>
+      <path d="M1.75 10.25 10.25 1.75l4 4-8.5 8.5z" />
+      <path d="M4.5 7.5l1.5 1.5M6.75 5.25l1.5 1.5M9 3l1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's section tool: a cube with a plane cutting through it. */
+export function SectionIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M1 8.75 8 5l7 3.75L8 12.5z" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's exploded view: a cube split into pieces pushed apart from its centre. */
+export function ExplodeIcon() {
+  return (
+    <Glyph>
+      <path d="M5.5 1.75h5v3.5h-5zM1.75 9h4.5v5.25h-4.5zM9.75 9h4.5v5.25h-4.5z" />
+      <path d="M8 6.75v1.5M6.75 8.25 6 8.75M9.25 8.25l.75.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+export function GridIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5h12M2 10.5h12M5.5 2v12M10.5 2v12" />
+    </Glyph>
+  );
+}
+
+export function MoonIcon() {
+  return (
+    <Glyph>
+      <path d="M13.5 9.75A5.75 5.75 0 1 1 6.25 2.5a4.5 4.5 0 0 0 7.25 7.25z" />
+    </Glyph>
+  );
+}
+
+/** A sun: the model pane's lighting menu. */
+export function SunIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" />
+    </Glyph>
+  );
+}
+
+/** Camera framing: four corners around a point, for the model pane's view presets. */
+export function FrameIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5" />
+      <circle cx="8" cy="8" r="1.75" />
+    </Glyph>
+  );
+}
+
+export function RecordIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
     </Glyph>
   );
 }

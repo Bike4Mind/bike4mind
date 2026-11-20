@@ -1,12 +1,12 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Logger } from '@bike4mind/observability';
 import { securityFindingRunRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'run-attack-simulation' } });
@@ -18,11 +18,10 @@ const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes between manual runs
  * Invokes the attackSimulationFunction Lambda asynchronously and returns immediately
  * with the runId so the UI can poll for results.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const stage = Resource.App.stage;
 
   // Cooldown is computed against the last *terminal* run (completed or failed) rather than

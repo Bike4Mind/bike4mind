@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 // The audit store fails; the repository, the seed generator and withTransaction are real.
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn(async () => {
     throw new Error('audit down');
   }),

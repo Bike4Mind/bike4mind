@@ -64,4 +64,27 @@ describe('redactErrorForLog', () => {
   it('is recognized as an axios error by axios itself (guards the test fixture)', () => {
     expect(axios.isAxiosError(makeAxiosError())).toBe(true);
   });
+
+  it('summarizes a validation detail array to locations and messages, dropping the echoed input', () => {
+    const error = Object.assign(makeAxiosError(), {
+      response: {
+        status: 422,
+        data: {
+          detail: [{ loc: ['body', 'prompt'], msg: 'String too long', type: 'too_long', input: 'a private prompt' }],
+        },
+        headers: {},
+      },
+    });
+
+    const redacted = redactErrorForLog(error) as Record<string, unknown>;
+
+    expect(redacted.providerDetail).toBe('body.prompt: String too long');
+    expect(JSON.stringify(redacted)).not.toContain('a private prompt');
+  });
+
+  it('keeps a string detail as the provider detail', () => {
+    expect((redactErrorForLog(makeAxiosError()) as Record<string, unknown>).providerDetail).toBe(
+      'Insufficient credits'
+    );
+  });
 });

@@ -23,8 +23,20 @@ export {
   type IntentPromptContext,
 } from './intentClassifier.prompt';
 export * from './sharedToolBuilder';
+export { conservativeRoundInputUsd } from './chatCreditCap';
+export {
+  MIN_AFFORDABLE_OUTPUT_TOKENS,
+  affordableRoundBudget,
+  capRoundOutput,
+  gateEveryRound,
+  type RoundBudget,
+  type RoundGate,
+} from '../completionCreditBudget';
+export { buildToolUsageEvent, recordToolUsageEvent } from './tools/ToolBuilder';
+export { buildSubagentUsageMeta, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
+export * from './recentGeneratedImagesNote';
 export * from './decisionProviders';
 export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
@@ -71,3 +83,5 @@ export type {
 export * from './toolEchoSources';
 export { DecisionToolRequestSchema } from './tools/implementation/decide';
 export type { DecideToolFn, DecisionToolRequest } from './tools/base/types';
+
+export * from './embeddingProviders';

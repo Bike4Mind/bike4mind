@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX, OverwatchUserDay, safeDropIndex } from '@bike4mind/database';
+import {
+  OVERWATCH_USER_DAY_INTERNAL_INDEX,
+  OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX,
+  OverwatchUserDay,
+  safeDropIndex,
+} from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // Same guard as the sibling index migrations' tests.
@@ -16,6 +21,17 @@ const INDEX_NAME = OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX;
 const UNIQUE_INDEX_NAME = 'productId_1_date_1_userId_1';
 // The default name an unfiltered index on the same key gets, which a stage may already have.
 const UNFILTERED_SAME_KEY_NAME = 'productId_1_date_1';
+// The schema's other partial index on the same key, which its own migration builds and tests.
+const INTERNAL_INDEX_NAME = OVERWATCH_USER_DAY_INTERNAL_INDEX;
+
+/** The `{ productId, date }` indexes other than the internal one, by name and filter. */
+async function sameKeyIndexes(): Promise<{ name?: string; partialFilterExpression?: unknown }[]> {
+  return (await OverwatchUserDay.collection.indexes())
+    .filter(i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 }))
+    .filter(i => i.name !== INTERNAL_INDEX_NAME)
+    .map(i => ({ name: i.name, partialFilterExpression: i.partialFilterExpression }))
+    .sort((a, b) => a.name!.localeCompare(b.name!));
+}
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -38,6 +54,7 @@ beforeEach(async () => {
   await safeDropIndex(OverwatchUserDay.collection, INDEX_NAME);
   await safeDropIndex(OverwatchUserDay.collection, UNIQUE_INDEX_NAME);
   await safeDropIndex(OverwatchUserDay.collection, UNFILTERED_SAME_KEY_NAME);
+  await safeDropIndex(OverwatchUserDay.collection, INTERNAL_INDEX_NAME);
 });
 
 /** Every index name the winning plan reads, wherever the engine nests its stages. */
@@ -116,11 +133,7 @@ describe('ensure-overwatch-user-day-synthetic-lane-index migration (real DB)', (
     await migration.up();
     await OverwatchUserDay.createIndexes();
 
-    const sameKey = (await OverwatchUserDay.collection.indexes())
-      .filter(i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 }))
-      .map(i => ({ name: i.name, partialFilterExpression: i.partialFilterExpression }))
-      .sort((a, b) => a.name!.localeCompare(b.name!));
-    expect(sameKey).toEqual([
+    expect(await sameKeyIndexes()).toEqual([
       { name: UNFILTERED_SAME_KEY_NAME, partialFilterExpression: undefined },
       { name: INDEX_NAME, partialFilterExpression: { lane: 'synthetic' } },
     ]);
@@ -132,10 +145,7 @@ describe('ensure-overwatch-user-day-synthetic-lane-index migration (real DB)', (
     // fails whichever builds second with IndexOptionsConflict, and when that is the migration, the deploy.
     await OverwatchUserDay.createIndexes();
 
-    const sameKey = (await OverwatchUserDay.collection.indexes()).filter(
-      i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 })
-    );
-    expect(sameKey.map(i => i.name)).toEqual([INDEX_NAME]);
+    expect((await sameKeyIndexes()).map(i => i.name)).toEqual([INDEX_NAME]);
   });
 
   it('is a no-op when autoIndex built the index first', async () => {
@@ -143,12 +153,7 @@ describe('ensure-overwatch-user-day-synthetic-lane-index migration (real DB)', (
     await OverwatchUserDay.createIndexes();
     await migration.up();
 
-    const sameKey = (await OverwatchUserDay.collection.indexes()).filter(
-      i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 })
-    );
-    expect(sameKey.map(i => ({ name: i.name, partialFilterExpression: i.partialFilterExpression }))).toEqual([
-      { name: INDEX_NAME, partialFilterExpression: { lane: 'synthetic' } },
-    ]);
+    expect(await sameKeyIndexes()).toEqual([{ name: INDEX_NAME, partialFilterExpression: { lane: 'synthetic' } }]);
   });
 
   it('wins the plan for synthetic-lane reads and is never used by reads that do not name the lane', async () => {

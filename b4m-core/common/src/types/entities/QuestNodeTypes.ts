@@ -122,7 +122,6 @@ export interface QuestNodeStatusExtra {
 export interface IQuestGraphRepository extends IBaseRepository<IQuestGraphDocument> {
   createGraph(input: QuestGraphCreateInput): Promise<IQuestGraphDocument>;
   findByUserId(userId: string): Promise<IQuestGraphDocument[]>;
-  updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null>;
   addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null>;
   softDelete(id: string): Promise<void>;
 }

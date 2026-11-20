@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserSettingsProvider, useUserSettings } from './UserSettingsContext';
@@ -51,9 +51,31 @@ vi.mock('@client/app/utils/userAPICalls', () => ({
   updateUserToServer: vi.fn().mockResolvedValue({}),
 }));
 
+const { mockHandleRevision, mockStopWatching, mockWatchArrivals } = vi.hoisted(() => {
+  const mockStopWatching = vi.fn();
+  return { mockHandleRevision: vi.fn(), mockStopWatching, mockWatchArrivals: vi.fn(() => mockStopWatching) };
+});
+vi.mock('@client/app/hooks/data/modelListRevision', () => ({
+  handleModelListRevisionSetting: mockHandleRevision,
+  watchModelListArrivals: mockWatchArrivals,
+}));
+const { mockHandleAccessRevision, mockStopWatchingAccess, mockWatchAccessArrivals } = vi.hoisted(() => {
+  const mockStopWatchingAccess = vi.fn();
+  return {
+    mockHandleAccessRevision: vi.fn(),
+    mockStopWatchingAccess,
+    mockWatchAccessArrivals: vi.fn(() => mockStopWatchingAccess),
+  };
+});
+vi.mock('@client/app/hooks/data/modelAccessRevision', () => ({
+  handleModelAccessRevisionSetting: mockHandleAccessRevision,
+  watchModelAccessArrivals: mockWatchAccessArrivals,
+}));
+
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useLanguage } = await import('@client/app/contexts/TranslationProvider');
 const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
+const { useSubscribeCollection } = await import('@client/app/utils/react-query');
 
 const storedUser = () => useUser.getState().currentUser as MockUser;
 const storedPrefs = () => storedUser().preferences as Record<string, unknown>;
@@ -77,8 +99,7 @@ function cancelError() {
   return Object.assign(new Error('canceled'), { __CANCEL__: true });
 }
 
-function makeWrapper() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function makeWrapper(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={client}>
@@ -268,6 +289,63 @@ describe('UserSettingsContext - concurrent toggles vs. a failed write', () => {
     expect(warn).toHaveBeenCalled();
 
     warn.mockRestore();
+  });
+});
+
+describe('UserSettingsContext - telemetry deletion outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStores();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('sends the re-run flag with the save and resolves with the reported outcome', async () => {
+    vi.mocked(updateUserToServer).mockResolvedValue({
+      id: 'u1',
+      telemetryDeletion: { verified: false, remainingCount: 2 },
+    });
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>>;
+    await act(async () => {
+      saved = await result.current.updatePreferences(
+        { contextTelemetryLevel: 'none' },
+        { rerunTelemetryDeletion: true }
+      );
+    });
+
+    expect(updateUserToServer).toHaveBeenCalledWith('u1', {
+      preferences: expect.objectContaining({ contextTelemetryLevel: 'none' }),
+      rerunTelemetryDeletion: true,
+    });
+    expect(saved!).toEqual({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+  });
+
+  it('leaves the flag out of an ordinary save and reports no deletion', async () => {
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>>;
+    await act(async () => {
+      saved = await result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(vi.mocked(updateUserToServer).mock.calls[0][1]).not.toHaveProperty('rerunTelemetryDeletion');
+    expect(saved!).toEqual({ telemetryDeletion: undefined });
+  });
+
+  it('resolves undefined when the write does not land', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(500));
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>> = {};
+    await act(async () => {
+      saved = await result.current.updatePreferences(
+        { contextTelemetryLevel: 'none' },
+        { rerunTelemetryDeletion: true }
+      );
+    });
+
+    expect(saved).toBeUndefined();
   });
 });
 
@@ -648,5 +726,95 @@ describe('UserSettingsContext - isHydrated', () => {
     useUser.setState({ isHydrated: false });
     const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
     expect(result.current.isHydrated).toBe(false);
+  });
+});
+
+describe('UserSettingsContext - model-list revision wiring', () => {
+  beforeEach(() => {
+    resetStores();
+    vi.clearAllMocks();
+  });
+
+  const adminSettingsCallback = () => {
+    const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
+    return call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
+  };
+
+  it('hands every pushed adminsettings write to the model-list revision handler', () => {
+    const client = new QueryClient();
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+
+    act(() => adminSettingsCallback()('update', { settingName: 'modelListRevision', settingValue: 'rev-2' }));
+
+    expect(mockHandleRevision).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ settingName: 'modelListRevision', settingValue: 'rev-2' })
+    );
+  });
+
+  it('does not treat a deleted setting row as a new revision', () => {
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    act(() => adminSettingsCallback()('delete', { settingName: 'modelListRevision', settingValue: 'rev-2' }));
+
+    expect(mockHandleRevision).not.toHaveBeenCalled();
+    expect(mockHandleAccessRevision).not.toHaveBeenCalled();
+  });
+
+  it('hands every pushed adminsettings write to the model access revision handler', () => {
+    const client = new QueryClient();
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+
+    act(() => adminSettingsCallback()('update', { settingName: 'modelAccessRevision', settingValue: 'acc-2' }));
+
+    expect(mockHandleAccessRevision).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ settingName: 'modelAccessRevision', settingValue: 'acc-2' })
+    );
+  });
+
+  it('watches the access entries landing for as long as the provider is mounted', () => {
+    const client = new QueryClient();
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    expect(mockWatchAccessArrivals).toHaveBeenCalledWith(client);
+
+    unmount();
+    expect(mockStopWatchingAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('watches the model list landing for as long as the provider is mounted', () => {
+    const client = new QueryClient();
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    expect(mockWatchArrivals).toHaveBeenCalledWith(client);
+
+    unmount();
+    expect(mockStopWatching).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('UserSettingsContext - model access revision wiring', () => {
+  it('refreshes the actual picker query for a non-admin subscription write', async () => {
+    resetStores();
+    vi.mocked(useSubscribeCollection).mockClear();
+    const actual = await vi.importActual<typeof import('@client/app/hooks/data/modelAccessRevision')>(
+      '@client/app/hooks/data/modelAccessRevision'
+    );
+    mockHandleAccessRevision.mockImplementationOnce((queryClient: QueryClient, setting: Record<string, unknown>) =>
+      actual.handleModelAccessRevisionSetting(queryClient, setting, () => 0)
+    );
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    client.setQueryData(['llm-model-configurations'], { configurations: [], revision: 'access-1' });
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
+    const callback = call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
+    act(() => callback('update', { settingName: 'modelAccessRevision', settingValue: 'access-2' }));
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith(
+        { queryKey: ['llm-model-configurations'], refetchType: 'all' },
+        { throwOnError: true }
+      )
+    );
+    unmount();
   });
 });

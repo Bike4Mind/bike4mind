@@ -42,13 +42,14 @@ vi.mock('@server/auth/auth', () => ({ authMiddleware: [], auth: h.AUTH_SENTINEL 
 
 // Remaining imports are stubbed only to keep baseApi loadable/side-effect-free at import + build time.
 vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
-vi.mock('@client/lib/settings/registerContributedSettings', () => ({}));
+vi.mock('@bike4mind/server-utils/lib/settings/registerContributedSettings', () => ({}));
 vi.mock('@server/middlewares/logging', () => ({ logging: () => {} }));
 vi.mock('@server/middlewares/errorHandler', () => ({ default: () => {} }));
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ apiKeyAuth: () => () => {} }));
 vi.mock('@server/middlewares/apiKeyAnomalyDetection', () => ({ apiKeyAnomalyDetection: () => () => {} }));
 vi.mock('@server/middlewares/apiKeyRateLimit', () => ({ apiKeyRateLimit: () => () => {} }));
 vi.mock('@server/analytics/analyticsMiddleware', () => ({ analyticsMiddleware: () => () => {} }));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({ connectDB: async () => {} }));
 vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({

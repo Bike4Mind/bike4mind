@@ -5,7 +5,7 @@ const buckets = (sessionIdsShowingKey: string[] = []) => ({
   files: { delete: vi.fn().mockResolvedValue(undefined) },
   generated: {
     storage: { delete: vi.fn().mockResolvedValue(undefined) },
-    quests: { findSessionIdsByImage: vi.fn().mockResolvedValue(sessionIdsShowingKey) },
+    quests: { findSessionIdsByMedia: vi.fn().mockResolvedValue(sessionIdsShowingKey) },
   },
 });
 const logger = { warn: vi.fn() };
@@ -91,7 +91,7 @@ describe('deleteStoredObjects', () => {
       logger
     );
 
-    expect(storage.generated.quests.findSessionIdsByImage).toHaveBeenCalledWith('b.mp3');
+    expect(storage.generated.quests.findSessionIdsByMedia).toHaveBeenCalledWith('b.mp3');
     expect(storage.files.delete).toHaveBeenCalledWith('generated-audio/b.mp3');
     expect(storage.generated.storage.delete).not.toHaveBeenCalled();
   });

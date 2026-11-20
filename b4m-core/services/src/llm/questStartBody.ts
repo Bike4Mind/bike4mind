@@ -2,7 +2,7 @@
  * The quest-start request schema.
  *
  * Kept in its own leaf module (deps: zod + @bike4mind/common only) because
- * apps/client's server/utils/eventBus.ts needs it to type two event payloads,
+ * server-utils' utils/eventBus.ts needs it to type two event payloads,
  * and eventBus is imported by hundreds of API routes. Defining it in
  * ChatCompletionFeatures.ts instead would make every one of those routes trace
  * ChatCompletionProcess and the whole tool registry into its bundle, since
@@ -12,6 +12,7 @@
  */
 import { z } from 'zod';
 import {
+  MessageContentObject,
   ChatCompletionCreateInputSchema,
   DashboardParamsSchema,
   PromptMetaZodSchema,
@@ -22,9 +23,11 @@ import {
   AudioGenerationToolCallSchema,
   PROMPT_TEXT_MAX,
   AuthOriginSchema,
+  CreditHolderType,
   type AuthOrigin,
   DEEP_RESEARCH_MAX_DEPTH,
   DEEP_RESEARCH_MAX_DURATION_MIN,
+  EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z
@@ -39,6 +42,10 @@ export const QuestStartBodySchema = z
     params: ChatCompletionCreateInputSchema,
     dashboardParams: DashboardParamsSchema.optional(),
     enableQuestMaster: z.boolean().optional(),
+    /** Server-generated admission id, never copied from the client request. */
+    questMasterStartId: z.string().optional(),
+    /** Invoke-time admission, preserved across queue redelivery and subscription changes. */
+    questAdmittedAs: z.enum(['subscriber', 'free']).optional(),
     enableMementos: z.boolean().optional(),
     enableArtifacts: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
@@ -66,10 +73,21 @@ export const QuestStartBodySchema = z
      */
     apiKeyId: z.string().optional(),
     /**
+     * Whether that key bills its owner or an organization. Server-set like `apiKeyId`. No longer read by the spend
+     * freeze check, which keeps the acting user for every key.
+     */
+    apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+    /**
      * The authenticating key lacks the admin scope, so the worker withholds the owner's admin role
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */
     adminRoleWithheld: z.boolean().optional(),
+    /**
+     * The visit the turn was asked in, read from the visit cookie by the chat route, so the worker's
+     * first_value names it. Server-set like `apiKeyId`, never from a client body; absent for a key or
+     * non-browser turn. Any string: the route has checked its shape, and analytics must not fail a turn.
+     */
+    visitId: z.string().optional(),
     /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
     systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
     enableAgents: z.boolean().optional(),
@@ -77,6 +95,9 @@ export const QuestStartBodySchema = z
     promptMeta: PromptMetaZodSchema,
     tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
     mcpServers: z.array(z.string()).optional(),
+    /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
+    disabledMcpConnections: z.array(z.string()).optional(),
+    enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
     questMaster: QuestMasterParamsSchema.optional(),
@@ -92,14 +113,14 @@ export const QuestStartBodySchema = z
         maxDepth: z.number().int().min(1).max(DEEP_RESEARCH_MAX_DEPTH).optional(),
         duration: z.number().positive().max(DEEP_RESEARCH_MAX_DURATION_MIN).optional(),
         // searchers are passed via ToolContext, not through this API schema
-        searchers: z.array(z.any()).optional(),
+        searchers: z.array(z.unknown()).optional(),
       })
       .optional(),
     extraContextMessages: z
       .array(
         z.object({
           role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-          content: z.union([z.string(), z.array(z.any())]),
+          content: z.union([z.string(), z.array(z.custom<MessageContentObject>())]),
           fabFileIds: z.array(z.string()).optional(),
           /** See the same field on the public request schema: send in the current user turn. */
           perTurn: z.boolean().optional(),
@@ -118,6 +139,11 @@ export const QuestStartBodySchema = z
      * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
      */
     includeSystemPrompt: z.boolean().optional(),
+    /**
+     * Invoke already published the notebook's AutoName event at turn start, so the after-reply
+     * AutoNameSessionFeature is skipped. Server-set by ChatCompletionInvoke, never from a client body.
+     */
+    autoNameDispatched: z.boolean().optional(),
   })
   .transform((b): typeof b & { authOrigin: AuthOrigin } => ({
     ...b,

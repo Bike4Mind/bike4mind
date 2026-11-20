@@ -130,8 +130,16 @@ If you prefer to do it manually:
 2. Did you export the correct date range?
 3. Some very old conversations may not be included in exports
 
-### "conversations.json not found"
-**Solution**: Your zip file structure may be incorrect. Make sure `conversations.json` is at the root level of the zip, not in a subfolder.
+### "This file doesn't look like a ChatGPT export" (or "a Claude export")
+**Solution**: The zip has no `conversations.json` at its root. Upload the export .zip exactly as ChatGPT or Claude sent it. If you unpacked it, either re-zip it so `conversations.json` sits at the root level of the zip (not in a subfolder), or request a new export.
+
+### "This file is not a valid .zip archive", "This file is damaged or is not a usable export", or "conversations.json in this file is not valid JSON"
+**What it means**: The import history and your inbox show one of these when the uploaded file itself cannot be read: it is not a zip, it is truncated or encrypted, or its `conversations.json` is broken. Retrying the same file fails the same way, so no Retry button is shown.
+
+**Solution**: Request a new export from ChatGPT or Claude and upload the new .zip as downloaded.
+
+### "Something went wrong on our side while processing this import"
+**Solution**: The file may be fine. Use Retry in the import history, or try again later and contact support if it keeps failing.
 
 ## FAQ
 

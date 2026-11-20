@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 interface BlogPublishParams {

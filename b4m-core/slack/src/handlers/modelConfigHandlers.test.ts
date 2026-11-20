@@ -5,6 +5,8 @@ const viewsUpdate = vi.fn();
 const buildSlackModelOptionsFromDashboard = vi.fn();
 const orgFindById = vi.fn();
 const findByChannelId = vi.fn();
+const removeModelConfigByChannelId = vi.fn();
+const upsertByChannelId = vi.fn();
 
 vi.mock('@slack/web-api', () => ({
   WebClient: class {
@@ -35,11 +37,17 @@ vi.mock('../constants/slack-model-options', () => ({
 vi.mock('../di/registry', () => ({
   getSlackDb: () => ({
     Organization: { findById: orgFindById },
-    slackChannelConfigRepository: { findByChannelId },
+    slackChannelConfigRepository: { findByChannelId, removeModelConfigByChannelId, upsertByChannelId },
   }),
 }));
 
-import { handleChannelConfigAdd, handleChannelConfigEdit, handleOrgDefaultsEdit } from './modelConfigHandlers';
+import {
+  handleChannelConfigAdd,
+  handleChannelConfigEdit,
+  handleChannelConfigRemove,
+  handleChannelModelConfigSubmission,
+  handleOrgDefaultsEdit,
+} from './modelConfigHandlers';
 
 const OPTIONS = {
   option_groups: [
@@ -128,5 +136,42 @@ describe('model config modal handlers', () => {
     expect(viewsUpdate).toHaveBeenCalledTimes(1);
     expect(viewsUpdate.mock.calls[0][0].view_id).toBe('V1');
     expect(JSON.stringify(viewsUpdate.mock.calls[0][0].view)).toContain('Failed to load');
+  });
+});
+
+describe('handleChannelConfigRemove', () => {
+  it("removes the channel's settings within the clicking workspace only", async () => {
+    removeModelConfigByChannelId.mockReset().mockResolvedValue(true);
+
+    await expect(handleChannelConfigRemove('U-admin', 'C1', 'T1', 'xoxb-test')).resolves.toEqual({});
+
+    expect(removeModelConfigByChannelId).toHaveBeenCalledWith('C1', 'T1');
+  });
+});
+
+describe('handleChannelModelConfigSubmission', () => {
+  const submit = () =>
+    handleChannelModelConfigSubmission({
+      user: { id: 'U-admin' },
+      view: {
+        private_metadata: JSON.stringify({ slackTeamId: 'T2', channelId: 'C1' }),
+        state: { values: { model_block: { model_select: { selected_option: { value: 'gpt' } } } } },
+      },
+    } as unknown as Parameters<typeof handleChannelModelConfigSubmission>[0]);
+
+  it('saves the settings', async () => {
+    upsertByChannelId.mockReset().mockResolvedValue({ channelId: 'C1', slackTeamId: 'T2' });
+
+    await expect(submit()).resolves.toEqual({});
+    expect(upsertByChannelId).toHaveBeenCalledWith('C1', expect.objectContaining({ slackTeamId: 'T2' }));
+  });
+
+  it("explains the refusal when the channel is API-posting enabled by the other workspace's organization", async () => {
+    upsertByChannelId.mockReset().mockResolvedValue(null);
+
+    const response = await submit();
+
+    expect(response).toMatchObject({ response_action: 'errors' });
+    expect((response as { errors: Record<string, string> }).errors.model_block).toMatch(/enabled for API posting/);
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attributionParams } from './attributionCookies';
 import { clearAttributionCookies } from './utmCapture';
-import { readAcquisitionTouches } from '@server/analytics/acquisition';
+import { readAcquisitionTouches } from '@bike4mind/server-utils/analytics/acquisition';
 
 const setCookie = (name: string, value: unknown) => {
   document.cookie = `${name}=${encodeURIComponent(JSON.stringify(value))}; path=/`;

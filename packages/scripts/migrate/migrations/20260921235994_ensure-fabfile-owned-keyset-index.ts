@@ -9,15 +9,19 @@ import { type MigrationFile } from './index';
  * file the user has in memory for each page.
  *
  * Migration rather than autoIndex, for the same reason as 20260907000000_ensure-fabfile-tagname-filename-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock, and left to autoIndex
+ * autoIndex builds are fire-and-forget (a failure is silent), and left to autoIndex
  * it would build on whichever Lambda's cold boot touches fabfiles first after deploy.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the
  * schema declares, so it also backfills any of this model's other declared indexes an environment
  * happens to be missing.
  *
- * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
- * migration's id the highest on disk - its own test asserts that invariant.
+ * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which had to be
+ * the highest core id before the runner supported `failClosed`.
+ *
+ * Deploy note: renumbered from 20260921235999. An environment that ran it under that id will skip
+ * UnsetStoredDefaultForcedRetrievalFloor, which now owns it; delete that environment's stale
+ * `20260921235999` row from the migrations collection so the $unset runs.
  */
 const migration: MigrationFile = {
   id: 20260921235994,

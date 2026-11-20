@@ -14,15 +14,17 @@ import {
   userRepository,
   organizationRepository,
   fabFileRepository,
-  cacheRepository,
   sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
-import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -31,7 +33,7 @@ const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res)
   const session = await sessionService.getSession(
     req.user!.id,
     { id: req.validatedParams.id },
-    { db: { sessions: sessionRepository, users: userRepository } }
+    { db: { sessions: sessionRepository, users: requesterScopedUsers(req, userRepository) } }
   );
 
   // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.
@@ -80,6 +82,21 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
     )
   );
 
+  // Published replies are snapshots that outlive their notebook; take the owner's down with it, as
+  // the bulk DELETE /api/sessions does. After the delete, so a refused or conflicting one keeps them.
+  // The delete is already committed, so a failure is logged rather than failing the request.
+  try {
+    await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds: [id] }, { logger: req.logger });
+  } catch (error) {
+    req.logger.error('Error unpublishing replies after session delete:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      sessionId: id,
+      userId,
+    });
+  }
+
+  await purgeDeletedNotebookMedia([id], { logger: req.logger });
+
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 
   return res.json({ newLastNotebookId: newLastNotebook?.id ?? null });
@@ -94,26 +111,7 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
   const updatedSession = await sessionService.updateSession(
     req.user!,
     { ...req.validated, id },
-    {
-      db: {
-        sessions: sessionRepository,
-        projects: projectRepository,
-        fabFiles: fabFileRepository,
-        caches: cacheRepository,
-      },
-      logger: req.logger,
-      // Lets the lake-tag derivation see lake-membership files: the ownership reader alone cannot,
-      // so attaching a teammate's org-lake file would otherwise derive nothing and leave the
-      // session unscoped. Same resolver the chat tool runs on, so the two cannot drift.
-      // Imported at CALL time - see the create route for why (the resolver's graph reaches the
-      // Mongoose models, and it is only needed when files are actually attached).
-      resolveLakeAccess: async () =>
-        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-      // The attachment door's lake arms, so an added lake file passes the access check.
-      resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user!, req.logger)(),
-      storage: getFilesStorage(),
-    }
+    buildSessionUpdateAdapters(req, req.user!, req.logger)
   );
 
   await logEvent(

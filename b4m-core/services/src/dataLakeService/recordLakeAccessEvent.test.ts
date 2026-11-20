@@ -62,4 +62,30 @@ describe('recordLakeAccessEvent', () => {
 
     expect(logger.error).toHaveBeenCalledWith('[lakeAccessAudit] failed to record access event', err);
   });
+
+  describe('admin-bypass reads', () => {
+    const BYPASS_INPUT: RecordLakeAccessEventInput = { ...INPUT, adminBypassLakeIds: ['lake1'] };
+
+    it('logs then rethrows a failed record()', async () => {
+      const err = new Error('mongo blip');
+      const record = vi.fn().mockRejectedValue(err);
+      const logger = { error: vi.fn(), warn: vi.fn() };
+
+      await expect(recordLakeAccessEvent({ record }, BYPASS_INPUT, logger, ADMIN_SETTINGS)).rejects.toBe(err);
+      expect(logger.error).toHaveBeenCalledWith('[lakeAccessAudit] failed to record access event', err);
+    });
+
+    it('throws when no recorder is wired in', async () => {
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      await expect(recordLakeAccessEvent(undefined, BYPASS_INPUT, logger, ADMIN_SETTINGS)).rejects.toThrow();
+    });
+
+    it('still swallows a failed write when the marker is empty', async () => {
+      const record = vi.fn().mockRejectedValue(new Error('x'));
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      await expect(
+        recordLakeAccessEvent({ record }, { ...INPUT, adminBypassLakeIds: [] }, logger, ADMIN_SETTINGS)
+      ).resolves.toBeUndefined();
+    });
+  });
 });

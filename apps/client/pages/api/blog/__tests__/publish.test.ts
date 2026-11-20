@@ -32,7 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn((v: string) => `decrypted:${v}`) }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  decryptToken: vi.fn((v: string) => `decrypted:${v}`),
+}));
 
 // The SSRF gate resolves DNS; stub it so blog.example.com is public and *.nip.io is loopback.
 vi.mock('dns', () => {

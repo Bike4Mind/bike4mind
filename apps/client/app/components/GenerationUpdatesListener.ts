@@ -6,11 +6,14 @@ import type {
   MusicGeneration,
   VideoGeneration,
 } from '@bike4mind/common';
+import { chatImageJobKeys, patchChatImageJob, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { invalidateGenerationCreditBalances } from '@client/app/hooks/data/generationCreditBalances';
 import { isAwaitingGenerationOutput, isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { patchMusicGeneration } from '@client/app/hooks/data/musicGenerationCache';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
+import { patchStudioImageJob, studioImageJobKeys } from '@client/app/hooks/data/studioImageJobs';
+import { studioRenderKeys } from '@client/app/hooks/data/studioRenders';
 import { patchVideoGeneration } from '@client/app/hooks/data/videoGenerationCache';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 
@@ -27,7 +30,12 @@ type KindCache = {
   patch: (queryClient: QueryClient, job: JobUpdate) => boolean;
 };
 
-const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
+// Image jobs are cached in two places, not through KIND_CACHES: Studio's gallery list and the chat card's per-id
+// detail (handleImageUpdate). Speech, sound effects and Scenes (compose) have no web job cache yet, so their frames
+// only refresh the credit balance. Render jobs live only in the Productions export panel (handleRenderUpdate).
+type CachedKind = Extract<GenerationJobKind, 'video' | 'music'>;
+
+const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {
     keys: videoGenerationKeys,
     patch: (queryClient, { id, state, progress }) => patchVideoGeneration(queryClient, { id, state, progress }),
@@ -39,10 +47,43 @@ const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
 };
 
 // A server newer than this client can send a kind it has no cache for.
-const isCachedKind = (kind: string): kind is GenerationJobKind => Object.hasOwn(KIND_CACHES, kind);
+const isCachedKind = (kind: string): kind is CachedKind => Object.hasOwn(KIND_CACHES, kind);
+
+// The frame moves the gallery row's and the chat card's state; a finished job refetches the list and the card, which
+// carry its output file and public error. Nothing to do for a cache that has never loaded.
+const handleImageUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
+  const isTerminal = isTerminalGenerationState(job.state);
+  const cached = patchStudioImageJob(queryClient, job);
+  const isChatCardCached = patchChatImageJob(queryClient, job);
+  const pending: Promise<void>[] = [];
+  if (isTerminal && isChatCardCached) pending.push(refetchDetail(queryClient, chatImageJobKeys.detail(job.id)));
+  if ((isTerminal || !cached) && queryClient.getQueryData(studioImageJobKeys.list)) {
+    pending.push(queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list }));
+  }
+  if (isTerminal) pending.push(invalidateGenerationCreditBalances(queryClient));
+  await Promise.all(pending);
+};
+
+// The export panel's list carries the progress, output file and public error, none of which a frame has.
+const handleRenderUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
+  const pending: Promise<void>[] = [queryClient.invalidateQueries({ queryKey: studioRenderKeys.all })];
+  if (isTerminalGenerationState(job.state)) pending.push(invalidateGenerationCreditBalances(queryClient));
+  await Promise.all(pending);
+};
 
 const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
-  if (!isCachedKind(job.kind)) return;
+  if (job.kind === 'image') {
+    await handleImageUpdate(queryClient, job);
+    return;
+  }
+  if (job.kind === 'render') {
+    await handleRenderUpdate(queryClient, job);
+    return;
+  }
+  if (!isCachedKind(job.kind)) {
+    if (isTerminalGenerationState(job.state)) await invalidateGenerationCreditBalances(queryClient);
+    return;
+  }
   const { keys, patch } = KIND_CACHES[job.kind];
   const cached = patch(queryClient, job);
   const pending: Promise<void>[] = [];
@@ -59,7 +100,9 @@ const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<v
 
 // Refetch the unfinished jobs and those still waiting for their output; a finished one needs nothing.
 const invalidateUnfinishedDetails = (queryClient: QueryClient, detailsKey: readonly unknown[]): void => {
-  for (const [key, job] of queryClient.getQueriesData<VideoGeneration | MusicGeneration>({ queryKey: detailsKey })) {
+  for (const [key, job] of queryClient.getQueriesData<VideoGeneration | MusicGeneration | ChatImageJob>({
+    queryKey: detailsKey,
+  })) {
     if (job && (!isTerminalGenerationState(job.state) || isAwaitingGenerationOutput(job))) {
       void refetchDetail(queryClient, key);
     }
@@ -67,7 +110,7 @@ const invalidateUnfinishedDetails = (queryClient: QueryClient, detailsKey: reado
 };
 
 /**
- * Writes `generation_job_updated` frames for video and music jobs into the React Query cache, so every job card (the
+ * Writes `generation_job_updated` frames for video, music and image jobs into the React Query cache, so every job card (the
  * Studio galleries and the chat cards) is live without a subscription of its own.
  * A frame carries the stored error (internal code, possibly provider wording) and no signed URL, so only state
  * and progress are applied; a terminal frame refetches the job for its public error and output.
@@ -96,6 +139,9 @@ const GenerationUpdatesListener = () => {
         void queryClient.invalidateQueries({ queryKey: keys.list });
         invalidateUnfinishedDetails(queryClient, keys.details);
       }
+      void queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list });
+      void queryClient.invalidateQueries({ queryKey: studioRenderKeys.all });
+      invalidateUnfinishedDetails(queryClient, chatImageJobKeys.details);
     }
     if (isOpen) hasOpenedRef.current = true;
     wasOpenRef.current = isOpen;

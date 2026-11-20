@@ -1,6 +1,6 @@
 import { assignUserToGroup, removeUserFromGroup, renameGroup, listOrganizationGroups } from './groupMembership';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { IUserDocument } from '@bike4mind/common';
+import { ConflictError, IUserDocument } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 describe('group membership (assign / remove)', () => {
@@ -13,8 +13,6 @@ describe('group membership (assign / remove)', () => {
   const platformAdmin = { id: 'admin-1', isAdmin: true } as IUserDocument;
   const outsiderAdmin = { id: 'stranger-1', isAdmin: false } as IUserDocument;
 
-  let db: any;
-
   const org = (over: Record<string, unknown> = {}) => ({
     id: ORG,
     userId: 'owner-1',
@@ -25,20 +23,23 @@ describe('group membership (assign / remove)', () => {
   });
   const group = (over: Record<string, unknown> = {}) => ({ id: GROUP, organizationId: ORG, type: 'sales', ...over });
 
+  const createDb = () => ({
+    organizations: { findById: vi.fn().mockResolvedValue(org()) },
+    groups: {
+      findById: vi.fn().mockResolvedValue(group()),
+      update: vi.fn().mockImplementation(async ({ id, name }: { id: string; name: string }) => ({
+        ...group(),
+        id,
+        name,
+      })),
+      renameIfNameMatches: vi.fn().mockResolvedValue({ ...group(), name: 'Sales' }),
+    },
+    users: { addGroupToUser: vi.fn(), removeGroupFromUser: vi.fn() },
+  });
+  let db: ReturnType<typeof createDb>;
   beforeEach(() => {
     vi.clearAllMocks();
-    db = {
-      organizations: { findById: vi.fn().mockResolvedValue(org()) },
-      groups: {
-        findById: vi.fn().mockResolvedValue(group()),
-        update: vi.fn().mockImplementation(async ({ id, name }: { id: string; name: string }) => ({
-          ...group(),
-          id,
-          name,
-        })),
-      },
-      users: { addGroupToUser: vi.fn(), removeGroupFromUser: vi.fn() },
-    };
+    db = createDb();
   });
 
   const assign = (actor: IUserDocument) =>
@@ -120,6 +121,40 @@ describe('group membership (assign / remove)', () => {
         expect(updated?.name).toBe('Renamed');
       }
       expect(db.groups.update).toHaveBeenCalledWith({ id: GROUP, name: 'Renamed' });
+    });
+
+    const undo = (actor: IUserDocument) =>
+      renameGroup(actor, { organizationId: ORG, groupId: GROUP, name: 'Sales', expectedName: 'Revenue' }, { db });
+
+    it('uses the conditional repository method for an authorized Undo', async () => {
+      for (const actor of [billingOwner, orgAdmin, platformAdmin]) expect((await undo(actor))?.name).toBe('Sales');
+      expect(db.groups.renameIfNameMatches).toHaveBeenCalledWith({
+        groupId: GROUP,
+        organizationId: ORG,
+        expectedName: 'Revenue',
+        name: 'Sales',
+      });
+      expect(db.groups.update).not.toHaveBeenCalled();
+    });
+
+    it('returns conflict when an authorized conditional rename no longer matches', async () => {
+      db.groups.renameIfNameMatches.mockResolvedValue(null);
+      await expect(undo(billingOwner)).rejects.toBeInstanceOf(ConflictError);
+      await expect(undo(billingOwner)).rejects.toMatchObject({ statusCode: 409 });
+      expect(db.groups.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unauthorized Undo before the conditional write', async () => {
+      await expect(undo(outsiderAdmin)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(db.groups.renameIfNameMatches).not.toHaveBeenCalled();
+    });
+
+    it('rejects a foreign or missing group before the conditional write', async () => {
+      db.groups.findById.mockResolvedValue(group({ organizationId: 'other-org' }));
+      await expect(undo(billingOwner)).rejects.toBeInstanceOf(NotFoundError);
+      db.groups.findById.mockResolvedValue(null);
+      await expect(undo(billingOwner)).rejects.toBeInstanceOf(NotFoundError);
+      expect(db.groups.renameIfNameMatches).not.toHaveBeenCalled();
     });
 
     it('forbids an unauthorized actor', async () => {

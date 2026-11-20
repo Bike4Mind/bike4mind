@@ -20,21 +20,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   orgGitHubConnectionRepository: { findSystemDefault: h.findSystemDefault, update: h.update },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ encryptSecret: () => 'encrypted-blob' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
-vi.mock('@server/utils/validators', () => ({ validatePrivateKeyFormat: () => true }));
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({ validatePrivateKeyFormat: () => true }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
     error = vi.fn();
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../rotate-key';
 

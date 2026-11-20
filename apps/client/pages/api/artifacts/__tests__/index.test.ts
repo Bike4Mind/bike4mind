@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   },
 }));
 
-vi.mock('@server/utils/artifactSourceRefsGuards', () => {
+vi.mock('@bike4mind/server-utils/utils/artifactSourceRefsGuards', () => {
   const sharedGuard = vi.fn();
   return {
     sharedGuard,
@@ -172,6 +172,8 @@ describe('POST /api/artifacts artifact gate', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(403);
+    // Released desktop builds match this exact body to tell the opt-out from other 403s.
+    expect(res._getJSONData()).toEqual({ error: 'Artifacts are disabled for this user' });
     expect(mockRefs.createArgs).toBeUndefined();
   });
 
@@ -271,7 +273,7 @@ describe('POST /api/artifacts organization scope', () => {
 describe('POST /api/artifacts reference guard', () => {
   it('hands the service the shared-access guard, not the owner-only one', async () => {
     mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
-    const guards = await import('@server/utils/artifactSourceRefsGuards');
+    const guards = await import('@bike4mind/server-utils/utils/artifactSourceRefsGuards');
     const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
 
     await mockRefs.postHandler!(req, res);

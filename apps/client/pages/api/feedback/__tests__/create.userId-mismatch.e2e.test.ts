@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 /**
  * End-to-end regression test for the real chain: POST handler -> logEvent -> incrementUserCounter
- * -> User.findById. Deliberately does NOT mock @server/utils/analyticsLog or the database models,
+ * -> User.findById. Deliberately does NOT mock @bike4mind/server-utils/utils/analyticsLog or the database models,
  * because a mock would hide the real Mongoose CastError this bug produces -- the handler must
  * pass logEvent the same resolved id it already used to build the saved document, not the raw,
  * client-controlled request-body userId.
@@ -35,9 +35,13 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+// Triage has dedicated coverage; keep this suite's settings failures scoped to its own read path.
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: () => chain,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
@@ -49,12 +53,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 
 const mockEmailPublish = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...args: unknown[]) => mockEmailPublish(...args) } },
 }));
 

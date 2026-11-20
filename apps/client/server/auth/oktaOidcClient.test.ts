@@ -56,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
 import * as openidClient from 'openid-client';
 import { identityProviderRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { Logger } from '@bike4mind/observability';
 import {
   generatePkceParams,
   getOktaConfigWithFallback,
@@ -704,6 +705,31 @@ describe('oktaOidcClient', () => {
           name: 'AggregateError',
           errors: [primaryError, fallbackError],
         });
+      });
+
+      it('logs a recoverable primary discovery failure at warn, not error', async () => {
+        vi.mocked(openidClient.discovery)
+          .mockRejectedValueOnce(misconfigError(404))
+          .mockResolvedValueOnce(mockConfig as any);
+
+        await getOidcConfiguration(customOnlyConfig);
+
+        expect(Logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[OktaOidc] Discovery failed for custom (default)'),
+          expect.anything()
+        );
+        expect(Logger.error).not.toHaveBeenCalled();
+      });
+
+      it('logs a primary discovery failure at error when no fallback is attempted', async () => {
+        vi.mocked(openidClient.discovery).mockRejectedValueOnce(misconfigError(503));
+
+        await expect(getOidcConfiguration(customOnlyConfig)).rejects.toBeDefined();
+
+        expect(Logger.error).toHaveBeenCalledWith(
+          expect.stringContaining('[OktaOidc] Discovery failed for custom (default)'),
+          expect.anything()
+        );
       });
     });
 

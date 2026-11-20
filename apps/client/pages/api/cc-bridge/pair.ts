@@ -2,6 +2,7 @@ import { ccBridgePairingTokenRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
@@ -37,6 +38,7 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError('Missing authenticated user');
       }
       ensureTavernAccess(req.user);
+      assertNotOrgServiceAccount(req.user);
 
       const parsed = PairRequestSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -76,7 +78,7 @@ const handler = baseApi({ auth: true })
         return res.status(500).json({ error: 'Server misconfigured: public URL not set' });
       }
 
-      req.logger.info(`[CC_BRIDGE] Minted pairing token ${tokenPrefix}… for user ${userId}, device "${deviceLabel}"`);
+      req.logger.info(`[CC_BRIDGE] Minted pairing token ${tokenPrefix}... for user ${userId}`);
 
       return res.status(201).json({
         pairingToken: token,

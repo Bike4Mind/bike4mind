@@ -9,8 +9,7 @@
 
 import { liveopsTriageRunRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
 /**
@@ -20,12 +19,11 @@ const QuerySchema = z.object({
   minutes: z.coerce.number().min(1).max(60).optional().default(10),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     // Parse query params
     const parseResult = QuerySchema.safeParse(req.query);
     const minutes = parseResult.success ? parseResult.data.minutes : 10;

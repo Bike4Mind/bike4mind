@@ -1,8 +1,8 @@
 import { FirstRunEvents } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { logEvent } from '@server/utils/analyticsLog';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import * as z from 'zod';
 
 const shownBodySchema = z.object({}).strict();

@@ -6,15 +6,21 @@ const h = vi.hoisted(() => ({
   agentCreate: vi.fn(),
 }));
 
+vi.mock('@server/utils/callerModelList', () => ({
+  getCallerModelList: async () => ({ models: [{ id: 'catalog-model', type: 'text' }], supersededModels: [] }),
+}));
+
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById },
   agentRepository: { countByUserId: h.countByUserId, create: h.agentCreate },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 
-import { AGENT_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
+import { AGENT_LIMIT_REACHED_ERROR_CODE, type IUserDocument } from '@bike4mind/common';
 import { createAgent } from './createAgent';
 import { AgentValidationError } from '@server/utils/agentValidation';
+
+const USER = { id: 'user-1' } as IUserDocument;
 
 describe('createAgent', () => {
   beforeEach(() => {
@@ -26,7 +32,7 @@ describe('createAgent', () => {
   it('tags the per-tier cap rejection with agent_limit_reached and creates nothing', async () => {
     h.countByUserId.mockResolvedValue(2);
 
-    const error = await createAgent({ name: 'Agent' }, 'user-1').catch(e => e);
+    const error = await createAgent({ name: 'Agent' }, USER).catch(e => e);
 
     expect(error).toMatchObject({
       name: 'BadRequestError',
@@ -38,7 +44,7 @@ describe('createAgent', () => {
   });
 
   it('leaves other rejections untagged', async () => {
-    const error = await createAgent({ name: 'Agent', preferredModel: 'not-a-model' }, 'user-1').catch(e => e);
+    const error = await createAgent({ name: 'Agent', preferredModel: 'not-a-model' }, USER).catch(e => e);
 
     expect(error).toMatchObject({ name: 'BadRequestError', message: 'Invalid model: not-a-model' });
     expect(error.additionalInfo).toBeUndefined();
@@ -47,7 +53,7 @@ describe('createAgent', () => {
   it('creates the agent for the caller under the cap', async () => {
     h.countByUserId.mockResolvedValue(1);
 
-    const { agent, userCredits } = await createAgent({ name: 'Agent' }, 'user-1');
+    const { agent, userCredits } = await createAgent({ name: 'Agent' }, USER);
 
     expect(agent).toMatchObject({ id: 'agent-1', name: 'Agent', userId: 'user-1', useOwnCredits: false });
     expect(userCredits).toBe(0);
@@ -56,7 +62,7 @@ describe('createAgent', () => {
   it('refuses an allocation above the balance without debiting or creating', async () => {
     h.countByUserId.mockResolvedValue(0);
 
-    const error = await createAgent({ name: 'Agent', useOwnCredits: true, currentCredits: 5 }, 'user-1').catch(e => e);
+    const error = await createAgent({ name: 'Agent', useOwnCredits: true, currentCredits: 5 }, USER).catch(e => e);
 
     expect(error).toMatchObject({ name: 'BadRequestError', message: expect.stringContaining('Insufficient credits') });
     expect(h.agentCreate).not.toHaveBeenCalled();
@@ -65,7 +71,7 @@ describe('createAgent', () => {
   it('refuses when the user does not exist', async () => {
     h.findById.mockResolvedValue(null);
 
-    const error = await createAgent({ name: 'Agent' }, 'user-1').catch(e => e);
+    const error = await createAgent({ name: 'Agent' }, USER).catch(e => e);
 
     expect(error).toMatchObject({ statusCode: 400, message: 'User not found' });
     expect(error).not.toBeInstanceOf(AgentValidationError);

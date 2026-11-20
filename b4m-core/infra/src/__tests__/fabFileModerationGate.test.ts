@@ -35,6 +35,7 @@ const SCAN_ROOTS = [
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',
+  'packages/server-utils/src',
 ];
 
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
@@ -134,47 +135,63 @@ const referencesGate = (source: string): boolean => /isImageServeable\s*\(/.test
  * be provably safe, not merely inconvenient to fix.
  */
 const ALLOWLIST: Record<string, string> = {
+  'packages/server-utils/src/tutorials/sheet.ts':
+    'writes a server-authored text/csv tutorial sheet, never an image or user upload',
   // --- The moderation scanner itself: downloads bytes to RUN Rekognition and PRODUCE
   // moderationStatus in the first place. It cannot gate on isImageServeable (that
   // would be circular - the field it's about to set is exactly what the predicate
   // reads) and never returns the bytes/URL to a client. ---
   'apps/workers/src/s3/objectCreated.ts':
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
-  'apps/client/server/s3/moderationScan.ts':
+  'packages/server-utils/src/s3/moderationScan.ts':
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
-  'apps/client/server/s3/knowledgeModerationDeps.ts':
+  'packages/server-utils/src/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
+
+  // --- The reviewer's own view of a blocked upload: the point is to see the image the scanner
+  // refused, so it cannot gate on isImageServeable. Reachable only through a full admin on a
+  // freshly verified session, audited before the link is signed, 5 minute inline-only link. ---
+  'apps/client/server/moderation/incidentImageLink.ts':
+    'admin moderation review of a blocked upload - must read the image isImageServeable refuses; full admin + step-up only, audited per view, 5 minute inline-only raster link',
 
   // --- Not FabFile content: the bucket is shared, but the key is a server-rendered CSV. ---
   'apps/client/server/utils/adminAuditExportStorage.ts':
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
+  'apps/client/pages/api/users/me/data-export/[jobId].ts':
+    "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
+  'packages/server-utils/src/utils/organizationDataExport.ts':
+    'signs only the organization metadata and CSV ZIP under the subject-addressable or validated historical exports/ key after owner authorization; the archive contains no uploaded file bytes or images and has no FabFile row',
+  'apps/client/pages/api/admin/users/[userId]/data-export/[jobId].ts':
+    'signs a data subject export zip under exports/ for an admin - not a FabFile row; the same worker as the self-serve export built it and left out files that are not isImageServeable',
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
   'apps/client/server/files/listQuestFiles.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/quests/[id]/files and GET /api/v1/quests/[id]/files, the latter also gating download_url on isImageServeable in toPublicFile',
-  'apps/client/pages/api/sessions/[id]/files.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
-  'apps/client/pages/api/files/search.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
-  'apps/client/pages/api/files/byIds.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/pages/api/v1/sessions/[id]/files.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/sessions/[id]/files and GET /api/v1/sessions/[id]/files',
+  'apps/client/server/files/searchFilesForRequest.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/search and GET /api/v1/files/search',
+  'apps/client/server/files/listFilesByIds.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/byIds and GET /api/v1/files/by-ids',
   'apps/client/pages/api/files/index.ts':
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/server/files/updateFileForUser.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); shared by PUT /api/files/[id] and PATCH /api/v1/files/[id]',
-  'apps/client/server/dataLakes/index.ts':
+  'packages/server-utils/src/dataLakes/index.ts':
     'DI passthrough - search and authorized single-file reads both use the generateSignedUrl moderation gate in fabFileService/get.ts',
-  'apps/client/server/files/loadAccessibleFabFile.ts':
+  'packages/server-utils/src/files/loadAccessibleFabFile.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts), which skips minting fileUrl for images at creation time (root-cause fix, commit 63cc8f9d3e)',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts':
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
+  'apps/client/pages/api/notebooks/mirror.ts':
+    'DI passthrough - same fileStorageService adapter as notebooks/export.ts, consumed by the already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
   'apps/workers/src/queueHandlers/researchEngineQueue.ts':
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
   'apps/workers/src/queueHandlers/notebookCuration.ts':
@@ -191,26 +208,34 @@ const ALLOWLIST: Record<string, string> = {
     'text-only mime, never an image — throws BadRequestError for any mimeType outside a fixed text/code allowlist before ever minting a signed URL',
   'apps/client/pages/api/notebooks/download.ts':
     'text-only mime, never an image — downloads/converts only the curated-notebook document (markdown/html/txt), identified via session.curatedNotebookFileId',
-  'apps/client/pages/api/agents/create-from-context.ts':
+  'apps/client/server/agents/createAgentFromContext.ts':
     'images filtered out (mimeType.startsWith("image/")) before the shared getFileContent extractor is ever called on a file',
 
   'apps/client/pages/api/files/createFabFile.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile; browser response signing delegates to signBrowserFileResponse',
-  'apps/client/server/files/signBrowserFileResponse.ts':
-    'DI passthrough to fabFilesService.generateSignedUrl, which applies the shared moderation gate before request-local browser signing',
+  'packages/server-utils/src/files/browserFileSigner.ts':
+    'DI passthrough - storage adapter consumed by fabFilesService.generateSignedUrl and the services that call it, which apply the moderation gate before using either the S3 signer or the content URL builder; the content URL itself redirects only after pages/api/files/[id]/content.ts calls isImageServeable',
 
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
+  // --- Permanent modal copies: upload moderation runs before promotion. ---
+  'apps/client/pages/api/modal-images/[name].ts':
+    'signs only modal-images/<uuid>.<ext> keys referenced by a Modal row, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
+  'apps/client/server/tools/modalImageUrls.ts':
+    'signs only the modal-images/ prefix of permanent modal copies, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
+
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
-  'apps/client/server/utils/saveGeneratedAssetToFiles.ts':
+  'packages/server-utils/src/generationJobs/audioJobWiring.ts':
+    'audio-only - readAudioJobOutput reads back the clip a speech or sound-effect job just stored (audio/* only, never an image) so the sync audio route can deliver it to the user who requested it; isImageServeable is inapplicable',
+  'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts':
     'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
-  'apps/client/pages/api/agents/[id]/generate-avatar.ts':
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts':
     'freshly generated avatar is moderated synchronously via moderateImageOrThrow/RekognitionImageModerationService before upload+mint (throws ImageModerationBlockedError first); not a stored-moderationStatus read path since no FabFile/moderationStatus exists yet',
 
   // --- Caller already gates before handing bytes to this module. ---

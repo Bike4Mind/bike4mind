@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { subscriptionsToUserSubscriptions } from '@client/lib/userSubscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { subscriptionsToUserSubscriptions } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user?.id;

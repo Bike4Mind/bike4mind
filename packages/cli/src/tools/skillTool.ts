@@ -80,6 +80,7 @@ async function executeHook(
   // Gate the hook command through the permission path BEFORE running it. Loading
   // a trusted project's skill does not pre-authorize the shell it carries.
   const decision = await requestShellCommandPermission(`skill_hook:${phase}`, script, process.cwd(), perm);
+  if (perm.isCancelled?.()) return { success: false, output: 'Parent session ended' };
   if (!decision.allowed) {
     return { success: false, output: decision.reason || 'Hook command denied' };
   }

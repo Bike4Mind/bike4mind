@@ -1,0 +1,91 @@
+import type { IUserRepository } from '@bike4mind/common';
+import { MAX_BULK_RELEASE } from './heldSignupGrants';
+import {
+  classifySignupGrantAction,
+  type SignupGrantAdminAction,
+  type SignupGrantNoopReason,
+} from './signupGrantActionClassifier';
+import { blockSignupGrant, unblockSignupGrant, type SignupGrantBlockAdapters } from './signupGrantAdminActions';
+
+export const MAX_BULK_SIGNUP_GRANT_ACTION = MAX_BULK_RELEASE;
+
+export type BulkSignupGrantRow = {
+  userId: string;
+  outcome: 'applied' | 'would_apply' | 'noop' | 'failed';
+  reason?: SignupGrantNoopReason;
+  rewardsAffected?: number;
+};
+
+export type BulkSignupGrantResult = {
+  dryRun: boolean;
+  results: BulkSignupGrantRow[];
+  /** Accounts whose block flag changed. The opposite action restores the flag; paid credits are not reclaimed. */
+  undoUserIds: string[];
+};
+
+const dedupe = (userIds: string[]) => [...new Set(userIds)].slice(0, MAX_BULK_SIGNUP_GRANT_ACTION);
+
+export type PreviewSignupGrantInput = { userIds: string[] } & (
+  | { action: 'release_remaining'; dripCap: number }
+  | { action: Exclude<SignupGrantAdminAction, 'release_remaining'>; dripCap?: never }
+);
+
+/**
+ * Reports, without writing anything, what `action` would do to each account. It uses the same classifier the
+ * real actions gate on, so the preview names the same no-op reasons the run would return.
+ */
+export async function previewSignupGrantAction(
+  input: PreviewSignupGrantInput,
+  adapters: { users: Pick<IUserRepository, 'findById'> }
+): Promise<BulkSignupGrantResult> {
+  const results: BulkSignupGrantRow[] = [];
+  for (const userId of dedupe(input.userIds)) {
+    const verdict = classifySignupGrantAction(await adapters.users.findById(userId), input.action, input.dripCap);
+    results.push(
+      verdict.eligible ? { userId, outcome: 'would_apply' } : { userId, outcome: 'noop', reason: verdict.reason }
+    );
+  }
+  return { dryRun: true, results, undoUserIds: [] };
+}
+
+/** Accounts are independent (each has its own transaction), so a small fan-out keeps 100 ids from running serially. */
+const BULK_CONCURRENCY = 5;
+
+export type BulkSignupGrantBlockAdapters = Omit<SignupGrantBlockAdapters, 'audit'> & {
+  /** Builds the per-account audit write, run in the same transaction as that account's flag change. */
+  auditFor?: (userId: string) => () => Promise<void>;
+  logger: { error: (message: string, ...args: unknown[]) => void };
+};
+
+/**
+ * Blocks or unblocks each account through the per-account action, a few at a time, so a bulk run has the same gates,
+ * audit write and no-op reasons as a single one. One account failing does not stop the rest: it is reported as
+ * failed and can be retried, since a repeat on an applied account is a no-op.
+ */
+export async function bulkSetSignupGrantBlock(
+  input: { action: 'block' | 'unblock'; userIds: string[] },
+  adapters: BulkSignupGrantBlockAdapters
+): Promise<BulkSignupGrantResult> {
+  const act = input.action === 'block' ? blockSignupGrant : unblockSignupGrant;
+  const applyOne = async (userId: string): Promise<BulkSignupGrantRow> => {
+    try {
+      const result = await act(userId, { ...adapters, audit: adapters.auditFor?.(userId) });
+      return result.outcome === 'applied'
+        ? { userId, outcome: 'applied', rewardsAffected: result.rewardsAffected }
+        : { userId, outcome: 'noop', reason: result.reason, rewardsAffected: result.rewardsAffected };
+    } catch (error) {
+      adapters.logger.error(`Bulk signup grant ${input.action} failed for user ${userId}`, error);
+      return { userId, outcome: 'failed' };
+    }
+  };
+  const userIds = dedupe(input.userIds);
+  const results: BulkSignupGrantRow[] = [];
+  for (let i = 0; i < userIds.length; i += BULK_CONCURRENCY) {
+    results.push(...(await Promise.all(userIds.slice(i, i + BULK_CONCURRENCY).map(applyOne))));
+  }
+  return {
+    dryRun: false,
+    results,
+    undoUserIds: results.filter(row => row.outcome === 'applied').map(row => row.userId),
+  };
+}

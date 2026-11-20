@@ -1,4 +1,4 @@
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { AppFile } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { AppFileEvents } from '@bike4mind/common';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
+import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 
 const AppFileDeleteRequestInput = z.object({
   id: z.string(),
@@ -29,6 +30,8 @@ const handler = baseApi().delete(
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
     await storage.delete(file.path);
+    const cdnPath = appFileCdnPath(file.path);
+    if (cdnPath) await invalidateRouterPaths([cdnPath], { label: 'app-file', logger: req.logger });
 
     await logEvent(
       { userId, type: AppFileEvents.DELETE_APP_FILE, metadata: { id: data.id } },

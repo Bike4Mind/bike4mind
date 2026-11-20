@@ -126,7 +126,7 @@ describe('wolfram_alpha', () => {
         const result = await resultPromise;
 
         expect(result).toBe('The answer is 4');
-        expect(mockLogger.log).toHaveBeenCalledWith('🔢 Wolfram Alpha: Querying:', '2+2');
+        expect(mockLogger.log).toHaveBeenCalledWith('Wolfram Alpha: Querying', { queryLength: 3 });
         expect(mockLogger.log).toHaveBeenCalledWith('📡 Wolfram Alpha: Response status:', 200);
       });
 
@@ -252,7 +252,9 @@ Try breaking compound queries into simpler steps, or send a concrete computation
 
 Wolfram Alpha responded: Invalid input`
         );
-        expect(mockLogger.error).toHaveBeenCalledWith('Wolfram Alpha: API error', {
+        expect(mockLogger.error).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+        expect(mockLogger.warn).toHaveBeenCalledWith('Wolfram Alpha: API error', {
           status: 501,
           statusText: 'Not Implemented',
           errorText: 'Invalid input',

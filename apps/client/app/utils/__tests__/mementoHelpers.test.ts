@@ -44,4 +44,35 @@ describe('mementoHelpers', () => {
   it('removeTag removes the specified tag', () => {
     expect(removeTag(['a', 'b', 'c'], 'b')).toEqual(['a', 'c']);
   });
+
+  describe('buildMementosCSV escaping', () => {
+    it('writes a header and one RFC 4180 row per memento', () => {
+      const [header, row] = buildMementosCSV([
+        makeMemo({
+          summary: 'Likes tea',
+          fullContent: 'Prefers green tea, "no sugar"',
+          lastAccessedAt: new Date('2026-11-01T00:00:00Z'),
+          tags: ['drink', 'tea'],
+          embedding: [0.5, 0.25],
+        }),
+      ]).split('\n');
+      expect(header).toBe('Type,Tier,Weight,Summary,Full Content,Last Accessed,Tags,Embedding');
+      expect(row).toContain(',Likes tea,"Prefers green tea, ""no sugar""",2026-11-01T00:00:00.000Z,drink;tea,0.5;0.25');
+    });
+
+    it.each(['=HYPERLINK("http://x")', '+1', '-2+3', '@SUM(A1)', '\tcmd', '\rcmd'])(
+      'neutralises a cell that a spreadsheet would read as a formula: %j',
+      payload => {
+        const csv = buildMementosCSV([makeMemo({ summary: payload, fullContent: payload, tags: [payload] })]);
+        const row = csv.split('\n').slice(1).join('\n');
+        expect(row).not.toMatch(/(^|,)"?[=+\-@\t\r]/);
+        expect(row).toContain(`'${payload.charAt(0)}`);
+      }
+    );
+
+    it('leaves a negative first embedding value unprefixed', () => {
+      const [, row] = buildMementosCSV([makeMemo({ embedding: [-0.5, 0.25] })]).split('\n');
+      expect(row.endsWith(',-0.5;0.25')).toBe(true);
+    });
+  });
 });

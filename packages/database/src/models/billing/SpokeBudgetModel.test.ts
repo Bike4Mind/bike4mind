@@ -121,6 +121,138 @@ describe('SpokeBudgetRepository', () => {
     expect(await SpokeBudgetModel.countDocuments()).toBe(0);
   });
 
+  it('keeps validated ceilings stable while database I/O is pending', async () => {
+    const mutableLimits = { ...limits, daily: 0 };
+    const admission = repository.reserve({
+      clientId: 'client-a',
+      userId: 'user-a',
+      requestId: 'r',
+      amount: 1,
+      limits: mutableLimits,
+    });
+    mutableLimits.daily = NaN;
+    expect(await admission).toBe('budget_exceeded');
+  });
+
+  it('enforces windows for UTC years below 100 and rejects an invalid clock', async () => {
+    now = new Date('0099-01-31T23:59:00Z');
+    expect(await reserve('first', 60)).toBe('reserved');
+    expect(await reserve('second', 1)).toBe('budget_exceeded');
+    now = new Date(NaN);
+    await expect(reserve('invalid-clock', 1)).rejects.toThrow('Invalid budget clock');
+    expect((await SpokeBudgetModel.findById('client-a'))?.reservations).toHaveLength(1);
+  });
+
+  it('rejects invalid identifiers and ceilings without writing', async () => {
+    for (const invalid of ['', 'r\n', 'r\r', 'a'.repeat(129), '$invalid']) {
+      await expect(reserve(invalid)).rejects.toThrow('Invalid budget identifier');
+      await expect(reserve('r', 1, invalid)).rejects.toThrow('Invalid budget identifier');
+      await expect(reserve('r', 1, 'user-a', invalid)).rejects.toThrow('Invalid budget identifier');
+    }
+    for (const field of ['daily', 'monthly', 'userDaily', 'userMonthly'] as const) {
+      for (const invalid of [-1, NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        await expect(
+          repository.reserve({
+            clientId: 'client-a',
+            userId: 'user-a',
+            requestId: 'r',
+            amount: 1,
+            limits: { ...limits, [field]: invalid },
+          })
+        ).rejects.toThrow('Invalid budget amount');
+      }
+    }
+    expect(await SpokeBudgetModel.countDocuments()).toBe(0);
+  });
+
+  it('fails closed on read and replacement failures without releasing a hold', async () => {
+    await reserve('held', 60);
+    vi.spyOn(SpokeBudgetModel, 'findById').mockImplementationOnce(() => {
+      throw new Error('read unavailable');
+    });
+    await expect(reserve('read-failure', 1)).rejects.toThrow('read unavailable');
+    vi.spyOn(SpokeBudgetModel, 'replaceOne').mockImplementationOnce(() => {
+      throw new Error('write unavailable');
+    });
+    await expect(settle('held', 0)).rejects.toThrow('write unavailable');
+    expect(await reserve('next', 1)).toBe('budget_exceeded');
+    expect(await reserve('held', 60)).toBe('reserved');
+  });
+
+  it('fails closed after bounded CAS contention without overwriting newer data', async () => {
+    await reserve('held', 30);
+    const query = SpokeBudgetModel.replaceOne({ _id: 'absent' }, { revision: 1 });
+    const exec = vi.spyOn(query, 'exec').mockResolvedValue({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    });
+    vi.spyOn(SpokeBudgetModel, 'replaceOne').mockReturnValue(query);
+    await expect(reserve('contended', 1)).rejects.toThrow('Budget contention');
+    expect(exec).toHaveBeenCalledTimes(16);
+    expect((await SpokeBudgetModel.findById('client-a'))?.reservations).toHaveLength(1);
+  });
+
+  it('allows only one competing settlement value to win', async () => {
+    await reserve('held', 60);
+    const outcomes = await Promise.allSettled([settle('held', 10), settle('held', 20)]);
+    expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+    const rejected = outcomes.find(outcome => outcome.status === 'rejected');
+    expect(rejected?.status === 'rejected' && rejected.reason.message).toBe('Settlement mismatch');
+    const budget = await SpokeBudgetModel.findById('client-a');
+    expect([10, 20]).toContain(budget?.reservations[0]?.charged);
+    expect(budget?.reservations[0]?.state).toBe('settled');
+  });
+
+  it('does not round an over-limit sum into an admission', async () => {
+    const maximum = Number.MAX_SAFE_INTEGER;
+    const hugeLimits = { daily: maximum, monthly: maximum, userDaily: maximum, userMonthly: maximum };
+    expect(
+      await repository.reserve({
+        clientId: 'client-a',
+        userId: 'user-a',
+        requestId: 'huge',
+        amount: maximum,
+        limits: hugeLimits,
+      })
+    ).toBe('reserved');
+    expect(
+      await repository.reserve({
+        clientId: 'client-a',
+        userId: 'user-b',
+        requestId: 'extra',
+        amount: 1,
+        limits: hugeLimits,
+      })
+    ).toBe('budget_exceeded');
+  });
+
+  it('serializes admissions at the lifetime capacity boundary and still permits settlement', async () => {
+    await SpokeBudgetModel.create({
+      _id: 'client-a',
+      revision: 0,
+      reservations: Array.from({ length: 1023 }, (_, i) => ({
+        requestId: `old${i}`,
+        userId: 'user-a',
+        reserved: 1,
+        charged: 0,
+        createdAt: now,
+        state: 'settled',
+      })),
+    });
+    const outcomes = await Promise.all([reserve('last-a', 1), reserve('last-b', 1)]);
+    expect([...outcomes].sort()).toEqual(['capacity_exceeded', 'reserved']);
+    const budget = await SpokeBudgetModel.findById('client-a');
+    const active = budget?.reservations.find(row => row.state === 'reserved');
+    expect(budget?.reservations).toHaveLength(1024);
+    if (!active) throw new Error('Expected an active reservation');
+    await settle(active.requestId, 0);
+    expect(await reserve(active.requestId, 1)).toBe('settled');
+    expect(await reserve('overflow', 1)).toBe('capacity_exceeded');
+  });
+
   it('bounds record size without discarding terminal retry protection', async () => {
     await SpokeBudgetModel.create({
       _id: 'client-a',

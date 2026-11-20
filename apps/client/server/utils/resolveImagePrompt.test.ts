@@ -29,7 +29,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return { ...actual, getLlmByModel: vi.fn(() => ({ complete: mockLlmComplete })) };
 });
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: mockOperationsModelService,
   getEffectiveApiKeyByBackend: mockGetEffectiveApiKeyByBackend,
 }));

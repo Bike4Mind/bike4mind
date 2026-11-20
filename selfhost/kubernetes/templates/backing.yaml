@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "full" }}
 {{- if not .Values.externalMongo.enabled }}
 ---
 apiVersion: v1
@@ -249,8 +250,7 @@ spec:
     matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      # No config checksum: Mailpit reads no chart config, and a roll would empty its unpersisted inbox.
       labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
     spec:
       {{ include "b4m.pod" . | nindent 6 }}
@@ -273,3 +273,4 @@ spec:
   type: ClusterIP
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
   ports: [{name: service, port: 1025, targetPort: service}]
+{{- end }}

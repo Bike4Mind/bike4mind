@@ -58,7 +58,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     upload = h.upload;
   },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 
 import { runOrgFeedbackSummary, summaryS3Key } from './orgFeedbackSummary';
 

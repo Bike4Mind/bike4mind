@@ -154,6 +154,29 @@ describe('AuthService', () => {
     service.dispose();
   });
 
+  it('opens the plain verification page when the server omits verification_uri_complete', async () => {
+    process.env[BAKED] = HOSTED;
+    const device = fakeDeviceFlow({
+      initiateDeviceFlow: vi.fn().mockResolvedValue({
+        device_code: 'device-code',
+        user_code: 'WDJB-MJHT',
+        verification_uri: `${HOSTED}/activate`,
+        expires_in: 600,
+        interval: 5,
+      }),
+    });
+    const { service, states, openExternal } = build({ device });
+
+    await service.initialize();
+    await service.signIn();
+
+    expect(openExternal).toHaveBeenCalledWith(`${HOSTED}/activate`);
+    expect(states.find(state => state.status === 'awaiting-approval')?.pending?.verificationUriComplete).toBe(
+      `${HOSTED}/activate`
+    );
+    service.dispose();
+  });
+
   it('surfaces the browser handoff failing without failing the sign-in', async () => {
     process.env[BAKED] = HOSTED;
     const { service, states } = build({
@@ -304,6 +327,20 @@ describe('AuthService', () => {
     service.dispose();
   });
 
+  it('starts a fresh install on Production, ready to sign in', async () => {
+    process.env[BAKED] = HOSTED;
+    const { service } = build({});
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      hostedAvailable: true,
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+    service.dispose();
+  });
+
   it('reports an unconfigured build instead of pointing at a localhost that is not there', async () => {
     const { service } = build({});
 
@@ -315,6 +352,25 @@ describe('AuthService', () => {
       error: { remedy: 'choose-environment' },
     });
 
+    service.dispose();
+  });
+
+  it('re-saves the vault in the current cipher format before it reads anything from it', async () => {
+    const vault = new TokenVault(cipher, memoryFile(), silentLogger);
+    const order: string[] = [];
+    vi.spyOn(vault, 'reencrypt').mockImplementation(async () => {
+      order.push('reencrypt');
+    });
+    const getEnvironment = vault.getEnvironment.bind(vault);
+    vi.spyOn(vault, 'getEnvironment').mockImplementation(() => {
+      order.push('getEnvironment');
+      return getEnvironment();
+    });
+    const { service } = build({ vault });
+
+    await service.initialize();
+
+    expect(order).toEqual(['reencrypt', 'getEnvironment']);
     service.dispose();
   });
 });
@@ -448,6 +504,51 @@ describe('AuthService token refresh', () => {
     expect(harness.service.getState().status).toBe('signed-in');
     return harness;
   }
+
+  it('moves a typed-in production URL to the hosted preset without losing its session', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault, accepted, device } = buildWithSharedClient({ refreshToken: vi.fn() });
+    const typed = `${HOSTED.toUpperCase()}/`;
+    accepted.add('access-0');
+    await vault.setEnvironment({ preset: 'custom', customUrl: typed });
+    await vault.setTokens(typed, storedTokens(0, 30 * 60_000));
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+    expect(await vault.getEnvironment()).toEqual({ preset: 'hosted' });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('restores the production session even when persisting the preset migration fails', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault, accepted, device } = buildWithSharedClient({ refreshToken: vi.fn() });
+    const typed = `${HOSTED.toUpperCase()}/`;
+    accepted.add('access-0');
+    await vault.setEnvironment({ preset: 'custom', customUrl: typed });
+    await vault.setTokens(typed, storedTokens(0, 30 * 60_000));
+    const persist = vi.spyOn(vault, 'setEnvironment').mockRejectedValue(new Error('read-only vault'));
+    silentLogger.warn.mockClear();
+
+    await service.initialize();
+
+    expect(persist).toHaveBeenCalledExactlyOnceWith({ preset: 'hosted' });
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: could not store the migrated environment: read-only vault');
+    expect(service.getState()).toMatchObject({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+      user: { id: 'user-1' },
+    });
+    expect(await vault.getTokens(HOSTED)).toMatchObject({ accessToken: 'access-0' });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
 
   it('keeps the session and the vault when a proactive refresh fails transiently', async () => {
     const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(503)));
@@ -824,5 +925,102 @@ describe('AuthService token refresh', () => {
     expect(service.getState()).toMatchObject({ status: 'signed-out', user: undefined });
     expect(service.getState().reauthRequired).toBeUndefined();
     service.dispose();
+  });
+});
+
+describe('AuthService captured Studio sessions', () => {
+  async function signedIn() {
+    process.env[BAKED] = HOSTED;
+    const refreshToken = vi.fn();
+    const harness = buildWithSharedClient({ refreshToken });
+    const initial = { ...storedTokens(0, 30 * 60_000), accessToken: fakeAccessToken('user-1') };
+    harness.accepted.add(initial.accessToken);
+    await harness.vault.setTokens(HOSTED, initial);
+    await harness.service.initialize();
+    expect(harness.service.getState().status).toBe('signed-in');
+    return { ...harness, refreshToken };
+  }
+
+  it('does not replay a captured paid request with another stored account', async () => {
+    const { service, vault, refreshToken } = await signedIn();
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const entered = Promise.withResolvers<InternalAxiosRequestConfig>();
+      const ack = Promise.withResolvers<AxiosResponse>();
+      const dispatch = vi.fn<AxiosAdapter>(async config => {
+        entered.resolve(config);
+        return ack.promise;
+      });
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      const outcome = captured.post('/api/studio/image-jobs', { prompt: 'account-a' }).catch((error: unknown) => error);
+      const sent = await entered.promise;
+      const accountB = { ...storedTokens(2, 30 * 60_000), userId: 'user-2', accessToken: fakeAccessToken('user-2') };
+      await vault.setTokens(HOSTED, accountB);
+      ack.reject(httpError(401, sent));
+      expect(await outcome).toMatchObject({ name: 'SessionChangedError', beforeRequest: false });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(refreshToken).not.toHaveBeenCalled();
+      expect(await vault.reloadTokens(HOSTED)).toEqual(accountB);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('invalidates a captured client as soon as a new sign-in starts', async () => {
+    const { service, device } = await signedIn();
+    const grant = Promise.withResolvers<Awaited<ReturnType<DeviceFlowClient['waitForAuthorization']>>>();
+    vi.mocked(device.waitForAuthorization).mockImplementation(() => grant.promise);
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const dispatch = vi.fn<AxiosAdapter>(async config => ({
+        data: {},
+        status: 202,
+        statusText: 'Accepted',
+        headers: {},
+        config,
+      }));
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      const signingIn = service.signIn();
+      await expect(captured.post('/api/studio/image-jobs', {})).rejects.toMatchObject({
+        name: 'SessionChangedError',
+        beforeRequest: true,
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      service.cancelSignIn();
+      grant.resolve({
+        access_token: fakeAccessToken('user-1'),
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+        expires_in: 1800,
+      });
+      await signingIn;
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('keeps automatic refresh available within the same captured account', async () => {
+    const { service, refreshToken } = await signedIn();
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const refreshed = fakeAccessToken('user-1');
+      refreshToken.mockResolvedValue({
+        access_token: refreshed,
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+        expires_in: 1800,
+      });
+      const dispatch = vi.fn<AxiosAdapter>(async config => {
+        if (dispatch.mock.calls.length === 1) throw httpError(401, config);
+        return { data: { id: 'job' }, status: 202, statusText: 'Accepted', headers: {}, config };
+      });
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      expect(await captured.post('/api/studio/image-jobs', {})).toEqual({ id: 'job' });
+      expect(refreshToken).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(service.getState().status).toBe('signed-in');
+    } finally {
+      service.dispose();
+    }
   });
 });

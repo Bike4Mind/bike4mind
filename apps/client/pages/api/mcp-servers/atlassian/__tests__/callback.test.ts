@@ -32,7 +32,7 @@ vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: 's', redirectUri: 'r' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET } }));
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   readStateNonceHash: (...a: unknown[]) => mockReadStateNonceHash(...a),
   clearStateNonce: (...a: unknown[]) => mockClearStateNonce(...a),
 }));
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     }),
   },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ encryptToken: (t: string) => t }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToken: (t: string) => t }));
 
 import handler from '../callback';
 
@@ -98,5 +98,79 @@ describe('GET /api/mcp-servers/atlassian/callback - duplicate delivery', () => {
 
     expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
     expect(mockAuditFailure).toHaveBeenCalledWith('session_mismatch');
+  });
+});
+
+describe('GET /api/mcp-servers/atlassian/callback - malformed state', () => {
+  it('rejects a non-JSON state at warn level so caller junk does not raise an alert', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code', state: 'y' } });
+
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('invalid_state');
+    expect(warnSpy).toHaveBeenCalledWith('❌ Failed to parse state parameter:', expect.any(SyntaxError));
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('rejects a state that is absent entirely at warn level', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code' } });
+
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_state');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Missing state parameter'));
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('GET /api/mcp-servers/atlassian/callback - authorization not completed', () => {
+  const call = async (query: Record<string, string>) => {
+    const { req, res } = createMocks({ method: 'GET', query });
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
+    return res;
+  };
+
+  it('logs a declined consent at warn with only the RFC 6749 code', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({ error: 'access_denied', state: 'opaque-state' });
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
+    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Authorization not completed', {
+      error: 'access_denied',
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs a callback with no code at all at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({});
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
+    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Missing authorization code');
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

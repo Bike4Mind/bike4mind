@@ -1,13 +1,32 @@
 import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchItemRule,
   ResearchRunLevers,
   ResearchRunTrigger,
   ResearchScheduleCadence,
 } from '@bike4mind/common';
-import { RESEARCH_CONFIG_NAME_MAX_CHARS } from '@bike4mind/common';
+import {
+  canonicalItemRules,
+  deriveLegacyAllowedDomains,
+  isSameDomainSet,
+  normalizeDomainList,
+  researchItemRuleKey,
+  RESEARCH_CONFIG_NAME_MAX_CHARS,
+  RESEARCH_FEED_URL_MAX_CHARS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
+  upgradeLegacyResearchLevers,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { researchConfigChange } from '../dataLakeService/diffLakeConfig';
+import { isPublicSuffixEntry } from '@bike4mind/utils/registrableDomain';
+import {
+  researchAutoAdmitChange,
+  researchConfigChange,
+  researchItemRulesChange,
+  researchSourceChange,
+  researchTrustedSitesChange,
+} from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 import {
   recordLakeConfigChange,
@@ -78,6 +97,96 @@ const resolveCadence = (
   return resolved;
 };
 
+/**
+ * Drop with nothing listed would ignore every hit, which no one means. Refused here and not in the
+ * normalizer, because the normalizer also runs at run start and must never throw on a stored config.
+ */
+const assertSourcesReachable = (levers: ResearchRunLevers): void => {
+  if (levers.unlistedSources === 'drop' && levers.trustedDomains.length + levers.reviewDomains.length === 0) {
+    throw new BadRequestError('List at least one site to review, or send other sites to review');
+  }
+};
+
+/**
+ * Shape only: a feed config needs an absolute http(s) address that fits the cap and carries no
+ * credentials. SSRF is enforced when the address is fetched. Runs on the raw draft because the
+ * normalizer truncates an over-long address and nulls an empty one, which would hide the problem.
+ */
+const assertFeedSource = (draft: ResearchLeversDraft): void => {
+  if ((draft.source as unknown) !== 'feed') return;
+  const raw = typeof draft.feedUrl === 'string' ? draft.feedUrl.trim() : '';
+  if (!raw) throw new BadRequestError('A feed source needs a feed address');
+  if (raw.length > RESEARCH_FEED_URL_MAX_CHARS) {
+    throw new BadRequestError(`The feed address is longer than ${RESEARCH_FEED_URL_MAX_CHARS} characters`);
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new BadRequestError('The feed address is not a valid web address');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new BadRequestError('The feed address must start with http:// or https://');
+  }
+  if (url.username || url.password) {
+    throw new BadRequestError('The feed address must not contain a username or password');
+  }
+};
+
+/**
+ * Limits on the raw draft, counted after cleaning (invisible characters stripped, whitespace collapsed), empty-drop and
+ * dedupe so a duplicate alone is not an error. Refused rather than truncated (a cut condition means something else), and checked here
+ * because the normalizer clamps, which would hide the problem.
+ */
+const assertItemRulesWithinLimits = (draft: ResearchLeversDraft): void => {
+  const rules = canonicalItemRules(draft.itemRules);
+  if (rules.length > RESEARCH_ITEM_RULES_MAX) {
+    throw new BadRequestError(`A research configuration can have at most ${RESEARCH_ITEM_RULES_MAX} item rules`);
+  }
+  if (rules.some(rule => rule.condition.length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS)) {
+    throw new BadRequestError(
+      `An item rule condition can be at most ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters`
+    );
+  }
+};
+
+/**
+ * An entry that is itself a public suffix (`com`, `github.io`) would let auto-admit trust every site
+ * anyone can create under it. Checked on the merged levers so a toggle-only edit cannot enable a
+ * stored list that already holds one.
+ */
+const assertAutoAdmitEntriesSafe = (levers: ResearchRunLevers): void => {
+  if (!levers.autoAdmitTrusted) return;
+  const unsafe = levers.trustedDomains.find(isPublicSuffixEntry);
+  if (unsafe) {
+    throw new BadRequestError(
+      `"${unsafe}" covers every site under it, so it cannot be a trusted site while trusted results are added automatically. List a specific site instead.`
+    );
+  }
+};
+
+/** An input that names the tiers is the new shape; its legacy `allowedDomains`, if any, is ignored. */
+const usesTierFields = (input: ResearchLeversDraft): boolean =>
+  input.unlistedSources !== undefined || input.reviewDomains !== undefined || input.trustedDomains !== undefined;
+
+const withoutAllowedDomains = ({ allowedDomains: _ignored, ...rest }: ResearchLeversDraft): ResearchLeversDraft => rest;
+
+/**
+ * Resolves an edit that still carries `allowedDomains` (an open old tab) against the stored config.
+ * Resubmitting what the config already derives is a no-op, so a query-only edit cannot disturb the
+ * review list. A different value is an edit of the site list, mapped onto the tier fields.
+ */
+const resolveLegacyAllowedInput = (input: ResearchLeversDraft, existing: ResearchRunLevers): ResearchLeversDraft => {
+  if (input.allowedDomains === undefined) return input;
+  const rest = withoutAllowedDomains(input);
+  if (usesTierFields(input)) return rest;
+
+  const incoming = normalizeDomainList(input.allowedDomains);
+  if (isSameDomainSet(incoming, deriveLegacyAllowedDomains(existing))) return rest;
+  const converted = upgradeLegacyResearchLevers({ ...existing, allowedDomains: incoming });
+  return { ...rest, reviewDomains: converted.reviewDomains, unlistedSources: converted.unlistedSources };
+};
+
 export async function createResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
@@ -95,6 +204,11 @@ export async function createResearchConfig(
   const name = normalizeName(input.name);
   const cadence = resolveCadence(input, 'off');
   const firstRunAt = firstResearchRunAt(cadence, now());
+  assertFeedSource(input);
+  assertItemRulesWithinLimits(input);
+  const levers = normalizeResearchLevers(usesTierFields(input) ? withoutAllowedDomains(input) : input);
+  assertSourcesReachable(levers);
+  assertAutoAdmitEntriesSafe(levers);
   const created = await db.dataLakeResearchConfigs.createConfig({
     dataLakeId: lake.id,
     name,
@@ -104,14 +218,24 @@ export async function createResearchConfig(
     nextRunAt: firstRunAt,
     scheduleAnchorAt: firstRunAt,
     createdByUserId: actor.userId,
-    ...normalizeResearchLevers(input),
+    ...levers,
   });
 
   // `grants` comes from the caller's own gate (assertLakeResearchManage), not re-fetched here -
   // the gate and the recorded manage rung must agree on the same grant set, the same reasoning
   // reviewDataLakeProposal's resolveReviewable applies to its own reused grants.
   await recordLakeConfigChange(
-    { actor, lake, grants, action: 'create-research-config', changes: [researchConfigChange(name, 'created')] },
+    {
+      actor,
+      lake,
+      grants,
+      action: 'create-research-config',
+      changes: [
+        researchConfigChange(name, 'created'),
+        ...(levers.autoAdmitTrusted ? [researchAutoAdmitChange(name, true)] : []),
+        ...itemRuleChanges(name, [], levers.itemRules),
+      ],
+    },
     { db, logger }
   );
 
@@ -133,16 +257,45 @@ const sameStringSet = (a: readonly string[], b: readonly string[]) => {
 const LEVER_EQUALITY: {
   [K in keyof ResearchRunLevers]-?: (a: ResearchRunLevers[K], b: ResearchRunLevers[K]) => boolean;
 } = {
+  // A config document read without the lever (not through the upgrader) is a search config.
+  source: (a, b) => (a ?? 'search') === (b ?? 'search'),
+  feedUrl: sameNullable,
   query: sameValue,
   model: sameNullable,
   maxResults: sameValue,
   maxProposals: sameValue,
   recencyDays: sameNullable,
-  allowedDomains: sameStringSet,
+  trustedDomains: sameStringSet,
+  reviewDomains: sameStringSet,
+  unlistedSources: sameValue,
+  autoAdmitTrusted: sameValue,
+  maxAutoAdmits: sameValue,
+  // Derived from the three fields above, so it can never be the reason a config moved.
+  allowedDomains: () => true,
   blockedDomains: sameStringSet,
   minRelevance: sameValue,
   costCeilingMicroUsd: sameValue,
   proposedTags: sameStringSet,
+  itemRules: (a, b) =>
+    sameStringSet(canonicalItemRules(a).map(researchItemRuleKey), canonicalItemRules(b).map(researchItemRuleKey)),
+};
+
+const itemRuleChanges = (
+  name: string,
+  before: readonly ResearchItemRule[] | undefined,
+  after: readonly ResearchItemRule[] | undefined
+) => {
+  const beforeKeys = new Set(canonicalItemRules(before).map(researchItemRuleKey));
+  const afterKeys = new Set(canonicalItemRules(after).map(researchItemRuleKey));
+  const added = [...afterKeys].filter(key => !beforeKeys.has(key)).length;
+  const removed = [...beforeKeys].filter(key => !afterKeys.has(key)).length;
+  return added > 0 || removed > 0 ? [researchItemRulesChange(name, added, removed)] : [];
+};
+
+const trustedSiteChanges = (name: string, before: readonly string[], after: readonly string[]) => {
+  const added = after.filter(entry => !before.includes(entry));
+  const removed = before.filter(entry => !after.includes(entry));
+  return added.length > 0 || removed.length > 0 ? [researchTrustedSitesChange(name, added, removed)] : [];
 };
 
 const leversMoved = (next: ResearchRunLevers, current: ResearchRunLevers) =>
@@ -190,7 +343,15 @@ export async function updateResearchConfig(
   // the whole lever set (an absent `query` in a patch is "unchanged", but to the normalizer an
   // absent query is a refusal), and re-normalizing the merge is also what re-clamps a stored value
   // that a tightened bound has since put out of range.
-  const merged = normalizeResearchLevers({ ...existing, ...input });
+  // `allowedDomains` is dropped from the stored side: it is derived, and a stale copy next to a
+  // changed tier list would read as an edit by older code.
+  const { allowedDomains: _derived, ...stored } = existing;
+  const mergedDraft = { ...stored, ...resolveLegacyAllowedInput(input, existing) };
+  assertFeedSource(mergedDraft);
+  assertItemRulesWithinLimits(mergedDraft);
+  const merged = normalizeResearchLevers(mergedDraft);
+  assertSourcesReachable(merged);
+  assertAutoAdmitEntriesSafe(merged);
   // Compared per lever via LEVER_EQUALITY, not a JSON.stringify of two object literals:
   // `normalizeResearchLevers` omits `model`/`recencyDays` when unset, so key order differs between
   // `merged` and a hand-built object and a byte-identical default-config resubmit would read as changed.
@@ -226,7 +387,18 @@ export async function updateResearchConfig(
         action: 'update-research-config',
         // The UPDATED document's own name, not the input: an edit that never touched `name` still
         // reads by its current name here rather than by whatever this caller happened to submit.
-        changes: [researchConfigChange(updated.name, 'updated')],
+        changes: [
+          researchConfigChange(updated.name, 'updated'),
+          ...(merged.autoAdmitTrusted !== (existing.autoAdmitTrusted === true)
+            ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
+            : []),
+          ...trustedSiteChanges(updated.name, existing.trustedDomains ?? [], merged.trustedDomains),
+          ...itemRuleChanges(updated.name, existing.itemRules, merged.itemRules),
+          ...(LEVER_EQUALITY.source(merged.source, existing.source) &&
+          LEVER_EQUALITY.feedUrl(merged.feedUrl, existing.feedUrl)
+            ? []
+            : [researchSourceChange(updated.name, merged.source, merged.feedUrl)]),
+        ],
       },
       { db, logger }
     );

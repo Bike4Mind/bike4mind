@@ -1,12 +1,24 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { randomUUID } from 'crypto';
-import { ImageModels, ModelInfo, UnprocessableEntityError, usdToCredits } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, getSettingsByNames } from '@bike4mind/utils';
+import {
+  ImageModels,
+  ModelInfo,
+  UnprocessableEntityError,
+  isTerminalCreditRefusal,
+  usdToCredits,
+} from '@bike4mind/common';
+import {
+  BadRequestError,
+  ExpectedImageGenerationError,
+  ForbiddenError,
+  getSettingsByNames,
+  logImageGenerationFailure,
+} from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import axios from 'axios';
 import {
@@ -14,8 +26,11 @@ import {
   estimateImageCredits,
   UnsupportedImageModelError,
 } from '@bike4mind/services/imageCost';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
 interface GenerateFeaturedImageRequest {
   imagePrompt: string;
@@ -70,13 +85,11 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
           );
         }
 
-        await (await createModelAdmission(req.user!, models)).assert(imageModelInfo.id);
-
         imageModelId = userImageModel;
         imageLogger.info(`[Blog Image] Using user-selected image model: ${imageModelId}`);
       } else {
         // Fall back to operations model
-        const operationsResult = await OperationsModelService.getOperationsModel();
+        const operationsResult = await OperationsModelService.getOperationsModel({ endUserId: userId });
         imageModelId = operationsResult.imageModelId;
         imageModelInfo = operationsResult.imageModelInfo;
 
@@ -87,6 +100,13 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
         }
         imageLogger.info(`[Blog Image] Using operations image model: ${imageModelId}`);
       }
+
+      if (imageModelInfo)
+        await (
+          await createModelAdmission(req.user!, [imageModelInfo], false, {
+            organizationId: resolveRequestBillingOrgId(req),
+          })
+        ).assert(imageModelInfo.id);
 
       // Re-asserted here (both branches above already guarantee this): narrows the type for
       // every use below, which the if/else diamond above does not do on its own.
@@ -242,14 +262,17 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
       if (
         error instanceof UnprocessableEntityError ||
         error instanceof ForbiddenError ||
-        error instanceof BadRequestError
+        error instanceof BadRequestError ||
+        isTerminalCreditRefusal(error)
       ) {
         throw error;
       }
-      imageLogger.error('[Blog Image] Error generating featured image:', error);
+      logImageGenerationFailure(imageLogger, '[Blog Image] Error generating featured image:', error);
 
       let errorMessage = 'Failed to generate featured image. Please try again.';
-      if (error instanceof Error) {
+      if (error instanceof ExpectedImageGenerationError) {
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
         if (error.message.includes('API key') || error.message.includes('model')) {
           errorMessage = 'AI service temporarily unavailable. Please try again later.';
         } else if (error.message.includes('credits')) {

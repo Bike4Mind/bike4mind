@@ -1,6 +1,6 @@
 import type { drive_v3 } from '@googleapis/drive';
 import type { Logger } from '@bike4mind/observability';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   User,
   adminSettingsRepository,
@@ -28,7 +28,8 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -41,7 +42,7 @@ import {
   getValidConnectionDriveAccessToken,
   isTerminalDriveGrantError,
   releaseDriveConnection,
-} from '@server/integrations/google/drive/common';
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   createDriveClient,
   isDriveAuthError,
@@ -64,19 +65,19 @@ import {
   isUnderRoot,
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
-} from '@server/integrations/google/drive/driveContent';
+} from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,
   driveIngestSkipReason,
 } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 const Payload = z.object({
   connectionId: z.string(),
@@ -636,6 +637,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    await resolveRoleAdminPermissions(user);
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
     // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the

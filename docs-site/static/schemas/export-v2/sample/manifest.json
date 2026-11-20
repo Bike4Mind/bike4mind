@@ -1,0 +1,16 @@
+{
+  "exportVersion": "2.0.0",
+  "exportedAt": "2026-01-01T00:00:00.000Z",
+  "platform": "bike4mind",
+  "collections": {
+    "notebooks": { "path": "collections/notebooks.jsonl", "count": 1, "bytes": 156, "sha256": "6cf64797f6faaa924a1689a391dfc471d6bbf250e25eab4ceee3f2e944ed8db9" },
+    "chat-messages": { "path": "collections/chat-messages.jsonl", "count": 1, "bytes": 160, "sha256": "1fc68c61c538653e3ae53a20e6bf483982ebb0e48cc89de5e1fef0f4e00598b3" },
+    "knowledge": { "path": "collections/knowledge.jsonl", "count": 1, "bytes": 224, "sha256": "cc96588b2a5f669e1754a104aed6c0f5236d10b99eb6613c20047c168e4bf6d7" },
+    "artifacts": { "path": "collections/artifacts.jsonl", "count": 1, "bytes": 168, "sha256": "5757b9e5b6525f78f172578fcb25cd419b41521efef124f09dff6dfab5d133fb" },
+    "tools": { "path": "collections/tools.jsonl", "count": 1, "bytes": 101, "sha256": "3dc2fdfa8d6082b0b86fa849aa267b50c58388f7159714e2cc5bb2eb1a2ea843" },
+    "agents": { "path": "collections/agents.jsonl", "count": 1, "bytes": 103, "sha256": "81d1ce202cbe1404ffef05a0ef418ecc8346589d478f4009f3f8fb0606f4e11d" }
+  },
+  "files": [
+    { "path": "files/5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", "bytes": 6, "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03" }
+  ]
+}

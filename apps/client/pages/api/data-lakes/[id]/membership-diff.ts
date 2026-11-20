@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
  * A full ISO-8601 instant with an explicit offset. Deliberately stricter than `new Date`, which

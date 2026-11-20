@@ -1,8 +1,8 @@
 import { buildApiKeyTable, getAvailableModels, PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services-core';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import { isUnpricedTextModel } from '@bike4mind/services-core/llm/modelAdmission';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDb } from '../di/registry';
 
@@ -31,6 +31,7 @@ export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
   [ModelBackend.Kimi]: 'Moonshot (Kimi)',
   [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.Ollama]: 'Ollama',
+  [ModelBackend.OpenAICompatible]: 'Local model server',
   [ModelBackend.AWS]: 'AWS',
   [ModelBackend.BFL]: 'Black Forest Labs',
   [ModelBackend.VoyageAI]: 'Voyage AI',

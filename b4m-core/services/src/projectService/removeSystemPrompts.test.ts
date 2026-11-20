@@ -70,4 +70,18 @@ describe('projectService - removeSystemPrompts', () => {
     );
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
   });
+
+  it('removes a stored uppercase-hex id by its lowercase form', async () => {
+    const upper = 'ABCDEF0123456789ABCDEF01';
+    const project = projectWith([upper, 'b']);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(project);
+
+    const result = await removeSystemPrompts(
+      user,
+      { projectId: 'project-1', fileIds: [upper.toLowerCase()] },
+      adapters
+    );
+
+    expect(result.systemPrompts).toEqual([{ fileId: 'b', enabled: true }]);
+  });
 });

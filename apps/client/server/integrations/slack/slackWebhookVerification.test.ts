@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import { verifySlackRequest, isSlackTimestampFresh, SLACK_REPLAY_TOLERANCE_SECS } from './slackWebhookVerification';
 
@@ -6,6 +6,17 @@ import { verifySlackRequest, isSlackTimestampFresh, SLACK_REPLAY_TOLERANCE_SECS 
 function computeSlackSignature(body: string, timestamp: string, secret: string): string {
   return `v0=${crypto.createHmac('sha256', secret).update(`v0:${timestamp}:${body}`).digest('hex')}`;
 }
+
+// The tests and the code under test each read the clock; frozen, a second ticking over between the
+// two reads (a busy CI runner) can no longer move a timestamp across the tolerance boundary.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-01-01T00:00:00.500Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('isSlackTimestampFresh', () => {
   afterEach(() => {

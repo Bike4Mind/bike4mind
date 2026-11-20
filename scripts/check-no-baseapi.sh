@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if any file under apps/client/pages/api/ lacks baseApi() and is not on the allowlist.
+# Fails if an API file lacks an authenticated route factory and is not on the allowlist.
 # Run in CI on every PR (ci.yml) and locally via husky pre-commit.
 #
 # To add a legitimate exception:
@@ -25,21 +25,22 @@ fi
 # is auth-enforced: it builds on baseApi and applies the contract's scopes. A handler
 # routed through it is authenticated exactly like a baseApi() handler, so it satisfies
 # this check without a direct baseApi import.
-violators=$(grep -rLE "baseApi|nextRouteForContract" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
+# adminApi also builds on baseApi and enforces a named permission per method.
+violators=$(grep -rLE "baseApi|adminApi|nextRouteForContract" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
 
 allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort)
 
 new_violators=$(comm -23 <(echo "$violators") <(echo "$allowed") | grep -v '^$' || true)
 
 if [ -n "$new_violators" ]; then
-  echo "❌ ERROR: The following API files do not use baseApi() and are not on the allowlist:"
+  echo "❌ ERROR: The following API files do not use an authenticated route factory (baseApi/adminApi/nextRouteForContract) and are not on the allowlist:"
   echo ""
   echo "$new_violators" | sed 's/^/  /'
   echo ""
   echo "Fix options:"
-  echo "  1. Use baseApi() directly, or route the handler through nextRouteForContract (contract adapter), OR"
+  echo "  1. Use baseApi(), adminApi(), or nextRouteForContract (contract adapter), OR"
   echo "  2. Add the path to scripts/no-baseapi-allowlist.txt with a comment explaining the alternative auth"
   exit 1
 fi
 
-echo "✅ All API files use baseApi() or are on the allowlist."
+echo "✅ All API files use an authenticated route factory or are on the allowlist."

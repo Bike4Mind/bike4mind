@@ -22,7 +22,9 @@ const PAYLOAD_VERSIONS = {
   modelMetrics: 2,
   // Bumped for the degenerateRate KPI: a stale v1 payload would hide the new field for
   // up to the cache's 12h TTL after deploy.
-  spend: 2,
+  // Bumped to 3 for the per-account errorRate/p95LatencyMs/flags fields.
+  // Bumped to 4 for executed-model rows in byModel.
+  spend: 4,
   eventMetrics: 1,
   modelStats: 1,
 } as const;
@@ -82,15 +84,9 @@ export const CacheKeys = {
     return `userInvites:${userId}:${limit}:${page}`;
   },
 
-  securityBehavioralSummary: (userId: string) => {
-    return `security-behavioral-summary-v2:${userId}`;
-  },
-
-  securityDashboardAiAssessment: (stage: string, fingerprintHash: string) => {
-    return `security-dashboard-ai-assessment:${stage}:${fingerprintHash}`;
-  },
-
   modelList: (userId: string) => `model-list:${userId}`,
+
+  userTags: () => 'admin-user-tags',
 
   refineText: (text: string, context?: string) => {
     const material = JSON.stringify({ text, context: context ?? '' });

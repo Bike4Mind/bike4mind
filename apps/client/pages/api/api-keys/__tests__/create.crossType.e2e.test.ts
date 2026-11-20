@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 // Analytics is a side channel here and would drag in the counter service + User docs.
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn(async () => undefined) }));
 
 import handler from '../create';
 

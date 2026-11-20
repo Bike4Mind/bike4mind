@@ -19,6 +19,7 @@ export const CopyCodeButton: React.FC<CopyCodeButtonProps> = ({ code }) => {
   return (
     <Tooltip title={copied ? 'Copied!' : 'Copy code to clipboard'} placement="top">
       <IconButton
+        data-testid="code-block-copy-btn"
         variant="plain"
         color="neutral"
         size="sm"

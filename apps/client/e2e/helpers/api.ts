@@ -3,6 +3,8 @@ import { Resource } from 'sst';
 import crypto from 'crypto';
 import type { DataLakeOrigin } from '@bike4mind/common';
 import { getE2ETestId, getTestRunId } from './test-users';
+import { wafBypassHeaders } from './waf-bypass';
+import { enrollMfa } from './mfa';
 
 interface LoginResponse {
   accessToken: string;
@@ -105,9 +107,18 @@ export async function apiCreateTestUser(
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept
     // fallback below. Defaults to consented so ordinary setup isn't 403'd by the gate.
     acceptedPolicies?: boolean;
+    // Pass true for a user that must clear the new-account trust gate on outbound actions (e.g.
+    // sending invites). Defaults to untrusted, like a real signup.
+    apiKeyTrustApproved?: boolean;
     // Starting credit balance. Omit for the default effectively-unlimited grant; pass a small
     // value to mint a low-balance user for the credit-gate spec.
     initialCredits?: number;
+    // Pass 'force' to hold this account to MFA enforcement with the stage's enforceMFA setting
+    // untouched, so a spec reaches the server's real enrollment gate.
+    mfaEnforcement?: 'force';
+    // Accounts are enrolled in TOTP MFA by default, like production accounts, so the suite passes
+    // whether or not the stage enforces MFA. Pass 'unenrolled' only for a spec about enrollment.
+    mfa?: 'enrolled' | 'unenrolled';
   }
 ): Promise<LoginResponse> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
@@ -115,8 +126,9 @@ export async function apiCreateTestUser(
   if (!secret) {
     throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
   }
+  const { mfa = 'enrolled', ...body } = params;
   const response = await request.post(`${baseURL}/api/test/create-user`, {
-    data: params,
+    data: body,
     headers: { 'x-e2e-cleanup-secret': secret },
   });
 
@@ -134,7 +146,10 @@ export async function apiCreateTestUser(
     await apiAcceptPolicies(request, result.accessToken);
   }
 
-  return result;
+  if (mfa === 'unenrolled') return result;
+  // Enrollment revokes the creation session, so only the tokens it returns are usable afterwards.
+  const { tokens } = await enrollMfa(request, result.accessToken);
+  return { ...result, ...tokens };
 }
 
 /**
@@ -146,7 +161,16 @@ export async function apiCreateTestUser(
  * or email, so without them a retry or `--repeat-each` run would die in apiCreateTestUser. The marker
  * stays before the `<id>-<runId>` tail so both cleanup regexes in pages/api/test/cleanup.ts match.
  */
-export async function apiCreateThrowawayUser(request: APIRequestContext, label: string) {
+export async function apiCreateThrowawayUser(
+  request: APIRequestContext,
+  label: string,
+  // Pass includePredefinedTags: false for a free-tier account: the predefined Developer tag bypasses
+  // the free-tier rate limit and daily caps.
+  options: Pick<
+    Parameters<typeof apiCreateTestUser>[1],
+    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved' | 'mfaEnforcement' | 'mfa'
+  > = {}
+) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
   const { retry, repeatEachIndex } = test.info();
@@ -158,6 +182,7 @@ export async function apiCreateThrowawayUser(request: APIRequestContext, label: 
     name: `Auth ${label} ${idSuffix}`,
     password: `E2eAuth${label}Pass123!`,
     isAdmin: false,
+    ...options,
   });
   return {
     email,
@@ -218,7 +243,15 @@ export async function apiLoginViaOtc(
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const normalizedEmail = email.toLowerCase().trim();
 
-  const sendResponse = await request.post(`${baseURL}/api/otc/send`, { data: { email: normalizedEmail } });
+  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
+  }
+  // The secret header lets a -e2e@test.com send skip the Turnstile challenge (see requireTurnstile).
+  const sendResponse = await request.post(`${baseURL}/api/otc/send`, {
+    data: { email: normalizedEmail },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+  });
   if (!sendResponse.ok()) {
     throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
   }
@@ -228,25 +261,106 @@ export async function apiLoginViaOtc(
 
   const verifyResponse = await request.post(`${baseURL}/api/otc/verify`, {
     data: { email: normalizedEmail, code, pendingToken },
+    headers: wafBypassHeaders(),
   });
   if (!verifyResponse.ok()) {
     throw new Error(`OTC verify failed: ${verifyResponse.status()} ${verifyResponse.statusText()}`);
   }
+  const body = (await verifyResponse.json()) as {
+    accessToken?: string;
+    mfaRequired?: boolean;
+    mfaSetupRequired?: boolean;
+  };
+  // With MFA the access token in the body is the pending second-factor token, not a session.
+  if (body.mfaRequired && body.accessToken) {
+    return apiCompleteMfaChallenge(request, body.accessToken, normalizedEmail);
+  }
+  if (body.mfaSetupRequired && body.accessToken) {
+    return (await enrollMfa(request, body.accessToken)).tokens;
+  }
+
   // The refresh token is no longer in the body - /api/otc/verify sets it as an HttpOnly cookie -
   // so it has to be read back off Set-Cookie.
   const refreshToken = refreshTokenFromSetCookie(verifyResponse.headers()['set-cookie']);
-
-  // /api/otc/verify returns 200 without tokens in some envs (MFA-enforced ->
-  // mfaRequired/mfaSetupRequired; registrationRequired -> no tokens). Fail loud and local
-  // here instead of returning undefined tokens that surface later as an opaque auth-seed 401.
-  const body = (await verifyResponse.json()) as { accessToken?: string };
+  // registrationRequired returns 200 without tokens. Fail loud and local here instead of returning
+  // undefined tokens that surface later as an opaque auth-seed 401.
   if (!body.accessToken || !refreshToken) {
     throw new Error(
-      `OTC verify returned no tokens (mfaRequired/registrationRequired?): keys=${Object.keys(body).join(',')}, ` +
+      `OTC verify returned no tokens (registrationRequired?): keys=${Object.keys(body).join(',')}, ` +
         `refreshCookie=${refreshToken ? 'set' : 'missing'}`
     );
   }
   return { accessToken: body.accessToken, refreshToken };
+}
+
+/**
+ * A TOTP code the server will accept for an enrolled -e2e@test.com account, read from the non-prod
+ * /api/test/mfa-code endpoint (same gating as apiGetOtcCode). Needs no secret on this side, so it
+ * also serves standing accounts enrolled by an earlier run. Waits when the account's next unused
+ * code is not valid yet.
+ */
+export async function apiGetMfaCode(request: APIRequestContext, email: string): Promise<string> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await request.get(`${baseURL}/api/test/mfa-code?email=${encodeURIComponent(email)}`, {
+      headers: { 'x-e2e-cleanup-secret': secret },
+    });
+    if (response.status() === 409) {
+      const { retryAfterMs } = (await response.json()) as { retryAfterMs: number };
+      await new Promise(resolve => setTimeout(resolve, Math.max(retryAfterMs, 0) + 500));
+      continue;
+    }
+    if (!response.ok()) {
+      throw new Error(`Get MFA code failed: ${response.status()} ${response.statusText()}`);
+    }
+    return ((await response.json()) as { code: string }).code;
+  }
+  throw new Error(`Get MFA code failed: no usable code for ${email}`);
+}
+
+/** Answer a sign-in's TOTP challenge (POST /api/auth/mfa/verify with its pending token) for a session. */
+export async function apiCompleteMfaChallenge(
+  request: APIRequestContext,
+  mfaPendingToken: string,
+  email: string
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/auth/mfa/verify`, {
+    headers: { ...wafBypassHeaders(), Authorization: `Bearer ${mfaPendingToken}` },
+    data: { token: await apiGetMfaCode(request, email) },
+  });
+  if (!response.ok()) {
+    throw new Error(`MFA verify failed: ${response.status()} ${response.statusText()}`);
+  }
+  const refreshToken = refreshTokenFromSetCookie(response.headers()['set-cookie']);
+  const { accessToken } = (await response.json()) as { accessToken?: string };
+  if (!accessToken || !refreshToken) {
+    throw new Error(`MFA verify returned no session (refreshCookie=${refreshToken ? 'set' : 'missing'})`);
+  }
+  return { accessToken, refreshToken };
+}
+
+/**
+ * Enroll the session's account in TOTP MFA unless it already has a factor. Enrolling revokes the
+ * session passed in, so use the returned tokens afterwards.
+ */
+export async function apiEnsureMfaEnrolled(
+  request: APIRequestContext,
+  tokens: { accessToken: string; refreshToken: string }
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/auth/mfa/status`, {
+    headers: { Authorization: `Bearer ${tokens.accessToken}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`MFA status failed: ${response.status()} ${response.statusText()}`);
+  }
+  if (((await response.json()) as { enabled?: boolean }).enabled) return tokens;
+  return (await enrollMfa(request, tokens.accessToken)).tokens;
 }
 
 /**
@@ -274,6 +388,8 @@ export async function apiLoginStandingUser(
     });
   }
   if (tokens) {
+    // An account a run before enrollment-by-default created is still unenrolled.
+    tokens = await apiEnsureMfaEnrolled(request, tokens);
     // The access token is a JWT whose `id` claim is the user id (AuthTokenGeneratorService).
     const payload: unknown = JSON.parse(Buffer.from(tokens.accessToken.split('.')[1], 'base64url').toString('utf-8'));
     const userId = (payload as { id?: unknown }).id;
@@ -376,6 +492,22 @@ export async function apiSeedLakeArticle(
   });
 }
 
+/** Stored admin setting rows by name. A key with no row is absent and resolves to its registry default. */
+export async function apiGetAdminSettings(
+  request: APIRequestContext,
+  adminToken: string
+): Promise<Map<string, unknown>> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/settings/fetch`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`Fetch admin settings failed: ${response.status()} ${response.statusText()}`);
+  }
+  const rows = (await response.json()) as Array<{ settingName: string; settingValue: unknown }>;
+  return new Map(rows.map(row => [row.settingName, row.settingValue]));
+}
+
 export async function apiUpdateAdminSetting(
   request: APIRequestContext,
   adminToken: string,
@@ -425,6 +557,75 @@ export async function apiDeleteInviteCode(
 
   if (!response.ok()) {
     throw new Error(`Delete invite code failed: ${response.status()} ${response.statusText()}`);
+  }
+}
+
+async function adminApiCall<T>(
+  request: APIRequestContext,
+  adminToken: string,
+  method: 'get' | 'post' | 'patch' | 'delete',
+  path: string,
+  data?: unknown
+): Promise<T> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request[method](`${baseURL}${path}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    ...(data === undefined ? {} : { data }),
+  });
+  if (!response.ok()) {
+    throw new Error(`${method.toUpperCase()} ${path} failed: ${response.status()} ${response.statusText()}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** A small capped package, below the large-grant threshold so no reason is needed. */
+export async function apiCreateGrantPackage(
+  request: APIRequestContext,
+  adminToken: string,
+  name: string
+): Promise<{ id: string }> {
+  const pkg = await adminApiCall<{ id: string }>(request, adminToken, 'post', '/api/admin/grant-packages', {
+    name,
+    credits: 10,
+    totalCap: 1,
+    dailyCap: null,
+  });
+  return { id: pkg.id };
+}
+
+/** Packages are never deleted, so cleanup deactivates them. */
+export async function apiDeactivateGrantPackage(request: APIRequestContext, adminToken: string, id: string) {
+  await adminApiCall(request, adminToken, 'patch', `/api/admin/grant-packages/${id}`, { active: false });
+}
+
+export async function apiCreatePackageInviteCode(
+  request: APIRequestContext,
+  adminToken: string,
+  grantPackageId: string
+): Promise<{ id: string; code: string }> {
+  const invites = await adminApiCall<Array<{ _id?: string; id?: string; code: string }>>(
+    request,
+    adminToken,
+    'post',
+    '/api/reg-invites/create',
+    { multiple: 1, grantPackageId }
+  );
+  return { id: String(invites[0]._id ?? invites[0].id), code: invites[0].code };
+}
+
+export async function apiCloseInviteCode(request: APIRequestContext, adminToken: string, id: string) {
+  await adminApiCall(request, adminToken, 'post', '/api/reg-invites/update', { ids: [id], status: 'used' });
+}
+
+export async function apiDeletePartnerRuleByDomain(request: APIRequestContext, adminToken: string, domain: string) {
+  const rules = await adminApiCall<{ data: Array<{ id: string; domain: string }> }>(
+    request,
+    adminToken,
+    'get',
+    `/api/admin/partner-signup-rules?page=1&limit=10&search=${encodeURIComponent(domain)}`
+  );
+  for (const rule of rules.data.filter(match => match.domain === domain)) {
+    await adminApiCall(request, adminToken, 'delete', `/api/admin/partner-signup-rules/${rule.id}`);
   }
 }
 
@@ -818,7 +1019,7 @@ export async function apiGrantTeam(
   return body.organizationId;
 }
 
-/** POST /api/organizations/:id/members - adds an accepted member directly, skipping the invite. */
+/** POST /api/organizations/:id/members - adds an accepted member directly, skipping the invite. Platform admins only. */
 export async function apiAddTeamMember(
   request: APIRequestContext,
   token: string,

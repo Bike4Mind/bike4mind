@@ -1,9 +1,6 @@
 import type { Connection } from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { OPENAI_EMBEDDING_MODEL_MAP } from '../embeddings/providers/OpenAIEmbeddingService';
-import { VOYAGEAI_EMBEDDING_MODEL_MAP } from '../embeddings/providers/VoyageAIEmbeddingService';
-import { BEDROCK_EMBEDDING_MODEL_MAP } from '../embeddings/providers/BedrockEmbeddingService';
-import { OLLAMA_EMBEDDING_MODEL_MAP } from '../embeddings/providers/OllamaEmbeddingService';
+import { EMBEDDING_MODEL_IDS, getEmbeddingModelCapabilities, isSupportedEmbeddingModel } from '@bike4mind/common';
 
 /**
  * Atlas Search index management for Data Lake chunk vectors, one index per embedding model.
@@ -11,9 +8,8 @@ import { OLLAMA_EMBEDDING_MODEL_MAP } from '../embeddings/providers/OllamaEmbedd
  * An Atlas Search index mapping is static, and embedding dimensions vary across models
  * (1024-3072 in the current registry), so a single shared index cannot serve every model - a
  * write under one model's width would corrupt the mapping for every other model sharing the
- * index. Every model below is keyed by its ACTUAL write-time width: `EmbeddingModelInfo.dimensions[0]`,
- * because no caller in this codebase overrides `outputDimension` today, so `dimensions[0]` is
- * what every chunk vector for that model is actually stored at.
+ * index. Every model below is keyed by its native write-time width from the catalog, because lake
+ * chunk vectors are stored at native width. API-only models stay outside the persisted lake schema.
  *
  * Every index also declares `fabFileId` and `embeddingModel` as `filter` fields - without them,
  * a `$vectorSearch` query with a `filter` on either path throws at query time (Atlas rejects
@@ -30,12 +26,9 @@ const FILTER_PATHS = ['fabFileId', 'embeddingModel'] as const;
 // prototype values (e.g. 'constructor') instead of undefined, so an unrecognized model would
 // fail OPEN with a garbage AtlasIndexTarget rather than closed to null.
 const ALL_MODEL_DIMENSIONS: Map<string, number> = new Map(
-  [
-    ...Object.values(OPENAI_EMBEDDING_MODEL_MAP),
-    ...Object.values(VOYAGEAI_EMBEDDING_MODEL_MAP),
-    ...Object.values(BEDROCK_EMBEDDING_MODEL_MAP),
-    ...Object.values(OLLAMA_EMBEDDING_MODEL_MAP),
-  ].map(info => [info.model, info.dimensions[0]] as const)
+  EMBEDDING_MODEL_IDS.filter(isSupportedEmbeddingModel).map(
+    model => [model, getEmbeddingModelCapabilities(model).dimensions.native] as const
+  )
 );
 
 export const getEmbeddingDimensions = (model: string): number | null => ALL_MODEL_DIMENSIONS.get(model) ?? null;

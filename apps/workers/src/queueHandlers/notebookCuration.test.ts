@@ -70,11 +70,11 @@ vi.mock('@bike4mind/services', async () => ({
   },
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: curation.createCompletionMeter,
   createRequestCompletionMeter: curation.createRequestCompletionMeter,
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       llm: { complete: curation.providerComplete },
@@ -83,12 +83,12 @@ vi.mock('@client/services/operationsModelService', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
-vi.mock('@server/utils/eventBus', async importOriginal => ({
-  NotebookCurationBillingSchema: (await importOriginal<typeof import('@server/utils/eventBus')>())
+vi.mock('@bike4mind/server-utils/utils/eventBus', async importOriginal => ({
+  NotebookCurationBillingSchema: (await importOriginal<typeof import('@bike4mind/server-utils/utils/eventBus')>())
     .NotebookCurationBillingSchema,
   NotebookCurationEvents: {
     Complete: { publish: vi.fn().mockResolvedValue(undefined) },
@@ -121,7 +121,7 @@ vi.mock('@bike4mind/observability', () => {
 });
 
 import { dispatch } from './notebookCuration';
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 const mockContext = {
   callbackWaitsForEmptyEventLoop: false,

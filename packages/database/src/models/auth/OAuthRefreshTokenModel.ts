@@ -38,6 +38,7 @@ export interface IOAuthRefreshTokenRepository extends IBaseRepository<IOAuthRefr
   revokeFamily(familyId: string): Promise<void>;
   /** Revoke every live family for a (user, client) pair, e.g. when the user revokes the grant. */
   revokeAllForGrant(userId: string, clientId: string): Promise<void>;
+  revokeAllForUser(userId: string): Promise<number>;
 }
 
 type IOAuthRefreshTokenModel = Model<IOAuthRefreshTokenDocument>;
@@ -88,6 +89,11 @@ class OAuthRefreshTokenRepository
 
   async revokeAllForGrant(userId: string, clientId: string) {
     await this.model.updateMany({ userId, clientId, revokedAt: null }, { $set: { revokedAt: new Date() } }).exec();
+  }
+
+  async revokeAllForUser(userId: string) {
+    const result = await this.model.updateMany({ userId, revokedAt: null }, { $set: { revokedAt: new Date() } }).exec();
+    return result.modifiedCount;
   }
 }
 

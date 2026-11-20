@@ -22,6 +22,12 @@ export type CompletionSource = 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'sy
 
 export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'api', 'agent', 'system'] as const;
 
+/**
+ * Sources that count toward active users: first-party surfaces (and agent runs). `api` is third-party and
+ * shown as its own series; `system` is background work. Must stay in sync with COMPLETION_SOURCES.
+ */
+export const ACTIVE_SOURCES = ['web', 'cli', 'desktop', 'agent'] as const satisfies readonly CompletionSource[];
+
 /** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
 export const API_KEY_COMPLETION_SOURCES = ['api', 'cli', 'desktop'] as const satisfies readonly CompletionSource[];
 
@@ -96,7 +102,7 @@ export interface IApiKeyEndpointTraffic {
  * What the scope gate WOULD decide for one key if a set of `requiredScopes`
  * were declared on the routes it has been calling.
  *
- * `outcome` mirrors ScopeGateDecision (apps/client/server/middlewares/apiKeyScopeGate.ts)
+ * `outcome` mirrors ScopeGateDecision (packages/server-utils/src/middlewares/apiKeyScopeGate.ts)
  * and is produced by calling that module's `decideScopeGate` - never by
  * reimplementing its rules here. A preflight that drifts from the runtime gate
  * reports a confidently wrong re-mint list, which is worse than no preflight.
@@ -144,6 +150,38 @@ export interface IApiKeyScopePreflight {
   coverage: IApiKeyScopePreflightCoverage;
 }
 
+/** One key on the admin legacy-key list (GET /api/admin/api-keys/legacy). */
+export interface IAdminLegacyApiKeyRow {
+  keyId: string;
+  name: string;
+  keyPrefix: string;
+  userId: string;
+  /** Absent when the owner account no longer exists. */
+  ownerEmail?: string;
+  ownerName?: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
+/**
+ * Recently used legacy API keys and their owners: who still has to move to a scoped key
+ * before legacy access ends. Paged server-side, most recently used first.
+ */
+export interface IAdminLegacyApiKeys {
+  rows: IAdminLegacyApiKeyRow[];
+  page: number;
+  limit: number;
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+  /** Only keys used within this many days are listed. */
+  usedWithinDays: number;
+  /** The legacy window's dates (ISO); `null` until set. */
+  cutoff: string | null;
+  endsAt: string | null;
+}
+
 /**
  * The client signal a request carries: User-Agent, then x-b4m-client. Header names are matched
  * case-insensitively. Source attribution and per-client rate limiting both read this, so the two
@@ -168,4 +206,40 @@ export function resolveApiCompletionSource(headers: Record<string, string | unde
   const client = resolveRequestClient(headers) ?? '';
   if (/^b4m-desktop\/\S+$/i.test(client)) return 'desktop';
   return /^b4m-cli\//i.test(client) ? 'cli' : 'api';
+}
+
+/**
+ * The first-party surfaces recorded per user on `IUser.clientUsage`. A subset of
+ * {@link CompletionSource}: `agent` and `system` are never a person using a client.
+ */
+export const CLIENT_SURFACES = ['web', 'desktop', 'cli', 'api'] as const satisfies readonly CompletionSource[];
+
+export type ClientSurface = (typeof CLIENT_SURFACES)[number];
+
+export interface ClientSurfaceSignal {
+  surface: ClientSurface;
+  /** The `<ver>` of a `b4m-desktop/<ver>` or `b4m-cli/<ver>` client, when it is well-formed. */
+  version?: string;
+}
+
+const FIRST_PARTY_CLIENT = /^b4m-(desktop|cli)\/(\S+)$/i;
+// Caller-controlled and persisted, so only a short semver-ish token is kept.
+const CLIENT_VERSION = /^[\w.+-]{1,32}$/;
+
+/**
+ * Which surface an authenticated request came from. Same caller-controlled signal as
+ * {@link resolveApiCompletionSource}, so it is attribution only, never an authorization input.
+ * A first-party client header wins; otherwise a delegated credential (API key, OAuth token) is
+ * `api` and a session cookie is `web`.
+ */
+export function resolveClientSurface(
+  headers: Record<string, string | undefined>,
+  options: { delegatedCredential: boolean }
+): ClientSurfaceSignal {
+  const match = FIRST_PARTY_CLIENT.exec(resolveRequestClient(headers) ?? '');
+  if (match) {
+    const surface = match[1].toLowerCase() as 'desktop' | 'cli';
+    return CLIENT_VERSION.test(match[2]) ? { surface, version: match[2] } : { surface };
+  }
+  return { surface: options.delegatedCredential ? 'api' : 'web' };
 }

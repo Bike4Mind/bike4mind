@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import { Logger } from '@bike4mind/observability';
 import { userAuthAuditLogRepository, type UserAuthAuditEvent } from '@bike4mind/database';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { recordSessionReuseRevoked, recordSessionRecovered } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -32,7 +33,7 @@ export async function logAuthAudit(
   if (params.event === 'session_reuse_revoked') {
     // One self-contained line, so the alarm can be triaged from the Lambda log without a database
     // lookup. The audit row below carries the same fields.
-    console.warn('[auth] session_reuse_revoked', { userId: params.userId, actorIp, userAgent, ...metadata });
+    Logger.warn('[auth] session_reuse_revoked', { userId: params.userId, actorIp, userAgent, ...metadata });
   }
   try {
     await userAuthAuditLogRepository.createLog({
@@ -46,7 +47,7 @@ export async function logAuthAudit(
       metadata,
     });
   } catch (err) {
-    console.debug(`Failed to write UserAuthAuditLog (${params.event}):`, err);
+    Logger.debug('Failed to write UserAuthAuditLog', { event: params.event, error: err });
   }
   // Awaited: both counts feed alarms (infra/alarms.ts), and a frozen Lambda loses a pending emit.
   // Neither is on the common refresh path - a revoke rejects the request and a recovery is a rare

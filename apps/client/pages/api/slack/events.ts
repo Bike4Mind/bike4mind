@@ -1,5 +1,5 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -53,12 +53,13 @@ import {
 import { adminSettingsRepository } from '@bike4mind/database';
 import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/slack/handleDataLakeCommand';
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { forwardSlackReaction } from '@server/integrations/slack/reactionFeedback';
 
 // Slack event schemas
 const SlackEventSchema = z.object({
@@ -273,6 +274,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
 
   integrationAuditLogger.success();
+
+  if (body.event?.type === 'reaction_added') {
+    await forwardSlackReaction(teamId, apiAppId, body.event);
+    return res.status(200).json({ ok: true });
+  }
 
   // Slack retries events when it doesn't get HTTP 200 within 3 seconds.
   // These retries can bypass MongoDB dedup TTL (5 min) and cause duplicate responses.
@@ -908,7 +914,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     channelId: slackEvent.channel,
     logger,
   });
-  req.logger.info(systemPrompt);
+  req.logger.info('Slack system prompt built', { systemPromptLength: systemPrompt.length });
 
   // Build command with file metadata context for upload tools
   // This tells the AI which fabFileId to use when delegating file uploads

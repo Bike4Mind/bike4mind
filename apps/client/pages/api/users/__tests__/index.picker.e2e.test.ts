@@ -117,8 +117,15 @@ beforeAll(async () => {
       deletedAt: null,
     },
   ]);
-  // One open invite (stored in a different case than the account) and one expired invite.
+  // Open invites use a different email case than the accounts. Expired invites stay unflagged.
   await Invite.collection.insertMany([
+    {
+      type: InviteType.Organization,
+      documentId: ORG.toString(),
+      remaining: 1,
+      recipients: { pending: ['ZEPHYR.REQUESTER@EXAMPLE.TEST'], accepted: [], refused: [] },
+      expiresAt: null,
+    },
     {
       type: InviteType.Project,
       documentId: PROJECT.toString(),
@@ -266,6 +273,18 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
 
   it('omits pendingInvite for a caller without share access, but still answers the search', async () => {
     const rows = await search(ORG_COLLEAGUE, false, { search: 'zep', pendingInviteProjectId: PROJECT.toString() });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).not.toHaveProperty('pendingInvite');
+  });
+  it('flags organization invitees for their manager without returning an email', async () => {
+    const rows = await search(ORG_COLLEAGUE, false, { search: 'zep', pendingInviteOrganizationId: ORG.toString() });
+    expect(rows.find(row => row.id === REQUESTER.toString())).toMatchObject({ pendingInvite: true });
+    expect(rows.find(row => row.id === ORG_COLLEAGUE.toString())).toMatchObject({ pendingInvite: false });
+    for (const row of rows) expect(row).not.toHaveProperty('email');
+  });
+
+  it('omits the organization annotation for an ordinary member', async () => {
+    const rows = await search(REQUESTER, false, { search: 'zep', pendingInviteOrganizationId: ORG.toString() });
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) expect(row).not.toHaveProperty('pendingInvite');
   });

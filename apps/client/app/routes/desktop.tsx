@@ -23,23 +23,22 @@ import {
 } from '@client/app/utils/desktopReleases';
 
 type PlatformId = 'mac-arm64' | 'mac-intel' | 'linux-x64' | 'linux-arm64' | 'windows';
-type AvailablePlatformId = 'mac-arm64' | 'linux-x64';
+type AvailablePlatformId = 'mac-arm64' | 'linux-x64' | 'windows';
 
 const PLATFORM_LABELS: Record<PlatformId, string> = {
   'mac-arm64': 'macOS (Apple Silicon)',
   'mac-intel': 'macOS (Intel)',
   'linux-x64': 'Linux (x64)',
   'linux-arm64': 'Linux (ARM)',
-  windows: 'Windows',
+  windows: 'Windows (x64 and ARM)',
 };
 
 const UNAVAILABLE_REASONS: Partial<Record<PlatformId, { status: string; detail: string }>> = {
   'mac-intel': { status: 'Paused', detail: 'Builds for Intel Macs are temporarily paused.' },
   'linux-arm64': { status: 'Not available yet', detail: 'There is no build for ARM Linux yet.' },
-  windows: { status: 'Not available yet', detail: 'There is no Windows build yet.' },
 };
 
-const SUPPORTED_SUMMARY = 'The desktop app runs on macOS (Apple Silicon) and Linux (x64).';
+const SUPPORTED_SUMMARY = 'The desktop app runs on macOS (Apple Silicon), Linux (x64) and Windows.';
 
 const LISTED_PLATFORMS: PlatformId[] = ['mac-arm64', 'mac-intel', 'linux-x64', 'windows'];
 
@@ -71,7 +70,7 @@ function primaryPlatform({ os, arch }: DetectedPlatform): PlatformId | null {
 }
 
 const isAvailable = (platform: PlatformId | null): platform is AvailablePlatformId =>
-  platform === 'mac-arm64' || platform === 'linux-x64';
+  platform === 'mac-arm64' || platform === 'linux-x64' || platform === 'windows';
 
 function useDetectedPlatform(): DetectedPlatform {
   const [platform, setPlatform] = useState(() =>
@@ -90,14 +89,22 @@ function useDetectedPlatform(): DetectedPlatform {
 }
 
 function downloadFor(platform: AvailablePlatformId, release: DesktopRelease | undefined) {
-  const url = platform === 'mac-arm64' ? release?.macArm64DmgUrl : release?.linuxX64AppImageUrl;
-  const fileLabel = platform === 'mac-arm64' ? '.dmg' : '.AppImage';
+  const { url, fileLabel, testId } = {
+    'mac-arm64': { url: release?.macArm64DmgUrl, fileLabel: '.dmg', testId: 'desktop-download-dmg-link' },
+    'linux-x64': {
+      url: release?.linuxX64AppImageUrl,
+      fileLabel: '.AppImage',
+      testId: 'desktop-download-appimage-link',
+    },
+    windows: { url: release?.windowsSetupUrl, fileLabel: '.exe', testId: 'desktop-download-exe-link' },
+  }[platform];
   return url
-    ? { href: url, label: `Download ${fileLabel}`, external: false }
+    ? { href: url, label: `Download ${fileLabel}`, external: false, testId }
     : {
         href: release?.releaseUrl ?? DESKTOP_RELEASES_PAGE_URL,
         label: `Get the ${fileLabel} on GitHub`,
         external: true,
+        testId,
       };
 }
 
@@ -170,6 +177,27 @@ function GatekeeperNote() {
   );
 }
 
+function SmartScreenNote() {
+  return (
+    <Alert
+      data-testid="desktop-download-smartscreen-note"
+      variant="soft"
+      color="neutral"
+      size="sm"
+      startDecorator={<InfoOutlinedIcon />}
+      sx={{ alignItems: 'flex-start' }}
+    >
+      <Box>
+        <Typography level="title-sm">The Windows installer is not code-signed yet</Typography>
+        <Typography level="body-sm">
+          Windows SmartScreen shows &quot;Windows protected your PC&quot; the first time you run it. Click More info,
+          then Run anyway. It runs on ARM PCs too.
+        </Typography>
+      </Box>
+    </Alert>
+  );
+}
+
 function HeroDetails({
   primary,
   detected,
@@ -203,6 +231,7 @@ function HeroDetails({
   const macChipUnknown = detected.os === 'mac' && detected.arch === 'unknown';
   const download = downloadFor(primary, release);
   const isMac = primary === 'mac-arm64';
+  const isWindows = primary === 'windows';
   return (
     <Stack spacing={2}>
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
@@ -213,10 +242,18 @@ function HeroDetails({
           </Chip>
         )}
       </Stack>
-      <InstallCommand />
-      <Typography level="body-sm">
-        Paste it into {isMac ? 'Terminal' : 'a terminal'}. Run it again any time to update.
-      </Typography>
+      {isWindows ? (
+        <Typography level="body-sm">
+          Download the installer and run it. The app installs its own updates after that.
+        </Typography>
+      ) : (
+        <>
+          <InstallCommand />
+          <Typography level="body-sm">
+            Paste it into {isMac ? 'Terminal' : 'a terminal'}. Run it again any time to update.
+          </Typography>
+        </>
+      )}
       {macChipUnknown && (
         <Typography data-testid="desktop-download-ambiguous-note" level="body-sm">
           The Mac app runs on Apple Silicon (M1 or later). Not sure which chip you have? Open the Apple menu &gt; About
@@ -226,7 +263,7 @@ function HeroDetails({
       )}
       <Box>
         <Button
-          data-testid={isMac ? 'desktop-download-dmg-link' : 'desktop-download-appimage-link'}
+          data-testid={download.testId}
           component="a"
           href={download.href}
           {...externalLinkProps(download.external)}
@@ -323,6 +360,7 @@ export default function DesktopDownloadPage() {
           <Stack spacing={2.5} sx={{ pt: { md: 1 } }}>
             <DesktopAppPreview />
             {primary === 'mac-arm64' && <GatekeeperNote />}
+            {primary === 'windows' && <SmartScreenNote />}
           </Stack>
         </Box>
 

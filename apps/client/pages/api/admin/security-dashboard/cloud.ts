@@ -1,24 +1,23 @@
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { handler as runCloudScan } from '@server/security/cloudScan';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'cloud-scan-api' } });
-const sqsClient = new SQSClient({});
+const lambdaClient = new LambdaClient({});
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
     const snapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');
 
@@ -29,10 +28,6 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     return res.status(200).json(snapshot);
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
 
     const latest = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');
@@ -46,56 +41,26 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     }
 
     try {
-      // Run the cloud scan inline. Reuses the scheduled CloudSecurityScan Lambda
-      // implementation so admins can trigger a scan on demand without extra infrastructure.
-      await runCloudScan();
+      // The generated SST types learn this Linkable key on the next deploy.
+      const functionName = (Resource as unknown as { lambdaFunctionNames?: Record<string, string> }).lambdaFunctionNames
+        ?.cloudSecurityScan;
+      if (!functionName) throw new Error('Cloud security scan function is not configured');
 
-      // Re-fetch latest snapshot to fan out critical/high findings to SecOps Triage.
-      // runCloudScan() discards the snapshot it creates, so we must query for it.
-      // Low-probability race: if the scheduled scan completes between our runCloudScan() and
-      // this findLatest, we may publish its snapshot instead of ours. Duplicate triage issues
-      // are harmless - the worker deduplicates by fingerprint.
-      const snapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');
-      if (snapshot) {
-        const triageFindings = snapshot.findings.filter(
-          (f: ISecurityDashboardFinding) => f.severity === 'critical' || f.severity === 'high'
-        );
-        if (triageFindings.length > 0) {
-          try {
-            await sqsClient.send(
-              new SendMessageCommand({
-                QueueUrl: getSourceQueueUrl('secopsTriageQueue'),
-                MessageBody: JSON.stringify({
-                  stage,
-                  scanSource: 'cloud' as const,
-                  snapshotId: snapshot.id,
-                  targetUrl: 'aws:cloud-infrastructure',
-                  findings: triageFindings.map((f: ISecurityDashboardFinding) => ({
-                    id: f.id,
-                    title: f.title,
-                    severity: f.severity,
-                    description: f.description,
-                    recommendation: f.recommendation,
-                    documentationUrl: f.documentationUrl,
-                    instances: [],
-                  })),
-                }),
-              })
-            );
-            logger.info('SecOps Triage: published Cloud findings to SQS', {
-              stage,
-              findingCount: triageFindings.length,
-            });
-          } catch (err) {
-            logger.error('SecOps Triage: failed to publish Cloud findings to SQS (non-fatal)', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-      }
+      await lambdaClient.send(
+        new InvokeCommand({
+          FunctionName: functionName,
+          InvocationType: 'Event',
+          Payload: Buffer.from(JSON.stringify({ trigger: 'manual' })),
+        })
+      );
 
-      // Align response shape with other scan endpoints (web, code, packages, secrets),
-      // which all return { canRun: true, queued: true } on success.
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:cloud', displayName: 'cloud security scan' },
+        summary: 'triggered a manual cloud scan',
+        details: { scanType: 'cloud', stage },
+      });
+
       return res.status(202).json({ canRun: true, queued: true });
     } catch (error) {
       logger.error('Error running cloud security scan from API', {

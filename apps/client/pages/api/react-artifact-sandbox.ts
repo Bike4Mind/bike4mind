@@ -7,6 +7,7 @@ import {
   LUCIDE_WRAPPER_FN,
 } from '@client/app/utils/reactArtifactDeps';
 import { IMPORT_SCANNER_FACTORY_SRC } from '@client/app/utils/importStatements';
+import { ARTIFACT_MODULE_RUNTIME_FACTORY_SRC } from '@client/app/utils/reactArtifactModules';
 
 /**
  * GET /api/react-artifact-sandbox - iframe target for client-rendered REACT artifacts.
@@ -71,7 +72,8 @@ const BASE_SCRIPT_TAGS = BASE_SANDBOX_SCRIPTS.map(src => `<script src="${src}"><
  * content becomes the literal script source. The body avoids inner template literals to
  * keep the escaping tractable. The import scanner is the exception: it is the source text of
  * createImportScanner (b4m-core/utils/src/importStatements.ts), interpolated as a value, so it is NOT
- * backslash-doubled and is the same code the publish transpiler runs on the server.
+ * backslash-doubled and is the same code the publish transpiler runs on the server. The module
+ * runtime (createArtifactModuleRuntime in app/utils/reactArtifactModules.ts) is interpolated the same way.
  *
  * FOOTGUN: never write the literal sequence `</script>` anywhere in this template -
  * not even inside a JS comment or string. The HTML tokenizer is in script-data state for the
@@ -104,6 +106,9 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     var importScanner = null;
     var importScannerError = '';
     try { importScanner = (${IMPORT_SCANNER_FACTORY_SRC})(); } catch (e) { importScannerError = String((e && e.message) || e); }
+    var artifactModules = null;
+    var artifactModulesError = '';
+    try { artifactModules = (${ARTIFACT_MODULE_RUNTIME_FACTORY_SRC})(); } catch (e) { artifactModulesError = String((e && e.message) || e); }
   </script>
   <script>
     var ALLOWED = ${JSON.stringify(ALLOWED_DEPENDENCIES)};
@@ -254,58 +259,11 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     // Links a multi-file artifact at run time. The program from buildModuleProgram calls it by this
     // global name, so it is reached the same way from the eval-mode Function and the inert script.
     // files is [name, factory] pairs; each factory is a CommonJS (module, exports, require) wrapper.
+    // The linker itself is shared with published bundles (app/utils/reactArtifactModules.ts); names
+    // match with the scanner's normalizer, as the chat's grouping (reactArtifactGroup.ts) does.
     function runArtifactModules(requireExternal, files, entryFactory) {
-      // The scanner's normalizer, which the chat's artifact grouping (reactArtifactGroup.ts) also
-      // matches siblings with, so the two agree on which file an import names.
-      function moduleName(path) {
-        return importScanner.moduleBaseName(String(path));
-      }
-      var factories = Object.create(null);
-      var keysByName = Object.create(null);
-      var keys = [];
-      files.forEach(function (file) {
-        var name = moduleName(file[0]);
-        factories[file[0]] = file[1];
-        keys.push(file[0]);
-        (keysByName[name] = keysByName[name] || []).push(file[0]);
-      });
-
-      var cache = Object.create(null);
-      var annotated = null;
-      function load(key) {
-        // A module required again while still loading (a cycle) gets its partial exports, as in Node.
-        if (cache[key]) return cache[key].exports;
-        var module = cache[key] = { exports: {} };
-        try {
-          factories[key].call(module.exports, module, module.exports, require);
-        } catch (e) {
-          // Name the innermost failing file once; the loads above it rethrow the error untouched.
-          if (e && typeof e === 'object' && typeof e.message === 'string' && e !== annotated) {
-            e.message = key + ': ' + e.message;
-            annotated = e;
-          }
-          throw e;
-        }
-        return module.exports;
-      }
-      function require(specifier) {
-        if (!/^\\.\\.?\\//.test(specifier)) return requireExternal(specifier);
-        var name = moduleName(specifier);
-        var matches = keysByName[name];
-        if (!matches) {
-          throw new Error('Cannot resolve "' + specifier + '": no artifact file is named "' + name +
-            '". Available files: ' + (keys.length ? keys.join(', ') : 'none') + '.');
-        }
-        if (matches.length > 1) {
-          throw new Error('Cannot resolve "' + specifier + '": files ' + matches.join(', ') + ' all match "' + name +
-            '". Give each file a unique name (case and extension are ignored).');
-        }
-        return load(matches[0]);
-      }
-
-      var entry = { exports: {} };
-      entryFactory.call(entry.exports, entry, entry.exports, require);
-      return entry.exports.default;
+      if (!artifactModules) throw new Error('Module runtime failed to load: ' + artifactModulesError);
+      return artifactModules.run(function (path) { return importScanner.moduleBaseName(String(path)); }, requireExternal, files, entryFactory);
     }
 
     // Same presets as the single-file path plus real ESM-to-CommonJS module semantics.

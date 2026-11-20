@@ -36,7 +36,7 @@ const messages: IMessage[] = [
   { role: 'user', content: TURN_END },
 ];
 
-const capture = async (toolCallCount: number): Promise<Captured> => {
+const capture = async (toolCallCount: number, sent: IMessage[] = messages): Promise<Captured> => {
   const backend = new AnthropicBackend('test-key');
   const captured: Captured[] = [];
   (backend as unknown as { _api: unknown })._api = {
@@ -50,7 +50,7 @@ const capture = async (toolCallCount: number): Promise<Captured> => {
 
   await backend.complete(
     MODEL,
-    messages,
+    sent,
     { stream: false, tools: [], cacheStrategy: strategy, _internal: { toolCallCount } },
     async () => {}
   );
@@ -76,5 +76,30 @@ describe('AnthropicBackend history anchor on a tool round', () => {
 
     expect(marked(request, TURN_END)).toBe(true);
     expect(marked(request, HISTORY_ANCHOR)).toBe(true);
+  });
+
+  describe('with a lookback breakpoint flagged ahead of the history anchor', () => {
+    const LOOKBACK = 'older answer';
+    const withLookback: IMessage[] = [
+      { role: 'system', content: 'stable head' },
+      { role: 'user', content: 'older question' },
+      { role: 'assistant', content: LOOKBACK, cache: true },
+      ...messages.slice(1),
+    ];
+
+    it('keeps both flags on the first call', async () => {
+      const request = await capture(0, withLookback);
+
+      expect(marked(request, LOOKBACK)).toBe(true);
+      expect(marked(request, HISTORY_ANCHOR)).toBe(true);
+    });
+
+    it('drops the spent lookback flag on a later round, keeping the newest flag and the end anchor', async () => {
+      const request = await capture(1, withLookback);
+
+      expect(marked(request, LOOKBACK)).toBe(false);
+      expect(marked(request, HISTORY_ANCHOR)).toBe(true);
+      expect(marked(request, TURN_END)).toBe(true);
+    });
   });
 });

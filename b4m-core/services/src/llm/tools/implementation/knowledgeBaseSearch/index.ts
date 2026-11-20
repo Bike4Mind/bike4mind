@@ -1,4 +1,6 @@
+import { embeddingBackendForModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/utils/embeddingProviders';
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { resolveToolBillingOrganization } from '../../base/resolveToolBillingOrganization';
 import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
@@ -10,13 +12,7 @@ import {
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  createTokenizer,
-  getProviderFromModel,
-  getSettingsByNames,
-  resolveEmbeddingWithKeylessFallback,
-  type ITokenizer,
-} from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
@@ -329,7 +325,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   // resolves to Bedrock here rather than losing semantic search entirely. The RESOLVED model is
   // what goes downstream, so the query is embedded in the same space the corpus was written in.
   const { missing, model: resolvedEmbeddingModel } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
-  const provider = getProviderFromModel(resolvedEmbeddingModel);
+  const provider = embeddingBackendForModel(resolvedEmbeddingModel);
   if (missing) {
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
@@ -384,8 +380,17 @@ async function recordEmbeddingUsage(
         inputTokens: queryTokens,
         costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
         source: 'system',
+        apiKeyId: context.apiKeyId,
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          ...context.db.operationalBilling,
+        },
+        billingCheck: context.operationalBillingCheck,
+        logger: context.logger,
+      }
     );
   } catch (recordErr) {
     context.logger.warn(`📚 [semantic] failed to record embedding usage for ${embeddingModel}:`, recordErr);
@@ -412,10 +417,7 @@ async function recordAllEmbeddingUsage(
 ): Promise<void> {
   let organization: Awaited<ReturnType<NonNullable<ToolContext['db']['organizations']>['findById']>> | null = null;
   try {
-    organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
+    organization = await resolveToolBillingOrganization(context);
   } catch (orgErr) {
     context.logger.warn('📚 [semantic] failed to resolve organization for embedding usage recording:', orgErr);
     return;
@@ -426,7 +428,7 @@ async function recordAllEmbeddingUsage(
     // model, so this filter should never actually drop anything.
     ...alternateModelsEmbedded
       .filter(isSupportedEmbeddingModel)
-      .map(model => ({ model, provider: getProviderFromModel(model) })),
+      .map(model => ({ model, provider: embeddingBackendForModel(model) })),
   ];
   await Promise.all(
     models.map(({ model, provider }) => recordEmbeddingUsage(context, organization, query, model, provider))
@@ -1307,7 +1309,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const bounds: KbPassageBounds = { rawMaxResults: params.max_results, defaultResults: budgets.kbDefaultResults };
         const maxResults = clampMaxResults(params.max_results, budgets.kbDefaultResults);
 
-        context.logger.log('📚 Knowledge Base Search: userId:', context.userId, 'query:', query, 'tags:', tags);
+        context.logger.log('Knowledge Base Search', { userId: context.userId, queryLength: query?.length ?? 0, tags });
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Base Search: fabfiles repository not available');

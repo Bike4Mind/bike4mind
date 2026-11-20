@@ -7,7 +7,7 @@ import type { Model } from 'mongoose';
  * Mongo never applies a changed expireAfterSeconds to an existing index, and createIndexes with the
  * new value fails with IndexOptionsConflict, so an environment built with an older TTL keeps deleting
  * rows on the old schedule until the index is collMod-ed. collMod targets the key pattern rather than
- * the index name because prod runs DocumentDB.
+ * the index name because the name is not guaranteed.
  *
  * Idempotent: collMod runs only when the stored TTL differs, and createIndexes is a no-op for indexes
  * that already match. It also builds the declared indexes where the collection has none.

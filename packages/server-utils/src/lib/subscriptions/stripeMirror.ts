@@ -1,0 +1,119 @@
+import type Stripe from 'stripe';
+import type { ISubscription } from './types';
+
+export type SubscriptionStripeMirror = Required<
+  Pick<
+    ISubscription,
+    | 'unitAmount'
+    | 'currency'
+    | 'interval'
+    | 'intervalCount'
+    | 'cancelAtPeriodEnd'
+    | 'cancelAt'
+    | 'endedAt'
+    | 'trialEndsAt'
+    | 'stripeCustomerId'
+    | 'lastSyncedAt'
+  >
+>;
+
+/**
+ * The slice of a Stripe subscription the mirror reads. Structural rather than `Stripe.Subscription`
+ * so a caller holding another installed copy of `stripe` (packages/scripts resolves one against a
+ * different @types/node) can pass its own object.
+ */
+export type StripeSubscriptionMirrorSource = Pick<
+  Stripe.Subscription,
+  'currency' | 'cancel_at_period_end' | 'cancel_at' | 'trial_end'
+> & {
+  ended_at?: Stripe.Subscription['ended_at'];
+  customer: string | { id: string };
+  items: {
+    data: ReadonlyArray<{
+      price: Pick<Stripe.Price, 'unit_amount' | 'currency'> & {
+        currency_options?: { [currency: string]: { unit_amount: number | null } };
+        recurring: Pick<Stripe.Price.Recurring, 'interval' | 'interval_count'> | null;
+      };
+    }>;
+  };
+};
+
+type MirrorPrice = StripeSubscriptionMirrorSource['items']['data'][number]['price'];
+
+const fromUnix = (seconds: number | null): Date | null => (seconds ? new Date(seconds * 1000) : null);
+
+// A multi-currency price reports its default currency and amount; the subscription's currency is
+// what Stripe bills. currency_options is only on the object when the caller expanded it.
+const unitAmountIn = (price: MirrorPrice, currency: string): number | null =>
+  price.currency === currency ? price.unit_amount : (price.currency_options?.[currency]?.unit_amount ?? null);
+
+/**
+ * The Subscription mirror fields projected from a Stripe subscription. Every path that syncs a row
+ * from a Stripe subscription object spreads this in, so list rows, counts and MRR read from Mongo
+ * alone (see docs/admin-subscriptions-spec.md section 6.1). Those paths: the create and admin-grant
+ * flip in apps/workers/src/lib/userSubscriptions/serverUtils.ts, the customer.subscription.updated
+ * worker, the customer.subscription.deleted branch of pages/api/stripe/webhook.ts, and the backfill
+ * in packages/scripts. Writers holding no subscription object (markPastDue, setSeats) leave the
+ * mirror alone; the customer.subscription.updated that follows them re-syncs it.
+ *
+ * `syncedAt` defaults to now; pass the time of the Stripe read when the write may land later.
+ */
+export const stripeMirrorFields = (
+  subscription: StripeSubscriptionMirrorSource,
+  syncedAt: Date = new Date()
+): SubscriptionStripeMirror => {
+  // Our plans are single-item subscriptions; every write path reads the same first item.
+  const price = subscription.items.data[0]?.price;
+  return {
+    unitAmount: price ? unitAmountIn(price, subscription.currency) : null,
+    currency: subscription.currency,
+    interval: price?.recurring?.interval ?? null,
+    intervalCount: price?.recurring?.interval_count ?? null,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    cancelAt: fromUnix(subscription.cancel_at),
+    endedAt: fromUnix(subscription.ended_at ?? null),
+    trialEndsAt: fromUnix(subscription.trial_end),
+    stripeCustomerId: typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id,
+    lastSyncedAt: syncedAt,
+  };
+};
+
+/** What `stripeSubscriptionRowFields` reads on top of the mirror source. */
+export type StripeSubscriptionRowSource = StripeSubscriptionMirrorSource &
+  Pick<Stripe.Subscription, 'status' | 'canceled_at'> & {
+    items: {
+      data: ReadonlyArray<
+        StripeSubscriptionMirrorSource['items']['data'][number] &
+          Pick<Stripe.SubscriptionItem, 'current_period_start' | 'current_period_end' | 'quantity'> & {
+            price: Pick<Stripe.Price, 'id'>;
+          }
+      >;
+    };
+  };
+
+const unixDate = (seconds: number): Date => new Date(seconds * 1000);
+
+/**
+ * Every Subscription row field the Stripe-wins rule writes: the lifecycle fields plus the mirror.
+ * The customer.subscription.updated worker, Sync from Stripe and the nightly reconciliation compare
+ * all go through this, so what is compared and what is written cannot drift apart.
+ */
+export const stripeSubscriptionRowFields = (
+  subscription: StripeSubscriptionRowSource,
+  syncedAt: Date = new Date()
+): Pick<ISubscription, 'status' | 'periodStartsAt' | 'periodEndsAt' | 'canceledAt' | 'priceId' | 'quantity'> &
+  SubscriptionStripeMirror => {
+  const [item] = subscription.items.data;
+  return {
+    status: subscription.status,
+    periodStartsAt: unixDate(item.current_period_start),
+    periodEndsAt: unixDate(item.current_period_end),
+    canceledAt: subscription.canceled_at ? unixDate(subscription.canceled_at) : null,
+    priceId: item.price.id,
+    quantity: item.quantity ?? 1,
+    ...stripeMirrorFields(subscription, syncedAt),
+  };
+};
+
+/** Stripe statuses in which the subscription's quantity sets the organization's seat count. */
+export const SEAT_BILLING_STATUSES: ReadonlySet<string> = new Set(['active', 'trialing', 'past_due']);

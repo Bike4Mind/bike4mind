@@ -6,7 +6,7 @@ import path from 'node:path';
 /**
  * Guard tying the CDN CSP backstop's prefix list to the routes it is meant to cover.
  *
- * `userFileCdnPrefixes` in infra/router.ts drives which CloudFront responses get the inert
+ * `userFileCdnPrefixes` in infra/routerFunctionCode.ts drives which CloudFront responses get the inert
  * `default-src 'none'; sandbox` CSP + nosniff. If someone adds a user-file bucket route in
  * infra/buckets.ts (a `router.routeBucket(...)`) but forgets the matching prefix, that
  * prefix's files ship with NO CSP and NO nosniff - a silent security hole with nothing else
@@ -19,20 +19,20 @@ import path from 'node:path';
  * literal route strings is exactly the assertion wanted.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const ROUTER_TS = path.join(REPO_ROOT, 'infra', 'router.ts');
+const ROUTER_TS = path.join(REPO_ROOT, 'infra', 'routerFunctionCode.ts');
 const BUCKETS_TS = path.join(REPO_ROOT, 'infra', 'buckets.ts');
 const APP_FILE_PROXY_TS = path.join(REPO_ROOT, 'packages', 'server-utils', 'src', 'utils', 'appFileProxy.ts');
 
 // tavern-sounds / tavern-icons are registered by the tavern overlay in gitignored
 // infra/premium-generated (contributeTavernInfra), so their routeBucket calls are not in the
-// public tree. They are exempt from the buckets.ts <-> router.ts cross-check here; the CSP
+// public tree. They are exempt from the buckets.ts <-> routerFunctionCode.ts cross-check here; the CSP
 // list still carries them so the backstop covers them at runtime.
 const OVERLAY_ONLY_PREFIXES = new Set(['tavern-sounds', 'tavern-icons']);
 
-/** The names inside `userFileCdnPrefixes = [ '/generated/', ... ]` in infra/router.ts. */
+/** The names inside `userFileCdnPrefixes = [ '/generated/', ... ]` in infra/routerFunctionCode.ts. */
 function readCspPrefixes(contents: string): string[] {
   const block = /const userFileCdnPrefixes = \[([\s\S]*?)\]/.exec(contents);
-  if (!block) throw new Error('userFileCdnPrefixes array not found in infra/router.ts');
+  if (!block) throw new Error('userFileCdnPrefixes array not found in infra/routerFunctionCode.ts');
   return [...block[1].matchAll(/'\/([a-z0-9-]+)\/'/g)].map(m => m[1]);
 }
 

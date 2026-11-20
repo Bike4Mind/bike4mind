@@ -102,7 +102,9 @@
     "no_subscription": "Brak Subskrypcji",
     "x_members": "{{count}} członków",
     "x_credits": "{{count}} kredytów",
-    "owner": "Właściciel"
+    "roles": {
+      "owner": "Właściciel"
+    }
   },
   "session": {
     "typeYourMessage": "Wpisz tutaj swoją wiadomość",

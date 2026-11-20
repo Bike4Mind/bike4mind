@@ -7,14 +7,14 @@ describe('sharingService - refuseInvite (expiry)', () => {
   const inviteId = 'invite-1';
 
   let db: {
-    invites: { findByIdAndPendingEmail: Mock; update: Mock };
+    invites: { findByIdAndPendingEmail: Mock; refusePendingRecipient: Mock };
     users: { findById: Mock };
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     db = {
-      invites: { findByIdAndPendingEmail: vi.fn(), update: vi.fn() },
+      invites: { findByIdAndPendingEmail: vi.fn(), refusePendingRecipient: vi.fn() },
       users: { findById: vi.fn() },
     };
   });
@@ -31,7 +31,7 @@ describe('sharingService - refuseInvite (expiry)', () => {
     db.invites.findByIdAndPendingEmail.mockResolvedValue(makeInvite(new Date(Date.now() - 1000)));
 
     await expect(refuseInvite(userId, { id: inviteId }, { db } as any)).rejects.toThrow(UnprocessableEntityError);
-    expect(db.invites.update).not.toHaveBeenCalled();
+    expect(db.invites.refusePendingRecipient).not.toHaveBeenCalled();
   });
 
   it('allows redemption of an invite whose expiresAt is in the future', async () => {
@@ -40,10 +40,7 @@ describe('sharingService - refuseInvite (expiry)', () => {
 
     await refuseInvite(userId, { id: inviteId }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledTimes(1);
-    expect(db.invites.update.mock.calls[0]).toStrictEqual([
-      { id: inviteId, recipients: { pending: [], accepted: [], refused: ['me@example.com'] }, remaining: 0 },
-    ]);
+    expect(db.invites.refusePendingRecipient.mock.calls).toStrictEqual([[inviteId, 'me@example.com']]);
   });
 
   it('allows redemption of an invite with no expiresAt set', async () => {
@@ -52,9 +49,6 @@ describe('sharingService - refuseInvite (expiry)', () => {
 
     await refuseInvite(userId, { id: inviteId }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledTimes(1);
-    expect(db.invites.update.mock.calls[0]).toStrictEqual([
-      { id: inviteId, recipients: { pending: [], accepted: [], refused: ['me@example.com'] }, remaining: 0 },
-    ]);
+    expect(db.invites.refusePendingRecipient.mock.calls).toStrictEqual([[inviteId, 'me@example.com']]);
   });
 });
