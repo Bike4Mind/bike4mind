@@ -53,6 +53,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'young-account-spend-alert',
       'api-probe-detector',
       'loop-scheduler',
+      'cloud-security-scan',
       'image-moderation-review-sweep',
       'spend-monitor',
       'signup-grant-held-release',

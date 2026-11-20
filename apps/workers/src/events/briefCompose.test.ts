@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
     complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
+    loadInstructions: vi.fn().mockResolvedValue([]),
     push: vi.fn().mockResolvedValue(undefined),
     emails: {
       markBriefed: vi.fn().mockResolvedValue(0),

@@ -2,7 +2,7 @@ import { cacheRepository } from '@bike4mind/database';
 import { isExecutableUploadMimeType, stripImageUrlSignature, verifyImageUrlSignature } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { verificationKeys } from '@bike4mind/server-utils/security/signingKeys';
 import { BadRequestError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { isResponseTooLargeError, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
@@ -31,13 +31,14 @@ import { z } from 'zod';
  * steering the model into writing an attacker-controlled URL with exfiltrated conversation data in
  * the query string - which this route would then fetch server-side as a beacon. The signature is
  * applied to every image URL where it's first shown to the model (websearch/index.ts's `Images:`
- * lines), using the same SECRET_ENCRYPTION_KEY as ChatCompletionFeatures.telemetryHmacSecret, so
- * only a URL that genuinely came from a search result can verify here. `verifyImageUrlSignature`
- * itself refuses to pass on an unconfigured or placeholder secret, so a deploy that never set a
- * real SECRET_ENCRYPTION_KEY fails closed (every image "Image unavailable") rather than accepting
- * anything. The signature is stripped before the fetch (`stripImageUrlSignature`) so the upstream
- * host only ever sees the exact URL the search provider returned. The per-user minute cap below is
- * a second, independent bound against egress-amplification abuse of the vetted URLs themselves.
+ * lines) with `signingKey('search-image-url')`, so only a URL that genuinely came from a search
+ * result can verify here; the keys accepted come from `verificationKeys` in
+ * server-utils/src/security/signingKeys.ts. `verifyImageUrlSignature` itself refuses to pass on an
+ * unconfigured or placeholder secret, so a deploy with no usable key fails closed (every image
+ * "Image unavailable") rather than accepting anything. The signature is stripped before the fetch
+ * (`stripImageUrlSignature`) so the upstream host only ever sees the exact URL the search provider
+ * returned. The per-user minute cap below is a second, independent bound against
+ * egress-amplification abuse of the vetted URLs themselves.
  */
 
 const SearchImageQuery = z.object({
@@ -58,7 +59,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     const { url: rawUrl } = SearchImageQuery.parse(req.query);
     const brand = process.env.APP_NAME || '';
 
-    if (!verifyImageUrlSignature(rawUrl, Config.SECRET_ENCRYPTION_KEY || '')) {
+    if (!verificationKeys('search-image-url').some(key => verifyImageUrlSignature(rawUrl, key))) {
       // No host/reason in the log: an unsigned or tampered URL is exactly the shape a scripted
       // probe would send, and this is reachable by every signed-in user.
       req.logger.warn('Rejected unsigned image URL on /api/search-image');

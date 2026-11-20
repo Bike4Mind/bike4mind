@@ -887,6 +887,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   broker(
+    'queue:infra/cloudScanDeadLetter.ts:cloudSecurityScanDlq',
+    'ebb4d665a7729e8eeb32f3e0230f05cdc2ed1a459808e761e14f28e85502fa83'
+  ),
+  broker(
     'queue:infra/apiProbeDetectorDeadLetter.ts:apiProbeDetectorDlq',
     'f353ac779308cb585b976a6bd5e80854661ced29c7569618b666faf1fb7e6d61'
   ),
@@ -946,7 +950,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:CloudSecurityScan',
-    '75ebb60c42949289eaa820ed09809f498c8859e5b8b0f7035e463913926d561d',
+    '4f2fd97b93060d4477a8e915dc58c8f4f98695c0fc12ee678afa94122657ef55',
     'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
   gap(
@@ -1212,7 +1216,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '87cbbe64ecdd8ba1d6b00c65fbc8d6fe4180ab6f6b8e23a62ccfcbacf86830d8',
+    '92dbb8fc2da886f9e5e147874c425240cc5d249cfb1ef9602c1129c18545b1cd',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
@@ -1309,7 +1313,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'cf34cc039fc0de71bf1daaabf43f40deef92126f55e00be9c3025645c1769cfb',
+    '03ea3a753a40eb0669d287e5931cd473a30731210cf559bc162837bafcf094bb',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

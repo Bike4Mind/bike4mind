@@ -102,6 +102,7 @@ import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSwe
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriagePermissions } from './dlqTriagePermissions';
 import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -755,6 +756,13 @@ if (isMonitoredStage) {
       queue: organizationRetentionDeadLetter.queue,
     });
   }
+
+  createDlqAlarms({
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    queue: cloudSecurityScanDeadLetter.queue,
+  });
 
   // S3 invokes the Lambda directly; the registry exposes this DLQ without a replay destination.
   createDlqAlarms({
