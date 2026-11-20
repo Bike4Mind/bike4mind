@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SERVER_UNREACHABLE_STOP, type ChatAutomaticOrigin, type ChatStreamEvent } from '@shared/chat';
 import type { LocalLoop, LocalRun } from '@shared/localLoops';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type { GhRunner } from '../../pr/gh';
 import { REF, snapshot } from '../../pr/prTestSupport';
 import type { MachineSample } from '../budget';
+import type { LoopMergeGithub } from '../session';
 import { LocalLoopScheduler, SCHEDULER_MS } from './LocalLoopScheduler';
 import { LocalLoopStore } from './LocalLoopStore';
 import { testLoop } from './testLoop';
@@ -66,12 +68,8 @@ describe('LocalLoopScheduler', () => {
   let otherLanes: number;
   let cloudSpent: number;
   let alerts: string[];
-  let gh: ReturnType<typeof vi.fn<(args: string[]) => Promise<string>>>;
-  let github: {
-    snapshot: ReturnType<typeof vi.fn>;
-    merge: ReturnType<typeof vi.fn>;
-    enqueue: ReturnType<typeof vi.fn>;
-  };
+  let gh: Mock<GhRunner>;
+  let github: { [K in keyof LoopMergeGithub]: Mock<LoopMergeGithub[K]> };
   const blocker = { start: vi.fn(() => 7), stop: vi.fn() };
 
   const make = (loop: Partial<LocalLoop> = {}) => store.putLoop(testLoop(loop));
@@ -102,8 +100,12 @@ describe('LocalLoopScheduler', () => {
     alerts = [];
     blocker.start.mockClear();
     blocker.stop.mockClear();
-    gh = vi.fn<(args: string[]) => Promise<string>>();
-    github = { snapshot: vi.fn(), merge: vi.fn(), enqueue: vi.fn() };
+    gh = vi.fn<GhRunner>();
+    github = {
+      snapshot: vi.fn<LoopMergeGithub['snapshot']>(),
+      merge: vi.fn<LoopMergeGithub['merge']>(),
+      enqueue: vi.fn<LoopMergeGithub['enqueue']>(),
+    };
     scheduler = new LocalLoopScheduler({
       store,
       chat,
