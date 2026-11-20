@@ -142,6 +142,7 @@ struct RootView: View {
     services.accountStatus.reset()
     // The profile belongs to the account that fetched it; the next sign-in must not see it.
     services.accountProfiles.invalidate()
+    services.transcriptCache.invalidate()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }

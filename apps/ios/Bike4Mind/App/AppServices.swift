@@ -16,6 +16,7 @@ final class AppServices {
     let api: APIClient
     let realtime: WSClient
     let cache: FileSessionListCache
+    let transcriptCache: SettledTranscriptCache
     let media: MediaClient
     let studio: StudioClient
     let capture: CaptureStack
@@ -202,6 +203,7 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var transcriptCache: SettledTranscriptCache { current.transcriptCache }
   var sessionHandoff: SessionHandoffClient {
     SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
   }
@@ -334,6 +336,7 @@ final class AppServices {
         handshake: RealtimeHandshake(baseURL: environment.baseURL, tokens: auth),
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
+      transcriptCache: SettledTranscriptCache(),
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
       capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
