@@ -922,13 +922,46 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
     });
 
-    it('labels hits whose search link could not be resolved', () => {
+    it('labels hits whose search link could not be resolved as skipped', () => {
       renderPanel({
         runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4, unresolvedRedirect: 3, proposed: 1 } })],
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(
-        /3 search link could not be resolved/
+        /3 search link never revealed its site \(skipped; usually clears on the next run\)/
       );
+    });
+
+    it('labels the two source-rule drops apart on a run that stored both', () => {
+      renderPanel({
+        runs: [
+          run({ totals: { ...emptyResearchRunTotals(), searchHits: 6, filteredBySource: 2, unlistedDropped: 4 } }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/2 on your Never these sites list/);
+      expect(summary).toMatch(/4 from sites not on your lists \(Other sites: Ignore\)/);
+    });
+
+    it('keeps the combined label for a run stored before the split', () => {
+      const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+      renderPanel({
+        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } as never })],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/6 blocked by your site lists/);
+      expect(summary).not.toMatch(/Never these sites/);
+    });
+
+    it('does not report a judge when a run only dropped hits by source', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 4, unlistedDropped: 4 },
+          }),
+        ],
+      });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
     });
 
     it('names the model that judged a run', () => {

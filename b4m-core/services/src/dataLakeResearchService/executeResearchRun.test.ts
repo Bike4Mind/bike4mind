@@ -174,7 +174,7 @@ describe('executeResearchRun', () => {
       expect(result.totals.proposed).toBe(1);
     });
 
-    it('counts a flagged unlisted hit as an unresolved redirect, not a source-rule drop', async () => {
+    it('counts a flagged hit as an unresolved redirect and an unlisted drop apart under drop', async () => {
       const { ports, calls } = makePorts({
         candidates: [
           { ...hit(1, 'www.google.com'), unresolvedRedirect: true },
@@ -191,7 +191,36 @@ describe('executeResearchRun', () => {
 
       expect(calls.judged).toEqual(['https://docs.example.com/3']);
       expect(result.totals.unresolvedRedirect).toBe(1);
-      expect(result.totals.filteredBySource).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
+      expect(result.totals.filteredBySource).toBe(0);
+    });
+
+    it('skips a flagged hit under review without judging, fetching or proposing it', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [{ ...hit(1, 'www.google.com'), unresolvedRedirect: true }, hit(2, 'docs.example.com')],
+      });
+
+      const result = await executeResearchRun(levers({ unlistedSources: 'review' }), 'run-1', ports);
+
+      expect(calls.judged).toEqual(['https://docs.example.com/2']);
+      expect(calls.fetched).toEqual(['https://docs.example.com/2']);
+      expect(calls.proposals.map(p => p.sourceUrl)).toEqual(['https://docs.example.com/2']);
+      expect(result.totals).toMatchObject({ searchHits: 2, unresolvedRedirect: 1, proposed: 1 });
+    });
+
+    it('counts a never-list hit and an unlisted-drop hit in separate buckets', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [hit(1, 'spam.net'), hit(2, 'other.com'), hit(3, 'docs.example.com')],
+      });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(calls.judged).toEqual(['https://docs.example.com/3']);
+      expect(result.totals).toMatchObject({ filteredBySource: 1, unlistedDropped: 1, unresolvedRedirect: 0 });
     });
 
     it('drops everything outside the review list when other sites are ignored', async () => {
@@ -204,7 +233,8 @@ describe('executeResearchRun', () => {
       );
 
       expect(calls.judged).toEqual(['https://docs.example.com/2']);
-      expect(result.totals.filteredBySource).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
+      expect(result.totals.filteredBySource).toBe(0);
     });
 
     it('upgrades a legacy-shaped snapshot, so a stored allow list still restricts the run', async () => {
@@ -217,7 +247,7 @@ describe('executeResearchRun', () => {
       const result = await executeResearchRun(legacy, 'run-1', ports);
 
       expect(calls.judged).toEqual(['https://docs.example.com/2']);
-      expect(result.totals.filteredBySource).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
     });
 
     it('passes the source tier of each proposed candidate to propose', async () => {
@@ -307,29 +337,31 @@ describe('executeResearchRun', () => {
       expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
     });
 
-    it('sweeps unreached candidates into unresolvedRedirect and filteredBySource apart', async () => {
+    it('sweeps unreached candidates into unresolvedRedirect, filteredBySource and unlistedDropped apart', async () => {
       const candidates = [
         hit(1),
         hit(2),
         hit(3),
         { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
         hit(5, 'other.com'),
-        hit(6),
+        hit(6, 'spam.net'),
+        hit(7),
       ];
       const { ports } = makePorts({ candidates, judge: vi.fn(async () => failing) });
 
       const result = await executeResearchRun(
-        levers({ reviewDomains: ['example.com'], unlistedSources: 'drop' }),
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
         'run-1',
         ports
       );
 
       expect(result.stopReason).toBe('judge_unavailable');
       expect(result.totals).toMatchObject({
-        searchHits: 6,
+        searchHits: 7,
         judgeFailed: 3,
         unresolvedRedirect: 1,
         filteredBySource: 1,
+        unlistedDropped: 1,
         notJudged: 1,
       });
       expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
@@ -397,6 +429,69 @@ describe('executeResearchRun', () => {
   });
 
   // Rule 4: only a card that actually reached a reviewer counts against the limit.
+  describe('bucket accounting', () => {
+    const OUTCOME_BUCKETS = [
+      'filteredBySource',
+      'unlistedDropped',
+      'unresolvedRedirect',
+      'belowRelevance',
+      'judgeFailed',
+      'fetchFailed',
+      'proposed',
+      'duplicatePending',
+      'alreadyInLake',
+      'suppressedByTombstone',
+      'unusableSource',
+      'notJudged',
+      'blockedByRule',
+    ] as const;
+    const outcomeSum = (totals: Record<string, number>) =>
+      OUTCOME_BUCKETS.reduce((sum, key) => sum + (totals[key] ?? 0), 0);
+
+    it('sums its outcome buckets to searchHits when the run is exhausted', async () => {
+      const candidates = [
+        hit(1),
+        hit(2, 'spam.net'),
+        hit(3, 'other.com'),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'docs.example.com'),
+      ];
+      const { ports } = makePorts({ candidates });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('exhausted');
+      expect(outcomeSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
+    it('sums its outcome buckets to searchHits when the judge is unavailable', async () => {
+      const failing = { outcome: 'failed', error: 'model access denied', costMicroUsd: 0 } as const;
+      const candidates = [
+        hit(1),
+        hit(2),
+        hit(3),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'other.com'),
+        hit(6, 'spam.net'),
+        hit(7),
+      ];
+      const { ports } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(outcomeSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+  });
+
   describe('rule 4 - the proposal limit', () => {
     it('stops at exactly maxProposals', async () => {
       const { ports, calls } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4)] });
