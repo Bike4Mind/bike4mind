@@ -8,6 +8,7 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSe
       request: vi.fn(),
       pulls: {
         get: vi.fn(),
+        list: vi.fn(),
       },
       issues: {
         create: vi.fn(),
@@ -772,6 +773,30 @@ describe('GitHubService', () => {
         expect(mockOctokit.issues.listForRepo).toHaveBeenCalledWith(
           expect.objectContaining({ owner: 'owner', repo: 'repo', state: 'all', labels: 'a,b', page: 2 })
         );
+      });
+    });
+
+    describe('listIssues author', () => {
+      it('maps the issue author, or null when absent', async () => {
+        const issue = (number: number, user: unknown) => ({
+          number,
+          title: `Issue ${number}`,
+          body: null,
+          state: 'open',
+          html_url: `https://github.com/owner/repo/issues/${number}`,
+          labels: [],
+          assignees: [],
+          user,
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        });
+        mockOctokit.issues.listForRepo.mockResolvedValue({
+          data: [issue(1, { login: 'author', id: 5 }), issue(2, null)],
+        });
+
+        const result = await service.listIssues('owner/repo');
+
+        expect(result.map(i => i.user)).toEqual([{ login: 'author' }, null]);
       });
     });
 
@@ -1730,6 +1755,47 @@ describe('GitHubService', () => {
         await service.searchIssuesAndPulls(['owner/repo'], 'bug org:evil repo:evil/x user:evil is:open');
 
         expect(mockOctokit.search.issuesAndPullRequests.mock.calls[0][0].q).toBe('repo:owner/repo bug    is:open');
+      });
+    });
+
+    describe('listMergedPullRequests', () => {
+      const pr = (number: number, merged_at: string | null) => ({
+        number,
+        title: `PR ${number}`,
+        body: null,
+        state: 'closed',
+        html_url: `https://h/${number}`,
+        merged_at,
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        user: { login: 'author' },
+        labels: [],
+      });
+
+      it('omits base when none is given and still filters by since', async () => {
+        mockOctokit.paginate.mockResolvedValue([
+          pr(1, '2024-02-01T00:00:00Z'),
+          pr(2, '2023-12-01T00:00:00Z'),
+          pr(3, null),
+        ]);
+
+        const result = await service.listMergedPullRequests('owner/repo', { since: new Date('2024-01-15T00:00:00Z') });
+
+        expect(result.map(p => p.number)).toEqual([1]);
+        const params = mockOctokit.paginate.mock.calls[0][1] as Record<string, unknown>;
+        expect(params).toMatchObject({ owner: 'owner', repo: 'repo', state: 'closed' });
+        expect(params).not.toHaveProperty('base');
+      });
+
+      it('passes base when given', async () => {
+        mockOctokit.paginate.mockResolvedValue([]);
+
+        await service.listMergedPullRequests('owner/repo', { base: 'main', since: new Date('2024-01-15T00:00:00Z') });
+
+        expect(mockOctokit.paginate).toHaveBeenCalledWith(
+          mockOctokit.pulls.list,
+          expect.objectContaining({ base: 'main' })
+        );
       });
     });
 
