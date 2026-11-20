@@ -204,7 +204,8 @@ final class AccountProfileStoreTests: XCTestCase {
     session.scope = nil
     await store.refresh()
 
-    XCTAssertEqual(store.profile(in: production), alex, "a transient failure to resolve the user must not blank the profile")
+    XCTAssertEqual(
+      store.profile(in: production), alex, "a transient failure to resolve the user must not blank the profile")
     store.invalidate()
     XCTAssertNil(store.profile(in: production))
   }
@@ -215,7 +216,11 @@ final class AccountProfileStoreTests: XCTestCase {
     let store = makeStore(session: Session(scope("u1")), recorder: recorder)
 
     let fired = Flag()
-    withObservationTracking { _ = store.profile(in: production) } onChange: { fired.raise() }
+    withObservationTracking {
+      _ = store.profile(in: production)
+    } onChange: {
+      fired.raise()
+    }
     await store.refresh()
 
     XCTAssertTrue(fired.value, "a view that rendered nil must redraw once the profile is stored")
