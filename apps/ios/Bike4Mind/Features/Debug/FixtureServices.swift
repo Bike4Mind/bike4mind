@@ -25,6 +25,7 @@
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
+    static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -96,6 +97,27 @@
           return Self.stuck
         default: return Self.brief
         }
+      }
+    }
+
+    /// One saved instruction, kept in memory for the session.
+    private actor FixtureInstructionAPI: InstructionAPI {
+      private var instructions = [
+        AssistantInstruction(
+          id: "fixture-instruction-1", text: "Always lead with anything about invoices.", createdAt: Date())
+      ]
+
+      func list() async throws -> [AssistantInstruction] { instructions }
+
+      func add(text: String) async throws -> AssistantInstruction {
+        guard instructions.count < AssistantInstruction.maxCount else { throw InstructionError.limitReached }
+        let instruction = AssistantInstruction(id: UUID().uuidString, text: text, createdAt: Date())
+        instructions.append(instruction)
+        return instruction
+      }
+
+      func remove(id: String) async throws {
+        instructions.removeAll { $0.id == id }
       }
     }
 

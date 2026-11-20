@@ -98,6 +98,8 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
             </Typography>
           </Stack>
           <Switch
+            data-testid="org-alerts-enable-switch-root"
+            sx={{ flexShrink: 0 }}
             checked={enabled}
             onChange={e => editDraft(() => setEnabled(e.target.checked))}
             disabled={locked}

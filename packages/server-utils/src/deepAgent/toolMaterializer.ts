@@ -51,6 +51,7 @@ import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
 import { buildAudioToolJobs } from '../generationJobs/audioJobWiring';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
+import { signingKey } from '../security/signingKeys';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
 import { resolveRequestBillingOrgId } from '../billing/resolveRequestBillingOrgId';
@@ -281,7 +282,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         enabledTools: enabledToolNames,
         config: {
           deep_research: true,
-          web_search: { imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value },
+          web_search: { imageUrlSigningSecret: signingKey('search-image-url') },
           audio_generation: { jobs: buildAudioToolJobs() },
         },
         toolAvailability,

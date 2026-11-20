@@ -2,6 +2,7 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const ACCOUNT_TRUST_REQUIRED_ERROR_CODE = 'account_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
+export const INSTRUCTION_LIMIT_REACHED_ERROR_CODE = 'instruction_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const FREE_QUEST_LIMIT_REACHED_ERROR_CODE = 'free_quest_limit_reached';
@@ -54,6 +55,8 @@ export const API_ERROR_CODES = [
   SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  /** The user keeps as many standing assistant instructions as allowed; remediation is removing one. */
+  INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
