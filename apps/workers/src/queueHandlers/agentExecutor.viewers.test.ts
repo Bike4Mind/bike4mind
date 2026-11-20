@@ -137,6 +137,17 @@ describe('createWsSender with viewers', () => {
     expect(targetsOf()).toEqual(['conn-1', 'viewer-1', 'viewer-2']);
   });
 
+  it('reuses an empty viewer list for every frame for a while', async () => {
+    findViewers.mockResolvedValue([]);
+    const { createWsSender } = await import('./agentExecutor');
+    const send = createWsSender('conn-1', logger as never, 'exec1');
+    await send('iteration_step', {});
+    await send('iteration_step', {});
+    await send('status', {});
+    expect(findViewers).toHaveBeenCalledTimes(1);
+    expect(targetsOf()).toEqual(['conn-1', 'conn-1', 'conn-1']);
+  });
+
   it('never reads viewers without a viewer execution id', async () => {
     const { createWsSender } = await import('./agentExecutor');
     await createWsSender('conn-1', logger as never)('iteration_step', {});

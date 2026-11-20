@@ -424,6 +424,9 @@ const sqsClient = new SQSClient({});
  * (steps, status changes) re-reads the list so a new viewer never misses one. */
 const VIEWER_CACHE_MS = 2_000;
 const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
+/** How long an empty viewer list is reused for every frame (ms): most runs have no viewer, so each frame would
+ * otherwise read the list. A viewer subscribing meanwhile gets its snapshot and misses at most this much. */
+const NO_VIEWERS_CACHE_MS = 10_000;
 
 /**
  * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
@@ -476,7 +479,13 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
 
   const viewerTargets = async (action: string): Promise<string[]> => {
     if (!viewerExecutionId) return [];
-    if (!VIEWER_CACHED_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
+    const age = Date.now() - viewers.at;
+    const cached =
+      viewers.at > 0 &&
+      (viewers.ids.length === 0
+        ? age <= NO_VIEWERS_CACHE_MS
+        : VIEWER_CACHED_ACTIONS.has(action) && age <= VIEWER_CACHE_MS);
+    if (!cached) {
       // Single-flight: frames emitted in the same tick share one read and keep their emit order.
       // A step joining a read already in flight can miss a viewer added meanwhile; the client's
       // gap re-subscribe repairs that.
@@ -4412,6 +4421,19 @@ async function chargeSubagentTokens(
   }
 }
 
+const ROOT_EXECUTION_IDS_CACHED = 1_000;
+const rootExecutionIds = new Map<string, string>();
+/** A child's top-level run, which never changes: walked once per child per warm container, not per invocation. */
+async function rootExecutionIdOf(childExecutionId: string): Promise<string> {
+  const known = rootExecutionIds.get(childExecutionId);
+  if (known) return known;
+  const root = await agentExecutionRepository.findRootExecutionId(childExecutionId);
+  const oldest = rootExecutionIds.keys().next().value;
+  if (oldest !== undefined && rootExecutionIds.size >= ROOT_EXECUTION_IDS_CACHED) rootExecutionIds.delete(oldest);
+  rootExecutionIds.set(childExecutionId, root);
+  return root;
+}
+
 /**
  * Runs a subagent that was dispatched to its own Lambda (either via `background: true`
  * or via the parent's mid-poll handoff when running out of time). The child doc
@@ -4451,7 +4473,7 @@ async function processSubagentDispatch(
 ): Promise<void> {
   logger.updateMetadata({ executionId: childExecutionId, role: 'subagent_dispatch' });
   // Viewers subscribe to the top-level run, so child frames fan out to the root's viewers.
-  const rootExecutionId = await agentExecutionRepository.findRootExecutionId(childExecutionId).catch(() => undefined);
+  const rootExecutionId = await rootExecutionIdOf(childExecutionId).catch(() => undefined);
   const sendWs = createWsSender(connectionId, logger, rootExecutionId);
 
   let parentId: string | undefined;
