@@ -132,6 +132,15 @@ describe('ProfileScreen local usage', () => {
     );
   });
 
+  it('gives a reason for an error with an empty or blank message', async () => {
+    for (const message of ['', '   ']) {
+      const { find } = await render(() => Promise.reject(new Error(message)));
+      expect(find('profile-local-error')?.textContent).toBe(
+        'Could not read local model usage: the request to the app failed'
+      );
+    }
+  });
+
   it('drops the previous account figures when the account changes', async () => {
     let answer: (result: LocalUsageResult) => void = () => {};
     const { find, show } = await render(async () => ({ ok: true, usage: localUsageFixture({ replies: 2 }) }));

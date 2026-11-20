@@ -151,6 +151,25 @@ describe('LocalUsageService', () => {
     });
   });
 
+  it('leaves the colon off when a failure carries no reason', async () => {
+    for (const message of ['', '  ']) {
+      const { service: usage } = service({ scan: vi.fn().mockRejectedValue(new Error(message)) });
+      expect(await usage.usage('last-24-hours')).toEqual({ ok: false, error: 'Could not read local model usage' });
+    }
+    const { service: reasoned } = service({ scan: vi.fn().mockRejectedValue(new Error(' disk full ')) });
+    expect(await reasoned.usage('last-24-hours')).toEqual({
+      ok: false,
+      error: 'Could not read local model usage: disk full',
+    });
+  });
+
+  it('asks the scan for a fresh read only when forced', async () => {
+    const { service: usage, buckets } = service();
+    await usage.usage('last-24-hours');
+    await usage.usage('last-24-hours', true);
+    expect(buckets.mock.calls).toEqual([[false], [true]]);
+  });
+
   it('says which kind of scope the figures came from', async () => {
     const scan = vi.fn(async () => ({ scope: 'account' as const, buckets: [bucket(1)] }));
     const { service: usage } = service({ scan });

@@ -4,7 +4,7 @@ const ESTIMATES: ReadonlySet<string> = new Set<ChatReplyStatsEstimate>(['reasoni
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
-const OPTIONAL_MS = [
+const OPTIONAL_NUMBERS = [
   'loadMs',
   'firstTokenLoadMs',
   'outputMs',
@@ -23,7 +23,7 @@ export function readReplyStats(value: unknown): ChatReplyStats | undefined {
   const { totalMs, modelMs, toolMs } = raw;
   if (!finite(totalMs) || !finite(modelMs) || !finite(toolMs)) return undefined;
   const stats: ChatReplyStats = { totalMs, modelMs, toolMs };
-  for (const key of OPTIONAL_MS) {
+  for (const key of OPTIONAL_NUMBERS) {
     const field = raw[key];
     if (finite(field)) stats[key] = field;
   }

@@ -149,6 +149,33 @@ describe('SessionStore.localUsage', () => {
     expect(reads.paths).toHaveLength(10);
   });
 
+  it('waits out a running scan on a fresh read, then counts what was saved meanwhile', async () => {
+    for (let index = 0; index < 10; index++) await writeSession(root, `s${index}`, [reply(10)]);
+    reads.delayMs = 10;
+    const store = new SessionStore(root, 'hosted-model');
+
+    const running = store.localUsage();
+    await new Promise(resolve => setTimeout(resolve, 15));
+    await writeSession(root, 'late', [reply(7)]);
+    const [joined, fresh] = await Promise.all([running, store.localUsage(true)]);
+
+    expect(outputOf(joined)).toBe(100);
+    expect(outputOf(fresh)).toBe(107);
+  });
+
+  it('lets overlapping fresh reads share the one scan that starts after them', async () => {
+    for (let index = 0; index < 5; index++) await writeSession(root, `s${index}`, [reply(10)]);
+    reads.delayMs = 10;
+    const store = new SessionStore(root, 'hosted-model');
+
+    const running = store.localUsage();
+    const [, first, second] = await Promise.all([running, store.localUsage(true), store.localUsage(true)]);
+
+    expect(outputOf(first)).toBe(50);
+    expect(outputOf(second)).toBe(50);
+    expect(reads.paths).toHaveLength(5);
+  });
+
   it('counts only the current scope, and says which kind it is', async () => {
     let current: SessionScope | null = {
       environmentUrl: 'b4m-device-local://offline',

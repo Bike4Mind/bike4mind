@@ -39,7 +39,7 @@ export function registerLocalUsage(
 ): LocalUsageService {
   const service = new LocalUsageService({
     logger: createMainLogger(VERBOSE),
-    scan: () => store.localUsage(),
+    scan: force => store.localUsage(force),
     scopeKey: () => {
       const scope = sessionScopeForChat(auth.getState());
       return scope ? sessionScopeKey(scope) : null;

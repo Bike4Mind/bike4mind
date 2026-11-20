@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { LocalUsageResult, UsageWindowId } from '@shared/usage';
-
-const LEAD_IN = 'Could not read local model usage';
+import { localUsageReadFailed, type LocalUsageResult, type UsageWindowId } from '@shared/usage';
 
 /**
  * One window of local model usage. Mounting and a new `reload` read past main's cache; an answer
@@ -19,7 +17,9 @@ export function useLocalUsage(windowId: UsageWindowId, reload: number, scopeKey:
       .getLocal(windowId, force)
       .catch((err: unknown): LocalUsageResult => ({
         ok: false,
-        error: `${LEAD_IN}: ${err instanceof Error && err.message ? err.message : 'the request to the app failed'}`,
+        error: localUsageReadFailed(
+          err instanceof Error && err.message.trim() ? err.message : 'the request to the app failed'
+        ),
       }))
       .then(result => {
         if (current) setAnswer({ scopeKey, result });

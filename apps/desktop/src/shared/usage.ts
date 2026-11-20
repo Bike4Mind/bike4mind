@@ -131,4 +131,11 @@ export interface LocalUsage {
 
 export type LocalUsageScope = 'device' | 'account' | 'none';
 
+/** The message of a failed local read; the reason follows the lead-in when there is one. */
+export function localUsageReadFailed(reason: string): string {
+  const lead = 'Could not read local model usage';
+  const detail = reason.trim();
+  return detail ? `${lead}: ${detail}` : lead;
+}
+
 export type LocalUsageResult = { ok: true; usage: LocalUsage } | { ok: false; error: string };

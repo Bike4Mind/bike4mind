@@ -1,4 +1,4 @@
-import type { LocalUsageResult, LocalUsageScope, UsageWindowId } from '@shared/usage';
+import { localUsageReadFailed, type LocalUsageResult, type LocalUsageScope, type UsageWindowId } from '@shared/usage';
 import { localUsageWindow, type LocalUsageBucket } from './localUsage';
 
 /** The renderer names the window, so it is checked; UsageService has the same guard but also an API client. */
@@ -9,16 +9,13 @@ function isUsageWindow(value: unknown): value is UsageWindowId {
 /** The scan is held briefly so flipping between the two windows does not re-stat every transcript. */
 const CACHE_TTL_MS = 15_000;
 
-/** The lead-in of a failed read's message; the reason follows it. */
-export const READ_FAILED = 'Could not read local model usage';
-
 type Scanned = Awaited<ReturnType<LocalUsageServiceDeps['scan']>>;
 type ScanOutcome = { ok: true; scanned: Scanned } | { ok: false; error: string };
 
 export interface LocalUsageServiceDeps {
   logger: { warn(message: string): void };
   /** Every session's buckets in the current scope, and its kind; see SessionStore.localUsage. */
-  scan(): Promise<{ scope: LocalUsageScope; account?: string; buckets: LocalUsageBucket[] }>;
+  scan(force: boolean): Promise<{ scope: LocalUsageScope; account?: string; buckets: LocalUsageBucket[] }>;
   /** The conversation scope reads come from, so a cached answer never crosses a sign-in or sign-out. */
   scopeKey(): string | null;
   /** Saved model servers' names by id, read from this device's own settings. */
@@ -47,13 +44,13 @@ export class LocalUsageService {
     const existing = this.scanning.get(key);
     if (!force && existing) return existing;
 
-    const pending: Promise<{ at: number; outcome: ScanOutcome }> = (async () => this.deps.scan())()
+    const pending: Promise<{ at: number; outcome: ScanOutcome }> = (async () => this.deps.scan(force))()
       .then(
         (scanned): ScanOutcome => ({ ok: true, scanned }),
         (err): ScanOutcome => {
           const reason = err instanceof Error ? err.message : String(err);
           this.deps.logger.warn(`USAGE: local usage read failed: ${reason}`);
-          return { ok: false, error: `${READ_FAILED}: ${reason}` };
+          return { ok: false, error: localUsageReadFailed(reason) };
         }
       )
       .then(outcome => {

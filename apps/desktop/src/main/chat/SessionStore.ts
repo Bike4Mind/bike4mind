@@ -871,7 +871,7 @@ export class SessionStore implements SessionWritesStore {
    * Usage buckets for every session in the current scope, and its kind. Only transcripts whose size
    * or mtime moved are parsed, each reduced to buckets at once so a first build stays small.
    */
-  async localUsage(): Promise<LocalUsageScan> {
+  async localUsage(fresh = false): Promise<LocalUsageScan> {
     const current = this.scope?.();
     const account = current && !current.local ? `${current.environmentUrl}\n${current.accountId}` : undefined;
     const directory = await this.directoryFor(true);
@@ -880,6 +880,11 @@ export class SessionStore implements SessionWritesStore {
 
     // One scan per folder at a time: two overlapping ones would each prune what the other just indexed.
     let scanning = this.localUsageScans.get(directory);
+    if (fresh && scanning) {
+      // A running scan may already have passed files saved since; wait it out, then join whatever started after.
+      await scanning.catch(() => undefined);
+      scanning = this.localUsageScans.get(directory);
+    }
     if (!scanning) {
       scanning = this.scanLocalUsage(directory).finally(() => this.localUsageScans.delete(directory));
       this.localUsageScans.set(directory, scanning);
