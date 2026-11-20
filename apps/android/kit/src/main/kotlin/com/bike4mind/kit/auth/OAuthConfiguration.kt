@@ -1,12 +1,22 @@
 package com.bike4mind.kit.auth
 
 import com.bike4mind.kit.environment.ServerEnvironment
+import java.net.URI
 
 /**
  * The OAuth client this build signs in as. Each (clientId, redirectUri) pair must match a registered OAuth
  * client row on the server exactly (apps/client/pages/api/oauth/token.ts `validateClient`).
  */
 data class OAuthConfiguration(val clientId: String, val redirectUri: String, val scope: String = "openid email profile") {
+    /** Whether [uri] targets [redirectUri]: same scheme, host and path. The query (code, state) is not checked here. */
+    fun isRedirect(uri: String): Boolean {
+        val candidate = runCatching { URI(uri) }.getOrNull() ?: return false
+        val expected = URI(redirectUri)
+        return candidate.scheme.equals(expected.scheme, ignoreCase = true) &&
+            candidate.host.equals(expected.host, ignoreCase = true) &&
+            candidate.path.orEmpty().trimEnd('/') == expected.path.orEmpty().trimEnd('/')
+    }
+
     companion object {
         /**
          * Non-production servers: the first-party native dev client (NATIVE_DEV_OAUTH_CLIENT_ID in

@@ -1,4 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Bike4Mind</string>
+
+    <!-- Shared -->
+    <string name="action_back">Back</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_try_again">Try again</string>
+
+    <!-- Sign-in -->
+    <string name="signin_title">@string/app_name</string>
+    <string name="signin_action">Sign in</string>
+    <string name="signin_failed">Sign-in failed</string>
+    <string name="signin_server_label">Server (debug builds only)</string>
+    <string name="signin_server_apply">Use this server</string>
+
+    <!-- Upgrade required -->
+    <string name="upgrade_title">Update required</string>
+    <string name="upgrade_body_version">This version of Bike4Mind is no longer supported. Version %1$s or later is required.</string>
+    <string name="upgrade_body">This version of Bike4Mind is no longer supported. Please install the latest version.</string>
+
+    <!-- Chats list -->
+    <string name="sessions_title">Chats</string>
+    <string name="sessions_brief">Brief</string>
+    <string name="sessions_sign_out">Sign out</string>
+    <string name="sessions_new_chat">New chat</string>
+    <string name="sessions_default_model">Default model: %1$s</string>
+    <string name="sessions_load_failed">Could not load chats</string>
+
+    <!-- Chat -->
+    <string name="chat_title">Chat</string>
+    <string name="chat_title_new">New chat</string>
+    <string name="chat_message_placeholder">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_refused">The message was refused (%1$s)</string>
+    <string name="chat_refused_unknown">unknown</string>
+    <string name="chat_reply_failed">The reply failed.</string>
+    <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
+    <string name="chat_reply_pending" translatable="false">...</string>
+
+    <!-- Brief -->
+    <string name="brief_title">Brief</string>
+    <string name="brief_load_failed">Couldn\'t load the brief</string>
+    <string name="brief_empty_title">No brief yet</string>
+    <string name="brief_empty_body">Your assistant can summarize what happened, what it handled and what needs you.</string>
+    <string name="brief_compose">Compose a brief</string>
+    <string name="brief_timed_out_title">Still working on it</string>
+    <string name="brief_timed_out_body">This is taking longer than usual. Refresh to check again.</string>
+    <string name="brief_composing">Putting your brief together</string>
+    <string name="brief_failed_title">The brief didn\'t finish</string>
+    <string name="brief_failed_body">Something went wrong while putting it together.</string>
+    <string name="brief_unsupported_title">Update to read this brief</string>
+    <string name="brief_unsupported_body">This brief needs a newer version of Bike4Mind.</string>
+    <string name="brief_quiet_title">All quiet</string>
+    <string name="brief_quiet_body">Nothing needs you right now.</string>
+    <string name="brief_since">Since %1$s</string>
+    <string name="brief_decisions">What needs you</string>
+    <string name="brief_handled">Handled</string>
+    <string name="brief_happened">What happened</string>
+    <string name="brief_open_approval">Open approval</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_default">@string/app_name</string>
 </resources>

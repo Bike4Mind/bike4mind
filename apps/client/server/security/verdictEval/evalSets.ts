@@ -23,6 +23,7 @@ import {
   type EvalSetRun,
   type EvalSetRunResponse,
 } from '@client/app/utils/verdictEvalSets';
+import { renormalisedAbuseProbability, type CalibratedAssessment } from './calibration';
 import { cohortsOf } from './cohorts';
 import {
   campaignKeys,
@@ -33,12 +34,7 @@ import {
   windowCovering,
   type EvalSetPredictions,
 } from './evalSetMath';
-import {
-  labelAccountsAndDetections,
-  type EvalAssessment,
-  type EvalDetection,
-  type SignupChartVerdict,
-} from './gradeVerdicts';
+import { labelAccountsAndDetections, type EvalDetection, type SignupChartVerdict } from './gradeVerdicts';
 import {
   VERDICT_EVAL_DETECTION_LIMIT,
   inChunks,
@@ -281,6 +277,7 @@ export async function drawEvalSet(
 type LeanAssessment = {
   detectionId: string;
   result: AbuseAssessmentResult;
+  probabilities?: { value: string; probability: number }[];
   confidence: number | null;
   decisionModel: string;
   assessedAt: Date;
@@ -301,7 +298,7 @@ async function loadPredictions(set: AbuseEvalSetItem, deps: VerdictEvalDeps, now
     inChunks(detectionIds, chunk =>
       AbuseAssessmentModel.find(
         { detectionId: { $in: chunk } },
-        { detectionId: 1, result: 1, confidence: 1, decisionModel: 1, assessedAt: 1 }
+        { detectionId: 1, result: 1, probabilities: 1, confidence: 1, decisionModel: 1, assessedAt: 1 }
       )
         .maxTimeMS(MAX_TIME_MS)
         .lean<LeanAssessment[]>()
@@ -332,9 +329,10 @@ async function loadPredictions(set: AbuseEvalSetItem, deps: VerdictEvalDeps, now
           days
         );
   return {
-    assessments: assessments.map<EvalAssessment>(row => ({
+    assessments: assessments.map<CalibratedAssessment>(row => ({
       detectionId: row.detectionId,
       result: row.result,
+      abuseProbability: renormalisedAbuseProbability(row.probabilities ?? []),
       confidence: row.confidence ?? null,
       model: row.decisionModel,
       assessedAt: row.assessedAt,
