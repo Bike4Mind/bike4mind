@@ -184,12 +184,20 @@ export const isDormant = (lastActionAt: string | null, now: Date, days: number):
   return now.getTime() - at >= days * DAY_MS;
 };
 
+/** When the review of the quarter holding `now` falls due: the end of that quarter's grace period. */
+export const accessReviewDueAt = (now: Date): Date =>
+  new Date(quarterStart(now).getTime() + ACCESS_REVIEW_GRACE_DAYS * DAY_MS);
+
 /** Overdue once the grace period of the current quarter has passed with no review completed inside it. */
 export const isAccessReviewOverdue = (latestCompletedAt: Date | null, now: Date): boolean => {
   const start = quarterStart(now);
   if (latestCompletedAt && latestCompletedAt.getTime() >= start.getTime()) return false;
-  return now.getTime() >= start.getTime() + ACCESS_REVIEW_GRACE_DAYS * DAY_MS;
+  return now.getTime() >= accessReviewDueAt(now).getTime();
 };
+
+/** The date the current review became overdue, or null while it is not overdue. */
+export const accessReviewOverdueSince = (latestCompletedAt: Date | null, now: Date): Date | null =>
+  isAccessReviewOverdue(latestCompletedAt, now) ? accessReviewDueAt(now) : null;
 
 const cell = (value: string | number | null | undefined): string =>
   value === null || value === undefined

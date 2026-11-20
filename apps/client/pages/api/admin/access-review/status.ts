@@ -1,5 +1,5 @@
 import { adminAccessReviewRepository } from '@bike4mind/database';
-import { isAccessReviewOverdue, reviewQuarter } from '@bike4mind/server-utils/security/accessReview/accessReview';
+import { accessReviewOverdueSince, reviewQuarter } from '@bike4mind/server-utils/security/accessReview/accessReview';
 import { adminApi } from '@server/middlewares/adminApi';
 import { assertAccessReviewer } from '@server/admin/accessReview';
 
@@ -9,9 +9,11 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:m
   const now = new Date();
   const quarter = reviewQuarter(now);
   const latest = await adminAccessReviewRepository.findLatestCompleted();
+  const overdueSince = accessReviewOverdueSince(latest?.completedAt ?? null, now);
   return res.json({
     quarter,
-    overdue: isAccessReviewOverdue(latest?.completedAt ?? null, now),
+    overdue: overdueSince !== null,
+    overdueSince,
     completedAt: latest?.quarter === quarter ? latest.completedAt : null,
   });
 });
