@@ -39,7 +39,7 @@ vi.mock('@server/integrations/slack/slackWebhookVerification', () => ({
   verifySlackRequest: () => ({ valid: true }),
 }));
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
-  IntegrationAuditLogger: { create: () => audit },
+  IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
 }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
 vi.mock('@bike4mind/database', async () => {
@@ -65,7 +65,7 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumSlackInteractiveAction
 }));
 vi.mock('@bike4mind/slack', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/slack')>('@bike4mind/slack');
-  return { ...actual, SlackAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) } };
+  return { ...actual, SlackAuditLogger: { create: () => audit } };
 });
 
 import { User } from '@bike4mind/database';
