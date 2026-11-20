@@ -14,6 +14,15 @@ readonly KEYCHAIN_ENTITLEMENTS=(
   Bike4Mind/Resources/Bike4Mind.entitlements
   ShareExtension/ShareExtension.entitlements
 )
+# Personal-team variants are exempt from the id rules above: a free Apple ID cannot sign App Groups,
+# Keychain Sharing, Push or Associated Domains, so they must declare no capability at all.
+readonly PERSONAL_ENTITLEMENTS=(
+  Config/Entitlements/Bike4Mind.personal.entitlements
+  Config/Entitlements/ShareExtension.personal.entitlements
+  Config/Entitlements/Widgets.personal.entitlements
+)
+readonly SIGNING_CONFIG=Config/Signing.xcconfig
+readonly LOCAL_CONFIG_EXAMPLE=Config/Local.xcconfig.example
 readonly CONTAINER_SOURCE=Packages/B4MKit/Sources/B4MKit/Capture/SharedContainer.swift
 readonly SNAPSHOT_SOURCE=Packages/B4MKit/Sources/B4MKit/Widgets/WidgetSnapshot.swift
 
@@ -56,6 +65,37 @@ for file in "${KEYCHAIN_ENTITLEMENTS[@]}"; do
   actual=$(plist_values "$file" keychain-access-groups)
   [ "$actual" = "\$(AppIdentifierPrefix)$keychain_suffix" ] ||
     fail "$file keychain-access-groups is '$actual', expected '\$(AppIdentifierPrefix)$keychain_suffix'"
+done
+
+# Prints the top-level keys of a plist, one per line.
+plist_keys() {
+  /usr/bin/python3 -I - "$1" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as handle:
+    print("\n".join(plistlib.load(handle)))
+PY
+}
+
+for file in "${PERSONAL_ENTITLEMENTS[@]}"; do
+  keys=$(plist_keys "$file")
+  [ -z "$keys" ] || fail "$file declares capabilities a personal team cannot sign: $(echo "$keys" | tr '\n' ' ')"
+done
+
+# Prints the value of `<name> = ...` in an xcconfig file.
+xcconfig_value() {
+  sed -n "s/^$2[[:space:]]*=[[:space:]]*//p" "$1" | head -n 1
+}
+
+# The xcconfig defaults must be the committed files checked above, and the example must point at
+# personal variants that exist.
+for pair in "B4M_APP_ENTITLEMENTS:${APP_ENTITLEMENTS[0]}" "B4M_SHARE_ENTITLEMENTS:${APP_ENTITLEMENTS[1]}" \
+  "B4M_WIDGETS_ENTITLEMENTS:${APP_ENTITLEMENTS[2]}"; do
+  variable=${pair%%:*}
+  expected=${pair#*:}
+  actual=$(xcconfig_value "$SIGNING_CONFIG" "$variable")
+  [ "$actual" = "$expected" ] || fail "$SIGNING_CONFIG $variable is '$actual', expected '$expected'"
+  example=$(xcconfig_value "$LOCAL_CONFIG_EXAMPLE" "$variable")
+  [ -f "$example" ] || fail "$LOCAL_CONFIG_EXAMPLE $variable points at '$example', which does not exist"
 done
 
 if [ "$failures" -gt 0 ]; then

@@ -30,6 +30,18 @@ export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
   elevenlabs: 'ElevenLabs',
 };
 
+/**
+ * When one spoken word (a whitespace-separated token of the input text) starts and ends, in ms from the start of
+ * the generated clip. Recorded on a speech job when its provider reports alignment (ElevenLabs does).
+ */
+export const SpeechWordTimingSchema = z.object({
+  text: z.string().min(1),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+});
+
+export type SpeechWordTiming = z.infer<typeof SpeechWordTimingSchema>;
+
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
 // subset). The vendor implementation is responsible for the format -> API param

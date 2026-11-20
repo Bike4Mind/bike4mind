@@ -253,8 +253,8 @@ describe('ChatService tool turn replay', () => {
     await store.appendMessage(id, assistant);
 
     const next = await nextTurn(id, 'thanks');
-    const [system, ...rest] = plain(next);
-    expect(system.role).toBe('system');
+    const [system, sessionTail, ...rest] = plain(next);
+    expect([system.role, sessionTail.role]).toEqual(['system', 'system']);
     expect(rest.slice(0, 4)).toEqual([
       { role: 'user', content: 'read it' },
       {
@@ -292,7 +292,7 @@ describe('ChatService tool turn replay', () => {
       const sent = next.messages.slice(1);
       // The client does not filter reasoning blocks by provider; the server adapter decides what to do with them.
       expect(sent.flatMap(thinkingOf)).toEqual([thinkingBlock('one'), thinkingBlock('two')]);
-      expect(plain(next).slice(1, lastRequest.messages.length)).toEqual(plain(lastRequest).slice(1));
+      expect(plain(next).slice(1, lastRequest.messages.length - 1)).toEqual(plain(lastRequest).slice(2));
     });
 
     it("replays only the last round's reasoning in the legacy shape", async () => {

@@ -688,6 +688,14 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID
         ? { NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.GA_MEASUREMENT_ID }
         : {}),
+      // A second GA4 property the app also reports to: the marketing site's, so that one property
+      // holds the whole funnel from the ad click on the marketing site to sign_up and purchase
+      // here (getGaMeasurementIds in apps/client/app/utils/gaConsentBootstrap.ts). Same rules as
+      // GA_MEASUREMENT_ID: production only, account-tied, no brand fallback. It only rides
+      // alongside GA_MEASUREMENT_ID, which stays the one switch for GA.
+      ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID && process.env.GA_MARKETING_MEASUREMENT_ID
+        ? { NEXT_PUBLIC_GA_MARKETING_MEASUREMENT_ID: process.env.GA_MARKETING_MEASUREMENT_ID }
+        : {}),
       // Reddit ads pixel: production-only for the same reason as GA4 above, and account-tied with
       // no brand fallback (empty == pixel disabled). Consent-deferred loading + the signup
       // conversion event live in apps/client/app/utils/redditPixel.ts / signupConversion.ts.

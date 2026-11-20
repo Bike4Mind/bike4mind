@@ -11,7 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
-import com.bike4mind.kit.push.NotificationRoute
+import com.bike4mind.kit.links.Route
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -23,8 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 fun AppRoot(
     app: B4MApplication,
     signInError: MutableStateFlow<String?>,
-    pushRoute: StateFlow<NotificationRoute?>,
-    onPushRouteConsumed: (NotificationRoute) -> Unit,
+    pendingRoute: StateFlow<Route?>,
+    onRouteConsumed: (Route) -> Unit,
     onSignedIn: () -> Unit = {},
 ) {
     val graph = app.graph.collectAsStateWithLifecycle().value ?: return
@@ -33,9 +33,9 @@ fun AppRoot(
     var restored by remember(graph) { mutableStateOf(false) }
     // A chat is identified by its session id; NEW_CHAT is a conversation the first message will create.
     var openChat by rememberSaveable(graph) { mutableStateOf<String?>(null) }
-    // A brief id from a push, or LATEST_BRIEF from the chats list.
+    // A brief id from a push or a link, or LATEST_BRIEF from the chats list.
     var openBrief by rememberSaveable(graph) { mutableStateOf<String?>(null) }
-    val pendingRoute by pushRoute.collectAsStateWithLifecycle()
+    val route by pendingRoute.collectAsStateWithLifecycle()
 
     LaunchedEffect(graph) {
         graph.session.restore()
@@ -52,17 +52,27 @@ fun AppRoot(
         }
     }
 
-    // A tapped push waits here through sign-in, then replaces whatever screen was up.
-    LaunchedEffect(graph, restored, signedIn, pendingRoute) {
-        val route = pendingRoute ?: return@LaunchedEffect
+    // A tapped push or an app link waits here through sign-in, then replaces whatever screen was up.
+    LaunchedEffect(graph, restored, signedIn, route) {
+        val pending = route ?: return@LaunchedEffect
         if (!restored || !signedIn) return@LaunchedEffect
-        when (route) {
-            is NotificationRoute.Brief -> {
+        when (pending) {
+            Route.Sessions -> {
+                openBrief = null
                 openChat = null
-                openBrief = route.briefId
             }
+            is Route.Session -> {
+                openBrief = null
+                openChat = pending.sessionId
+            }
+            is Route.Brief -> {
+                openChat = null
+                openBrief = pending.briefId
+            }
+            // MainActivity opens web routes itself; one never waits here.
+            is Route.Web -> Unit
         }
-        onPushRouteConsumed(route)
+        onRouteConsumed(pending)
     }
 
     // The upgrade screen leaves the current screen's view models alone, so the user returns to them intact.

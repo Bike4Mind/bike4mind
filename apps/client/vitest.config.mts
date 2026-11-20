@@ -145,6 +145,13 @@ export default defineConfig({
           ...projectTest,
           name: 'node',
           environment: 'node',
+          // The unit lane never connects to Mongo; the integration lane may issue model calls before
+          // its connection opens, which is what buffering is for. Node project only, so jsdom files
+          // do not pay for loading mongoose.
+          setupFiles: [
+            ...projectTest.setupFiles,
+            ...(INTEGRATION_LANE ? [] : [path.resolve(__dirname, 'vitest.setup.unitMongoose.ts')]),
+          ],
           include: NODE_PROJECT_INCLUDE,
           exclude: LANE_EXCLUDE,
         },

@@ -12,7 +12,7 @@ import {
   type ChatQueueEvent,
 } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED, SHARED_CHECKOUT_PREAMBLE } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
@@ -145,11 +145,17 @@ describe('ChatService spawn placement', () => {
   }
 
   /** Ask for one spawn, the way a model does. */
-  function requestSpawn(stream: PassThrough, id: string, prompt: string, title: string): void {
+  function requestSpawn(
+    stream: PassThrough,
+    id: string,
+    prompt: string,
+    title: string,
+    extra: Record<string, unknown> = {}
+  ): void {
     stream.write(
       frame({
         type: 'tool_use',
-        tools: [{ id, name: 'session_spawn', arguments: JSON.stringify({ prompt, title }) }],
+        tools: [{ id, name: 'session_spawn', arguments: JSON.stringify({ prompt, title, ...extra }) }],
       })
     );
     stream.write(frame('[DONE]'));
@@ -282,8 +288,12 @@ describe('ChatService spawn placement', () => {
     return release;
   }
 
+  function postedSeeds(): string[] {
+    return post.mock.calls.map(call => String(call[1]?.messages?.[1]?.content ?? ''));
+  }
+
   function seedPosted(text: string): boolean {
-    return post.mock.calls.some(call => String(call[1]?.messages?.[1]?.content ?? '').includes(text));
+    return postedSeeds().some(seed => seed.includes(text));
   }
 
   it('gives the child a worktree of its own when the user starts it in one', async () => {
@@ -305,17 +315,35 @@ describe('ChatService spawn placement', () => {
   });
 
   /** An orchestrating parent asks for one spawn, which starts without a card. */
-  async function delegate(task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }) {
+  async function delegate(
+    task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' },
+    /** null sends no isolation field, as a model that leaves the default does. */
+    isolation: 'shared' | 'worktree' | null = 'worktree'
+  ) {
     const parent = await parentSession();
     await service.setSessionOrchestrate(parent.id, true);
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
-    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
+    requestSpawn(streams[0], 'call-1', task.prompt, task.title, isolation ? { isolation } : {});
     await awaitSettled(1);
     return { parent, call: settled()[0] };
   }
 
-  it('gives a delegated agent a worktree of its own in a repository, as the card does by default', async () => {
+  it("runs a delegated agent in the parent's checkout by default, told not to commit or switch branches", async () => {
+    const { parent, call } = await delegate(undefined, null);
+
+    expect(call?.status).toBe('done');
+    const agent = await vi.waitUntil(async () => await child(), { timeout: 5000, interval: 10 });
+    expect(agent?.project?.workingDirectory).toBe(main);
+    expect(agent?.project?.workspaceBranch).toBe((await store.get(parent.id))?.project?.workspaceBranch);
+    const seed = await vi.waitUntil(() => postedSeeds().find(text => text.endsWith('do the thing')), {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(seed).toBe(`${SHARED_CHECKOUT_PREAMBLE}\n\ndo the thing`);
+  });
+
+  it('gives a delegated agent a worktree of its own in a repository when it asks for isolation', async () => {
     const { parent, call } = await delegate();
 
     expect(call?.status).toBe('done');

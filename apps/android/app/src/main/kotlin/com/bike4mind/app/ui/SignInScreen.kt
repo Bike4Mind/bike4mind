@@ -23,10 +23,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
+import com.bike4mind.app.R
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -37,16 +38,16 @@ fun SignInScreen(app: B4MApplication, graph: AppGraph, signInError: MutableState
     val error by signInError.collectAsStateWithLifecycle()
 
     Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(Spacing.l),
+        verticalArrangement = Arrangement.spacedBy(Spacing.m, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Bike4Mind", style = MaterialTheme.typography.headlineLarge)
+        Text(stringResource(R.string.signin_title), style = MaterialTheme.typography.headlineLarge)
         Button(modifier = Modifier.testTag("signin-submit-btn"), onClick = {
             signInError.value = null
             CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(graph.beginSignIn()))
         }) {
-            Text("Sign in")
+            Text(stringResource(R.string.signin_action))
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("signin-error-text")) }
         if (app.environments.canSwitch) ServerPicker(app = app, current = graph.environment.baseUrl)
@@ -59,8 +60,8 @@ private fun ServerPicker(app: B4MApplication, current: String) {
     var url by remember(current) { mutableStateOf(current) }
     var problem by remember { mutableStateOf<String?>(null) }
 
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Server (debug builds only)", style = MaterialTheme.typography.labelLarge)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+        Text(stringResource(R.string.signin_server_label), style = MaterialTheme.typography.labelLarge)
         OutlinedTextField(
             value = url,
             onValueChange = { url = it },
@@ -77,7 +78,7 @@ private fun ServerPicker(app: B4MApplication, current: String) {
                 }
             }
         }) {
-            Text("Use this server")
+            Text(stringResource(R.string.signin_server_apply))
         }
         problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
