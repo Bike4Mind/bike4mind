@@ -252,8 +252,14 @@ describe('sound packs', () => {
     await mkdir(brokenJson);
     await writeFile(manifestOf(brokenJson), '{ nope');
 
-    expect((await loadSkins(modsRoot)).map(result => result.id)).toEqual(['bad-json', 'nightglass', 'no-manifest']);
-    expect((await loadSoundPacks(modsRoot)).map(result => result.id)).toEqual(['chimes']);
+    expect((await loadSkins(modsRoot)).map(result => (result.ok ? result.skin.manifest.id : result.id))).toEqual([
+      'bad-json',
+      'nightglass',
+      'no-manifest',
+    ]);
+    expect((await loadSoundPacks(modsRoot)).map(result => (result.ok ? result.pack.manifest.id : result.id))).toEqual([
+      'chimes',
+    ]);
     expect(await loadSkin(modsRoot, 'chimes')).toBe('not-a-skin');
     expect(await loadSoundPack(modsRoot, 'nightglass')).toBe('not-a-sound-pack');
   });

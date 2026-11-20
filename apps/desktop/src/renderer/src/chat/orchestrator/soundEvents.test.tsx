@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, type ReactElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentState } from '@shared/agentState';
 import { skinAssetUrl, type SoundPackSummary } from '@shared/mods';
 import { soundEventsBetween, useAgentSoundEvents } from './soundEvents';
@@ -37,55 +38,64 @@ describe('soundEventsBetween', () => {
   });
 });
 
-describe('useAgentSoundEvents', () => {
-  const agents = (...entries: [string, AgentState][]) => entries.map(([id, state]) => ({ id, state }));
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+type Roster = { id: string; state: AgentState }[];
+const agents = (...entries: [string, AgentState][]): Roster => entries.map(([id, state]) => ({ id, state }));
+
+let container: HTMLDivElement;
+let root: Root;
+
+function Probe({ list, parent }: { list: Roster; parent: boolean }): ReactElement | null {
+  useAgentSoundEvents(list, parent);
+  return null;
+}
+const render = (list: Roster, parent = false) => act(async () => root.render(<Probe list={list} parent={parent} />));
+
+describe('useAgentSoundEvents', () => {
   beforeEach(() => {
     chime.playSoundEvent.mockClear();
     resetSoundPacksForTests();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
   });
 
-  it('takes the first roster as the baseline and plays once per transition, never per render', () => {
-    const { rerender } = renderHook(
-      ({ list, parent }: { list: ReturnType<typeof agents>; parent: boolean }) => useAgentSoundEvents(list, parent),
-      { initialProps: { list: agents(['a', 'working'], ['b', 'done']), parent: false } }
-    );
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('takes the first roster as the baseline and plays once per transition, never per render', async () => {
+    await render(agents(['a', 'working'], ['b', 'done']));
     expect(chime.playSoundEvent).not.toHaveBeenCalled();
 
-    rerender({ list: agents(['a', 'done'], ['b', 'done']), parent: false });
+    await render(agents(['a', 'done'], ['b', 'done']));
     expect(chime.playSoundEvent).toHaveBeenCalledTimes(1);
     expect(chime.playSoundEvent).toHaveBeenLastCalledWith('agent-done', undefined);
 
     // A fresh array with the same states, as every status push produces, plays nothing.
-    rerender({ list: agents(['a', 'done'], ['b', 'done']), parent: false });
-    rerender({ list: agents(['a', 'done'], ['b', 'done']), parent: false });
+    await render(agents(['a', 'done'], ['b', 'done']));
+    await render(agents(['a', 'done'], ['b', 'done']));
     expect(chime.playSoundEvent).toHaveBeenCalledTimes(1);
   });
 
-  it('plays again for a later transition of the same agent', () => {
-    const { rerender } = renderHook(
-      ({ list }: { list: ReturnType<typeof agents> }) => useAgentSoundEvents(list, false),
-      {
-        initialProps: { list: agents(['a', 'working']) },
-      }
-    );
-    rerender({ list: agents(['a', 'failed']) });
-    rerender({ list: agents(['a', 'working']) });
-    rerender({ list: agents(['a', 'failed']) });
+  it('plays again for a later transition of the same agent', async () => {
+    await render(agents(['a', 'working']));
+    await render(agents(['a', 'failed']));
+    await render(agents(['a', 'working']));
+    await render(agents(['a', 'failed']));
     expect(chime.playSoundEvent.mock.calls.map(([event]) => event)).toEqual(['agent-error', 'agent-error']);
   });
 
-  it('counts the parent waiting on an approval', () => {
-    const { rerender } = renderHook(
-      ({ parent }: { parent: boolean }) => useAgentSoundEvents(agents(['a', 'working']), parent),
-      { initialProps: { parent: false } }
-    );
-    rerender({ parent: true });
+  it('counts the parent waiting on an approval', async () => {
+    await render(agents(['a', 'working']), false);
+    await render(agents(['a', 'working']), true);
     expect(chime.playSoundEvent).toHaveBeenCalledTimes(1);
     expect(chime.playSoundEvent).toHaveBeenLastCalledWith('approval-requested', undefined);
   });
 
-  it('plays the active pack file for the event, resolved when it fires', () => {
+  it('plays the active pack file for the event, resolved when it fires', async () => {
     const pack: SoundPackSummary = {
       status: 'ok',
       id: 'chimes',
@@ -94,13 +104,8 @@ describe('useAgentSoundEvents', () => {
       sounds: { 'agent-done': skinAssetUrl('chimes', 'sounds/done.ogg') },
     };
     resetSoundPacksForTests([pack], 'chimes');
-    const { rerender } = renderHook(
-      ({ list }: { list: ReturnType<typeof agents> }) => useAgentSoundEvents(list, false),
-      {
-        initialProps: { list: agents(['a', 'working'], ['b', 'working']) },
-      }
-    );
-    act(() => rerender({ list: agents(['a', 'done'], ['b', 'failed']) }));
+    await render(agents(['a', 'working'], ['b', 'working']));
+    await render(agents(['a', 'done'], ['b', 'failed']));
     expect(chime.playSoundEvent.mock.calls).toEqual([
       ['agent-done', 'b4m-skin://chimes/sounds/done.ogg'],
       ['agent-error', undefined],

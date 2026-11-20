@@ -621,9 +621,9 @@ export const IPC_CHANNELS = {
   /** main -> renderer push after the mods folder changed on disk. */
   skinsChanged: 'skins:changed',
   /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
-  soundPacksList: 'soundPacks:list',
+  soundPacksList: 'sound-packs:list',
   /** Pushed with the fresh list when the mods folder changes. */
-  soundPacksChanged: 'soundPacks:changed',
+  soundPacksChanged: 'sound-packs:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
