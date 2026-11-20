@@ -27,12 +27,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const localLoopId = localLoopIdOf(req.query);
     const body = loopMirrorSnapshotSchema.safeParse(req.body);
     if (!body.success) throw new BadRequestError(body.error.issues[0]?.message || 'Invalid request body');
-    if (
-      !(await loopMirrorRepository.exists(userId, localLoopId)) &&
-      (await loopMirrorRepository.countForUser(userId)) >= LOOP_MIRROR_LOOPS_MAX
-    )
-      throw new BadRequestError(`At most ${LOOP_MIRROR_LOOPS_MAX} Desktop loops are shown on the web`);
+    const tooMany = new BadRequestError(`At most ${LOOP_MIRROR_LOOPS_MAX} Desktop loops are shown on the web`);
+    const isNew = !(await loopMirrorRepository.exists(userId, localLoopId));
+    if (isNew && (await loopMirrorRepository.countForUser(userId)) >= LOOP_MIRROR_LOOPS_MAX) throw tooMany;
     await loopMirrorRepository.upsert(userId, localLoopId, body.data, new Date());
+    // Concurrent PUTs can all pass the check above; the count after the write catches the overshoot.
+    if (isNew && (await loopMirrorRepository.countForUser(userId)) > LOOP_MIRROR_LOOPS_MAX) {
+      await loopMirrorRepository.remove(userId, localLoopId);
+      throw tooMany;
+    }
     res.json({ ok: true });
   })
   .delete(async (req, res) => {

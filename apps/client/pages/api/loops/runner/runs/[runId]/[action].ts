@@ -13,7 +13,7 @@ import {
 
 const TEXT_MAX = 4000;
 const text = z.string().max(TEXT_MAX);
-const durationMs = z.number().int().min(0);
+const durationMs = z.number().int().min(0).max(7 * 24 * 60 * 60 * 1000);
 
 const ProgressBody = z.object({
   frames: z
