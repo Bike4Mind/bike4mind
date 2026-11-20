@@ -46,7 +46,7 @@ describe('sessionUsageBuckets', () => {
     const result = buckets([
       reply('2026-11-02T15:05:00.000Z', {
         outputTokens: 40,
-        rate: { evalTokens: 40, evalMs: 1250, promptTokens: 900, promptMs: 500, loadMs: 28_000, totalMs: 29_800 },
+        rate: { evalTokens: 40, evalMs: 1250, promptTokens: 900, promptMs: 500, loadMs: 28_000 },
       }),
     ]);
     expect(result[0]).toMatchObject({ evalTokens: 40, evalMs: 1250, promptTokens: 900, promptMs: 500, loadMs: 28_000 });
@@ -447,6 +447,75 @@ describe('sessionUsageBuckets', () => {
   });
 });
 
+describe('a reply with timed and estimated rounds', () => {
+  const timed = { evalTokens: 100, evalMs: 1000, promptTokens: 50, promptMs: 100, loadMs: 500 };
+  const estimated = { evalTokens: 40, evalMs: 800, estimated: true as const };
+  const round = (endedAt: string, usage: ChatUsage) => ({
+    text: 'x',
+    toolCallIds: [],
+    usage,
+    timing: { startedAt: Date.parse(endedAt) - 1000, endedAt: Date.parse(endedAt) },
+  });
+  const mixed = (first: string, second: string, order: 'timed-first' | 'estimated-first' = 'timed-first') => {
+    const rounds =
+      order === 'timed-first'
+        ? [round(first, { outputTokens: 100, rate: timed }), round(second, { outputTokens: 40, rate: estimated })]
+        : [round(first, { outputTokens: 40, rate: estimated }), round(second, { outputTokens: 100, rate: timed })];
+    return {
+      ...reply('2026-11-02T14:05:00.000Z', {
+        outputTokens: 140,
+        // What main stores: the rounds summed, so the estimated flag is an OR.
+        rate: {
+          evalTokens: 140,
+          evalMs: 1800,
+          promptTokens: 50,
+          promptMs: 100,
+          loadMs: 500,
+          estimated: true,
+        },
+      }),
+      rounds,
+    };
+  };
+  const expected = {
+    replies: 1,
+    outputTokens: 140,
+    timedReplies: 1,
+    evalTokens: 100,
+    evalMs: 1000,
+    promptTokens: 50,
+    promptMs: 100,
+    loads: 1,
+    loadMs: 500,
+    estimatedReplies: 0,
+    estimatedEvalTokens: 40,
+    estimatedEvalMs: 800,
+  };
+
+  it.each([
+    ['in one clock hour', '2026-11-02T14:06:00.000Z', '2026-11-02T14:07:00.000Z'],
+    ['across hours', '2026-11-02T14:06:00.000Z', '2026-11-02T15:07:00.000Z'],
+    ['across hours, the estimated round first', '2026-11-02T15:06:00.000Z', '2026-11-02T14:07:00.000Z'],
+  ])('counts the timed round as timed and only the estimated one as estimated, %s', (_, first, second) => {
+    const order = first > second ? 'estimated-first' : 'timed-first';
+    const result = buckets([mixed(first, second, order)]);
+    const total = localUsageWindow(result, 'last-24-hours', NOW, NAMES).totals;
+    expect(total).toMatchObject(expected);
+  });
+
+  it('counts a reply timed if any round was, and estimated only when every rated round was', () => {
+    const at = '2026-11-02T14:06:00.000Z';
+    const onlyEstimated = {
+      ...reply('2026-11-02T14:05:00.000Z', { outputTokens: 80, rate: { ...estimated, evalTokens: 80 } }),
+      rounds: [round(at, { outputTokens: 40, rate: estimated }), round(at, { outputTokens: 40, rate: estimated })],
+    };
+    const [bucket] = buckets([onlyEstimated]);
+    expect(bucket).toMatchObject({ timedReplies: 0, estimatedReplies: 1, evalTokens: 0, estimatedEvalTokens: 80 });
+    const [timedOnly] = buckets([mixed(at, at)]);
+    expect(timedOnly).toMatchObject({ timedReplies: 1, estimatedReplies: 0 });
+  });
+});
+
 describe('localUsageWindow', () => {
   function bucket(model: string, at: string, figures: Partial<LocalUsageBucket>): LocalUsageBucket {
     const [made] = sessionUsageBuckets({ model, messages: [reply(at, { outputTokens: 0 }, model)] });
@@ -528,6 +597,33 @@ describe('localUsageWindow', () => {
       ['Studio box', 35],
       ['This computer', 10],
       ['Removed server', 2],
+    ]);
+  });
+});
+
+describe('the removed server row', () => {
+  function bucket(model: string, at: string, figures: Partial<LocalUsageBucket>): LocalUsageBucket {
+    const [made] = sessionUsageBuckets({ model, messages: [reply(at, { outputTokens: 0 }, model)] });
+    return { ...made, ...figures };
+  }
+
+  it('is matched by id, so a saved server named like it keeps its own row', () => {
+    const named = new Map([
+      ['box', 'Removed server'],
+      ['other', 'Studio box'],
+    ]);
+    const result = localUsageWindow(
+      [
+        bucket(SERVER, '2026-11-02T14:00:00.000Z', { outputTokens: 5 }),
+        bucket('local:srv-gone:qwen3', '2026-11-02T14:00:00.000Z', { outputTokens: 1 }),
+      ],
+      'last-24-hours',
+      NOW,
+      named
+    );
+    expect(result.byServer.map(row => [row.key, row.label, row.outputTokens])).toEqual([
+      ['srv-box', 'Removed server', 5],
+      ['removed', 'Removed server', 1],
     ]);
   });
 });

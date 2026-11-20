@@ -8,7 +8,6 @@ import {
 } from '@shared/chat';
 import { LOCAL_SERVER_NAME, serverIdOfRuntime } from '@shared/modelServers';
 import type { LocalUsage, LocalUsageBar, LocalUsageFigures, LocalUsageRow, UsageWindowId } from '@shared/usage';
-import { addTokenRate } from '../chat/tokenRate';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -83,18 +82,23 @@ function usageFigures(usage: ChatUsage): LocalUsageFigures {
   return figures;
 }
 
-/** The counts one reply adds, from its whole usage on the model it started on. */
-function replyFigures(usage: ChatUsage): LocalUsageFigures {
+const hasRate = (usage: ChatUsage): boolean => amount(usage.rate?.evalTokens) > 0 && amount(usage.rate?.evalMs) > 0;
+
+/**
+ * The counts one reply adds, from its usage slices on the model it started on. Counted timed if any
+ * slice was server-timed, else estimated if any was; load is the server-timed slices' reported load.
+ */
+function replyFigures(slices: readonly ChatUsage[]): LocalUsageFigures {
   const figures = emptyFigures();
   figures.replies = 1;
-  const rate = usage?.rate;
-  if (!rate || amount(rate.evalTokens) === 0 || amount(rate.evalMs) === 0) return figures;
-  if (rate.estimated) {
+  const rated = slices.filter(hasRate);
+  if (rated.length === 0) return figures;
+  if (rated.every(slice => slice.rate?.estimated)) {
     figures.estimatedReplies = 1;
     return figures;
   }
   figures.timedReplies = 1;
-  const loadMs = amount(rate.loadMs);
+  const loadMs = slices.reduce((sum, slice) => sum + (slice.rate?.estimated ? 0 : amount(slice.rate?.loadMs)), 0);
   if (loadMs > 0) {
     figures.loads = 1;
     figures.loadMs = loadMs;
@@ -113,15 +117,6 @@ function replyModel(message: ChatMessage, sessionModel: string): string | null {
   const snapshot = message.contextSnapshot?.model;
   if (typeof snapshot === 'string' && snapshot) return snapshot;
   return message.usage?.rate ? sessionModel : null;
-}
-
-function addShare(total: ChatUsage | undefined, next: ChatUsage): ChatUsage {
-  const rate = addTokenRate(total?.rate, next.rate);
-  return {
-    outputTokens: amount(total?.outputTokens) + amount(next.outputTokens),
-    inputTokens: amount(total?.inputTokens) + amount(next.inputTokens),
-    ...(rate ? { rate } : {}),
-  };
 }
 
 const RATE_KEYS = [
@@ -149,7 +144,8 @@ function usageBeyond(whole: ChatUsage, parts: ChatUsage[], withRate: boolean): C
   return { ...rest, rate };
 }
 
-type HourlyUsage = Map<number, ChatUsage>;
+/** The usage slices that ended in each UTC hour, kept apart so a timed round is never folded into an estimated one. */
+type HourlyUsage = Map<number, ChatUsage[]>;
 
 function addAt(shares: Map<string | null, HourlyUsage>, model: string | null, hour: number, usage: ChatUsage): void {
   let hours = shares.get(model);
@@ -157,7 +153,7 @@ function addAt(shares: Map<string | null, HourlyUsage>, model: string | null, ho
     hours = new Map();
     shares.set(model, hours);
   }
-  hours.set(hour, addShare(hours.get(hour), usage));
+  hours.set(hour, [...(hours.get(hour) ?? []), usage]);
 }
 
 function hourOf(at: number): number {
@@ -217,12 +213,14 @@ export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messag
     const started = replyModel(message, session.model);
     for (const [model, hours] of replyShares(message as ChatMessage & { usage: ChatUsage }, started, startHour)) {
       if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
-      let whole: ChatUsage = {};
-      for (const [hour, usage] of hours) {
-        addFigures(bucketAt(model, hour), usageFigures(usage));
-        whole = addShare(whole, usage);
+      const slices: ChatUsage[] = [];
+      for (const [hour, usages] of hours) {
+        for (const usage of usages) {
+          addFigures(bucketAt(model, hour), usageFigures(usage));
+          slices.push(usage);
+        }
       }
-      if (model === started) addFigures(bucketAt(model, startHour), replyFigures(whole));
+      if (model === started) addFigures(bucketAt(model, startHour), replyFigures(slices));
     }
   }
   return [...buckets.values()];
@@ -248,6 +246,12 @@ export function serverLabel(runtimeId: string, serverNames: ReadonlyMap<string, 
   const serverId = serverIdOfRuntime(runtimeId);
   if (serverId === null || !serverNames) return runtimeId;
   return serverNames.get(serverId) ?? REMOVED_SERVER_LABEL;
+}
+
+/** By id, not label: a saved server may be named like the removed row. */
+function isRemovedServer(runtimeId: string, serverNames: ReadonlyMap<string, string> | null): boolean {
+  const serverId = serverIdOfRuntime(runtimeId);
+  return serverNames !== null && serverId !== null && !serverNames.has(serverId);
 }
 
 function utcDayStart(at: number): number {
@@ -318,7 +322,8 @@ export function localUsageWindow(
     if (!parsed) continue;
     addToRow(byModel, parsed.model, parsed.model, bucket);
     const server = serverLabel(parsed.runtimeId, serverNames);
-    addToRow(byServer, server === REMOVED_SERVER_LABEL ? 'removed' : parsed.runtimeId, server, bucket);
+    const removed = isRemovedServer(parsed.runtimeId, serverNames);
+    addToRow(byServer, removed ? 'removed' : parsed.runtimeId, server, bucket);
   }
 
   return {
