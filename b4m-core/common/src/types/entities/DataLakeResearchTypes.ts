@@ -583,7 +583,7 @@ export const RESEARCH_DROP_REASONS: Record<ResearchDropBucket, ResearchDropReaso
   suppressedByTombstone: {
     lever: null,
     direction: null,
-    reason: 'The largest group was declined before and have not changed.',
+    reason: 'The largest group was declined before and has not changed.',
   },
   unusableSource: {
     lever: null,

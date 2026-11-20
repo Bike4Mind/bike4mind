@@ -575,6 +575,8 @@ const DROP_HINT_VERB = { raise: 'Raise', lower: 'Lower', edit_list: 'Check' } as
  * run actually used. Null when nothing was dropped or the largest bucket has no setting to point at.
  */
 const runDropHint = (run: IDataLakeResearchRunDocument): string | null => {
+  // The breaker sweep counts source drops that no setting explains, and the stop line already says so.
+  if (run.stopReason === 'judge_unavailable') return null;
   const { totals } = run;
   let top: ResearchDropBucket | null = null;
   let topCount = 0;
@@ -588,6 +590,8 @@ const runDropHint = (run: IDataLakeResearchRunDocument): string | null => {
   if (!top) return null;
   // A run stored before the split counts both source drops in filteredBySource, so it cannot name one list.
   if (top === 'filteredBySource' && totals.unlistedDropped === undefined) return null;
+  // filteredBySource also counts URLs with no usable host, which the Never list cannot explain when empty.
+  if (top === 'filteredBySource' && !run.levers.blockedDomains?.length) return null;
   const { lever, direction, reason } = RESEARCH_DROP_REASONS[top];
   const noun = lever ? DROP_LEVER_NOUN[lever] : undefined;
   if (!lever || !direction || !noun) return null;
@@ -1716,6 +1720,7 @@ export function DataLakeResearchPanel({
                     <Button
                       size="sm"
                       variant="plain"
+                      disabled={savingConfigId === run.configId || deletingConfigId === run.configId}
                       onClick={() => openEdit(configById.get(run.configId)!, { forceAdvanced: true })}
                       data-testid={`datalake-research-run-adjust-${run.id}`}
                     >

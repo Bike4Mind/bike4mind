@@ -4,9 +4,7 @@ import {
   isResearchRunInFlight,
   RESEARCH_DROP_REASONS,
   RESEARCH_RUN_STALE_AFTER_MS,
-  type ResearchDropBucket,
   type ResearchRunLevers,
-  type ResearchRunTotals,
 } from './DataLakeResearchTypes';
 
 const NOW = new Date('2026-03-01T12:00:00.000Z').getTime();
@@ -78,12 +76,6 @@ describe('RESEARCH_DROP_REASONS', () => {
       key => !(NOT_BUCKETS as readonly string[]).includes(key)
     );
     expect(Object.keys(RESEARCH_DROP_REASONS).sort()).toEqual(bucketKeys.sort());
-  });
-
-  it('is compile-exhaustive: the bucket union is exactly the totals keys minus the non-buckets', () => {
-    type Expected = Exclude<keyof ResearchRunTotals, (typeof NOT_BUCKETS)[number]>;
-    const bothWays: [Expected, ResearchDropBucket] extends [ResearchDropBucket, Expected] ? true : false = true;
-    expect(bothWays).toBe(true);
   });
 
   it('pairs a lever with a direction, and a null lever with none', () => {

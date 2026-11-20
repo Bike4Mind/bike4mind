@@ -1815,7 +1815,7 @@ describe('DataLakeResearchPanel run fix hints', () => {
     ],
     [
       'filteredBySource',
-      {},
+      { blockedDomains: ['spam.net'] },
       'The largest group came from sites on the never list, or had no usable web address. Check Never these sites in Advanced settings.',
     ],
     [
@@ -1847,6 +1847,45 @@ describe('DataLakeResearchPanel run fix hints', () => {
   it('renders no hint for a run with no drops', () => {
     renderPanel({ runs: [run({ totals: totalsWith({ proposed: 4 }) })] });
     expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint when the largest bucket is filteredBySource but the Never list is empty', () => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, blockedDomains: [] },
+          totals: totalsWith({ filteredBySource: 6, unlistedDropped: 1 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint on a judge-outage run even when source drops are the largest bucket', () => {
+    renderPanel({
+      runs: [
+        run({
+          status: 'failed',
+          stopReason: 'judge_unavailable',
+          levers: { ...run().levers, unlistedSources: 'drop' },
+          totals: totalsWith({ unlistedDropped: 7, judgeFailed: 3 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['saving', { savingConfigId: 'config-b' }],
+    ['deleting', { deletingConfigId: 'config-b' }],
+  ] as const)('disables Adjust settings while its config is %s', (_label, busyProps) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b' }), run({ id: 'run-8', configId: 'config-a' })],
+      ...busyProps,
+    });
+    expect((screen.getByTestId('datalake-research-run-adjust-run-9') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('datalake-research-run-adjust-run-8') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('renders no hint when a run stored before the split cannot say which list dropped hits', () => {
