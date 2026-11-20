@@ -219,7 +219,11 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     mockFindFile.mockResolvedValueOnce(null);
     const res = await run();
     expect(res._getStatusCode()).toBe(303);
-    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      ResponseContentDisposition: 'attachment; filename="wide.mp4"',
+    });
   });
 
   it('404s an upload that moderation holds or blocks', async () => {
