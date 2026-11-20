@@ -61,7 +61,7 @@ describe('SignedOutProfile', () => {
       ok: true,
       usage: localUsageFixture({ replies: 2, outputTokens: 50 }),
     });
-    expect(getLocal).toHaveBeenCalledWith('last-24-hours', false);
+    expect(getLocal).toHaveBeenCalledWith('last-24-hours', true);
     expect(has('profile-signed-out')).toBe(true);
     expect(has('profile-window-group')).toBe(true);
     expect(has('profile-local-usage')).toBe(true);

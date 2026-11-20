@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LocalUsageResult, UsageWindowId } from '@shared/usage';
 
-const READ_FAILED: LocalUsageResult = { ok: false, error: 'Could not read local model usage.' };
+const LEAD_IN = 'Could not read local model usage';
 
 /**
- * One window of local model usage. A new `reload` reads past main's cache; an answer read under
- * another `scopeKey` is never returned, and within one key the last answer stays until the next.
+ * One window of local model usage. Mounting and a new `reload` read past main's cache; an answer
+ * read under another `scopeKey` is never returned, and within one key the last answer stays until the next.
  */
 export function useLocalUsage(windowId: UsageWindowId, reload: number, scopeKey: string): LocalUsageResult | null {
   const [answer, setAnswer] = useState<{ scopeKey: string; result: LocalUsageResult } | null>(null);
-  const forcedFor = useRef(reload);
+  const forcedFor = useRef<number | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -17,7 +17,10 @@ export function useLocalUsage(windowId: UsageWindowId, reload: number, scopeKey:
     forcedFor.current = reload;
     void window.b4m.usage
       .getLocal(windowId, force)
-      .catch(() => READ_FAILED)
+      .catch((err: unknown): LocalUsageResult => ({
+        ok: false,
+        error: `${LEAD_IN}: ${err instanceof Error && err.message ? err.message : 'the request to the app failed'}`,
+      }))
       .then(result => {
         if (current) setAnswer({ scopeKey, result });
       });

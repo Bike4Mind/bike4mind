@@ -6,8 +6,14 @@ function isUsageWindow(value: unknown): value is UsageWindowId {
   return value === 'last-24-hours' || value === 'last-30-days';
 }
 
-/** Held briefly so flipping between the two windows does not re-stat every transcript. */
+/** The scan is held briefly so flipping between the two windows does not re-stat every transcript. */
 const CACHE_TTL_MS = 15_000;
+
+/** The lead-in of a failed read's message; the reason follows it. */
+export const READ_FAILED = 'Could not read local model usage';
+
+type Scanned = Awaited<ReturnType<LocalUsageServiceDeps['scan']>>;
+type ScanOutcome = { ok: true; scanned: Scanned } | { ok: false; error: string };
 
 export interface LocalUsageServiceDeps {
   logger: { warn(message: string): void };
@@ -25,8 +31,8 @@ export interface LocalUsageServiceDeps {
  * request: there is no API client here, and only aggregates leave main.
  */
 export class LocalUsageService {
-  private readonly cache = new Map<string, { at: number; result: LocalUsageResult }>();
-  private readonly inFlight = new Map<string, Promise<LocalUsageResult>>();
+  private readonly scans = new Map<string, { at: number; outcome: ScanOutcome }>();
+  private readonly scanning = new Map<string, Promise<{ at: number; outcome: ScanOutcome }>>();
 
   constructor(private readonly deps: LocalUsageServiceDeps) {}
 
@@ -34,43 +40,49 @@ export class LocalUsageService {
     return this.deps.now?.() ?? Date.now();
   }
 
-  usage(window: UsageWindowId, force = false): Promise<LocalUsageResult> {
-    if (!isUsageWindow(window)) return Promise.resolve({ ok: false, error: 'Unknown usage window.' });
+  /** `force` starts a new scan even where one is in flight, and only the newest scan is kept. */
+  private scan(key: string, force: boolean): Promise<{ at: number; outcome: ScanOutcome }> {
+    const cached = this.scans.get(key);
+    if (!force && cached && this.now() - cached.at < CACHE_TTL_MS) return Promise.resolve(cached);
+    const existing = this.scanning.get(key);
+    if (!force && existing) return existing;
 
-    const key = `${this.deps.scopeKey() ?? ''}\n${window}`;
-    const cached = this.cache.get(key);
-    if (!force && cached && this.now() - cached.at < CACHE_TTL_MS) return Promise.resolve(cached.result);
-
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-
-    const pending = this.read(window)
-      .then(result => {
-        if (result.ok) this.cache.set(key, { at: this.now(), result });
-        return result;
-      })
-      .finally(() => this.inFlight.delete(key));
-    this.inFlight.set(key, pending);
+    const pending: Promise<{ at: number; outcome: ScanOutcome }> = (async () => this.deps.scan())()
+      .then(
+        (scanned): ScanOutcome => ({ ok: true, scanned }),
+        (err): ScanOutcome => {
+          const reason = err instanceof Error ? err.message : String(err);
+          this.deps.logger.warn(`USAGE: local usage read failed: ${reason}`);
+          return { ok: false, error: `${READ_FAILED}: ${reason}` };
+        }
+      )
+      .then(outcome => {
+        const entry = { at: this.now(), outcome };
+        if (this.scanning.get(key) === pending) {
+          this.scans.set(key, entry);
+          this.scanning.delete(key);
+        }
+        return entry;
+      });
+    this.scanning.set(key, pending);
     return pending;
   }
 
-  private async read(window: UsageWindowId): Promise<LocalUsageResult> {
-    try {
-      const [{ scope, account, buckets }, serverNames] = await Promise.all([this.deps.scan(), this.readServerNames()]);
-      const now = this.now();
-      return {
-        ok: true,
-        usage: {
-          ...localUsageWindow(buckets, window, now, serverNames),
-          scope,
-          ...(account ? { account } : {}),
-          readAt: now,
-        },
-      };
-    } catch (err) {
-      this.deps.logger.warn(`USAGE: local usage read failed: ${err instanceof Error ? err.message : String(err)}`);
-      return { ok: false, error: 'Could not read local model usage.' };
-    }
+  async usage(window: UsageWindowId, force = false): Promise<LocalUsageResult> {
+    if (!isUsageWindow(window)) return { ok: false, error: 'Unknown usage window.' };
+    const { at, outcome } = await this.scan(this.deps.scopeKey() ?? '', force);
+    if (!outcome.ok) return outcome;
+    const { scope, account, buckets } = outcome.scanned;
+    const serverNames = await this.readServerNames();
+    return {
+      ok: true,
+      usage: {
+        ...localUsageWindow(buckets, window, this.now(), serverNames),
+        scope,
+        ...(account ? { account } : {}),
+        readAt: at,
+      },
+    };
   }
 
   /** Null when the saved servers cannot be read; the breakdown then names servers by runtime id. */

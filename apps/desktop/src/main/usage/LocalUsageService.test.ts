@@ -88,15 +88,67 @@ describe('LocalUsageService', () => {
     expect(buckets).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses an unknown window and reports a failed read without caching it', async () => {
+  it('computes each window from one cached scan, so flipping windows reads nothing again', async () => {
+    const { service: usage, buckets } = service();
+    const day = await usage.usage('last-24-hours');
+    const month = await usage.usage('last-30-days');
+    expect(buckets).toHaveBeenCalledTimes(1);
+    expect(day).toMatchObject({ ok: true, usage: { window: 'last-24-hours', granularity: 'hour' } });
+    expect(month).toMatchObject({ ok: true, usage: { window: 'last-30-days', granularity: 'day' } });
+  });
+
+  it('drops the scan of both windows on a forced read', async () => {
+    let tokens = 10;
+    const scan = vi.fn(async () => ({ scope: 'device' as const, buckets: [bucket(tokens)] }));
+    const { service: usage } = service({ scan });
+    await usage.usage('last-24-hours');
+    await usage.usage('last-30-days');
+    tokens = 25;
+    await usage.usage('last-24-hours', true);
+    expect(await usage.usage('last-30-days')).toMatchObject({ ok: true, usage: { totals: { outputTokens: 25 } } });
+    expect(scan).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads past a scan still in flight when forced, and keeps only the newer answer', async () => {
+    const resolvers: ((value: Awaited<ReturnType<LocalUsageServiceDeps['scan']>>) => void)[] = [];
+    const scan = vi.fn(() => new Promise<Awaited<ReturnType<LocalUsageServiceDeps['scan']>>>(r => resolvers.push(r)));
+    const { service: usage } = service({ scan });
+    const stale = usage.usage('last-24-hours');
+    const fresh = usage.usage('last-24-hours', true);
+    expect(scan).toHaveBeenCalledTimes(2);
+    resolvers[1]({ scope: 'device', buckets: [bucket(30)] });
+    await fresh;
+    resolvers[0]({ scope: 'device', buckets: [bucket(1)] });
+    await stale;
+    expect(await usage.usage('last-24-hours')).toMatchObject({ ok: true, usage: { totals: { outputTokens: 30 } } });
+    expect(scan).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses an unknown window, and keeps a failed read with its reason until a forced read retries', async () => {
     const failing = vi
       .fn()
-      .mockRejectedValueOnce(new Error('disk'))
+      .mockRejectedValueOnce(new Error('EACCES: permission denied'))
       .mockResolvedValue({ scope: 'device', buckets: [bucket(1)] });
     const { service: usage } = service({ scan: failing });
     expect(await usage.usage('last-year' as never)).toEqual({ ok: false, error: 'Unknown usage window.' });
-    expect(await usage.usage('last-24-hours')).toMatchObject({ ok: false });
-    expect(await usage.usage('last-24-hours')).toMatchObject({ ok: true });
+    expect(await usage.usage('last-24-hours')).toEqual({
+      ok: false,
+      error: 'Could not read local model usage: EACCES: permission denied',
+    });
+    expect(await usage.usage('last-30-days')).toMatchObject({ ok: false });
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(await usage.usage('last-24-hours', true)).toMatchObject({ ok: true });
+  });
+
+  it('also reports a scan that throws before returning a promise', async () => {
+    const scan = vi.fn((): never => {
+      throw new Error('bad store');
+    });
+    const { service: usage } = service({ scan });
+    expect(await usage.usage('last-24-hours')).toEqual({
+      ok: false,
+      error: 'Could not read local model usage: bad store',
+    });
   });
 
   it('says which kind of scope the figures came from', async () => {

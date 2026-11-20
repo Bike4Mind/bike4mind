@@ -80,9 +80,9 @@ describe('ProfileScreen local usage', () => {
     expect(find('profile-local-usage')).toBeNull();
   });
 
-  it('asks again for the picked window, and past the cache on refresh', async () => {
+  it('reads past the cache on open, asks again for the picked window, and past the cache on refresh', async () => {
     const { find, getLocal } = await render({ ok: true, usage: localUsageFixture({ replies: 1 }) });
-    expect(getLocal).toHaveBeenLastCalledWith('last-24-hours', false);
+    expect(getLocal).toHaveBeenLastCalledWith('last-24-hours', true);
 
     const thirty = container.querySelector<HTMLElement>('[data-window="last-30-days"]')!;
     await act(async () => thirty.click());
@@ -114,14 +114,22 @@ describe('ProfileScreen local usage', () => {
   });
 
   it('says so when the local read fails', async () => {
-    const { find } = await render({ ok: false, error: 'Could not read local model usage.' });
-    expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage.');
+    const error = 'Could not read local model usage: EACCES: permission denied';
+    const { find } = await render({ ok: false, error });
+    expect(find('profile-local-error')?.textContent).toBe(error);
     expect(find('profile-local-usage')).toBeNull();
   });
 
   it('says so when the local read rejects outright', async () => {
     const { find } = await render(() => Promise.reject(new Error('channel closed')));
-    expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage.');
+    expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage: channel closed');
+  });
+
+  it('gives a reason for a rejection that carries none', async () => {
+    const { find } = await render(() => Promise.reject('gone'));
+    expect(find('profile-local-error')?.textContent).toBe(
+      'Could not read local model usage: the request to the app failed'
+    );
   });
 
   it('drops the previous account figures when the account changes', async () => {
