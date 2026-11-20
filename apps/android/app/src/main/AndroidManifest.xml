@@ -3,6 +3,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16+: lets the running-agent notification (push/AgentRunNotifications.kt) show as a Live Update. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- push/AgentRunKeepAlive.kt: keeps a followed agent run polling after the user leaves the app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
     <queries>
@@ -35,6 +40,12 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- dataSync: it fetches a run's state from the server for as long as the run lasts (an hour at most). -->
+        <service
+            android:name=".push.AgentRunKeepAlive"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- singleTask so the OAuth redirect returns to the running activity (onNewIntent) instead of a new one. -->
         <activity

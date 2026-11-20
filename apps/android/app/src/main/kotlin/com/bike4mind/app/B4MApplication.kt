@@ -1,6 +1,7 @@
 package com.bike4mind.app
 
 import android.app.Application
+import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
@@ -20,6 +21,7 @@ class B4MApplication : Application() {
         super.onCreate()
         environments = EnvironmentStore(this)
         PushNotifications.createChannel(this)
+        AgentRunNotifications.createChannel(this)
         FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
     }
