@@ -87,7 +87,7 @@ describe('PlanBlock', () => {
   });
 
   it('keeps the live in-progress leaf visible in a nested plan', () => {
-    const leaf = (id: string, status: PlanItem['status']): PlanItem => ({ id, content: id, status });
+    const leaf = (id: string, status: PlanItem['status']) => ({ id, content: id, status });
     const nested: PlanItem[] = [
       leaf('A', 'completed'),
       {
