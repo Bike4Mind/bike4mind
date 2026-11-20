@@ -1720,7 +1720,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     memory: '1024 MB',
     vpc: lambdaVpc,
     // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
-    link: [...allSecrets, websocketApi, appFilesBucket],
+    // eventBus: the org credit alert email from a run's debit is queued as an email.send event.
+    link: [...allSecrets, websocketApi, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
