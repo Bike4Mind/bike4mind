@@ -98,10 +98,18 @@ export interface ChildExecution {
  * same step from the snapshot and from the live stream.
  */
 function appendCollapsingFinalAnswer(iterations: IterationStep[], incoming: IterationStep): IterationStep[] {
-  const existingIdx =
+  // Steps arrive in iteration order, so a match can only sit in the incoming iteration's tail.
+  const isMatch = (it: IterationStep) =>
     incoming.step.type === 'final_answer'
-      ? iterations.findLastIndex(it => it.iteration === incoming.iteration && it.step.type === 'final_answer')
-      : iterations.findLastIndex(it => isSameStep(it, incoming));
+      ? it.iteration === incoming.iteration && it.step.type === 'final_answer'
+      : isSameStep(it, incoming);
+  let existingIdx = -1;
+  for (let i = iterations.length - 1; i >= 0 && iterations[i].iteration >= incoming.iteration; i--) {
+    if (isMatch(iterations[i])) {
+      existingIdx = i;
+      break;
+    }
+  }
   if (existingIdx !== -1) {
     const next = iterations.slice();
     next[existingIdx] = incoming;
