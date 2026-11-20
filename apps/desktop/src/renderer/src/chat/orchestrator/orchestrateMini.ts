@@ -39,7 +39,9 @@ export interface MiniWindowToggle {
 
 /** The window's open state, followed from main; undefined where there is no bridge to toggle it with. */
 export function useOrchestrateMiniWindow(): MiniWindowToggle | undefined {
-  const bridge = miniBridge();
+  // Read once per mount: the effects below key on the bridge, so a getter that hands back a fresh object
+  // each read would resubscribe on every render.
+  const [bridge] = useState(miniBridge);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -47,13 +49,13 @@ export function useOrchestrateMiniWindow(): MiniWindowToggle | undefined {
     let pulled = false;
     const unsubscribe = bridge.onOpenChanged(next => {
       pulled = true;
-      setOpen(next);
+      setOpen(next === true);
     });
     // A push that lands first is newer than this pull's answer, which is then dropped.
     bridge
       .isOpen()
       .then(first => {
-        if (!pulled) setOpen(first);
+        if (!pulled) setOpen(first === true);
       })
       .catch((error: unknown) => console.warn(`Could not read the mini window state: ${String(error)}`));
     return unsubscribe;
@@ -66,7 +68,7 @@ export function useOrchestrateMiniWindow(): MiniWindowToggle | undefined {
         onToggle: () => {
           bridge
             .toggle()
-            .then(setOpen)
+            .then(next => setOpen(next === true))
             .catch((error: unknown) => console.warn(`Could not toggle the mini window: ${String(error)}`));
         },
       },
@@ -79,7 +81,7 @@ export function useOrchestrateMiniWindow(): MiniWindowToggle | undefined {
  * the stage goes. Republished only when the payload's content changes, not on every roster re-render.
  */
 export function usePublishOrchestrateMini(payload: OrchestrateMiniPayload | null, open: boolean): void {
-  const bridge = miniBridge();
+  const [bridge] = useState(miniBridge);
   const latest = useRef(payload);
   latest.current = payload;
   const key = open ? JSON.stringify(payload) : undefined;
