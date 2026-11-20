@@ -20,6 +20,7 @@ export { getClientConfigContract, getPublicClientConfigContract } from './contra
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export { composeBriefContract, listBriefsContract, getBriefContract } from './contracts/briefs.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
 export {
   listAssistantInstructionsContract,
   createAssistantInstructionContract,

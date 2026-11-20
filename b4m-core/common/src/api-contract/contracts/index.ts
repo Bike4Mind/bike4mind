@@ -17,6 +17,7 @@ import { getClientConfigContract, getPublicClientConfigContract } from './client
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
@@ -193,6 +194,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteAssistantInstructionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
+  listHandoffDevicesContract,
+  sendSessionHandoffContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,

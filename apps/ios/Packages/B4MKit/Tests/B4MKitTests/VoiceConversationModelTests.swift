@@ -501,6 +501,7 @@ final class VoiceConversationModelTests: XCTestCase {
     }
     await listener.endTask()
     await until { model.phase == .failed(.recognizerUnavailable) }
+    await until { await audio.deactivations == 1 }
     let deactivations = await audio.deactivations
     XCTAssertEqual(deactivations, 1)
   }

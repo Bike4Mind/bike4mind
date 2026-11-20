@@ -12,6 +12,7 @@ export const PUSH_NOTIFICATION_CATEGORIES = [
   'chat_completed',
   'generation_ready',
   'agent_message',
+  'session_handoff',
   'brief_ready',
 ] as const;
 
@@ -29,6 +30,8 @@ export const PushNotificationEventSchema = z.object({
   collapseId: z.string().optional(),
   questId: z.string().optional(),
   sessionId: z.string().optional(),
+  destinationId: z.string().optional(),
+  destinationSid: z.string().optional(),
   /** `brief_ready` only: the brief to open. A pointer; the client fetches it with its own credentials. */
   briefId: z.string().optional(),
   /**
@@ -51,6 +54,7 @@ export const PushNotificationPreferencesSchema = z.object({
   chat_completed: z.boolean().optional(),
   generation_ready: z.boolean().optional(),
   agent_message: z.boolean().optional(),
+  session_handoff: z.boolean().optional(),
   brief_ready: z.boolean().optional(),
 });
 

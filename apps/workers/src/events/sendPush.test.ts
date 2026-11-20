@@ -87,6 +87,7 @@ const EVENT: PushNotificationEvent = {
 };
 
 type Token = {
+  id?: string;
   token: string;
   environment: 'sandbox' | 'production';
   sid?: string;
@@ -139,6 +140,42 @@ const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
 
 describe('deliverPush', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('sends a handoff only to the selected registration with no transcript or destination metadata', async () => {
+    const { deps, sent } = makeDeps([
+      { id: 'chosen', token: 'tok-chosen', environment: 'production' },
+      { id: 'other', token: 'tok-other', environment: 'production' },
+    ]);
+    await deliverPush(
+      {
+        ...EVENT,
+        category: 'session_handoff',
+        destinationId: 'chosen',
+        destinationSid: 'sid-live',
+        title: 'Continue',
+        body: 'Tap to open',
+      },
+      deps,
+      logger
+    );
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-chosen']);
+    expect(payloadOf(sent[0])).toEqual({
+      aps: { alert: { title: 'Continue', body: 'Tap to open' }, sound: 'default', 'thread-id': 'session-1' },
+      category: 'session_handoff',
+      deepLink: 'https://app.example.test/notebooks/session-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+    });
+    sent.length = 0;
+    await deliverPush({ ...EVENT, category: 'session_handoff' }, deps, logger);
+    expect(sent).toEqual([]);
+    await deliverPush(
+      { ...EVENT, category: 'session_handoff', destinationId: 'chosen', destinationSid: 'previous-session' },
+      deps,
+      logger
+    );
+    expect(sent).toEqual([]);
+  });
 
   it('succeeds without contacting APNs or reading the user when there are no device tokens', async () => {
     const { deps } = makeDeps([]);
