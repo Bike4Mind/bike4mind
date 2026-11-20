@@ -3457,6 +3457,8 @@ async function runExecution(
       }
 
       // A loop run's own spend ceiling (set by the loop scheduler), checked whether or not credits are enforced.
+      // Subagents run uncapped and roll their credits up on resume, so a run can end over its cap by what its
+      // children spent (each bounded by its own maxIterations); the next check stops it.
       if (execution.creditCap != null && iterationIndex !== aggregationWakeStartIteration) {
         const stopped = await stopCappedIteration(
           {
