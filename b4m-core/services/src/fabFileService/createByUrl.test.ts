@@ -5,7 +5,8 @@ import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
  * ingest, and - the load-bearing one - that neither can be supplied through the parsed request
- * body, only by a server-side caller that has already run the lake write gate.
+ * body, only by a server-side caller that has already run the lake write gate. They also lock the
+ * fetched body against the `MaxFileSize` admin setting.
  */
 
 const fetchAndParseURL = vi.hoisted(() => vi.fn());
@@ -451,8 +452,8 @@ describe('createFabFileByUrl assertFinalUrl', () => {
 describe('createFabFileByUrl MaxFileSize', () => {
   const ONE_MB = 1024 * 1024;
 
-  // MaxFileSize=1 (MB) with a storage quota well above it, so checkStorageLimitForOwner cannot
-  // refuse first and mask the file-size check.
+  // MaxFileSize is in MB. The default fixture's storageLimit is also in MB (~1TB), so the accept
+  // cases still pass the real quota check after the size check.
   function limitedAdapters() {
     const base = adapters();
     return {
@@ -463,11 +464,6 @@ describe('createFabFileByUrl MaxFileSize', () => {
           findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '1' }]),
           findBySettingNames: vi.fn().mockResolvedValue([]),
         } as never,
-        users: {
-          findById: vi
-            .fn()
-            .mockResolvedValue({ id: 'user-1', storageLimit: 10 * ONE_MB, currentStorageSize: 0 } as never),
-        },
       },
     };
   }
