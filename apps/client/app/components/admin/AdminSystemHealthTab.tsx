@@ -1,4 +1,5 @@
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
+import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -239,7 +240,7 @@ const getEmailErrorGuidance = (error: string): string | null => {
 
   // Auth failed
   if (error.includes('authentication') || error.includes('535') || error.includes('Invalid login')) {
-    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct.';
+    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct, or set both if they are unset and the server requires auth.';
   }
 
   // Timeout
@@ -686,7 +687,7 @@ const AdminSystemHealthTab = () => {
                     {key}
                   </Typography>
                   {!configured &&
-                    (email.optionalSecrets?.some(name => name === key) ? (
+                    (email.optionalSecrets.some(name => name === key) ? (
                       <StatusChip tone="neutral" label="Optional" />
                     ) : (
                       <StatusChip tone="warn" label="Missing" />
@@ -699,13 +700,12 @@ const AdminSystemHealthTab = () => {
             <Alert color="warning" variant="outlined">
               <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
                 <Typography level="body-sm" fontWeight="bold">
-                  Missing secrets
+                  Missing settings
                 </Typography>
                 <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
                 {selfHost ? (
                   <Typography level="body-xs" data-testid="system-health-email-hint">
-                    Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} in .env.selfhost (Docker Compose) or the
-                    chart config values / runtime Secret (Kubernetes), then restart the app.
+                    {SELF_HOST_SETTINGS_HINT}
                   </Typography>
                 ) : (
                   <>

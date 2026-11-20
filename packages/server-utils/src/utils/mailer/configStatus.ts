@@ -8,7 +8,7 @@ export interface EmailConfigStatus {
   configured: boolean;
   transport: MailTransportKind;
   missingSecrets: MailSecretName[];
-  /** Settings that may stay unset: the SMTP credentials when neither is set, for a relay without auth. */
+  /** Settings that may stay unset: on self-host, the SMTP credentials when neither is set, for a relay without auth. */
   optionalSecrets: MailSecretName[];
   /** Only the secrets this transport needs, so an SES stage never lists the SMTP credentials. */
   secrets: Partial<Record<MailSecretName, boolean>>;
@@ -34,6 +34,14 @@ export function isUnsetMailValue(value: string | undefined | null): boolean {
 }
 
 /**
+ * A self-host SMTP relay that takes no auth: both credentials unset. Hosted stages always need the
+ * credentials, and one set without the other is a mistake, so neither counts.
+ */
+export function isUnauthenticatedSmtpRelay(env: Pick<MailTransportEnv, 'B4M_SELF_HOST'> = process.env): boolean {
+  return env.B4M_SELF_HOST === 'true' && SMTP_CREDENTIALS.every(name => isUnsetMailValue(Config[name]));
+}
+
+/**
  * The transport a process that only reports mail status should describe. Such a process never sends,
  * so infra/mailTransport.ts gives it MAIL_STATUS_TRANSPORT instead of MAIL_TRANSPORT and the SES grant.
  */
@@ -48,9 +56,7 @@ export function getMailConfigStatus(kind: MailTransportKind = statusTransportKin
   const required = requiredMailSecrets(kind);
   const secrets: Partial<Record<MailSecretName, boolean>> = {};
   for (const name of required) secrets[name] = !isUnsetMailValue(Config[name]);
-  // The SMTP credentials are a pair: both unset is a relay without auth, one alone is a mistake.
-  const credentialsUnset = kind === 'smtp' && SMTP_CREDENTIALS.every(name => !secrets[name]);
-  const optionalSecrets = credentialsUnset ? [...SMTP_CREDENTIALS] : [];
+  const optionalSecrets = kind === 'smtp' && isUnauthenticatedSmtpRelay() ? [...SMTP_CREDENTIALS] : [];
   const missingSecrets = required.filter(name => !secrets[name] && !optionalSecrets.includes(name));
   return { configured: missingSecrets.length === 0, transport: kind, missingSecrets, optionalSecrets, secrets };
 }

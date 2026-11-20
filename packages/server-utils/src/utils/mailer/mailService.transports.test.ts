@@ -30,7 +30,8 @@ vi.mock('../../integrations/slack/slack', () => ({
   postEmailMirrorToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   isPlaceholderValue: (value: string | undefined | null) => {
     if (!value) return true;
     const normalized = value.trim().toLowerCase();
@@ -293,7 +294,8 @@ describe('SMTP without auth', () => {
   it.each([
     ['unset', ''],
     ['placeholders', 'not-configured'],
-  ])('omits auth from the transport when both credentials are %s', async (_label, value) => {
+  ])('omits auth from a self-host transport when both credentials are %s', async (_label, value) => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     Object.assign(configValues, { MAIL_USERNAME: value, MAIL_PASSWORD: value });
     const nodemailer = await import('nodemailer');
     const { createMailTransport } = await import('./index');
@@ -305,7 +307,21 @@ describe('SMTP without auth', () => {
     );
   });
 
-  it('omits auth when only one credential is set', async () => {
+  it('keeps auth on a hosted stage even when both credentials are unset', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    Object.assign(configValues, { MAIL_USERNAME: '', MAIL_PASSWORD: '' });
+    const nodemailer = await import('nodemailer');
+    const { createMailTransport } = await import('./index');
+
+    createMailTransport('smtp');
+
+    expect(nodemailer.default.createTransport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ auth: { user: '', pass: '' } })
+    );
+  });
+
+  it('still logs in with a half-set pair on self-host, so the send fails instead of going out unauthenticated', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     Object.assign(configValues, { MAIL_USERNAME: 'user@example.com', MAIL_PASSWORD: '' });
     const nodemailer = await import('nodemailer');
     const { createMailTransport } = await import('./index');
@@ -313,7 +329,7 @@ describe('SMTP without auth', () => {
     createMailTransport('smtp');
 
     expect(nodemailer.default.createTransport).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ auth: expect.anything() })
+      expect.objectContaining({ auth: { user: 'user@example.com', pass: '' } })
     );
   });
 
@@ -344,7 +360,8 @@ describe('SMTP without auth', () => {
     expect(message).not.toContain('.env.selfhost');
   });
 
-  it('does not warn about a relay without auth', async () => {
+  it('does not warn about a self-host relay without auth', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     Object.assign(configValues, { MAIL_USERNAME: '', MAIL_PASSWORD: '' });
     const { Logger } = await import('@bike4mind/observability');
     const { MailService } = await import('./index');
@@ -352,5 +369,16 @@ describe('SMTP without auth', () => {
     new MailService();
 
     expect(Logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still warns about unset credentials on a hosted stage', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    Object.assign(configValues, { MAIL_USERNAME: '', MAIL_PASSWORD: '' });
+    const { Logger } = await import('@bike4mind/observability');
+    const { MailService } = await import('./index');
+
+    new MailService();
+
+    expect(vi.mocked(Logger.warn).mock.calls.at(-1)?.[0]).toContain('MAIL_USERNAME, MAIL_PASSWORD');
   });
 });

@@ -1,12 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('@bike4mind/common', () => ({
-  isPlaceholderValue: (value: string | undefined | null) => {
-    if (!value) return true;
-    const normalized = value.trim().toLowerCase();
-    return normalized === 'my-secret-placeholder-value' || normalized === 'not-configured';
-  },
-}));
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const configValues = vi.hoisted((): Record<string, string | undefined> => ({
   MAIL_HOST: 'smtp.example.com',
@@ -23,7 +15,12 @@ import { getMailConfigStatus, requiredMailSecrets, statusTransportKind } from '.
 const SMTP_KEYS = ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM'];
 
 describe('getMailConfigStatus', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     Object.assign(configValues, {
       MAIL_HOST: 'smtp.example.com',
       MAIL_PORT: '465',
@@ -80,7 +77,7 @@ describe('getMailConfigStatus', () => {
     ['empty', ''],
     ['whitespace', '   '],
     ['placeholder', 'not-configured'],
-  ])('reports SMTP without auth as configured when both credentials are %s', (_label, value) => {
+  ])('reports a self-host SMTP relay without auth as configured when both credentials are %s', (_label, value) => {
     Object.assign(configValues, { MAIL_USERNAME: value, MAIL_PASSWORD: value });
 
     const status = getMailConfigStatus('smtp');
@@ -89,6 +86,20 @@ describe('getMailConfigStatus', () => {
     expect(status.missingSecrets).toEqual([]);
     expect(status.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
     expect(status.secrets).toMatchObject({ MAIL_USERNAME: false, MAIL_PASSWORD: false });
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['placeholder', 'my-secret-placeholder-value'],
+  ])('keeps flagging both credentials on a hosted stage when they are %s', (_label, value) => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    Object.assign(configValues, { MAIL_USERNAME: value, MAIL_PASSWORD: value });
+
+    const status = getMailConfigStatus('smtp');
+
+    expect(status.configured).toBe(false);
+    expect(status.missingSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(status.optionalSecrets).toEqual([]);
   });
 
   it.each([

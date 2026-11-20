@@ -192,7 +192,7 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 
 **On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register with the emailed code becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
-For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
+For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit. Self-host skips the hosted check that refuses a sign-in code for a domain with no MX record, so with a real provider a code sent to such an address is accepted at sign-in and then bounces at the relay.
 
 ## 5. Make your first API call
 

@@ -63,7 +63,13 @@ describe('POST /api/email/resend-verification', () => {
   });
 
   it('tells an admin which secrets are missing and sends nothing when mail is not configured', async () => {
-    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    mockStatus.mockReturnValue({
+      configured: false,
+      transport: 'smtp',
+      missingSecrets: ['MAIL_HOST'],
+      optionalSecrets: [],
+      secrets: {},
+    });
     const { res, done } = invoke(true);
     await done;
 
@@ -75,7 +81,13 @@ describe('POST /api/email/resend-verification', () => {
 
   it('points a self-host admin at the env file and chart instead of SST secrets', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
-    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    mockStatus.mockReturnValue({
+      configured: false,
+      transport: 'smtp',
+      missingSecrets: ['MAIL_HOST'],
+      optionalSecrets: [],
+      secrets: {},
+    });
     const { res, done } = invoke(true);
     await done;
 
@@ -86,7 +98,13 @@ describe('POST /api/email/resend-verification', () => {
 
   it('keeps the SST hint off self-host', async () => {
     vi.stubEnv('B4M_SELF_HOST', '');
-    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    mockStatus.mockReturnValue({
+      configured: false,
+      transport: 'smtp',
+      missingSecrets: ['MAIL_HOST'],
+      optionalSecrets: [],
+      secrets: {},
+    });
     const { res, done } = invoke(true);
     await done;
 
@@ -94,7 +112,13 @@ describe('POST /api/email/resend-verification', () => {
   });
 
   it('gives a non-admin a generic 503 without the secret names', async () => {
-    mockStatus.mockReturnValue({ configured: false, transport: 'smtp', missingSecrets: ['MAIL_HOST'], secrets: {} });
+    mockStatus.mockReturnValue({
+      configured: false,
+      transport: 'smtp',
+      missingSecrets: ['MAIL_HOST'],
+      optionalSecrets: [],
+      secrets: {},
+    });
     const { res, done } = invoke(false);
     await done;
 
@@ -108,6 +132,7 @@ describe('POST /api/email/resend-verification', () => {
       configured: true,
       transport: 'ses',
       missingSecrets: [],
+      optionalSecrets: [],
       secrets: { MAIL_FROM: true },
     });
     const { res, done } = invoke(false);
