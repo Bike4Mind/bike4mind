@@ -15,9 +15,11 @@ import type {
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
+  SendMessageResult,
   SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
@@ -536,6 +538,13 @@ export interface ConversationController {
   stop: () => void;
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
+  /**
+   * Replace a sent prompt with `text`, dropping every turn after it, and send it. False when main
+   * refused; the thread is put back and the reason is in `sendError`.
+   */
+  editMessage: (messageId: string, text: string) => Promise<boolean>;
+  /** Drop the last reply and run its prompt again. A refusal puts the reply back. */
+  regenerate: () => Promise<void>;
   /**
    * Run a slash command. Client-side actions only; nothing here reaches the model as a tool.
    * A refusal lands in `sendError`, which is where the user is already looking for one.
@@ -1182,6 +1191,75 @@ export function useConversation(
     if (read && read.sessionId === id) read.stale = true;
   }, []);
 
+  /**
+   * Both rewinds draw at once - the dropped turns leave the thread before the round trip, as a
+   * send's prompt appears before it - and put the thread back if main refuses. Main truncates
+   * the stored thread itself (SessionStore.truncateFrom), so a reload shows the same history.
+   */
+  const rewind = useCallback(
+    async (
+      next: (current: ChatMessage[]) => ChatMessage[],
+      call: (id: string) => Promise<SendMessageResult>
+    ): Promise<boolean> => {
+      if (!sessionId) return false;
+      transcriptVersion.current++;
+      outdateOpenRead(sessionId);
+      setSendError(null);
+      setNotice(null);
+      const before = messages;
+      setMessages(next(before));
+      const result = await call(sessionId);
+      if (activeSessionId.current !== sessionId) return result.ok;
+      if (!result.ok) {
+        setMessages(before);
+        setSendError(result.error);
+        return false;
+      }
+      if (!result.queued && result.notice) setNotice(result.notice);
+      const updated = await window.b4m.chat.getSession(sessionId);
+      if (updated) {
+        if (activeSessionId.current === sessionId)
+          setSession(current => (current?.id === sessionId ? updated : current));
+        onSummaryChanged(summarizeSession(updated));
+      }
+      return true;
+    },
+    [sessionId, messages, onSummaryChanged, outdateOpenRead]
+  );
+
+  const editMessage = useCallback(
+    async (messageId: string, text: string): Promise<boolean> => {
+      const prompt = text.trim();
+      if (!prompt) return false;
+      return rewind(
+        current => {
+          const at = current.findIndex(message => message.id === messageId);
+          if (at < 0) return current;
+          const { attachments } = current[at];
+          return [
+            ...current.slice(0, at),
+            {
+              id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
+              role: 'user',
+              content: prompt,
+              createdAt: new Date().toISOString(),
+              ...(attachments?.length ? { attachments } : {}),
+            },
+          ];
+        },
+        id => window.b4m.chat.editMessage({ sessionId: id, messageId, text: prompt })
+      );
+    },
+    [rewind]
+  );
+
+  const regenerate = useCallback(async () => {
+    await rewind(
+      current => (regenerableReply(current) ? current.slice(0, -1) : current),
+      id => window.b4m.chat.regenerateReply(id)
+    );
+  }, [rewind]);
+
   // A summary main just wrote, folded into both the open conversation and the sidebar row. The
   // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
@@ -1647,6 +1725,8 @@ export function useConversation(
     send,
     stop,
     continueReply,
+    editMessage,
+    regenerate,
     runCommand,
     commandProgress,
     queued,
