@@ -71,6 +71,8 @@ export class LoopMirror {
   private retryAt = 0;
   private backoff = 0;
   private flushing: Promise<void> | undefined;
+  /** The server answered 404 (EnableLoops is off): stop posting until the next reset. */
+  private disabled = false;
 
   constructor(
     private readonly deps: {
@@ -96,6 +98,7 @@ export class LoopMirror {
     this.synced = false;
     this.retryAt = 0;
     this.backoff = 0;
+    this.disabled = false;
   }
 
   /** Post every mirrored loop now (the heartbeat calls this); skipped while backing off. */
@@ -107,7 +110,7 @@ export class LoopMirror {
   private async post(): Promise<void> {
     const now = (this.deps.now ?? Date.now)();
     const api = this.deps.api();
-    if (!api || now < this.retryAt) return;
+    if (!api || this.disabled || now < this.retryAt) return;
     try {
       const details = this.deps.details();
       const mirrored = details.filter(detail => detail.loop.mirror);
@@ -117,6 +120,7 @@ export class LoopMirror {
           this.sent.add(detail.loop.id);
         } catch (err) {
           // One loop refused (e.g. past the server's loop cap) must not hold back the others.
+          if (notFound(err)) throw err;
           if (!refused(err)) throw err;
           this.deps.logger.warn(`LOOPS: mirror refused ${detail.loop.id}: ${String(err)}`);
         }
@@ -134,6 +138,11 @@ export class LoopMirror {
       this.synced = true;
       this.backoff = 0;
     } catch (err) {
+      if (notFound(err)) {
+        this.disabled = true;
+        this.deps.logger.warn('LOOPS: mirror disabled, the server has loops turned off');
+        return;
+      }
       if (this.backoff === 0) this.deps.logger.warn(`LOOPS: mirror post failed: ${String(err)}`);
       this.backoff = Math.min(Math.max(this.backoff * 2, MIRROR_MS.backoffMin), MIRROR_MS.backoffMax);
       this.retryAt = now + this.backoff;
@@ -145,4 +154,9 @@ export class LoopMirror {
 function refused(err: unknown): boolean {
   const status = (err as { response?: { status?: unknown } } | null)?.response?.status;
   return typeof status === 'number' && status >= 400 && status < 500 && status !== 429;
+}
+
+/** The loops API answers 404 for everyone while the admin's EnableLoops setting is off. */
+function notFound(err: unknown): boolean {
+  return (err as { response?: { status?: unknown } } | null)?.response?.status === 404;
 }

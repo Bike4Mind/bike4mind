@@ -173,6 +173,17 @@ describe('LoopMirror', () => {
     expect(put).toHaveBeenCalledTimes(4);
   });
 
+  it('stops posting after a 404 (loops disabled on the server) until reset', async () => {
+    put.mockRejectedValue(Object.assign(new Error('404'), { response: { status: 404 } }));
+    await mirror.flush();
+    vi.advanceTimersByTime(MIRROR_MS.backoffMax * 2);
+    await mirror.flush();
+    expect(put).toHaveBeenCalledTimes(1);
+    mirror.reset();
+    await mirror.flush();
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
   it('posts nothing while signed out', async () => {
     mirror = new LoopMirror({ api: () => null, details: () => details, logger: { warn } });
     await mirror.flush();
