@@ -2,8 +2,8 @@ import type { AdminPermissionRequirement } from '@bike4mind/common';
 
 /**
  * The admin queues the sidebar counts: one key per page whose items wait for an admin to act.
- * `GET /api/admin/action-counts` (admin/actionCounts.ts) answers every key in one request;
- * adminSidebarConfig.tsx names the key each sidebar item shows.
+ * `GET /api/admin/action-counts` (apps/client/server/admin/actionCounts.ts) answers every key in one
+ * request; apps/client/app/components/admin/adminSidebarConfig.tsx names the key each sidebar item shows.
  */
 export const ADMIN_ACTION_COUNT_KEYS = [
   'waitingSubscribers',
