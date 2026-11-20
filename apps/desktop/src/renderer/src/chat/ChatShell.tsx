@@ -50,6 +50,7 @@ import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { PanelRightIcon } from './icons';
+import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
@@ -802,7 +803,7 @@ export function ChatShell({
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
   // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
-  // and messages, wait until it is off; Focus mode and the peek drawer still answer them.
+  // and messages, are replaced by a neutral count until it is off.
   const presentingStage = orchestrating && orchestratorPrefs.presenter;
   const { setOrchestrate } = conversation;
   const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
@@ -2044,6 +2045,13 @@ export function ChatShell({
                     {sideChatError.error}
                   </Alert>
                 </Box>
+              )}
+
+              {presentingStage && (
+                <PresenterPendingNotice
+                  count={heldRelays.held.length + taskDecisions.length}
+                  onTurnOff={() => orchestratorPrefs.setPresenter(false)}
+                />
               )}
 
               {!presentingStage && (
