@@ -5,6 +5,7 @@ import {
   deliverEscalationReminderDigest,
   deliverIncidentAlert,
   deliverReminderDigest,
+  type IncidentAlertOutcome,
   type IncidentEscalationDelivery,
   type IncidentReminderDigest,
   type RecordedIncident,
@@ -27,11 +28,17 @@ export const REVIEW_SWEEP_SEND_BUDGET_MS = 3 * MINUTE_MS;
 // An incident still awaiting a verdict this long after it was recorded moves to the second review
 // step. Kept here, not with the sweep specs, because no deployed resource reads it.
 export const REVIEW_ESCALATION_TIMEOUT_HOURS = 24;
+// A queued alert the email-send worker has not confirmed is resent only after this long, so one
+// still in flight (the worker's own retries finish within minutes) is not sent twice.
+export const REVIEW_ALERT_IN_FLIGHT_MINUTES = 60;
 
 export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
   incidents: {
-    /** Unreviewed incidents created at or before the cutoff with no delivered alert, oldest first. */
-    findUnalerted(createdBefore: Date, limit: number): Promise<RecordedIncident[]>;
+    /**
+     * Unreviewed incidents created at or before the cutoff with no delivered alert, oldest first,
+     * skipping one whose alert was queued after `queuedBefore`.
+     */
+    findUnalerted(createdBefore: Date, limit: number, queuedBefore: Date): Promise<RecordedIncident[]>;
     /** Alerted, unreviewed incidents whose last alert or reminder is at or before the cutoff, oldest first. */
     findDueForReminder(notifiedBefore: Date, limit: number): Promise<RecordedIncident[]>;
     /** Number of unreviewed incidents of any age. */
@@ -39,14 +46,16 @@ export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
     /** The oldest unreviewed incident of any age. */
     findOldestPending(): Promise<RecordedIncident | undefined>;
     markAlerted(id: string, at: Date): Promise<void>;
+    markAlertQueued(id: string, at: Date): Promise<void>;
     markReminded(ids: string[], at: Date): Promise<void>;
     /** Unreviewed, unescalated incidents created at or before the cutoff, oldest first. */
     findDueForEscalation(createdBefore: Date, limit: number): Promise<RecordedIncident[]>;
     /** Stamps a timeout escalation; null when the incident was escalated or decided meanwhile. */
     escalateOnTimeout(id: string, at: Date): Promise<RecordedIncident | null>;
-    /** Escalated, unreviewed incidents with no delivered escalation email, oldest first. */
-    findEscalationUnalerted(limit: number): Promise<RecordedIncident[]>;
+    /** Escalated, unreviewed incidents with no delivered escalation email, oldest first; same `queuedBefore` rule. */
+    findEscalationUnalerted(limit: number, queuedBefore: Date): Promise<RecordedIncident[]>;
     markEscalationAlerted(id: string, at: Date): Promise<void>;
+    markEscalationAlertQueued(id: string, at: Date): Promise<void>;
     /** Escalated, unreviewed incidents whose escalation email or last escalation reminder is at or before the cutoff, oldest first. */
     findDueForEscalationReminder(notifiedBefore: Date, limit: number): Promise<RecordedIncident[]>;
     markEscalationReminded(ids: string[], at: Date): Promise<void>;
@@ -54,12 +63,13 @@ export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
 }
 
 export interface IncidentReviewSweepResult {
+  /** Alerts sent this run, delivered inline or queued for the email-send worker. */
   alerted: number;
   /** Incidents covered by the reminder digest this run. */
   reminded: number;
   /** Incidents this run moved to the second review step because they waited too long. */
   escalated: number;
-  /** Escalation emails delivered this run. */
+  /** Escalation emails sent this run, delivered inline or queued. */
   escalationAlerted: number;
   /** Incidents covered by the reminder digest to the second reviewers this run. */
   escalationReminded: number;
@@ -124,6 +134,7 @@ export async function runIncidentReviewSweep(
   const escalationConfigured = partitionEmailList(escalationRecipients).valid.length > 0;
   const oldestPending = await incidents.findOldestPending();
   const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
+  const inFlightCutoff = new Date(now.getTime() - REVIEW_ALERT_IN_FLIGHT_MINUTES * MINUTE_MS);
   const digestFor = async (due: RecordedIncident[]): Promise<IncidentReminderDigest> => ({
     pendingCount: Math.max(await incidents.countPending(), due.length),
     oldestAgeMinutes: ageMinutes(oldestPending ?? due[0], now),
@@ -131,12 +142,19 @@ export async function runIncidentReviewSweep(
 
   if (reviewersConfigured) {
     const graceCutoff = new Date(now.getTime() - REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES * MINUTE_MS);
-    const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT);
+    const unalerted = await incidents.findUnalerted(graceCutoff, REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff);
     for (const incident of unalerted) {
       if (outOfBudget()) break;
-      if (await sendAlert(incident, deps)) {
+      const sent = await sendAlert(incident, deps);
+      if (sent) {
         result.alerted++;
-        await stamp(() => incidents.markAlerted(incident.id, now), 'alertedAt', { incidentId: incident.id }, deps);
+        await stamp(
+          () =>
+            sent === 'queued' ? incidents.markAlertQueued(incident.id, now) : incidents.markAlerted(incident.id, now),
+          sent === 'queued' ? 'alertQueuedAt' : 'alertedAt',
+          { incidentId: incident.id },
+          deps
+        );
       } else {
         result.failed++;
       }
@@ -179,15 +197,19 @@ export async function runIncidentReviewSweep(
     }
   }
 
-  const owed = await incidents.findEscalationUnalerted(REVIEW_SWEEP_BATCH_LIMIT);
+  const owed = await incidents.findEscalationUnalerted(REVIEW_SWEEP_BATCH_LIMIT, inFlightCutoff);
   if (escalationConfigured) {
     for (const incident of owed) {
       if (outOfBudget()) break;
-      if (await sendEscalation(incident, deps)) {
+      const sent = await sendEscalation(incident, deps);
+      if (sent) {
         result.escalationAlerted++;
         await stamp(
-          () => incidents.markEscalationAlerted(incident.id, now),
-          'escalationAlertedAt',
+          () =>
+            sent === 'queued'
+              ? incidents.markEscalationAlertQueued(incident.id, now)
+              : incidents.markEscalationAlerted(incident.id, now),
+          sent === 'queued' ? 'escalationAlertQueuedAt' : 'escalationAlertedAt',
           { incidentId: incident.id },
           deps
         );
@@ -223,35 +245,41 @@ export async function runIncidentReviewSweep(
     );
   }
 
-  // Read after the sends so an incident this run alerted does not count against the alarm.
-  const [oldestUnalerted] = await incidents.findUnalerted(now, 1);
+  // Read after the sends so an incident this run alerted inline does not count against the alarm. A
+  // queued alert still counts until the email-send worker confirms it.
+  const [oldestUnalerted] = await incidents.findUnalerted(now, 1, now);
   result.oldestUnalertedAgeMinutes = ageMinutes(oldestUnalerted, now);
   result.oldestPendingAgeMinutes = ageMinutes(oldestPending, now);
   result.pendingWithoutReviewers = !reviewersConfigured && oldestPending !== undefined;
   return result;
 }
 
-async function sendAlert(incident: RecordedIncident, deps: IncidentReviewSweepDeps): Promise<boolean> {
+type SentOutcome = Extract<IncidentAlertOutcome, 'delivered' | 'queued'> | null;
+
+const sentOutcome = (outcome: IncidentAlertOutcome): SentOutcome =>
+  outcome === 'delivered' || outcome === 'queued' ? outcome : null;
+
+async function sendAlert(incident: RecordedIncident, deps: IncidentReviewSweepDeps): Promise<SentOutcome> {
   try {
-    return (await deliverIncidentAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
+    return sentOutcome(await deliverIncidentAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS }));
   } catch (error) {
     deps.logger.error('[ImageModeration] review sweep alert failed', {
       incidentId: incident.id,
       errorName: errorName(error),
     });
-    return false;
+    return null;
   }
 }
 
-async function sendEscalation(incident: RecordedIncident, deps: IncidentReviewSweepDeps): Promise<boolean> {
+async function sendEscalation(incident: RecordedIncident, deps: IncidentReviewSweepDeps): Promise<SentOutcome> {
   try {
-    return (await deliverEscalationAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
+    return sentOutcome(await deliverEscalationAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS }));
   } catch (error) {
     deps.logger.error('[ImageModeration] review sweep escalation alert failed', {
       incidentId: incident.id,
       errorName: errorName(error),
     });
-    return false;
+    return null;
   }
 }
 
@@ -262,7 +290,8 @@ async function sendDigest(
 ): Promise<boolean> {
   const deliver = to === 'escalation' ? deliverEscalationReminderDigest : deliverReminderDigest;
   try {
-    return (await deliver(digest, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
+    // A digest carries no delivery ref, so a queued one counts as sent and lastReminderAt is a queue-time stamp.
+    return sentOutcome(await deliver(digest, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) !== null;
   } catch (error) {
     deps.logger.error(`[ImageModeration] review sweep ${to === 'escalation' ? 'escalation ' : ''}reminder failed`, {
       pendingCount: digest.pendingCount,

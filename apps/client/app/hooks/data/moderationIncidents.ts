@@ -145,12 +145,16 @@ export type ModerationIncidentView = {
   ncmecReportId: string | null;
   /** Null when no reviewer alert was delivered. */
   alertedAt: string | null;
+  /** Set when the alert was queued for delivery; until alertedAt is set too, it is still in flight. */
+  alertQueuedAt: string | null;
   lastReminderAt: string | null;
   /** Null until the incident moves to the second review step. */
   escalatedAt: string | null;
   escalationTrigger: IncidentEscalationTrigger | null;
   /** Null when no escalation email was delivered. */
   escalationAlertedAt: string | null;
+  /** Same as alertQueuedAt, for the escalation email. */
+  escalationAlertQueuedAt: string | null;
   reportedAt: string | null;
   falsePositiveAt: string | null;
   noActionAt: string | null;
@@ -205,13 +209,16 @@ export function useModerationIncidentVerdict() {
   });
 }
 
-/** Whether the escalation email went out: `no_recipients` means no escalation reviewer is configured. */
-export type ModerationEscalationAlert = 'delivered' | 'no_recipients' | 'failed';
+/**
+ * Whether the escalation email went out: `queued` means it is waiting on the email-send worker,
+ * `no_recipients` means no escalation reviewer is configured.
+ */
+export type ModerationEscalationAlert = 'delivered' | 'queued' | 'no_recipients' | 'failed';
 
 export type ModerationEscalationResult = {
   incident: Pick<
     ModerationIncidentView,
-    'id' | 'reviewStatus' | 'escalatedAt' | 'escalationTrigger' | 'escalationAlertedAt'
+    'id' | 'reviewStatus' | 'escalatedAt' | 'escalationTrigger' | 'escalationAlertedAt' | 'escalationAlertQueuedAt'
   >;
   alert: ModerationEscalationAlert;
 };

@@ -68,10 +68,12 @@ const view = (over: Partial<ModerationIncidentView> = {}): ModerationIncidentVie
   fabFileId: null,
   ncmecReportId: null,
   alertedAt: null,
+  alertQueuedAt: null,
   lastReminderAt: null,
   escalatedAt: null,
   escalationTrigger: null,
   escalationAlertedAt: null,
+  escalationAlertQueuedAt: null,
   reportedAt: null,
   falsePositiveAt: null,
   noActionAt: null,
@@ -327,6 +329,19 @@ describe('ModerationIncidentDetail', () => {
     renderDetail();
     expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('No alert delivered yet');
     expect(screen.queryByTestId('moderation-incident-reminded')).toBeNull();
+  });
+
+  it('says the alert is awaiting delivery while it is queued, and shows the time once delivered', () => {
+    m.view.mockReturnValue(loaded(view({ alertQueuedAt: '2026-10-30T10:01:00.000Z' })));
+    const { unmount } = renderDetail();
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('Alert queued, awaiting delivery');
+    unmount();
+
+    m.view.mockReturnValue(
+      loaded(view({ alertQueuedAt: '2026-10-30T10:01:00.000Z', alertedAt: '2026-10-30T10:02:00.000Z' }))
+    );
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toMatch(/30 Oct 2026/);
   });
 
   it('shows the alert time once one was delivered', () => {

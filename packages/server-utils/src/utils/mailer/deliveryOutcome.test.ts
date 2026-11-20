@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ record: vi.fn(), reconcile: vi.fn(), logError: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ emailSendAttemptRepository: { recordDeliveryOutcome: mocks.record } }));
+const mocks = vi.hoisted(() => ({ record: vi.fn(), recordAlert: vi.fn(), reconcile: vi.fn(), logError: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({
+  emailSendAttemptRepository: { recordDeliveryOutcome: mocks.record },
+  imageModerationIncidentRepository: { recordAlertDelivery: mocks.recordAlert },
+}));
 vi.mock('../../email/reconcileEmailJob', () => ({ reconcileEmailJob: mocks.reconcile }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: mocks.logError } }));
 
@@ -32,6 +35,22 @@ describe('recordEmailDeliveryOutcome', () => {
     mocks.record.mockRejectedValue(new Error('db down'));
     await expect(recordEmailDeliveryOutcome(ref, ok)).resolves.toBeUndefined();
     expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('emailAttempt attempt-1: db down'));
+  });
+
+  it('routes an incident alert outcome to the incident, never to an attempt', async () => {
+    const failed = { ok: false as const, error: 'rejected' };
+    await recordEmailDeliveryOutcome({ kind: 'incidentAlert', incidentId: 'inc-1', alert: 'escalation' }, failed);
+    expect(mocks.recordAlert).toHaveBeenCalledWith('inc-1', 'escalation', failed);
+    expect(mocks.record).not.toHaveBeenCalled();
+    expect(mocks.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('logs the incident id and resolves when the incident write throws', async () => {
+    mocks.recordAlert.mockRejectedValue(new Error('db down'));
+    await expect(
+      recordEmailDeliveryOutcome({ kind: 'incidentAlert', incidentId: 'inc-1', alert: 'review' }, ok)
+    ).resolves.toBeUndefined();
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('incidentAlert inc-1: db down'));
   });
 
   it('resolves when the recount throws', async () => {

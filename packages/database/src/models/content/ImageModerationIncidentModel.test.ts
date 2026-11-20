@@ -53,6 +53,48 @@ describe('ImageModerationIncidentRepository', () => {
     });
   });
 
+  describe('recordAlertDelivery', () => {
+    const read = async (id: unknown) => ImageModerationIncident.findById(id).lean();
+
+    it('stamps the first delivered copy and leaves it on a later copy or a replay', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const first = new Date('2026-10-19T12:00:00.000Z');
+
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: first });
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', {
+        ok: true,
+        at: new Date('2026-10-19T12:05:00.000Z'),
+      });
+
+      expect((await read(inc._id))?.alertedAt).toEqual(first);
+      expect((await read(inc._id))?.escalationAlertedAt).toBeUndefined();
+    });
+
+    it('never marks the incident delivered on a failure, only stamps the failure time', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const at = new Date('2026-10-19T12:00:00.000Z');
+
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: false, error: 'x' }, at);
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'escalation', { ok: false, error: 'x' }, at);
+
+      const stored = await read(inc._id);
+      expect(stored?.alertedAt).toBeUndefined();
+      expect(stored?.escalationAlertedAt).toBeUndefined();
+      expect(stored?.alertFailedAt).toEqual(at);
+      expect(stored?.escalationAlertFailedAt).toEqual(at);
+    });
+
+    it('keeps a delivered stamp when another reviewer copy fails afterwards', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const delivered = new Date('2026-10-19T12:00:00.000Z');
+
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'escalation', { ok: true, at: delivered });
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'escalation', { ok: false, error: 'x' });
+
+      expect((await read(inc._id))?.escalationAlertedAt).toEqual(delivered);
+    });
+  });
+
   describe('review sweep queries', () => {
     const NOW = new Date('2026-10-20T12:00:00.000Z');
     const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000);
@@ -94,10 +136,29 @@ describe('ImageModerationIncidentRepository', () => {
       await seed({ createdAt: hoursAgo(7), reviewStatus: 'false_positive' });
       await seed({ createdAt: hoursAgo(8), reviewStatus: 'no_action' });
 
-      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10);
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, NOW);
 
       expect(found.map(incident => String(incident._id))).toEqual([older, newer]);
-      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1)).toHaveLength(1);
+      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1, NOW)).toHaveLength(1);
+    });
+
+    it('findUnalerted skips an alert queued after the in-flight cutoff and returns one queued before it', async () => {
+      const inFlight = await seed({ createdAt: hoursAgo(3) });
+      const stale = await seed({ createdAt: hoursAgo(4) });
+      await imageModerationIncidentRepository.markAlertQueued(inFlight, hoursAgo(0.5));
+      await imageModerationIncidentRepository.markAlertQueued(stale, hoursAgo(2));
+
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, hoursAgo(1));
+      expect(found.map(incident => String(incident._id))).toEqual([stale]);
+      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10, NOW)).toHaveLength(2);
+    });
+
+    it('findEscalationUnalerted skips an escalation email still in flight', async () => {
+      const inFlight = await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1) });
+      await imageModerationIncidentRepository.markEscalationAlertQueued(inFlight, hoursAgo(0.5));
+
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, hoursAgo(1))).toEqual([]);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW)).toHaveLength(1);
     });
 
     it('findDueForReminder returns alerted unreviewed incidents whose last notice is a day old', async () => {
@@ -139,10 +200,10 @@ describe('ImageModerationIncidentRepository', () => {
       await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1), reviewStatus: 'false_positive' });
       await seed({ createdAt: hoursAgo(30) });
 
-      const found = await imageModerationIncidentRepository.findEscalationUnalerted(10);
+      const found = await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW);
 
       expect(found.map(incident => String(incident._id))).toEqual([timeout, manual]);
-      expect(await imageModerationIncidentRepository.findEscalationUnalerted(1)).toHaveLength(1);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(1, NOW)).toHaveLength(1);
     });
 
     it('findDueForEscalationReminder returns escalated unreviewed incidents whose last escalation notice is a day old', async () => {
@@ -267,7 +328,7 @@ describe('ImageModerationIncidentRepository', () => {
       await imageModerationIncidentRepository.markEscalationAlerted(inc.id, AT);
 
       expect((await ImageModerationIncident.findById(inc._id).lean())?.escalationAlertedAt).toEqual(AT);
-      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10)).toEqual([]);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10, NOW)).toEqual([]);
     });
 
     it('rejects an escalation trigger outside the enum', async () => {

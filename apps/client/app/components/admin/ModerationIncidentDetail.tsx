@@ -51,6 +51,7 @@ const VERDICT_SUCCESS: Record<VerdictChoice, string> = {
 
 const ESCALATION_ALERT_COPY: Record<ModerationEscalationAlert, string> = {
   delivered: 'Escalated. The second reviewers were emailed.',
+  queued: 'Escalated. The email to the second reviewers is queued for delivery.',
   no_recipients:
     'Escalated, but no second reviewer is configured, so no email went out. Add addresses to Image Moderation Escalation Emails in admin settings.',
   failed: 'Escalated, but the email to the second reviewers did not send. The next review sweep sends it again.',
@@ -257,7 +258,11 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                 </Fact>
               )}
               <Fact label="Reviewer alert" data-testid="moderation-incident-alerted">
-                {data.alertedAt ? formatUtc(new Date(data.alertedAt)) : 'No alert delivered yet'}
+                {data.alertedAt
+                  ? formatUtc(new Date(data.alertedAt))
+                  : data.alertQueuedAt
+                    ? 'Alert queued, awaiting delivery'
+                    : 'No alert delivered yet'}
               </Fact>
               {data.lastReminderAt && (
                 <Fact label="Last reminder" data-testid="moderation-incident-reminded">
@@ -277,7 +282,9 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   <Fact label="Escalation email" data-testid="moderation-incident-escalation-alerted">
                     {escalationState.escalationAlertedAt
                       ? formatUtc(new Date(escalationState.escalationAlertedAt))
-                      : 'No escalation email delivered yet'}
+                      : escalationState.escalationAlertQueuedAt
+                        ? 'Escalation email queued, awaiting delivery'
+                        : 'No escalation email delivered yet'}
                   </Fact>
                 </>
               )}
@@ -442,7 +449,7 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
           )}
           {escalated && (
             <Alert
-              color={escalated.alert === 'delivered' ? 'neutral' : 'warning'}
+              color={escalated.alert === 'delivered' || escalated.alert === 'queued' ? 'neutral' : 'warning'}
               data-testid="moderation-incident-escalation-outcome"
               data-alert={escalated.alert}
             >

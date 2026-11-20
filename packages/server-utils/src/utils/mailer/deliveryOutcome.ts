@@ -1,4 +1,4 @@
-import { emailSendAttemptRepository } from '@bike4mind/database';
+import { emailSendAttemptRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import type { EmailDeliveryOutcome } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { reconcileEmailJob } from '../../email/reconcileEmailJob';
@@ -13,6 +13,8 @@ export async function recordEmailDeliveryOutcome(ref: EmailDeliveryRef, outcome:
     if (ref.kind === 'emailAttempt') {
       const jobId = await emailSendAttemptRepository.recordDeliveryOutcome(ref.attemptId, outcome);
       if (jobId) await reconcileEmailJob(jobId);
+    } else {
+      await imageModerationIncidentRepository.recordAlertDelivery(ref.incidentId, ref.alert, outcome);
     }
   } catch (e: unknown) {
     const id = ref.kind === 'emailAttempt' ? ref.attemptId : ref.incidentId;
