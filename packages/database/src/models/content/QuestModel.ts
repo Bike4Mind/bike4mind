@@ -1370,8 +1370,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
-   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
-   * needs no index of its own.
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Served by the partial `sessionId_pendingActionTs` index.
    */
   async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
     if (sessionIds.length === 0) return [];
@@ -1394,6 +1393,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       ts: quest.pendingAction.ts,
       params: quest.pendingAction.params,
     }));
+  }
+
+  /**
+   * How many approvals in the given sessions can still be answered: raised at or after `raisedSinceTs` (ms
+   * epoch), the bound the pending-actions endpoints accept. Served by the partial `sessionId_pendingActionTs` index.
+   */
+  async countPendingActionsBySessionIds(sessionIds: string[], raisedSinceTs: number): Promise<number> {
+    if (sessionIds.length === 0) return 0;
+    // countDocuments skips the soft-delete plugin's find hooks, so the tombstone filter is explicit.
+    return this.model.countDocuments({
+      sessionId: { $in: sessionIds },
+      'pendingAction.ts': { $gte: raisedSinceTs },
+      deletedAt: null,
+    });
   }
 
   /**
@@ -1945,6 +1958,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { oauthClientId: 1, timestamp: -1 },
       { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
+    );
+
+    // Serves countPendingActionsBySessionIds and findPendingActionsBySessionIds. Partial, so it holds only
+    // quests parked on an approval. Pre-built by 20261120072518_ensure-quest-session-pending-action-index.
+    ChatHistoryItemSchema.index(
+      { sessionId: 1, 'pendingAction.ts': -1 },
+      { name: 'sessionId_pendingActionTs', partialFilterExpression: { 'pendingAction.ts': { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

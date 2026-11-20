@@ -5,6 +5,7 @@ import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -12,9 +13,6 @@ import { describeCustomCallFailure } from '@bike4mind/server-utils/mcpConnection
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-
-// Token expiration time (15 minutes) - must match ChatCompletionProcess.ts
-const TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
 
 type ActingUser = Parameters<typeof resolvePendingActionTarget>[1];
 

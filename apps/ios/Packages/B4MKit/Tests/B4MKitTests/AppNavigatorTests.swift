@@ -37,6 +37,13 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
   }
 
+  func testTheLatestBriefRouteFromTheWidgetPushesAnIdlessBrief() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: nil))
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
+    XCTAssertTrue(navigator.isShowing(.brief(id: nil)))
+  }
+
   func testTheLatestBriefIsNotAssumedToBeThePushedBrief() {
     let navigator = AppNavigator()
     navigator.openLatestBrief()

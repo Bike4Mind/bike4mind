@@ -1,5 +1,10 @@
 import { defineEndpoint } from '../defineEndpoint';
-import { BriefIdParamSchema, BriefListResponseSchema, BriefSchema } from '../../schemas/brief';
+import {
+  BriefIdParamSchema,
+  BriefListResponseSchema,
+  BriefSchema,
+  PendingDecisionCountSchema,
+} from '../../schemas/brief';
 import { ApiErrorSchema } from '../../schemas/chat';
 
 const JWT_ONLY_NOTE =
@@ -65,6 +70,27 @@ export const getBriefContract = defineEndpoint({
     200: { description: 'The brief.', schema: BriefSchema },
     401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
     404: { description: 'No such brief, or it is not yours.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+/** Served by apps/client/pages/api/v1/pending-decisions.ts; counted by apps/client/server/briefs/countPendingDecisions.ts. */
+export const getPendingDecisionCountContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/pending-decisions',
+  operationId: 'getPendingDecisionCount',
+  summary: 'Count decisions waiting on you',
+  description:
+    'The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still ' +
+    'open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it ' +
+    'composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks ' +
+    'and briefs are counted.',
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'The count.', schema: PendingDecisionCountSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: '<access_token>', streaming: false },

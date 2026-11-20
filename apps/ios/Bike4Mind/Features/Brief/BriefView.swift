@@ -25,9 +25,15 @@ private struct BriefScreen: View {
       .background(Tokens.Palette.background)
       .navigationTitle("Brief")
       .navigationBarTitleDisplayMode(.inline)
-      .task { await model.load() }
+      .task {
+        await model.load()
+        services.refreshWidgetPendingDecisions()
+      }
       .onDisappear { model.cancel() }
-      .refreshable { await model.refresh() }
+      .refreshable {
+        await model.refresh()
+        services.refreshWidgetPendingDecisions()
+      }
       .toolbar {
         if let brief = model.brief, brief.status == .ready, !brief.isEmpty {
           ToolbarItem(placement: .topBarTrailing) {

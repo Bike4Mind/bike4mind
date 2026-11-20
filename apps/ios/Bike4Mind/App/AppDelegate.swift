@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
       } else {
         // Approve/deny buttons: answered here, with the result posted back as a local notification.
         await Self.services?.approvalNotifications.handle(actionIdentifier: actionIdentifier, payload: payload)
+        Self.services?.refreshWidgetPendingDecisions()
       }
       completionHandler()
     }

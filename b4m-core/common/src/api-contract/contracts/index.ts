@@ -15,7 +15,12 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
-import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
+import {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  getPendingDecisionCountContract,
+} from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
@@ -183,6 +188,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getPendingDecisionCountContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,

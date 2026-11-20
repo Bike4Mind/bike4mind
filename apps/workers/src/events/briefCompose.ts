@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { publishPushNotification, briefDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
@@ -38,7 +39,6 @@ import {
  * malformed reply, and the user can simply compose again.
  */
 
-const APPROVAL_TTL_MS = 15 * 60 * 1000; // Mirrors the pending-action lifecycle (pendingActions.contract.ts).
 const MAX_RUNS = 30;
 const MAX_APPROVALS = 12;
 const MODEL_MAX_TOKENS = 1500;
@@ -148,7 +148,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   const sessionIds = [...new Set(items.map(item => item.sessionId))];
   const pending = await questRepository.findPendingActionsBySessionIds(
     sessionIds,
-    now.getTime() - APPROVAL_TTL_MS,
+    now.getTime() - TOKEN_EXPIRATION_MS,
     MAX_APPROVALS
   );
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
