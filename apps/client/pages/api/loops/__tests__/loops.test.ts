@@ -227,6 +227,13 @@ describe('EnableLoops gate', () => {
     ['override', 'post'],
     ['coach', 'get'],
     ['coach', 'post'],
+    ['events', 'get'],
+    ['resolve', 'post'],
+    ['stats', 'get'],
+    ['rating', 'put'],
+    ['tickets', 'get'],
+    ['budget', 'get'],
+    ['budget', 'put'],
   ];
 
   it.each(routes)('%s %s is a 404 while the setting is off, before touching the repository', async (mod, method) => {
