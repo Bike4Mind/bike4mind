@@ -247,15 +247,16 @@ export const productionStoryboardTool: ToolDefinition = {
           const products = current.brandKit.productFileIds;
           const product = args.productFileId?.toLowerCase();
           const directorIds = new Set<string>(Object.values(DIRECTOR_TRACK_IDS));
-          // The old cut's picture, captions, voice and effects were laid to the old shots, so a new storyboard
-          // clears them; the music bed is laid to the whole cut, so it is kept (trimmed) rather than paid for again.
+          // The old voice and effects were laid to the old shots and add_audio keeps a part already laid, so a new
+          // storyboard clears them. The picture and captions stay until production_assemble re-lays them, so a run
+          // that stops before then leaves a cut that still plays; the music bed is kept (trimmed), not paid again.
           const staleCut = current.timeline.tracks.some(track => directorIds.has(track.id) && track.clips.length > 0);
           await config.compositions.update(args.compositionId, {
             shots,
             ...(staleCut && {
               timeline: withDirectorTracks(
                 current.timeline,
-                { video: [], music: keptMusic(current.timeline, totalMs), voice: [], sfx: [], captions: [] },
+                { music: keptMusic(current.timeline, totalMs), voice: [], sfx: [] },
                 totalMs
               ),
             }),
@@ -268,6 +269,12 @@ export const productionStoryboardTool: ToolDefinition = {
                 },
               }),
           });
+          // A kept shot whose voice line changed: the user's own words may be gone, so the result names them.
+          const linesChanged = resolved.flatMap(({ shot, source }) =>
+            source?.voiceLine && source.voiceLine !== shot.voiceLine
+              ? [{ shot: source.id, was: source.voiceLine, now: shot.voiceLine ?? '' }]
+              : []
+          );
           return JSON.stringify({
             // Every storyboard renumbers its shots, so a kept shot reports the id it had, which is now stale.
             shots: shots.map((shot, index) => {
@@ -282,9 +289,13 @@ export const productionStoryboardTool: ToolDefinition = {
             }),
             totalSeconds: totalMs / 1000,
             ...(lost.length > 0 && { takesDropped: lost }),
+            ...(linesChanged.length > 0 && { linesChanged }),
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
               'unless it needs a clip.' +
+              (linesChanged.length > 0
+                ? ' Tell the user each line in linesChanged as it now reads; never say a changed line was kept.'
+                : '') +
               (staleCut
                 ? " The old cut's voiceover and sound effects were cleared: call production_add_audio again with " +
                   'them, and with the music, which is remade only if the cut grew past it.'

@@ -29,7 +29,10 @@ export function describeProductionError(error: unknown): string {
     const issues = issueList(error);
     return `Error: the production was not saved (${error.message}${issues ? `: ${issues}` : ''}).`;
   }
-  throw error;
+  // Any other failure is reported to the director rather than thrown: a throw ends the whole agent run with no
+  // reply, leaving the user with no word of what was saved.
+  const message = error instanceof Error ? error.message : String(error);
+  return `Error: this step failed unexpectedly (${message}). Tell the user what this step was and that it failed.`;
 }
 
 /**
