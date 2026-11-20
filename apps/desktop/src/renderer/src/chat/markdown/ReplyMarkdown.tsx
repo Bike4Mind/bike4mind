@@ -1,5 +1,6 @@
 import { memo, useMemo, type ComponentProps } from 'react';
 import Box from '@mui/joy/Box';
+import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -7,6 +8,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
+import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton, revealBlockCopyButtonSx } from '../CopyMessageButton';
 import { ExternalLink } from '../ExternalLink';
 import { FilePathLink } from '../FilePathLink';
 import { useImageMenu } from '../ImageContextMenu';
@@ -37,6 +39,16 @@ const REHYPE_PLUGINS = [rehypeSanitize, rehypeFilePaths];
 
 type CodeProps = ComponentProps<'code'> & ExtraProps;
 
+/** What a fence with no language hint is highlighted as; it earns no label. */
+const UNKNOWN_LANGUAGE = 'text';
+
+/** The language label shows and hides with the block's copy button. */
+const LANGUAGE_LABEL_CLASS = 'b4m-block-language';
+const revealLanguageSx = {
+  [`& .${LANGUAGE_LABEL_CLASS}`]: { opacity: 0, transition: 'opacity 120ms' },
+  [`&:hover .${LANGUAGE_LABEL_CLASS}, &:focus-within .${LANGUAGE_LABEL_CLASS}`]: { opacity: 1 },
+} as const;
+
 /**
  * One fenced block, highlighted.
  *
@@ -55,17 +67,51 @@ const CodeBlock = memo(function CodeBlock({
   mode: 'light' | 'dark';
 }) {
   return (
-    <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
-      {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
-      <SyntaxHighlighter
-        language={language}
-        style={SYNTAX_THEMES[mode]}
-        PreTag="div"
-        renderer={fastRenderer}
-        wrapLines={false}
+    // The toolbar sits outside the scroller so it stays put while a long line scrolls under it.
+    <Box sx={{ position: 'relative', my: 1.5, ...revealBlockCopyButtonSx, ...revealLanguageSx }}>
+      <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
+        {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
+        <SyntaxHighlighter
+          language={language}
+          style={SYNTAX_THEMES[mode]}
+          PreTag="div"
+          renderer={fastRenderer}
+          wrapLines={false}
+        >
+          {code}
+        </SyntaxHighlighter>
+      </Box>
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 4,
+          right: 4,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.5,
+          borderRadius: 'sm',
+          // Over the code it covers, so the label never reads as part of the code.
+          bgcolor: 'background.level1',
+        }}
       >
-        {code}
-      </SyntaxHighlighter>
+        {language !== UNKNOWN_LANGUAGE && (
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            className={LANGUAGE_LABEL_CLASS}
+            sx={{ pl: 0.75 }}
+            data-testid="reply-codeblock-language"
+          >
+            {language}
+          </Typography>
+        )}
+        <CopyMessageButton
+          text={code}
+          label="Copy code"
+          className={BLOCK_COPY_BUTTON_CLASS}
+          testId="reply-codeblock-copy-btn"
+        />
+      </Box>
     </Box>
   );
 });
@@ -111,7 +157,7 @@ function buildComponents(mode: 'light' | 'dark'): Components {
           </code>
         );
       }
-      const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
+      const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? UNKNOWN_LANGUAGE;
       // An empty fence has no children at all.
       return <CodeBlock code={String(children ?? '').replace(/\n$/, '')} language={language} mode={mode} />;
     },
