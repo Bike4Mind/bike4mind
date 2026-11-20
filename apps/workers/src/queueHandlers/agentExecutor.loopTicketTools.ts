@@ -51,7 +51,7 @@ import {
   validateWorkItemTitle,
 } from '@server/utils/workItemValidation';
 
-/** ponytail: per-invocation cap on loop_ticket_create, so a runaway run cannot flood a loop. Per-run budgets are later work. */
+/** Per-invocation cap on loop_ticket_create, so a runaway run cannot flood a loop. Per-run budgets are later work. */
 export const MAX_TICKET_CREATES_PER_INVOCATION = 20;
 const LIST_DESCRIPTION_CHARS = 500;
 const LIST_LIMIT = 100;
@@ -668,7 +668,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             }
             return { epic: summarize(epic), children: ids };
           } catch (error) {
-            // ponytail: not a transaction; a crash between the creates and the epic write leaves the children behind.
+            // Not a transaction; a crash between the creates and the epic write leaves the children behind.
             // Best effort, so a failed cleanup does not hide why the split failed.
             await Promise.all(ids.map(id => workItemRepository.softDeleteForUser(id, userId))).catch(() => undefined);
             throw error;

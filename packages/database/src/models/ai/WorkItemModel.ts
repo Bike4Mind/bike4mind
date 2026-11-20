@@ -39,16 +39,16 @@ const ModelName = 'WorkItem';
 export const MAX_GRAPH_ITEMS = 2000;
 
 /**
- * ponytail: candidate window for `listReadyForLoop`, cut after the priority sort and before the dependency
+ * Candidate window for `listReadyForLoop`, cut after the priority sort and before the dependency
  * filter. Lower priorities starve only while 200+ higher-or-equal open tickets fill it (even ones still waiting on
  * open deps), and finish-first applies within the window.
  */
 const LOOP_READY_CANDIDATES = 200;
 
-/** ponytail: pages of parked tickets `reopenSatisfiedBlocks` reads per call; ones further on wait until earlier ones move. */
+/** Pages of parked tickets `reopenSatisfiedBlocks` reads per call; ones further on wait until earlier ones move. */
 const REOPEN_SCAN_PAGES = 25;
 
-/** ponytail: tickets the stats API reads per loop and window; a bigger loop's figures come from a prefix (`truncated`). */
+/** Tickets the stats API reads per loop and window; a bigger loop's figures come from a prefix (`truncated`). */
 const LOOP_STATS_TICKETS = 2000;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
@@ -524,7 +524,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return conditions;
   }
 
-  // ponytail: /graph and the cycle check still count closed loop tickets toward MAX_GRAPH_ITEMS; they need
+  // /graph and the cycle check still count closed loop tickets toward MAX_GRAPH_ITEMS; they need
   // them to see every edge. Page the graph if a user's loops ever fill the window.
   private async loadAllForUser(
     userId: string,

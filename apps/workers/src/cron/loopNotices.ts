@@ -15,7 +15,7 @@ const KEY_PREFIX = 'loop:';
 export const USER_BUDGET_PAUSE_REASON = 'All-loops daily budget reached; resumes 00:00 UTC';
 const TITLE_CHARS = 120;
 const MESSAGE_CHARS = 1000;
-/** ponytail: p0/p1 loop tickets the service-level check reads per tick across all users; past it some go unflagged. */
+/** The p0/p1 loop tickets the service-level check reads per tick across all users; past it some go unflagged. */
 export const MAX_URGENT_TICKETS_READ = 500;
 /** Loops needing their owner, and blocked loop tickets, the sweep reads per tick across all users. */
 export const MAX_NOTICE_LOOPS_READ = 1000;

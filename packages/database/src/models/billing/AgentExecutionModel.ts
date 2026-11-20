@@ -1088,7 +1088,7 @@ AgentExecutionSchema.index(
 // --- List filters & summary projection (history viewer) ---
 
 const LOOP_TOOL_FAILURES_MAX = 20;
-/** ponytail: runs the loop stats read per loop and window; a bigger loop's figures come from a prefix. */
+/** Runs the loop stats read per loop and window; a bigger loop's figures come from a prefix. */
 const LOOP_STATS_RUNS = 5000;
 
 /** The fields of a loop run the loop stats read. */

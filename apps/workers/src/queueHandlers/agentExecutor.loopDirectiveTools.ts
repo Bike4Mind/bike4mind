@@ -44,7 +44,7 @@ const logger = new Logger();
 
 /**
  * Counted in the DB by `executionId`, so it holds across continuations.
- * ponytail: count-then-create, so parallel calls in one turn can slip a little past it, and there is no cap
+ * Count-then-create, so parallel calls in one turn can slip a little past it, and there is no cap
  * on open directives per target. Add an atomic counter on the execution if either is ever seen.
  */
 export const MAX_DIRECTIVES_PER_RUN = 5;
@@ -110,7 +110,7 @@ async function loopStatus(loop: ILoop, userId: string) {
   const [credits, creditsToday, tickets, runs, directives] = await Promise.all([
     agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]),
     agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], startOfUtcDay(new Date())),
-    // ponytail: counts cover the first 100 unclosed tickets; page through if a watched loop ever holds more.
+    // Counts cover the first 100 unclosed tickets; page through if a watched loop ever holds more.
     workItemRepository.listForUser(
       userId,
       { loopId: loop.id, status: WORK_ITEM_STATUSES.filter(status => status !== 'closed') },

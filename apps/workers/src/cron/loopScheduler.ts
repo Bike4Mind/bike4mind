@@ -98,18 +98,18 @@ export const MAX_CONSECUTIVE_FAILURES = 3;
 export const MAX_RESUMED_FOLDS_PER_TICK = 100;
 /** Due loops claimed per tick, started or not (a deferred or paused loop does not use a run slot). */
 export const MAX_CLAIMS_PER_TICK = 100;
-/** ponytail: tickets parked on dependencies reopened per tick across all users; the rest wait for later ticks. */
+/** Tickets parked on dependencies reopened per tick across all users; the rest wait for later ticks. */
 export const MAX_REOPENS_PER_TICK = 200;
 const LOOP_LONG_RUN_SAMPLE = 5;
 /**
- * ponytail: loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks.
+ * Loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks.
  * 100+ long-held in_progress tickets (desktop runs, long cloud runs) would starve the stranded sweep; page past
  * them if that ever happens.
  */
 export const MAX_LIVENESS_SWEEP = 100;
-/** ponytail: untriaged tickets one triage run is shown, oldest first; the rest go to the next triage run. */
+/** Untriaged tickets one triage run is shown, oldest first; the rest go to the next triage run. */
 export const LOOP_TRIAGE_BATCH = 20;
-/** ponytail: p2 tickets the cap demotes per loop per tick; the rest wait for later ticks. */
+/** The p2 tickets the cap demotes per loop per tick; the rest wait for later ticks. */
 export const MAX_DEMOTES_PER_LOOP_TICK = 50;
 
 const MINUTE_MS = 60 * 1000;
@@ -166,7 +166,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger, remainingM
     }
   }
 
-  // ponytail: oldest first and still-running resumed runs are skipped unfolded, so 100+ of those across all
+  // Oldest first and still-running resumed runs are skipped unfolded, so 100+ of those across all
   // users would hold back newer folds; page past skipped events if that ever happens.
   for (const event of await loopEventRepository.listResumedUnfolded(MAX_RESUMED_FOLDS_PER_TICK)) {
     try {
@@ -182,7 +182,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger, remainingM
     } catch (error) {
       logger.error(`[Loops] Failed to reconcile loop ${loop.id}`, error as Error);
     }
-    // ponytail: pushes every in-flight loop each tick, folded or not (at most LoopsMaxActiveRuns cloud runs
+    // Pushes every in-flight loop each tick, folded or not (at most LoopsMaxActiveRuns cloud runs
     // plus desktop runs, one small refetch each per open page); have reconcileLoop report a fold if it matters.
     await pushLoopChanged(loop.userId, loop.id, logger);
   }
@@ -245,7 +245,7 @@ export async function dispatchLoopNow(
     folded = !after || activeLaneCount(after) < activeLaneCount(loop);
   }
 
-  // ponytail: count-then-claim is not atomic, so concurrent events and the tick can overshoot the cap by the
+  // Count-then-claim is not atomic, so concurrent events and the tick can overshoot the cap by the
   // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
   const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
   const claimed: string[] = [];
@@ -546,7 +546,7 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     const stopped = await endUnansweredStop(execution, executionId, now);
     if (stopped === 'raced') return;
     if (stopped === 'aborted') execution.status = 'aborted';
-    // ponytail: updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
+    // An updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
     // aborts the doc on the owner's next start. A legitimately long-quiet run is folded as failed here.
     else if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) {
       return raiseLongRun(loop, execution, executionId, now);
@@ -1073,7 +1073,7 @@ async function dispatchLoop(
       else await parkLaneless(loop, now);
       return false;
     }
-    // ponytail: priced on the ticket nextRunModel peeks at; an owner edit landing between the peek and the
+    // Priced on the ticket nextRunModel peeks at; an owner edit landing between the peek and the
     // claim can start a run on a differently priced model. Claim first and release on refusal if that bites.
     const admission = await admit(loop, await nextRunModel(loop, ready, onlyPriorities), now, logger);
     if (!admission) return false;
