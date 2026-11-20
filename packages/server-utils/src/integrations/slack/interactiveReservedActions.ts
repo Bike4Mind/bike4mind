@@ -3,6 +3,8 @@ import { IMAGE_GEN_MODEL_ACTION_ID } from '@bike4mind/slack';
 /**
  * Action ids the interactive endpoint handles itself; a contributed handler may not claim them.
  * Must stay in sync with the literals in handleInteractiveAction (pinned by a source-scan test next to the endpoint).
+ * The scan only sees single-quoted `case 'id':`, `action_id === 'id'` and `action_id.startsWith('prefix')`; match ids in
+ * one of those forms or the new id goes unchecked.
  */
 export const SLACK_INTERACTIVE_RESERVED_ACTIONS = {
   ids: [

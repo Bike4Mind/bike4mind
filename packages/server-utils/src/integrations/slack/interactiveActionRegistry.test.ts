@@ -192,6 +192,7 @@ describe('buildSlackInteractiveActionRegistry', () => {
 
       expect(registry.problems).toHaveLength(1);
       expect(registry.problems[0]).toContain(`"${named}"`);
+      expect(registry.problems[0]).toContain('a core or reserved action');
       expect(registry.find(named)).not.toBe(contributed);
     });
 
