@@ -4,6 +4,8 @@ import { allSecrets } from './secrets';
 import { eventBus } from './bus';
 import { lambdaVpc } from './vpc';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { appFilesBucket } from './buckets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Image Moderation Review Sweep - re-sends the reviewer alert for incidents nobody was told about
 // and reminds once a day while an incident awaits a verdict. VPC because it reads the incident
@@ -21,8 +23,9 @@ const imageModerationReviewSweep =
           retries: 0,
           // eventBus: the reviewer alerts and reminders are queued as email.send events.
           link: [...allSecrets, eventBus],
-          environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+          environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mailBodyEnvironment(appFilesBucket) },
           permissions: [
+            mailBodyPutPermission(appFilesBucket),
             imageModerationReviewSweepDeadLetter.sendPermission,
             { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
           ],

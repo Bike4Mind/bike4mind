@@ -21,6 +21,7 @@ import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { agentContinuationQueue, generationJobQueue } from './queues';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Re-export websocketApi route setup for the agent_execute route.
 // Defined here (not in websocket.ts) to avoid circular dependency:
@@ -54,6 +55,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     generationJobQueue,
   ],
   environment: {
+    ...mailBodyEnvironment(appFilesBucket),
     // First, so a core variable of the same name always wins.
     ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -74,6 +76,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   permissions: [
+    mailBodyPutPermission(appFilesBucket),
     {
       // P2 #6: Scoped to the actual model invocation actions used by the agent —
       // wildcards would grant Bedrock admin operations the executor never needs.
