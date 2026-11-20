@@ -65,7 +65,7 @@ function readSharedGlue(name: string) {
   return readFileSync(join(sandbox, SHARED_GLUE, `${name}.generated.ts`), 'utf8');
 }
 
-// The five shared-glue modules that import a linked overlay name its source by relative path: no
+// The six shared-glue modules that import a linked overlay name its source by relative path: no
 // overlay is linked into packages/server-utils, so a bare specifier would not resolve there.
 function expectSharedGlueImportsOverlaySource() {
   const tools = readSharedGlue('premiumLlmTools');
@@ -89,7 +89,12 @@ function expectSharedGlueImportsOverlaySource() {
   );
   expect(sessionSettings).toContain('"opti": settings0,');
 
-  for (const glue of [tools, prompts, agentExtensions, adminSettings, sessionSettings]) {
+  const slackActions = readSharedGlue('premiumSlackInteractiveActions');
+  expect(slackActions).toContain(
+    `import { slackInteractiveActions as actions0 } from '${OVERLAY_SRC}/slack-interactive-actions';`
+  );
+
+  for (const glue of [tools, prompts, agentExtensions, adminSettings, sessionSettings, slackActions]) {
     expect(glue).not.toContain(PKG_NAME);
   }
 }
@@ -116,6 +121,7 @@ beforeAll(() => {
         './agent-extensions': './src/agent-extensions.ts',
         './admin-settings': './src/admin-settings.ts',
         './session-settings': './src/session-settings.ts',
+        './slack-interactive-actions': './src/slack-interactive-actions.ts',
       },
       b4mContributions: {
         spaRoutesExport: `${PKG_NAME}/routes`,
@@ -129,6 +135,7 @@ beforeAll(() => {
         agentExtensionsExport: `${PKG_NAME}/agent-extensions`,
         adminSettingsExport: `${PKG_NAME}/admin-settings`,
         workspaceSessionSettingsExport: { opti: `${PKG_NAME}/session-settings` },
+        slackInteractiveActionsExport: `${PKG_NAME}/slack-interactive-actions`,
         migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
         serverHandlerStubs: [
@@ -219,6 +226,8 @@ describe('hydrated but UNLINKED overlay', () => {
       premiumAdminSettings: 'export const premiumAdminSettings: SettingDefinition<string>[] = [];',
       premiumWorkspaceSessionSettings:
         'export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};',
+      premiumSlackInteractiveActions:
+        'export const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [];',
     };
     for (const [name, absent] of Object.entries(absentForms)) {
       const glue = readSharedGlue(name);
@@ -323,6 +332,7 @@ describe('a contributed export the overlay does not declare', () => {
     ['agentExtensionsExport', './agent-extensions'],
     ['adminSettingsExport', './admin-settings'],
     ['workspaceSessionSettingsExport', './session-settings'],
+    ['slackInteractiveActionsExport', './slack-interactive-actions'],
   ])('fails codegen instead of dropping the %s import', (field, subpath) => {
     const pkg = JSON.parse(packageJson);
     delete pkg.exports[subpath];
@@ -359,6 +369,7 @@ describe('exports shapes the shared glue resolves', () => {
       delete pkg.b4mContributions[field];
     }
     delete pkg.b4mContributions.workspaceSessionSettingsExport;
+    delete pkg.b4mContributions.slackInteractiveActionsExport;
     delete pkg.b4mContributions.migrationsExport;
     writeFileSync(overlayPackageJson(), JSON.stringify(pkg));
     runCodegen();

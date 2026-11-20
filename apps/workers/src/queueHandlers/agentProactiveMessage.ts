@@ -17,6 +17,7 @@ import {
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { apiKeyService } from '@bike4mind/services';
 import { isTerminalCreditRefusal, readOrgModelPolicy } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
@@ -141,7 +142,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         apiKeyTable,
         storage: getFilesStorage(),
         imageGenerateStorage: getGeneratedImageStorage(),
-        imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+        imageUrlSigningSecret: signingKey('search-image-url'),
         meter: createCompletionMeter(user, logger, 'proactive agent messages', {
           sessionId: config.sessionId,
           orgModelPolicy,

@@ -57,6 +57,7 @@ export * from './sessionHandoff';
 export * from './personas';
 export * from './pendingActions';
 export * from './brief';
+export * from './assistantInstruction';
 export * from './pushNotification';
 export * from './studioJobCompleted';
 export * from './liveActivityPush';

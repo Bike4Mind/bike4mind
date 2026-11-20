@@ -116,6 +116,8 @@ There are only these seven levels. The skin maps every heading below `h1` to the
 
 Every admin page renders inside the shared admin layout (`AdminLayout.tsx`: sidebar navigation plus content frame); there are no full-screen admin pages. New admin routes are children of the `/admin` layout route, never siblings of it.
 
+**Contributed pages.** A premium package can add a page without adding an `AdminTab`: its route descriptor sets `adminPage` (`premiumContract.ts`), the router parents the route under the admin layout, and the sidebar lists a link after the items of the section it names (it counts toward the "More" rule like a trailing item). The path is literal and lives under `/admin/ext/`. The page is for full admins only (a delegated admin gets `MissingPermissionState` and no link) and gets no badge. It follows the same anatomy as a detail route: its route wraps it in the `adminPageFrame` gutter, so the page sets no outer padding of its own, and `AdminPageHeader` comes first.
+
 ### Sidebar
 
 The sidebar is the frame of every admin page, so it sets the tone. Calm, scannable and never louder than the content. Sections and items live in `adminSidebarConfig.tsx`.

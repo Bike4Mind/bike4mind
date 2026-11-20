@@ -17,6 +17,8 @@ struct SettingsView: View {
       Section {
         NavigationLink("Notifications") { NotificationSettingsView() }
           .accessibilityIdentifier("settings-notifications-link")
+        NavigationLink("Assistant instructions") { AssistantInstructionsView() }
+          .accessibilityIdentifier("settings-instructions-link")
       }
       .listRowBackground(Tokens.Palette.groupedBackground)
 

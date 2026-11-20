@@ -11,6 +11,7 @@ const SCRIPT_SOURCE = fs.readFileSync(SCRIPT, 'utf8');
 
 const GENERATED = 'apps/client/app/premium-generated';
 const LLM_TOOLS = 'packages/server-utils/src/premium-generated/premiumLlmTools.generated.ts';
+const SLACK_ACTIONS = 'packages/server-utils/src/premium-generated/premiumSlackInteractiveActions.generated.ts';
 const LS_KEYS = `${GENERATED}/premiumLocalStorageKeys.generated.ts`;
 const ROUTES = `${GENERATED}/premiumRoutes.generated.ts`;
 const API_STUB = 'apps/client/pages/api/premium-fx/ping.ts';
@@ -69,6 +70,7 @@ describe('generate-premium-glue.mjs', () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('found 0 premium package(s): (none)');
       expect(read(root, LLM_TOOLS)).toContain('premiumLlmTools: Record<string, ToolDefinition> = {};');
+      expect(read(root, SLACK_ACTIONS)).toContain('readonly SlackInteractiveActionHandler[] = [];');
       expect(read(root, LS_KEYS)).toContain('[]');
       expect(exists(root, 'apps/client/pages/api')).toBe(false);
     });

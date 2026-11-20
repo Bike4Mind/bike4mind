@@ -1,4 +1,5 @@
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
+import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -239,7 +240,7 @@ const getEmailErrorGuidance = (error: string): string | null => {
 
   // Auth failed
   if (error.includes('authentication') || error.includes('535') || error.includes('Invalid login')) {
-    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct.';
+    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct, or set both if they are unset and the server requires auth.';
   }
 
   // Timeout
@@ -625,7 +626,7 @@ const AdminSystemHealthTab = () => {
     );
   }
 
-  const { email, database, oauth } = systemHealth.data || {};
+  const { email, database, oauth, selfHost } = systemHealth.data || {};
   const integrations = integrationHealth.data?.integrations ?? [];
 
   const renderBreakerChip = (
@@ -668,7 +669,7 @@ const AdminSystemHealthTab = () => {
           )}
 
           <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
-            Required secrets
+            Mail settings
           </Typography>
 
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
@@ -685,7 +686,12 @@ const AdminSystemHealthTab = () => {
                   <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
                     {key}
                   </Typography>
-                  {!configured && <StatusChip tone="warn" label="Missing" />}
+                  {!configured &&
+                    (email.optionalSecrets?.some(name => name === key) ? (
+                      <StatusChip tone="neutral" label="Optional" />
+                    ) : (
+                      <StatusChip tone="warn" label="Missing" />
+                    ))}
                 </Stack>
               ))}
           </Box>
@@ -694,19 +700,27 @@ const AdminSystemHealthTab = () => {
             <Alert color="warning" variant="outlined">
               <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
                 <Typography level="body-sm" fontWeight="bold">
-                  Missing secrets
+                  Missing settings
                 </Typography>
                 <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
-                <Typography level="body-xs">
-                  Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
-                </Typography>
-                {email.missingSecrets.map(name => (
-                  <Typography key={name} level="body-xs">
-                    <code data-testid={`system-health-email-secret-hint-${name}`}>
-                      ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
-                    </code>
+                {selfHost ? (
+                  <Typography level="body-xs" data-testid="system-health-email-hint">
+                    {SELF_HOST_SETTINGS_HINT}
                   </Typography>
-                ))}
+                ) : (
+                  <>
+                    <Typography level="body-xs">
+                      Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
+                    </Typography>
+                    {email.missingSecrets.map(name => (
+                      <Typography key={name} level="body-xs">
+                        <code data-testid={`system-health-email-secret-hint-${name}`}>
+                          ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
+                        </code>
+                      </Typography>
+                    ))}
+                  </>
+                )}
               </Stack>
             </Alert>
           )}
