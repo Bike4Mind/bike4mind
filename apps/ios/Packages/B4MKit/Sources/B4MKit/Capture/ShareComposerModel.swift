@@ -197,7 +197,17 @@ public final class ShareComposerModel {
     guard canSubmit, let destination else { return }
     phase = .submitting
     if let pendingDelegation {
-      await postDelegation(pendingDelegation)
+      // The retry carries the Assistant field as it is now, so an edit is honoured and clearing it cancels.
+      let intent = Self.normalizedIntent(intent)
+      guard !intent.isEmpty else {
+        self.pendingDelegation = nil
+        phase = .sent
+        return
+      }
+      await postDelegation(
+        DelegationRequest(
+          intent: intent, url: pendingDelegation.url, text: pendingDelegation.text,
+          fileIDs: pendingDelegation.fileIDs))
       return
     }
     let sentItems = items
@@ -220,8 +230,7 @@ public final class ShareComposerModel {
   }
 
   private func delegateIfAsked() async {
-    let intent = intent.split(whereSeparator: \.isNewline).joined(separator: " ")
-      .trimmingCharacters(in: .whitespaces)
+    let intent = Self.normalizedIntent(intent)
     guard delegator != nil, !intent.isEmpty else { return }
     let items = sendContext.items
     let texts = items.compactMap { item -> String? in
@@ -230,19 +239,27 @@ public final class ShareComposerModel {
     // The API takes only an http(s) link within its length cap; any other link would be refused on every retry.
     let url = items.lazy.compactMap { item -> URL? in
       guard case .url(let url) = item, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-        url.absoluteString.utf16.count <= Self.maxDelegatedURL
+        url.host?.isEmpty == false, url.absoluteString.utf16.count <= Self.maxDelegatedURL
       else { return nil }
       return url
     }.first
     let text = texts.isEmpty ? nil : Self.clipped(texts.joined(separator: "\n\n"), to: Self.maxDelegatedText)
     let fileIDs = Array(sendContext.fileIDs.prefix(Self.maxDelegatedFiles))
     guard url != nil || text != nil || !fileIDs.isEmpty else { return }
-    await postDelegation(
-      DelegationRequest(intent: Self.clipped(intent, to: Self.maxIntent), url: url, text: text, fileIDs: fileIDs))
+    await postDelegation(DelegationRequest(intent: intent, url: url, text: text, fileIDs: fileIDs))
+  }
+
+  /// One line within the server's cap: the API refuses a newline or a longer intent.
+  private static func normalizedIntent(_ raw: String) -> String {
+    let line = raw.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    return clipped(line, to: maxIntent)
   }
 
   private func postDelegation(_ request: DelegationRequest) async {
     guard let delegator else { return }
+    // Not `.sent` while the POST is in flight: that would show Done, and Done in the share extension
+    // tears the process down mid-request.
+    phase = .submitting
     do {
       try await delegator.delegate(request)
       pendingDelegation = nil

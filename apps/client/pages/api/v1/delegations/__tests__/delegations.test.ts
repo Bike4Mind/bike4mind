@@ -20,6 +20,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     return chain;
   },
 }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
 vi.mock('@server/delegations/createDelegation', () => ({ createDelegation: mocks.createDelegation }));
 vi.mock('@bike4mind/database', () => ({ delegatedItemRepository: { findByIdForUser: mocks.findByIdForUser } }));
 

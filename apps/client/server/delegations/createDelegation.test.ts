@@ -46,7 +46,7 @@ describe('createDelegation', () => {
       text: null,
       fileIds: ['f1', 'f2'],
     });
-    expect(mocks.publish).toHaveBeenCalledWith({ delegationId: 'g1', userId: 'u1' });
+    expect(mocks.publish).toHaveBeenCalledWith({ delegationId: 'g1', userId: 'u1' }, { requireAcceptance: true });
   });
 
   it('accepts text alone without looking up files', async () => {

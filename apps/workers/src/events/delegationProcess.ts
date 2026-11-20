@@ -1,4 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
+import { HTTPError, HttpStatus } from '@bike4mind/common';
 import { DelegationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   delegatedItemRepository,
@@ -38,9 +39,10 @@ const CLAIM_LEASE_MS = 3 * 60 * 1000;
 
 type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 
-export class ContentNotReadyError extends Error {
+/** A 4xx so withEventContext logs this designed retry at warn, not as an error the log monitor alerts on. */
+export class ContentNotReadyError extends HTTPError {
   constructor(delegationId: string) {
-    super(`Shared files of delegation ${delegationId} are still being extracted`);
+    super(HttpStatus.Conflict, `Shared files of delegation ${delegationId} are still being extracted`);
     this.name = 'ContentNotReadyError';
   }
 }
@@ -118,29 +120,39 @@ export async function processDelegation(
     return;
   }
 
-  const gate = await deps.canRun(input.userId);
+  try {
+    await settleClaimed(deps, input.delegationId, item);
+  } catch (error) {
+    // Hand the lease back before the retry lands, or that retry would skip the item as held by another delivery.
+    await items.releaseClaim(input.delegationId).catch((releaseError: unknown) => {
+      logger.error('[Delegation] could not release the claim', { delegationId: input.delegationId, releaseError });
+    });
+    throw error;
+  }
+}
+
+async function settleClaimed(deps: DelegationProcessDeps, delegationId: string, item: IDelegatedItem): Promise<void> {
+  const { items, logger } = deps;
+  const gate = await deps.canRun(item.userId);
   if (gate !== 'ok') {
-    await items.markFailed(input.delegationId, gate, deps.now());
+    await items.markFailed(delegationId, gate, deps.now());
     return;
   }
 
   try {
     const content = await loadContent(deps, item);
     const { reply, model } = await deps.complete(
-      input.userId,
-      input.delegationId,
+      item.userId,
+      delegationId,
       buildDelegationPrompt(item.intent, content)
     );
     const outcome = parseDelegationReply(reply);
-    await items.markSettled(input.delegationId, { ...outcome, model }, deps.now());
-    logger.info('[Delegation] item settled', { delegationId: input.delegationId, status: outcome.status });
+    await items.markSettled(delegationId, { ...outcome, model }, deps.now());
+    logger.info('[Delegation] item settled', { delegationId, status: outcome.status });
   } catch (error) {
-    if (error instanceof ContentNotReadyError) {
-      await items.releaseClaim(input.delegationId);
-      throw error;
-    }
-    logger.error('[Delegation] processing failed', { delegationId: input.delegationId, error });
-    await items.markFailed(input.delegationId, 'processing_failed', deps.now());
+    if (error instanceof ContentNotReadyError) throw error;
+    logger.error('[Delegation] processing failed', { delegationId, error });
+    await items.markFailed(delegationId, 'processing_failed', deps.now());
   }
 }
 

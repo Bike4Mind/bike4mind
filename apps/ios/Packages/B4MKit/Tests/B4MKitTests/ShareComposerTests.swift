@@ -135,6 +135,22 @@ private actor RecordingDelegator: DelegationSubmitting {
   }
 }
 
+/// Holds the delegation POST open until `open()`, so a test can look at the composer mid-request.
+private actor GatedDelegator: DelegationSubmitting {
+  private var gate: CheckedContinuation<Void, Never>?
+  private(set) var started = false
+
+  func delegate(_ request: DelegationRequest) async throws {
+    started = true
+    await withCheckedContinuation { gate = $0 }
+  }
+
+  func open() {
+    gate?.resume()
+    gate = nil
+  }
+}
+
 @MainActor
 final class ShareComposerModelTests: XCTestCase {
   private let lake = LakeSummary(id: "l1", name: "Research", fileCount: 1, isBuiltIn: false)
@@ -470,6 +486,7 @@ final class ShareComposerDelegationTests: XCTestCase {
   func testLeavesOutALinkTheServerWouldRefuse() async throws {
     for link in [
       try XCTUnwrap(URL(string: "mailto:someone@example.com")),
+      try XCTUnwrap(URL(string: "http:example.com")),
       try XCTUnwrap(URL(string: "https://example.com/" + String(repeating: "a", count: 2_100))),
     ] {
       let delegator = RecordingDelegator()
@@ -539,6 +556,56 @@ final class ShareComposerDelegationTests: XCTestCase {
     let requests = await delegator.requests
     XCTAssertEqual(requests.count, 2)
     XCTAssertEqual(requests[0], requests[1])
+  }
+
+  func testARetryCarriesTheEditedIntent() async {
+    let delegator = RecordingDelegator()
+    await delegator.setFailure(APIError.offline)
+    let model = await model([.text("hi")], submitter: RecordingSubmitter(), delegator: delegator)
+    model.intent = "handle this"
+    await model.submit()
+
+    await delegator.setFailure(nil)
+    model.intent = "summarize this"
+    await model.submit()
+    XCTAssertEqual(model.phase, .sent)
+    let requests = await delegator.requests
+    XCTAssertEqual(requests.map(\.intent), ["handle this", "summarize this"])
+    XCTAssertEqual(requests[1].text, "hi")
+  }
+
+  func testClearingTheIntentAfterAFailureCancelsTheDelegation() async {
+    let delegator = RecordingDelegator()
+    await delegator.setFailure(APIError.offline)
+    let model = await model([.text("hi")], submitter: RecordingSubmitter(), delegator: delegator)
+    model.intent = "handle this"
+    await model.submit()
+
+    model.intent = "  "
+    await model.submit()
+    XCTAssertEqual(model.phase, .sent)
+    let requests = await delegator.requests
+    XCTAssertEqual(requests.count, 1)
+  }
+
+  func testTheComposerStaysBusyWhileTheDelegationPosts() async {
+    let delegator = GatedDelegator()
+    let model = ShareComposerModel(
+      items: [.text("hi")],
+      source: StubSource(
+        lakeResult: .success([LakeSummary(id: "l1", name: "Research", fileCount: 1, isBuiltIn: false)])),
+      submitter: RecordingSubmitter(),
+      store: InMemoryDestinationStore(.lake(id: "l1", name: "Research")), delegator: delegator)
+    await model.load()
+    model.intent = "handle this"
+    let send = Task { await model.submit() }
+    while !(await delegator.started) { await Task.yield() }
+
+    XCTAssertEqual(model.phase, .submitting)
+    XCTAssertEqual(model.dismissButtonTitle, "Cancel")
+    await delegator.open()
+    await send.value
+    XCTAssertEqual(model.phase, .sent)
   }
 
   func testARejectedDelegationShowsTheServersReason() async {

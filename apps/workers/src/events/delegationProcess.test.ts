@@ -207,6 +207,26 @@ describe('processDelegation', () => {
     }
   });
 
+  it('hands the lease back when an unexpected error escapes, so the retry is not skipped', async () => {
+    const outage = new Error('mongo unavailable');
+    const gateDeps = makeDeps({ canRun: vi.fn().mockRejectedValue(outage) });
+    await expect(processDelegation(gateDeps, input)).rejects.toBe(outage);
+    expect(gateDeps.items.releaseClaim).toHaveBeenCalledWith('g1');
+
+    const markDeps = makeDeps({ complete: vi.fn().mockRejectedValue(new Error('model down')) });
+    markDeps.items.markFailed.mockRejectedValue(outage);
+    markDeps.items.releaseClaim.mockRejectedValue(new Error('still down'));
+    await expect(processDelegation(markDeps, input)).rejects.toBe(outage);
+    expect(markDeps.logger.error).toHaveBeenCalledWith(
+      '[Delegation] could not release the claim',
+      expect.objectContaining({ delegationId: 'g1' })
+    );
+  });
+
+  it('marks the still-extracting retry as an expected 4xx so it logs at warn', () => {
+    expect(new ContentNotReadyError('g1').statusCode).toBe(409);
+  });
+
   it('goes ahead without the file text once the item is old enough', async () => {
     const deps = makeDeps({ fileText: vi.fn().mockResolvedValue('') });
     deps.items.findById.mockResolvedValue(item({ fileIds: ['f1'] }));

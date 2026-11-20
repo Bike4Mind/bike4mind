@@ -5,6 +5,7 @@ import {
   type DelegationCreateRequest,
 } from '@bike4mind/common';
 import { delegatedItemRepository, fabFileRepository, type IDelegatedItem } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { DelegationEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 type Deps = {
@@ -15,10 +16,13 @@ type Deps = {
   now: () => Date;
 };
 
+const logger = new Logger({ metadata: { service: 'delegations' } });
+
 const defaultDeps: Deps = {
   items: delegatedItemRepository,
   findFiles: ids => fabFileRepository.findAllByIds(ids),
-  publishProcess: event => DelegationEvents.Process.publish(event),
+  // requireAcceptance: on self-host an unqueued event must fail the request too, not leave the item pending.
+  publishProcess: event => DelegationEvents.Process.publish(event, { requireAcceptance: true }),
   now: () => new Date(),
 };
 
@@ -53,7 +57,8 @@ export async function createDelegation(
   const delegationId = item._id.toString();
   try {
     await deps.publishProcess({ delegationId, userId });
-  } catch {
+  } catch (error) {
+    logger.error('[Delegation] could not publish the process event', { delegationId, error });
     await deps.items.markFailed(delegationId, 'dispatch_failed', deps.now());
     throw new BadGatewayError('Could not hand the item to the assistant; try again');
   }
