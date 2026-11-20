@@ -634,17 +634,17 @@ export const IPC_CHANNELS = {
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
   /** An app window's stage -> main: the OrchestrateMiniPayload the Orchestrate mini window shows, or null. */
-  orchestrateMiniPublish: 'orchestrate-mini:publish',
-  orchestrateMiniToggle: 'orchestrate-mini:toggle',
-  orchestrateMiniGetOpen: 'orchestrate-mini:get-open',
+  orchestrateMiniPublish: 'orchestrate:mini-publish',
+  orchestrateMiniToggle: 'orchestrate:mini-toggle',
+  orchestrateMiniGetOpen: 'orchestrate:mini-get-open',
   /** main -> app windows push: the Orchestrate mini window opened or closed. */
-  orchestrateMiniOpen: 'orchestrate-mini:open',
+  orchestrateMiniOpen: 'orchestrate:mini-open',
   /** The Orchestrate mini window's own surface (preload/orchestrateMini.ts); refused from any other window. */
-  orchestrateMiniGetSnapshot: 'orchestrate-mini:get-snapshot',
+  orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',
   /** main -> Orchestrate mini window push of the latest payload, or null. */
-  orchestrateMiniSnapshot: 'orchestrate-mini:snapshot',
-  orchestrateMiniFocus: 'orchestrate-mini:focus',
-  orchestrateMiniClose: 'orchestrate-mini:close',
+  orchestrateMiniSnapshot: 'orchestrate:mini-snapshot',
+  orchestrateMiniFocus: 'orchestrate:mini-focus',
+  orchestrateMiniClose: 'orchestrate:mini-close',
   /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */

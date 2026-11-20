@@ -7,10 +7,10 @@ import type { OrchestrateMiniApi } from '@shared/ipc';
  * orchestrateMini.test.ts holds them equal to IPC_CHANNELS.
  */
 export const ORCHESTRATE_MINI_CHANNELS = {
-  orchestrateMiniGetSnapshot: 'orchestrate-mini:get-snapshot',
-  orchestrateMiniSnapshot: 'orchestrate-mini:snapshot',
-  orchestrateMiniFocus: 'orchestrate-mini:focus',
-  orchestrateMiniClose: 'orchestrate-mini:close',
+  orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',
+  orchestrateMiniSnapshot: 'orchestrate:mini-snapshot',
+  orchestrateMiniFocus: 'orchestrate:mini-focus',
+  orchestrateMiniClose: 'orchestrate:mini-close',
 } as const;
 
 // The Orchestrate mini window's whole bridge: see OrchestrateMiniApi for why it is this small. Main

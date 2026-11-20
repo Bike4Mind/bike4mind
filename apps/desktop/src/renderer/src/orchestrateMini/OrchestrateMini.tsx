@@ -5,7 +5,7 @@ import List from '@mui/joy/List';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
 import Typography from '@mui/joy/Typography';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { OrchestrateMiniApi } from '@shared/ipc';
 import { looksLikeNeedsYou } from '@shared/needsYouColor';
@@ -95,7 +95,8 @@ function RowContent({ row }: { row: MiniRow }) {
  * needs-you count and the stage's agents with their states. A needs-you row raises the app on that
  * decision; nothing here answers or approves.
  */
-export function OrchestrateMini({ api = orchestrateMiniApi() }: { api?: OrchestrateMiniApi }) {
+export function OrchestrateMini({ api: injected }: { api?: OrchestrateMiniApi }) {
+  const [api] = useState(() => injected ?? orchestrateMiniApi());
   const payload = useOrchestrateMiniPayload(api);
   const skinKey = JSON.stringify(payload?.skin ?? null);
   const theme = useMemo(() => toSkinTheme(payload?.skin), [skinKey]);
