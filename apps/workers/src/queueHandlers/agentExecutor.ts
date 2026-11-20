@@ -1509,7 +1509,8 @@ async function runExecution(
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
         failureReason: 'insufficient_credits',
       });
-      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      // The member has credits; the org's per-member cap stopped the run, so the live frame is not "out of credits".
+      await sendWs('failed', { executionId, reason: 'spend_cap', message: creditService.MEMBER_CREDIT_CAP_MESSAGE });
       return;
     }
 

@@ -199,7 +199,9 @@ async function stopRun(
   await deps.markFailed(args.executionId, { message: stop.message, failureReason: stop.failureReason });
   await deps.sendWs('failed', {
     executionId: args.executionId,
-    reason: stop.failureReason === 'credit_cap' ? 'credit_cap' : 'insufficient_credits',
+    reason: stop.failureReason,
+    // The client renders a spend cap stop by its message (IterationStream); the others have fixed copy.
+    ...(stop.failureReason === 'spend_cap' && { message: stop.message }),
     partialResult: steps,
   });
   await deps.persistRunAsQuest(

@@ -122,7 +122,8 @@ describe('stopUnfundedIteration', () => {
     expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage, failureReason: 'spend_cap' });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', {
       executionId: 'exec-1',
-      reason: 'insufficient_credits',
+      reason: 'spend_cap',
+      message: capMessage,
       partialResult: steps,
     });
     expect(deps.persistRunAsQuest).toHaveBeenCalledWith(
