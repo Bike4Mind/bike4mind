@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
-import type { ArtifactVersionMeta, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -19,6 +19,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
+import { planPublishVersions } from '@server/services/publish/planPublishVersions';
 
 /**
  * POST /api/publish/[publicId]/restore[?sha={version}] - roll a published bundle
@@ -143,27 +144,17 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     // backfill the version being replaced if history doesn't yet record it
     // (pre-version-history artifacts, or the first revise/restore).
     // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-    const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: ArtifactVersionMeta[] = [];
-    if (!haveShas.has(currentSha)) {
-      versionsToPush.push({
-        publishedAt: artifact.publishedAt,
-        publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-        size: artifact.size,
-        sha256Index: currentSha,
-        ...(currentBuf ? { indexBytes: currentBuf.length } : {}),
-      });
-      haveShas.add(currentSha);
-    }
-    if (!haveShas.has(newSha)) {
-      versionsToPush.push({
-        publishedAt: now,
+    const { versionsToPush } = planPublishVersions({
+      previous: artifact,
+      priorIndex: currentBuf,
+      incoming: {
+        sha256: newSha,
         publishedBy: String(req.user.id),
+        publishedAt: now,
         size: { totalBytes, fileCount: newManifest.length },
-        sha256Index: newSha,
         indexBytes: restoredBuf.length,
-      });
-    }
+      },
+    });
 
     // Storage quota on the net change (see checkInPlaceRewriteQuota). The current index.html is
     // archived and the restored version becomes current, so its archived copy leaves the count.
