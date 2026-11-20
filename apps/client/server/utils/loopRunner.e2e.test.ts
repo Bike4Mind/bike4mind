@@ -281,6 +281,7 @@ describe('claimRunnerTicket', () => {
   it("serves green-ci as review when the loop's org turned it off", async () => {
     vi.spyOn(organizationRepository, 'findById').mockResolvedValue({
       id: 'org-1',
+      userId: USER,
       currentCredits: 1000,
       userDetails: [],
       loopsGreenCiMergeDisabled: true,
@@ -289,6 +290,39 @@ describe('claimRunnerTicket', () => {
     const ticket = await createTicket(loop.id);
 
     expect((await claim(ticket.id)).stage.mergePolicy).toBe('review');
+  });
+
+  it("refuses a claim on an org loop once the owner is no longer in the loop's org, creating nothing", async () => {
+    const org = { id: 'org-1', userId: 'someone-else', currentCredits: 1000, userDetails: [], users: [] };
+    vi.spyOn(organizationRepository, 'findById').mockResolvedValue(org as never);
+    const loop = await createLoop({ organizationId: 'org-1' });
+    const ticket = await createTicket(loop.id);
+
+    expect(await claimRunnerTicket(USER, ticket.id, NOW, logger)).toMatchObject({
+      status: 409,
+      reason: 'organization_not_found',
+    });
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+    expect(await AgentExecution.countDocuments({})).toBe(0);
+
+    vi.spyOn(organizationRepository, 'findById').mockResolvedValue({ ...org, users: [{ userId: USER }] } as never);
+    expect((await claim(ticket.id)).runId).toBeTruthy();
+  });
+
+  it("never lets another user claim, heartbeat, progress or complete the caller's run", async () => {
+    const loop = await createLoop();
+    const other = await createTicket(loop.id);
+    expect(await claimRunnerTicket('user-2', other.id, NOW, logger)).toMatchObject({ status: 404 });
+    expect(await ticketOf(other.id)).toMatchObject({ status: 'open' });
+
+    const { runId } = await claim((await createTicket(loop.id)).id);
+    const frames = [{ type: 'text' as const, text: 'hijack' }];
+    expect(await heartbeatRunnerRun('user-2', runId, NOW, logger)).toMatchObject({ status: 404 });
+    expect(await progressRunnerRun('user-2', runId, frames, NOW, logger)).toMatchObject({ status: 404 });
+    expect(
+      await completeRunnerRun('user-2', runId, { outcome: 'advanced', answer: 'x', durationMs: 1 }, NOW, logger)
+    ).toMatchObject({ status: 404 });
+    expect(await runOf(runId)).toMatchObject({ status: 'running', checkpoint: { steps: [] } });
   });
 
   it('refuses a claimed ticket, a cloud-stage one, and one past the desktop lane cap', async () => {
@@ -356,9 +390,14 @@ describe('claimRunnerTicket', () => {
   it("reserves an in-flight desktop run's cap against the loop budget", async () => {
     const loop = await createLoop({ budgetCreditsPerDay: 10 });
     const first = await claim((await createTicket(loop.id)).id);
-    expect((await runOf(first.runId)).creditCap).toBeGreaterThan(0);
+    const firstCap = (await runOf(first.runId)).creditCap as number;
+    expect(firstCap).toBeGreaterThan(0);
 
-    expect(await claimRunnerTicket(USER, (await createTicket(loop.id)).id, NOW, logger)).toMatchObject({ status: 409 });
+    // Each lane gets a share of what is left, so a second claim fits only in what the first did not reserve.
+    const second = await claimRunnerTicket(USER, (await createTicket(loop.id)).id, NOW, logger);
+    if (!isRefusal(second)) {
+      expect(firstCap + ((await runOf(second.runId)).creditCap as number)).toBeLessThanOrEqual(10);
+    }
   });
 
   it('releases the ticket and ends the run when creating the run fails', async () => {

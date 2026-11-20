@@ -196,6 +196,11 @@ export async function claimRunnerTicket(
     return refuse(409, 'p2_budget', "The loop's p2 runs for today are used up; p2 and p3 tickets wait until 00:00 UTC");
   }
 
+  // The same membership check a cloud run gets in startAgentExecution's resolveRunBillingOrg.
+  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
+  if (loop.organizationId && !(org?.userId === userId || org?.users?.some(member => member.userId === userId))) {
+    return refuse(409, 'organization_not_found', "You are no longer a member of the loop's organization");
+  }
   const stage = stageConfigOf(loop, ticket.stage);
   const activeDesktop = await agentExecutionRepository.countActiveDesktopByUserId(userId);
   if (activeDesktop >= MAX_DESKTOP_RUNS_PER_USER) {
@@ -204,7 +209,6 @@ export async function claimRunnerTicket(
   const admitted = await admitDesktopRun(loop, stage, runs + 1, now, MAX_DESKTOP_RUNS_PER_USER - activeDesktop);
   if (isRefusal(admitted)) return admitted;
 
-  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
   const runId = new Types.ObjectId().toString();
   const claimed = await workItemRepository.claimForRunner(ticket.id, userId, loop.id, stages, runId);
   if (!claimed) return refuse(409, 'claimed', 'The ticket was claimed by another run');
