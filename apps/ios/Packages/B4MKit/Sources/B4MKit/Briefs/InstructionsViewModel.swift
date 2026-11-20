@@ -19,6 +19,8 @@ public final class InstructionsViewModel {
   private var draftRevision = 0
   private var mutationRevision = 0
   private var loadRevision = 0
+  /// Adds wait for one full list so a save racing the first load cannot leave a partial list and undercount the cap.
+  private var hasLoaded = false
   private var removingIds: Set<String> = []
   public private(set) var isSaving = false
   /// The last add or remove that failed, for an alert; cleared by the next attempt.
@@ -37,7 +39,7 @@ public final class InstructionsViewModel {
   }
 
   public var canAdd: Bool {
-    !isSaving && !limitReached && AssistantInstruction.validated(draft) != nil
+    hasLoaded && !isSaving && !limitReached && AssistantInstruction.validated(draft) != nil
   }
 
   public func load() async {
@@ -51,6 +53,7 @@ public final class InstructionsViewModel {
       let loaded = try await api.list()
       guard requestRevision == loadRevision, startingMutationRevision == mutationRevision else { return }
       instructions = loaded
+      hasLoaded = true
       serverSaidFull = false
       state = .loaded
     } catch {

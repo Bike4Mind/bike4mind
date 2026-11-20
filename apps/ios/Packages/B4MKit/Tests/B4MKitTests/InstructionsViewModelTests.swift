@@ -218,6 +218,7 @@ extension InstructionsViewModelTests {
   func testSavingKeepsANewDraftAndDoesNotSubmitTwice() async {
     let api = SuspendedInstructionAPI()
     let model = InstructionsViewModel(api: api)
+    await prime(model, api, [])
     model.draft = "Submitted"
     let saving = Task { await model.add() }
     await api.waitFor(.add)
@@ -234,6 +235,7 @@ extension InstructionsViewModelTests {
   func testSavingKeepsADraftEditedAwayAndBackToTheSubmittedText() async {
     let api = SuspendedInstructionAPI()
     let model = InstructionsViewModel(api: api)
+    await prime(model, api, [])
     model.draft = "Submitted"
     let saving = Task { await model.add() }
     await api.waitFor(.add)
@@ -309,35 +311,37 @@ extension InstructionsViewModelTests {
     XCTAssertEqual(model.state, .loaded)
   }
 
-  func testAFailedAddDuringTheInitialLoadSettlesAndAllowsAFreshRetry() async {
-    for listFinishesFirst in [false, true] {
-      let api = SuspendedInstructionAPI()
-      let model = InstructionsViewModel(api: api)
-      let loading = Task { await model.load() }
-      await api.waitFor(.list(1))
-      model.draft = "Submitted"
-      let saving = Task { await model.add() }
-      await api.waitFor(.add)
-      if listFinishesFirst {
-        await api.finishList(1, .success([]))
-        await loading.value
-      }
-      await api.failAdd(.api(.offline))
-      await saving.value
-      if !listFinishesFirst {
-        await api.finishList(1, .success([]))
-        await loading.value
-      }
-      XCTAssertEqual(model.state, .failed(.api(.offline)))
-      XCTAssertEqual(model.draft, "Submitted")
-      XCTAssertFalse(model.isSaving)
-      let retry = Task { await model.load() }
-      await api.waitFor(.list(2))
-      await api.finishList(2, .success([makeInstruction(id: "known")]))
-      await retry.value
-      XCTAssertEqual(model.state, .loaded)
-      XCTAssertEqual(model.instructions.map(\.id), ["known"])
-    }
+  func testAddWaitsForTheInitialLoad() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    let loading = Task { await model.load() }
+    await api.waitFor(.list(1))
+    model.draft = "Submitted"
+    XCTAssertFalse(model.canAdd)
+    await model.add()
+    let addedWhileLoading = await api.added
+    XCTAssertTrue(addedWhileLoading.isEmpty)
+    await api.finishList(1, .success([makeInstruction(id: "known")]))
+    await loading.value
+    XCTAssertTrue(model.canAdd)
+    let saving = Task { await model.add() }
+    await api.waitFor(.add)
+    await api.finishAdd(makeInstruction(id: "saved", text: "Submitted"))
+    await saving.value
+    XCTAssertEqual(model.instructions.map(\.id), ["known", "saved"])
+    XCTAssertEqual(model.state, .loaded)
+  }
+
+  func testAFailedInitialLoadKeepsAddBlockedUntilARetrySucceeds() async {
+    let api = FakeInstructionAPI()
+    await api.set(list: .failure(.api(.offline)))
+    let model = InstructionsViewModel(api: api)
+    await model.load()
+    model.draft = "Submitted"
+    XCTAssertFalse(model.canAdd)
+    await api.set(list: .success([makeInstruction(id: "known")]))
+    await model.load()
+    XCTAssertTrue(model.canAdd)
   }
 
 }
