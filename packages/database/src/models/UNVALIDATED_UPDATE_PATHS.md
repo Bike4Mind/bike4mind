@@ -45,6 +45,38 @@ can silently turn it into `none`.
 
 ## Inventory
 
+### Focused follow-up: FabFile tag rename
+
+This pass inspected the two positional tag-name writers in `content/FabFileModel.ts`, the
+`tagService/update.ts` caller, its rename tests, and the existing inventory and gate tests.
+It does not constitute a fresh audit of every caller represented in the table below.
+
+| Entity | Path | Constraint | Writer | Load-bearing gate |
+|---|---|---|---|---|
+| FabFile | `tags.$[elem].name` | shared name-length cap, not a schema validator | `claimTagRewriteByUserId` | `assertTagRenameLength` before the claim |
+| FabFile | `tags.$[elem].name`, `primaryTag` | shared name-length cap, not a schema validator | `updateTagsByUserId` | `assertTagRenameLength` before either bulk write |
+
+`tags` is `[Object]`, not a typed subdocument with `tags.name.maxlength`. These writes therefore do
+not appear in the mechanically derived constrained-schema intersection. Adding `runValidators`
+would not enforce a tag-name limit. The service already rejects an overlong destination on a real
+rename before its writes; it allows metadata-only edits of legacy overlong names. The repositories
+now reject overlong destinations too, without rejecting an overlong source being repaired or deleted.
+The claim feeds membership before/after events; the bulk rewrite also changes `primaryTag` and reaches
+soft-deleted files. These values feed membership and tag-count readers, not just logs.
+
+`content/FabFileModel.tagRenameLength.test.ts` covers both repository writers against Mongo: limit + 1
+and 10,000-character destinations reject without changing stored tags or `primaryTag`, the exact cap
+is accepted, and a legacy overlong source can be repaired. Existing service tests cover its separate
+caller gate. Existing `FabFileModel.statusEnumGate.test.ts` and the inventory hook-gate test cover the
+previously added status-family protections; this pass does not replace those gates.
+
+Remaining work is explicitly outside this focused repair: enumerate caller-built patch/spread writes
+through BaseRepository per constrained path; inspect direct writes outside this package, raw-driver
+and bulk writes; trace pipeline expressions and removal/move operators against their destination
+constraints; behaviorally verify route-schema and non-literal repository-check rows rather than only
+checking their references. Other tag creation/replacement/push paths are not newly audited here.
+The table below remains the literal-update inventory, not proof that all database updates are gated.
+
 | Model | Path | Constraint | Writer | Gate | Ref | Note |
 |---|---|---|---|---|---|---|
 | AbuseAssessment | `decisionModel` | enum | `infra/security/AbuseAssessmentModel.ts#AbuseAssessmentRepository.save` | route-schema | `b4m-core/common/src/schemas/settings.ts#AbuseAssessmentConfigSchema` | Sole caller passes config.model, z.enum(DECISION_MODEL_IDS), plus registry check in callablePlatformModel |
