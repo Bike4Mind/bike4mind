@@ -307,6 +307,34 @@ describe('executeResearchRun', () => {
       expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
     });
 
+    it('sweeps unreached candidates into unresolvedRedirect and filteredBySource apart', async () => {
+      const candidates = [
+        hit(1),
+        hit(2),
+        hit(3),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'other.com'),
+        hit(6),
+      ];
+      const { ports } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result.totals).toMatchObject({
+        searchHits: 6,
+        judgeFailed: 3,
+        unresolvedRedirect: 1,
+        filteredBySource: 1,
+        notJudged: 1,
+      });
+      expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
     it('leaves nothing uncounted when the breaker trips on the last candidate', async () => {
       const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3)], judge: vi.fn(async () => failing) });
 

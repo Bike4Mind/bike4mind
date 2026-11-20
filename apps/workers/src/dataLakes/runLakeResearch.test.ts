@@ -944,6 +944,50 @@ describe('runLakeResearch', () => {
         });
       });
 
+      it('stops after three retry rounds for a link that never resolves', async () => {
+        provide([link(1)]);
+        const hits = searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => waiting(url));
+        const { sleep, done } = run();
+        await done;
+
+        expect(h.resolveSearchRedirect.mock.calls.filter(call => call[1])).toHaveLength(3);
+        expect(sleep.mock.calls.map(c => c[0])).toEqual([60_000, 60_000, 60_000]);
+        expect(hits()).toEqual([{ title: 'T0', url: link(1), snippet: 's', unresolvedRedirect: true }]);
+        expect(logged()).toMatchObject({ retry: { eligible: 1, rounds: 3, resolvedOnRetry: 0, stillUnresolved: 1 } });
+      });
+
+      it('checks the time floor before each link in a round, not only before the round', async () => {
+        provide([link(1), link(2)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => waiting(url));
+        const remaining = vi.fn<() => number>();
+        remaining.mockReturnValueOnce(400_000).mockReturnValueOnce(400_000).mockReturnValue(200_000);
+        const { done } = run({ remainingTimeMs: remaining });
+        await done;
+
+        const retried = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retried.map(call => call[0])).toEqual([link(1)]);
+        expect(logged()).toMatchObject({ retry: { rounds: 1, skippedForTime: true } });
+      });
+
+      it('carries the cookies returned by one retry into the next round', async () => {
+        provide([link(1)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: { cookies?: string[] }) => {
+          if (!opts) return waiting(url, ['a=1']);
+          return opts.cookies?.[0] === 'a=1' ? waiting(url, ['b=2']) : followed('https://arxiv.org/abs/1');
+        });
+        const { done } = run();
+        await done;
+
+        const retries = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retries).toEqual([
+          [link(1), { cookies: ['a=1'] }],
+          [link(1), { cookies: ['b=2'] }],
+        ]);
+      });
+
       it('passes each link its own cookies on retry and never logs them', async () => {
         provide([link(1), link(2)]);
         searchOnce();
