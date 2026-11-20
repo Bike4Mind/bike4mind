@@ -4,9 +4,11 @@
 import { ForbiddenError, NotFoundError, getDelegationContract } from '@bike4mind/common';
 import { delegatedItemRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { serializeDelegation } from '@server/delegations/serializeDelegation';
 
 const route = nextRouteForContract(getDelegationContract, {
+  rateLimit: perUserRateLimit('GET /api/v1/delegations/[id]'),
   // Polling one item should not spend a daily slot per poll; the per-minute burst limit still applies.
   exemptReadsFromDailyRateLimit: true,
   recordsActivity: false,
