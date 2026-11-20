@@ -16,6 +16,15 @@ vi.mock('./premium-generated/premiumRoutes.generated', () => ({
   ],
 }));
 
+// Records the pages the router hands the admin layout, so the wiring is checked without its providers.
+const layoutProps = vi.hoisted(() => ({ adminPages: undefined as unknown }));
+vi.mock('./components/admin/AdminLayout', () => ({
+  AdminLayoutRoute: (props: { adminPages?: unknown }) => {
+    layoutProps.adminPages = props.adminPages;
+    return <div data-testid="admin-layout-stub" />;
+  },
+}));
+
 // router.tsx runs these at import time; the other router tests stub them the same way.
 vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
 vi.mock('./utils/pageBeacon', () => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
@@ -40,6 +49,17 @@ describe('a contributed admin page route', () => {
 
   it('is registered in the route tree under that id', () => {
     expect(router.routesById['/admin-layout/admin/ext/example']?.fullPath).toBe(PAGE_PATH);
+  });
+
+  it('hands the contributed pages to the admin layout', () => {
+    const layout = adminRoute.options.getParentRoute();
+    const Layout = layout.options.component as React.ComponentType;
+
+    render(<Layout />);
+
+    expect(layoutProps.adminPages).toEqual([
+      expect.objectContaining({ path: PAGE_PATH, adminPage: { section: 'platform', label: 'Example page' } }),
+    ]);
   });
 
   it('renders the lazy page inside the shared admin page frame', async () => {

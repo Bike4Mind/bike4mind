@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Puzzle, Sparkles } from 'lucide-react';
 import { SIDEBAR_SECTIONS } from './adminSidebarConfig';
-import {
-  canOpenContributedAdminPage,
-  contributedPageTestId,
-  withContributedPages,
-  type ContributedAdminPage,
-} from './adminContributedPages';
+import { contributedPageTestId } from './adminExtPath';
+import { canOpenContributedAdminPage, withContributedPages, type ContributedAdminPage } from './adminContributedPages';
 
 const page = (path: string, adminPage: NonNullable<ContributedAdminPage['adminPage']>): ContributedAdminPage => ({
   path,
@@ -16,10 +12,6 @@ const page = (path: string, adminPage: NonNullable<ContributedAdminPage['adminPa
 describe('withContributedPages', () => {
   it('returns the very same sections when there is nothing to add', () => {
     expect(withContributedPages(SIDEBAR_SECTIONS, [])).toBe(SIDEBAR_SECTIONS);
-  });
-
-  it('ignores a descriptor with no adminPage', () => {
-    expect(withContributedPages(SIDEBAR_SECTIONS, [{ path: '/admin/ext/x' }])).toEqual(SIDEBAR_SECTIONS);
   });
 
   it('puts each page in the section it names, in the order given, after the section items', () => {

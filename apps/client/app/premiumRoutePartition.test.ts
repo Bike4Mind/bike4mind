@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { WORKSPACE_SURFACES } from '@bike4mind/common';
 import type { PremiumRouteDescriptor } from './premiumContract';
-import { isAdminExtPath, partitionPremiumRoutes } from './premiumRoutePartition';
+import { isAdminExtPath } from './components/admin/adminExtPath';
+import { partitionPremiumRoutes } from './premiumRoutePartition';
 
 const lazyImport = () => Promise.resolve({ default: () => null });
 const route = (over: Partial<PremiumRouteDescriptor>): PremiumRouteDescriptor => ({ path: '/x', lazyImport, ...over });
@@ -140,17 +141,52 @@ describe('partitionPremiumRoutes admin pages', () => {
     expect(() => partitionPremiumRoutes([page({ adminPage: { ...adminPage, label } })])).toThrow(/without a label/);
   });
 
+  it('refuses a label that is not a string', () => {
+    const bad = { ...adminPage, label: 5 } as unknown as PremiumRouteDescriptor['adminPage'];
+    expect(() => partitionPremiumRoutes([page({ adminPage: bad })])).toThrow(/without a label/);
+  });
+
   it('refuses two admin pages on one path', () => {
     expect(() => partitionPremiumRoutes([page(), page()])).toThrow(/declared twice with adminPage/);
   });
 
-  it.each(['/admin', '/admin/', '/admin/ext/reports', '/admin/users/$userId', '/Admin/Reports'])(
-    'refuses a route without adminPage on %s',
+  it('refuses two admin pages whose paths differ only in letter case', () => {
+    expect(() => partitionPremiumRoutes([page(), page({ path: '/admin/ext/Reports' })])).toThrow(
+      /declared twice with adminPage/
+    );
+  });
+
+  it.each(['/admin/ext/a//b', '/admin/ext/a/', '/admin/ext/../x', '/admin/ext/./x', '/admin/ext//x'])(
+    'refuses adminPage on %s, which has an empty, "." or ".." segment',
     path => {
-      expect(() => partitionPremiumRoutes([route({ path })])).toThrow(/under \/admin without adminPage/);
-      expect(() => partitionPremiumRoutes([route({ path, public: true })])).toThrow(/under \/admin without adminPage/);
+      expect(() => partitionPremiumRoutes([page({ path })])).toThrow(/empty, "\." or "\.\." segment/);
     }
   );
+
+  it('refuses two admin pages that derive the same sidebar test id', () => {
+    expect(() =>
+      partitionPremiumRoutes([page({ path: '/admin/ext/foo-bar' }), page({ path: '/admin/ext/foo/bar' })])
+    ).toThrow(/test id admin-ext-foo-bar-btn is already taken/);
+  });
+
+  it('accepts two admin pages when an explicit test id tells them apart', () => {
+    const first = page({ path: '/admin/ext/foo-bar' });
+    const second = page({ path: '/admin/ext/foo/bar', adminPage: { ...adminPage, testId: 'other-btn' } });
+    expect(partitionPremiumRoutes([first, second]).admin).toEqual([first, second]);
+  });
+
+  it.each([
+    '/admin',
+    '/admin/',
+    '/admin/ext/reports',
+    '/admin/users/$userId',
+    '/Admin/Reports',
+    'admin/users/$userId',
+    '//admin/x',
+  ])('refuses a route without adminPage on %s', path => {
+    expect(() => partitionPremiumRoutes([route({ path })])).toThrow(/under \/admin without adminPage/);
+    expect(() => partitionPremiumRoutes([route({ path, public: true })])).toThrow(/under \/admin without adminPage/);
+  });
 
   it('does not treat a sibling prefix as the admin URL space', () => {
     const sibling = route({ path: '/administrator/tools' });

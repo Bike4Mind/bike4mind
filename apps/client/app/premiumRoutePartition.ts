@@ -1,19 +1,15 @@
-import type { PremiumRouteDescriptor } from './premiumContract';
+import type { PremiumAdminPage, PremiumRouteDescriptor } from './premiumContract';
+import { ADMIN_EXT_PATH_PREFIX, contributedPageTestId, isAdminExtPath } from './components/admin/adminExtPath';
 import { ADMIN_SIDEBAR_SECTION_KEYS, isAdminSidebarSectionKey } from './components/admin/adminSidebarSectionKeys';
 
-/** Every contributed admin page lives under this prefix, so it can never collide with a core admin route. */
-export const ADMIN_EXT_PATH_PREFIX = '/admin/ext/';
-
-/**
- * Whether `pathname` is inside the contributed admin page namespace (and so is never a core admin
- * route). Case-insensitive because the router matches paths that way, so a guard keyed on this is
- * not sidestepped by typing the URL in another case.
- */
-export const isAdminExtPath = (pathname: string): boolean => pathname.toLowerCase().startsWith(ADMIN_EXT_PATH_PREFIX);
-
+/** The router drops empty and `.` segments when it mounts a path, so `admin/x` and `//admin/x` are `/admin/x`. */
 const isAdminUrlSpace = (path: string): boolean => {
-  const lower = path.toLowerCase();
-  return lower === '/admin' || lower.startsWith('/admin/');
+  const normalized = `/${path
+    .toLowerCase()
+    .split('/')
+    .filter(segment => segment !== '' && segment !== '.')
+    .join('/')}`;
+  return normalized === '/admin' || normalized.startsWith('/admin/');
 };
 
 export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
@@ -24,7 +20,7 @@ export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
   /** Inside the notebook layout, gated by RestrictedPage. */
   appShell: T[];
   /** Inside the admin layout, behind its guard, with a link in the admin sidebar. */
-  admin: T[];
+  admin: (T & { adminPage: PremiumAdminPage })[];
 }
 
 const ADMIN_PAGE_EXCLUDED_FIELDS = [
@@ -38,12 +34,25 @@ const ADMIN_PAGE_EXCLUDED_FIELDS = [
   'fallbackPath',
 ] as const;
 
-function assertValidAdminPage(descriptor: PremiumRouteDescriptor, seenPaths: Set<string>): void {
+function assertValidAdminPage(
+  descriptor: PremiumRouteDescriptor & { adminPage: PremiumAdminPage },
+  seenPaths: Set<string>,
+  seenTestIds: Set<string>
+): void {
   const { path, adminPage } = descriptor;
-  if (!adminPage) return;
   if (!isAdminExtPath(path) || path.length === ADMIN_EXT_PATH_PREFIX.length) {
     throw new Error(
       `Premium route ${path} sets adminPage outside ${ADMIN_EXT_PATH_PREFIX}; a contributed admin page lives under ${ADMIN_EXT_PATH_PREFIX}<name> so it cannot collide with a core admin route`
+    );
+  }
+  if (
+    path
+      .slice(ADMIN_EXT_PATH_PREFIX.length)
+      .split('/')
+      .some(segment => ['', '.', '..'].includes(segment))
+  ) {
+    throw new Error(
+      `Premium route ${path} sets adminPage on a path with an empty, "." or ".." segment; use a plain path under ${ADMIN_EXT_PATH_PREFIX}`
     );
   }
   if (path.includes('$')) {
@@ -67,10 +76,16 @@ function assertValidAdminPage(descriptor: PremiumRouteDescriptor, seenPaths: Set
   if (typeof adminPage.label !== 'string' || adminPage.label.trim() === '') {
     throw new Error(`Premium route ${path} sets adminPage without a label; the sidebar link needs one`);
   }
-  if (seenPaths.has(path)) {
+  const pathKey = path.toLowerCase();
+  if (seenPaths.has(pathKey)) {
     throw new Error(`Premium route ${path} is declared twice with adminPage; each admin page needs its own path`);
   }
-  seenPaths.add(path);
+  seenPaths.add(pathKey);
+  const testId = adminPage.testId ?? contributedPageTestId(path);
+  if (seenTestIds.has(testId)) {
+    throw new Error(`Premium route ${path} sets an adminPage whose sidebar test id ${testId} is already taken`);
+  }
+  seenTestIds.add(testId);
 }
 
 /**
@@ -86,10 +101,12 @@ export function partitionPremiumRoutes<T extends PremiumRouteDescriptor>(
 ): PremiumRoutePartition<T> {
   const partition: PremiumRoutePartition<T> = { public: [], standalone: [], appShell: [], admin: [] };
   const adminPaths = new Set<string>();
+  const adminTestIds = new Set<string>();
   for (const descriptor of descriptors) {
     if (descriptor.adminPage !== undefined) {
-      assertValidAdminPage(descriptor, adminPaths);
-      partition.admin.push(descriptor);
+      const adminDescriptor = descriptor as T & { adminPage: PremiumAdminPage };
+      assertValidAdminPage(adminDescriptor, adminPaths, adminTestIds);
+      partition.admin.push(adminDescriptor);
       continue;
     }
     if (isAdminUrlSpace(descriptor.path)) {
