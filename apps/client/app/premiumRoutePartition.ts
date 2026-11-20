@@ -1,4 +1,20 @@
 import type { PremiumRouteDescriptor } from './premiumContract';
+import { ADMIN_SIDEBAR_SECTION_KEYS, isAdminSidebarSectionKey } from './components/admin/adminSidebarSectionKeys';
+
+/** Every contributed admin page lives under this prefix, so it can never collide with a core admin route. */
+export const ADMIN_EXT_PATH_PREFIX = '/admin/ext/';
+
+/**
+ * Whether `pathname` is inside the contributed admin page namespace (and so is never a core admin
+ * route). Case-insensitive because the router matches paths that way, so a guard keyed on this is
+ * not sidestepped by typing the URL in another case.
+ */
+export const isAdminExtPath = (pathname: string): boolean => pathname.toLowerCase().startsWith(ADMIN_EXT_PATH_PREFIX);
+
+const isAdminUrlSpace = (path: string): boolean => {
+  const lower = path.toLowerCase();
+  return lower === '/admin' || lower.startsWith('/admin/');
+};
 
 export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
   /** Bare under the root route: the URL is the authorization, so no gate and no ProviderBundle. */
@@ -7,6 +23,54 @@ export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
   standalone: T[];
   /** Inside the notebook layout, gated by RestrictedPage. */
   appShell: T[];
+  /** Inside the admin layout, behind its guard, with a link in the admin sidebar. */
+  admin: T[];
+}
+
+const ADMIN_PAGE_EXCLUDED_FIELDS = [
+  'public',
+  'appShell',
+  'edgeToEdge',
+  'hostsWorkspace',
+  'adminDashboard',
+  'requireEntitlement',
+  'requireFeatureTag',
+  'fallbackPath',
+] as const;
+
+function assertValidAdminPage(descriptor: PremiumRouteDescriptor, seenPaths: Set<string>): void {
+  const { path, adminPage } = descriptor;
+  if (!adminPage) return;
+  if (!isAdminExtPath(path) || path.length === ADMIN_EXT_PATH_PREFIX.length) {
+    throw new Error(
+      `Premium route ${path} sets adminPage outside ${ADMIN_EXT_PATH_PREFIX}; a contributed admin page lives under ${ADMIN_EXT_PATH_PREFIX}<name> so it cannot collide with a core admin route`
+    );
+  }
+  if (path.includes('$')) {
+    throw new Error(
+      `Premium route ${path} sets adminPage on a parameterised path; the admin sidebar link points at the literal path`
+    );
+  }
+  const combined = ADMIN_PAGE_EXCLUDED_FIELDS.filter(
+    field => descriptor[field] !== undefined && descriptor[field] !== false
+  );
+  if (combined.length > 0) {
+    throw new Error(
+      `Premium route ${path} sets adminPage together with ${combined.join(', ')}; the admin layout's guard is the gate and the sidebar entry is the link`
+    );
+  }
+  if (!isAdminSidebarSectionKey(adminPage.section)) {
+    throw new Error(
+      `Premium route ${path} sets adminPage.section to an unknown section; use one of ${ADMIN_SIDEBAR_SECTION_KEYS.join(', ')}`
+    );
+  }
+  if (typeof adminPage.label !== 'string' || adminPage.label.trim() === '') {
+    throw new Error(`Premium route ${path} sets adminPage without a label; the sidebar link needs one`);
+  }
+  if (seenPaths.has(path)) {
+    throw new Error(`Premium route ${path} is declared twice with adminPage; each admin page needs its own path`);
+  }
+  seenPaths.add(path);
 }
 
 /**
@@ -14,12 +78,25 @@ export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
  * asks for two things at once: a gate on a public route would be invisible to the reader
  * it blocks, the app shell's beforeLoad redirects a signed-out visitor before render, and
  * only the app shell has a sidebar to draw a hosted workspace's conversation list in.
+ * An admin page is gated by the admin layout alone, and only an admin page may sit under
+ * the admin URL space, so a contributed route never shadows or shares a core admin path.
  */
 export function partitionPremiumRoutes<T extends PremiumRouteDescriptor>(
   descriptors: readonly T[]
 ): PremiumRoutePartition<T> {
-  const partition: PremiumRoutePartition<T> = { public: [], standalone: [], appShell: [] };
+  const partition: PremiumRoutePartition<T> = { public: [], standalone: [], appShell: [], admin: [] };
+  const adminPaths = new Set<string>();
   for (const descriptor of descriptors) {
+    if (descriptor.adminPage !== undefined) {
+      assertValidAdminPage(descriptor, adminPaths);
+      partition.admin.push(descriptor);
+      continue;
+    }
+    if (isAdminUrlSpace(descriptor.path)) {
+      throw new Error(
+        `Premium route ${descriptor.path} is under /admin without adminPage; only an admin page may live under the admin URL space`
+      );
+    }
     if (descriptor.hostsWorkspace !== undefined && !descriptor.appShell) {
       throw new Error(
         `Premium route ${descriptor.path} sets hostsWorkspace without appShell; only the notebook layout draws a workspace's conversation list`
