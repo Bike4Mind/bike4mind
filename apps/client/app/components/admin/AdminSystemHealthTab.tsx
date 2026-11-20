@@ -687,7 +687,7 @@ const AdminSystemHealthTab = () => {
                     {key}
                   </Typography>
                   {!configured &&
-                    (email.optionalSecrets.some(name => name === key) ? (
+                    (email.optionalSecrets?.some(name => name === key) ? (
                       <StatusChip tone="neutral" label="Optional" />
                     ) : (
                       <StatusChip tone="warn" label="Missing" />
