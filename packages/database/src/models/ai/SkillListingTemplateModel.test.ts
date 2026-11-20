@@ -195,4 +195,15 @@ describe('lifecycle rules', () => {
     ).toBe(false);
     expect(await find()).toMatchObject({ status: 'draft', scanStatus: 'error', freeRunEnabled: false });
   });
+
+  it('unpublishing a template in review voids the late scan verdict', async () => {
+    await create();
+    const claimedAt = new Date();
+    await claimSkillTemplateScan('listing-1', claimedAt, ['draft']);
+    expect(await unpublishSkillTemplate('listing-1')).toBe(true);
+    expect(
+      await writeSkillTemplateScanVerdict('listing-1', claimedAt, { scanStatus: 'passed', scanFindings: [] }, true)
+    ).toBe(false);
+    expect(await find()).toMatchObject({ status: 'draft', scanStatus: 'error' });
+  });
 });
