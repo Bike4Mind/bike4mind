@@ -114,11 +114,10 @@ describe('withReviewerAlerts', () => {
     expect(deps.incidents.markAlertQueued).not.toHaveBeenCalled();
     expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
     // Voiding the round keeps the queued copy's delivery from closing it.
-    expect(outcome.record).toHaveBeenCalledExactlyOnceWith({
-      kind: 'incidentAlert',
-      incidentId: 'incident-123',
-      alert: 'review',
-    });
+    expect(outcome.record).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'incidentAlert', incidentId: 'incident-123', alert: 'review' },
+      expect.any(Date)
+    );
   });
 
   it('leaves alertedAt unset when only some reviewers were reached', async () => {

@@ -198,14 +198,23 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /**
    * Voids a round in which some reviewer's copy could not be queued. The copies that were queued still
    * report back; with the queue stamp cleared their delivery cannot close the round (recordAlertDelivery),
-   * so the sweep resends to every reviewer.
+   * and a delivery stamped at or after `roundStart` is cleared, so the sweep resends to every reviewer.
+   * An earlier round's stamp predates `roundStart` and stays.
    */
-  async voidAlertRound(id: string, alert: 'review' | 'escalation', now = new Date()): Promise<void> {
-    const [queued, failed] =
-      alert === 'review' ? ['alertQueuedAt', 'alertFailedAt'] : ['escalationAlertQueuedAt', 'escalationAlertFailedAt'];
+  async voidAlertRound(id: string, alert: 'review' | 'escalation', roundStart: Date, now = new Date()): Promise<void> {
+    const [delivered, queued, failed] =
+      alert === 'review'
+        ? ['alertedAt', 'alertQueuedAt', 'alertFailedAt']
+        : ['escalationAlertedAt', 'escalationAlertQueuedAt', 'escalationAlertFailedAt'];
+    // Unqueue first: a copy delivered after this write can no longer stamp, so the clear below is final.
     await this.model.updateOne(
       { _id: id },
       { $set: { [failed]: now }, $unset: { [queued]: 1 } },
+      { runValidators: true }
+    );
+    await this.model.updateOne(
+      { _id: id, [delivered]: { $gte: roundStart } },
+      { $unset: { [delivered]: 1 } },
       { runValidators: true }
     );
   }

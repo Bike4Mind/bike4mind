@@ -99,7 +99,12 @@ describe('ImageModerationIncidentRepository', () => {
       await imageModerationIncidentRepository.markAlertQueued(inc.id, new Date('2026-10-19T11:00:00.000Z'));
       const voidedAt = new Date('2026-10-19T12:01:00.000Z');
 
-      await imageModerationIncidentRepository.voidAlertRound(inc.id, 'review', voidedAt);
+      await imageModerationIncidentRepository.voidAlertRound(
+        inc.id,
+        'review',
+        new Date('2026-10-19T11:00:00.000Z'),
+        voidedAt
+      );
       await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', {
         ok: true,
         at: new Date('2026-10-19T12:02:00.000Z'),
@@ -113,6 +118,53 @@ describe('ImageModerationIncidentRepository', () => {
       await imageModerationIncidentRepository.markAlertQueued(inc.id, resent);
       await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: resent });
       expect((await read(inc._id))?.alertedAt).toEqual(resent);
+    });
+
+    it.each(['review', 'escalation'] as const)(
+      'clears a %s delivery stamped in the voided round so the sweep resends',
+      async alert => {
+        const [delivered, queued] =
+          alert === 'review'
+            ? (['alertedAt', 'alertQueuedAt'] as const)
+            : (['escalationAlertedAt', 'escalationAlertQueuedAt'] as const);
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        const roundStart = new Date('2026-10-19T12:00:00.000Z');
+        await imageModerationIncidentRepository.recordAlertDelivery(inc.id, alert, {
+          ok: true,
+          at: new Date('2026-10-19T12:00:05.000Z'),
+        });
+
+        await imageModerationIncidentRepository.voidAlertRound(
+          inc.id,
+          alert,
+          roundStart,
+          new Date('2026-10-19T12:00:10.000Z')
+        );
+        const voided = await read(inc._id);
+        expect(voided?.[delivered]).toBeUndefined();
+        expect(voided?.[queued]).toBeUndefined();
+
+        const resent = new Date('2026-10-19T13:00:00.000Z');
+        if (alert === 'review') await imageModerationIncidentRepository.markAlertQueued(inc.id, resent);
+        else await imageModerationIncidentRepository.markEscalationAlertQueued(inc.id, resent);
+        await imageModerationIncidentRepository.recordAlertDelivery(inc.id, alert, { ok: true, at: resent });
+        expect((await read(inc._id))?.[delivered]).toEqual(resent);
+      }
+    );
+
+    it('keeps a delivery stamp from an earlier round when a later round is voided', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const earlier = new Date('2026-10-19T11:00:00.000Z');
+      await imageModerationIncidentRepository.recordAlertDelivery(inc.id, 'review', { ok: true, at: earlier });
+
+      await imageModerationIncidentRepository.voidAlertRound(
+        inc.id,
+        'review',
+        new Date('2026-10-19T12:00:00.000Z'),
+        new Date('2026-10-19T12:00:10.000Z')
+      );
+
+      expect((await read(inc._id))?.alertedAt).toEqual(earlier);
     });
 
     it('lets a delivered copy close a queued round even after another copy failed at the worker', async () => {

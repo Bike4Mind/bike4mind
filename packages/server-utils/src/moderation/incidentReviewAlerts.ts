@@ -190,6 +190,7 @@ async function deliverToReviewers(
   // Digests carry no ref: nothing on an incident records their delivery.
   const send = (recipient: string) => (ref ? deps.sendEmail(recipient, email, ref) : deps.sendEmail(recipient, email));
   const deliver = () => Promise.all(recipients.map(send));
+  const roundStart = new Date();
   try {
     const results = await Promise.race([deliver(), timedOut]);
     if (results === 'timeout') {
@@ -200,7 +201,7 @@ async function deliverToReviewers(
       deps.logger.error(`[ImageModeration] reviewer ${what} failed to send`, meta);
       // The copies that were queued still report back; voiding the round keeps their delivery from
       // closing it, so the sweep resends to every reviewer.
-      if (ref) await voidRound(ref, meta, deps);
+      if (ref) await voidRound(ref, roundStart, meta, deps);
       return 'failed';
     }
     return results.every(isQueued) ? 'queued' : 'delivered';
@@ -211,12 +212,13 @@ async function deliverToReviewers(
 
 async function voidRound(
   ref: EmailDeliveryRef,
+  roundStart: Date,
   meta: Record<string, string>,
   deps: IncidentReviewDelivery
 ): Promise<void> {
   try {
     const { voidIncidentAlertRound } = await import('../utils/mailer/deliveryOutcome');
-    await voidIncidentAlertRound(ref);
+    await voidIncidentAlertRound(ref, roundStart);
   } catch (error) {
     deps.logger.error('[ImageModeration] could not void a failed reviewer alert round', {
       ...meta,

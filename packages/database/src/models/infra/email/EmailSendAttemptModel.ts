@@ -165,8 +165,9 @@ export class EmailSendAttemptRepository
   /**
    * Writes the transport's result, never downgrading an attempt already SENT or past it
    * (delivered, opened, clicked, bounced, complained). FAILED -> SENT is allowed: a retried send can
-   * succeed. CANCELLED -> SENT is allowed (the mail went out after a mid-publish cancel); a failure
-   * leaves CANCELLED alone. Returns the attempt's jobId when the write applied, else null.
+   * succeed. CANCELLED is overwritten too: an outcome exists only for a published mail, and a failure
+   * left CANCELLED would let a later markQueued turn it into QUEUED. Returns the jobId when the write
+   * applied, else null.
    */
   async recordDeliveryOutcome(
     id: string,
@@ -189,7 +190,7 @@ export class EmailSendAttemptRepository
             EmailSendStatus.PROCESSING,
             EmailSendStatus.QUEUED,
             EmailSendStatus.FAILED,
-            ...(outcome.ok ? [EmailSendStatus.CANCELLED] : []),
+            EmailSendStatus.CANCELLED,
           ],
         },
       },

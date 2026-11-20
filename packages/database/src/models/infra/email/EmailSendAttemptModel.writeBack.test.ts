@@ -78,10 +78,11 @@ describe('EmailSendAttemptRepository delivery write-back', () => {
     expect(await statusOf(id)).toBe(status);
   });
 
-  it('keeps a cancelled attempt cancelled on a worker failure', async () => {
+  it('records a worker failure that lands before markQueued on a cancelled attempt', async () => {
     const id = await attemptIn(EmailSendStatus.CANCELLED);
-    await expect(repo.recordDeliveryOutcome(id, failed)).resolves.toBeNull();
-    expect(await statusOf(id)).toBe(EmailSendStatus.CANCELLED);
+    await expect(repo.recordDeliveryOutcome(id, failed)).resolves.toBe('job-1');
+    await expect(repo.markQueued(id, { sentAt: new Date(), retryCount: 0 })).resolves.toBe(false);
+    expect(await statusOf(id)).toBe(EmailSendStatus.FAILED);
   });
 
   it('records a send that went out after a mid-publish cancel', async () => {

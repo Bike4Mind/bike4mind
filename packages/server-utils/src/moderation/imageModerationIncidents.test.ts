@@ -171,7 +171,7 @@ describe('imageModerationIncidents', () => {
       expect(mocks.queueFailureLog.mock.calls[0][0]).not.toContain('reviewer@example.com');
       expect(mocks.markAlerted).not.toHaveBeenCalled();
       expect(mocks.markAlertQueued).not.toHaveBeenCalled();
-      expect(mocks.voidAlertRound).toHaveBeenCalledExactlyOnceWith(REVIEW_REF);
+      expect(mocks.voidAlertRound).toHaveBeenCalledExactlyOnceWith(REVIEW_REF, expect.any(Date));
     });
   });
 
