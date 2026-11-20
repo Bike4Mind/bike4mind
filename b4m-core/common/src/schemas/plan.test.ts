@@ -363,11 +363,12 @@ describe('QuestMaster plan fixture', () => {
         subQuests: [
           { id: 'a', title: 'Hyphenated', status: 'in-progress' },
           { id: 'b', title: 'V2 initial', status: 'pending' },
+          { id: 'c', title: 'V1 blocked', status: 'blocked' },
         ],
       },
     ]);
     expect(result.warnings).toEqual([]);
-    expect(result.plan.items[0].children?.map(child => child.status)).toEqual(['in_progress', 'pending']);
+    expect(result.plan.items[0].children?.map(child => child.status)).toEqual(['in_progress', 'pending', 'pending']);
   });
 });
 
