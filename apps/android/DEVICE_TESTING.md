@@ -68,6 +68,24 @@ server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
 - [ ] A refused message (for example out of credits) shows the server's reason and keeps the draft box usable.
 - [ ] Rotation and process death keep the open chat and the draft.
 
+## Agent runs
+
+Needs a server with `/api/v1/agent-executions` and notifications allowed for the app.
+
+- [ ] In an existing chat, "Agent" shows next to the composer (not in "New chat"). With it on, a send starts an agent
+      run: the turn appears, and the toggle turns itself off so the next message is a plain chat turn.
+- [ ] Starting a run shows an ongoing "Running agents" notification titled with the opening of the prompt, reading
+      "Starting agent", then "Using <tool>" / "Finished <tool>" and "Step N" as the run advances. It cannot be swiped away.
+- [ ] On Android 16+, the notification shows as a Live Update (status bar chip, lock screen) with the progress style.
+      On Android 15 and below it is a plain ongoing notification with an indeterminate bar.
+- [ ] Leaving the chat (Back, or home) keeps the notification updating.
+- [ ] When the run completes, fails or is stopped, the notification clears.
+- [ ] A run that needs approval or input replaces it with an alerting, dismissable "Waiting for your approval" (or
+      "Waiting for your input") notification.
+- [ ] Tapping either notification opens that run's chat, from the foreground, the background and after sign-in.
+- [ ] Force-stopping the app while a run is going: the ongoing notification lapses within about a minute.
+- [ ] A start the server refuses shows the error and leaves "Agent" on, so sending again retries the run.
+
 ## Brief
 
 Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recent agent activity.

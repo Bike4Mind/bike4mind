@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -92,12 +94,22 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(Spacing.m),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                // An agent run reports progress in its notification (push/AgentRunNotifications.kt), not here.
+                if (model.controller.canStartAgentRun(state)) {
+                    FilterChip(
+                        selected = state.sendsAsAgentRun,
+                        onClick = { model.controller.setSendsAsAgentRun(!state.sendsAsAgentRun) },
+                        label = { Text(stringResource(R.string.chat_agent_toggle)) },
+                        modifier = Modifier.testTag("chat-composer-agent-toggle"),
+                    )
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
-                    placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
+                    placeholder = { Text(stringResource(if (state.sendsAsAgentRun) R.string.chat_agent_placeholder else R.string.chat_message_placeholder)) },
                 )
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
                     model.controller.send(draft)

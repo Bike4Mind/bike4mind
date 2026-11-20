@@ -37,6 +37,8 @@
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
     <string name="chat_reply_pending" translatable="false">...</string>
+    <string name="chat_agent_toggle">Agent</string>
+    <string name="chat_agent_placeholder">Describe a task for the agent</string>
 
     <!-- Brief -->
     <string name="brief_title">Brief</string>
@@ -61,4 +63,9 @@
 
     <!-- Notifications -->
     <string name="notification_channel_default">@string/app_name</string>
+    <string name="notification_channel_agent_runs">Running agents</string>
+    <string name="agent_run_working">Working</string>
+    <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_chip">Agent</string>
+    <string name="agent_run_needs_you">Needs you</string>
 </resources>

@@ -1,10 +1,14 @@
 package com.bike4mind.kit.chat
 
+import com.bike4mind.kit.agents.AgentRunReceipt
+import com.bike4mind.kit.agents.AgentRunStarter
 import com.bike4mind.kit.realtime.RealtimeFrames.StreamedCompletion
 import com.bike4mind.kit.sessions.Quest
 import com.bike4mind.kit.sessions.QuestStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -105,5 +109,76 @@ class ChatControllerTest {
 
         assertEquals(ChatError.Refused("insufficient_credits", "Out of credits"), chat.state.value.error)
         assertEquals(emptyList<Quest>(), chat.state.value.turns)
+    }
+
+    private class FakeRuns(var receipt: AgentRunReceipt = AgentRunReceipt("e1", "q-run", "s1")) : AgentRunStarter {
+        val started = mutableListOf<Triple<String, String, String>>()
+        var failure: Exception? = null
+
+        override suspend fun start(sessionId: String, title: String, message: String): AgentRunReceipt {
+            started += Triple(sessionId, title, message)
+            failure?.let { throw it }
+            return receipt
+        }
+    }
+
+    private fun TestScope.agentController(backend: FakeBackend, runs: FakeRuns, sessionId: String?) =
+        ChatController(sessionId, backend, backgroundScope, now = { testScheduler.currentTime }, agentRuns = runs).also { it.start() }
+
+    @Test
+    fun anAgentRunSendsThroughTheRunRouteOnceThenFallsBackToChat() = runTest {
+        val backend = FakeBackend().apply { receipt = ChatReceipt.Accepted("q2", "s1") }
+        val runs = FakeRuns()
+        val chat = agentController(backend, runs, "s1")
+
+        chat.setSendsAsAgentRun(true)
+        chat.send(" Audit this ")
+        runCurrent()
+
+        assertEquals(listOf(Triple("s1", "Audit this", "Audit this")), runs.started.toList())
+        assertTrue(backend.sent.isEmpty())
+        val turn = chat.state.value.turns.single()
+        assertEquals("q-run", turn.id)
+        assertEquals(QuestStatus.PENDING, turn.status)
+        assertFalse(chat.state.value.sendsAsAgentRun)
+
+        chat.send("Thanks")
+        runCurrent()
+        assertEquals(listOf<Pair<String, String?>>("Thanks" to "s1"), backend.sent.toList())
+        assertEquals(1, runs.started.size)
+    }
+
+    @Test
+    fun aRunWithoutAQuestSettlesAsStarted() = runTest {
+        val runs = FakeRuns(AgentRunReceipt("e1", null, "s1"))
+        val chat = agentController(FakeBackend(), runs, "s1")
+        chat.setSendsAsAgentRun(true)
+        chat.send("go")
+        runCurrent()
+        val turn = chat.state.value.turns.single()
+        assertEquals(QuestStatus.DONE, turn.status)
+        assertEquals(ChatController.UNTRACKED_RUN_REPLY, turn.reply)
+    }
+
+    @Test
+    fun aFailedStartKeepsTheToggleOnForARetry() = runTest {
+        val runs = FakeRuns().apply { failure = IllegalStateException("409") }
+        val chat = agentController(FakeBackend(), runs, "s1")
+        chat.setSendsAsAgentRun(true)
+        chat.send("go")
+        runCurrent()
+        assertTrue(chat.state.value.sendsAsAgentRun)
+        assertTrue(chat.state.value.error is ChatError.Failed)
+        assertTrue(chat.state.value.turns.isEmpty())
+    }
+
+    @Test
+    fun aNewChatCannotStartAnAgentRun() = runTest {
+        val chat = agentController(FakeBackend(), FakeRuns(), sessionId = null)
+        assertFalse(chat.canStartAgentRun(chat.state.value))
+        chat.setSendsAsAgentRun(true)
+        assertFalse(chat.state.value.sendsAsAgentRun)
+        val plain = controller(FakeBackend(), sessionId = "s1")
+        assertFalse(plain.canStartAgentRun(plain.state.value))
     }
 }
