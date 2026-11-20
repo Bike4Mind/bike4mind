@@ -243,6 +243,8 @@ function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalPar
 
 const MAX_DESCRIPTION_CHARS = 140;
 
+const SHELL_TOOLS = new Set(['bash_execute', 'bash_background']);
+
 /** The model's description as one capped line, or '' when there is nothing to show. */
 function approvalDescriptionLine(description: string | undefined): string {
   const flat = (description ?? '').replace(/\s+/g, ' ').trim();
@@ -429,6 +431,10 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // string twice in three lines - and a write has no other argument worth a line of its own.
   const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
+  // Read from the input, so a call that never stopped at the gate (an imported session's) shows it too.
+  const description = SHELL_TOOLS.has(call.name)
+    ? approvalDescriptionLine(typeof call.input.description === 'string' ? call.input.description : undefined)
+    : '';
   // The list stands in for the raw text it was parsed from; the model still got that text.
   const listsHits = useWebSearchHits(call).length > 0;
 
@@ -454,6 +460,11 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
 
   return (
     <Box data-testid="chat-tool-detail">
+      {description && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-tool-detail-summary">
+          {`Agent's summary: ${description}`}
+        </Typography>
+      )}
       {argument && (
         <Typography
           level="body-sm"
