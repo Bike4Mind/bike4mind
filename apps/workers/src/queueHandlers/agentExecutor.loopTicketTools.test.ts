@@ -307,6 +307,33 @@ describe('loop_ticket_update', () => {
     expect(items.updateForUser).not.toHaveBeenCalled();
   });
 
+  it("changes a ticket of a hand-off target, but not of a loop outside the run loop's hand-off list", async () => {
+    const OTHER = '507f1f77bcf86cd799439014';
+    loops.findByIdAndUserId.mockImplementation(async (id: string) =>
+      [OWN, SIBLING, OTHER].includes(id) ? loop(id) : null
+    );
+    const ticket = (loopId: string) => ({ id: 't1', loopId, stage: 'todo', status: 'open', dependencies: [] });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    items.findByIdForUser.mockResolvedValue(ticket(OTHER));
+    expect(await run(tools, 'loop_ticket_update', { id: 't1', title: 'New' })).toMatch(/^Error: .*hand-off list/);
+    expect(
+      await run(tools, 'loop_ticket_split', {
+        id: 't1',
+        children: [
+          { title: 'A', priority: 'p1' },
+          { title: 'B', priority: 'p1' },
+        ],
+      })
+    ).toMatch(/^Error: .*hand-off list/);
+    expect(items.updateForUser).not.toHaveBeenCalled();
+    expect(items.create).not.toHaveBeenCalled();
+
+    items.findByIdForUser.mockResolvedValue(ticket(SIBLING));
+    await run(tools, 'loop_ticket_update', { id: 't1', title: 'New' });
+    expect(items.updateForUser).toHaveBeenCalledWith('t1', 'u1', expect.objectContaining({ title: 'New' }), 'open');
+  });
+
   it('blocks its own ticket with a reason, and requires the reason', async () => {
     items.findByIdForUser.mockResolvedValue({
       id: 't1',

@@ -156,6 +156,15 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
     return loop;
   };
 
+  /** A loop whose tickets this run may change: its own or one on its hand-off list, as for loop_ticket_create. */
+  const reachableLoop = async (id: string): Promise<ILoop> => {
+    const loop = await ownLoop(id);
+    if (loop.id !== loopId && !(await ownLoop(loopId)).handoffTargets?.includes(loop.id)) {
+      throw new BadRequestError('only a ticket of this loop or of a loop on its hand-off list can be changed');
+    }
+    return loop;
+  };
+
   /** A run hand-off of a ticket of this run's loop; shared by loop_ticket_handoff and loop_ticket_update. */
   const handOff = async (params: { id?: unknown; loopId?: unknown; stage?: unknown; note?: unknown }) => {
     const ticket = typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
@@ -434,7 +443,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             }
             return handOff({ id: existing.id, loopId: params.loopId, stage: params.stage });
           }
-          const current = await ownLoop(existing.loopId);
+          const current = await reachableLoop(existing.loopId);
           // Setting only the priority does not work the ticket, so a triage run may set it in a desktop stage too.
           const onlyPriority = Object.entries(params).every(
             ([key, v]) => v === undefined || ['id', 'priority'].includes(key)
@@ -572,7 +581,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const existing =
             typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
           if (!existing?.loopId) throw new NotFoundError(TICKET_NOT_FOUND);
-          const loop = await ownLoop(existing.loopId);
+          const loop = await reachableLoop(existing.loopId);
           assertCloudRunMayChange(loop, existing);
           if (existing.status !== 'open' || existing.epic)
             throw new BadRequestError('only an open, unsplit ticket can be split');
