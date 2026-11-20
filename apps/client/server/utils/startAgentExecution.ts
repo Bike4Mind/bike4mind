@@ -480,7 +480,18 @@ export async function startAgentExecution(
   }
 
   await pinning;
-  if (input.beforeDispatch && !(await input.beforeDispatch(executionId))) {
+  let allowed: boolean;
+  try {
+    allowed = !input.beforeDispatch || (await input.beforeDispatch(executionId));
+  } catch (err) {
+    // The caller tracks no run it failed to record, so this one must not sit `pending` until the stale sweep.
+    await agentExecutionRepository
+      .markFailed(executionId, { message: 'Run start was withdrawn.', failureReason: 'abandoned' })
+      .catch(() => undefined);
+    if (persistedQuestId) await Quest.deleteOne({ _id: persistedQuestId }).catch(() => undefined);
+    throw err;
+  }
+  if (!allowed) {
     logger.warn('[Start] Dispatch refused by the caller before invoking the executor', { executionId });
     if (persistedQuestId) await Quest.deleteOne({ _id: persistedQuestId }).catch(() => undefined);
     return { ok: false, reason: 'dispatch_failed', message: 'Run start was withdrawn.', executionId };
