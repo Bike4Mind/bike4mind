@@ -1,3 +1,4 @@
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import {
   appFilesBucket,
   fabFileBucket,
@@ -15,7 +16,7 @@ import {
   TEST_DECISION_PROVIDER_ENVIRONMENT,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
-import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction, cloudSecurityScanFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
 // round to break exactly that cycle).
@@ -228,6 +229,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     ...stageScopedQueueUrls({
       // Contributed entries go first so a core key always wins.
       ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'cloud-security-scan': cloudSecurityScanDeadLetter.queue.url,
       'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
       'fab-file-chunk': fabFileChunkQueueDLQ.url,
       'generation-callback': generationCallbackQueueDLQ.url,
@@ -313,6 +315,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    cloudSecurityScan: cloudSecurityScanFunction.name,
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
@@ -496,6 +499,7 @@ export const web = new sst.aws.Nextjs(
         resources: [
           attackSimulationFunction.arn,
           modelDiscoveryFunction.arn,
+          cloudSecurityScanFunction.arn,
           agentExecutor.arn,
           emailSendSubscription.nodes.function.apply(fn => fn.arn),
         ],

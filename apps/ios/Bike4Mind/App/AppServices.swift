@@ -43,12 +43,16 @@ final class AppServices {
   let pendingActions: any PendingActionAPI
   /// The server-composed assistant brief, on whichever server the app currently points at.
   let briefs: any BriefAPI
+  /// The standing instructions the brief composer follows, on whichever server the app points at.
+  let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
   let clientUpgrade: ClientUpgradeStatus
+  /// The signed-in account's profile, kept for the session; cleared when the session ends (`RootView.endSession`).
+  let accountProfiles: AccountProfileStore
 
   init(auth: AuthController) {
     self.auth = auth
@@ -100,7 +104,32 @@ final class AppServices {
       #endif
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    instructions = ForwardingInstructionAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
+      #endif
+      return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    accountProfiles = AccountProfileStore(
+      resolveScope: {
+        #if DEBUG
+          if FixtureServices.isEnabled {
+            return AccountProfileStore.Scope(userID: "fixture", environment: auth.environment)
+          }
+        #endif
+        guard let userID = await auth.userID() else { return nil }
+        return AccountProfileStore.Scope(userID: userID, environment: auth.environment)
+      },
+      fetch: { scope in
+        #if DEBUG
+          if FixtureServices.isEnabled {
+            return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
+          }
+        #endif
+        let client = AccountClient(baseURL: scope.environment.baseURL, tokens: auth)
+        return try? await client.profile(userID: scope.userID)
+      })
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -137,16 +166,15 @@ final class AppServices {
     return current.account
   }
 
-  /// The signed-in account's profile for the greeting, avatar and Settings header, fetched from the server; `nil`
-  /// when it cannot be loaded. Fixture runs have no session, so they get a stand-in.
-  func accountProfile() async -> AccountProfile? {
-    #if DEBUG
-      if FixtureServices.isEnabled {
-        return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
-      }
-    #endif
-    guard let userID = await auth.userID() else { return nil }
-    return try? await account.profile(userID: userID)
+  /// The profile for the greeting, avatar and Settings header, available on the first frame once it has loaded in
+  /// this session; `nil` before that, and after the session ends or the server changes.
+  var cachedAccountProfile: AccountProfile? {
+    accountProfiles.profile(in: auth.environment)
+  }
+
+  /// Loads the profile in the background unless a fresh one is stored; views render `cachedAccountProfile`.
+  func refreshAccountProfile() async {
+    await accountProfiles.refresh()
   }
 
   var stepUp: any StepUpAPI {
@@ -162,6 +190,7 @@ final class AppServices {
     await questActivities.sessionWillEnd()
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
+    ThumbnailCache.shared.removeAll()
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
@@ -352,5 +381,22 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func brief(id: String) async throws -> Brief {
     try await provider().brief(id: id)
+  }
+}
+
+/// Routes instruction calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingInstructionAPI: InstructionAPI {
+  let provider: @MainActor @Sendable () -> any InstructionAPI
+
+  func list() async throws -> [AssistantInstruction] {
+    try await provider().list()
+  }
+
+  func add(text: String) async throws -> AssistantInstruction {
+    try await provider().add(text: text)
+  }
+
+  func remove(id: String) async throws {
+    try await provider().remove(id: id)
   }
 }

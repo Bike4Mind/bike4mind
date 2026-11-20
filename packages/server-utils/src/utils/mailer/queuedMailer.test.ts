@@ -50,6 +50,19 @@ describe('queuedMailer on a hosted stage', () => {
     expect(Object.keys(mocks.publish.mock.calls[0][0]).sort()).toEqual(['body', 'subject', 'to']);
   });
 
+  it('carries the delivery ref on the event so the worker can record the outcome', async () => {
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'attempt-1' };
+    await queuedMailer.sendEmail('a@example.org', mail, { ref, logRecipient: false });
+
+    expect(mocks.publish).toHaveBeenCalledWith({
+      to: 'a@example.org',
+      subject: 'Hello',
+      body: '<p>Body</p>',
+      logRecipient: false,
+      ref,
+    });
+  });
+
   it('puts text, category, mirror and logRecipient on the event when they are set', async () => {
     await queuedMailer.sendEmail(
       'a@example.org',
@@ -193,6 +206,15 @@ describe('queuedMailer on self-host', () => {
 
     expect(mocks.mailerSend).toHaveBeenCalledTimes(1);
     expect(mocks.mailerSend).toHaveBeenCalledWith('a@example.org', richMail, options);
+  });
+
+  it('does not hand the delivery ref to the mailer, which has no use for it', async () => {
+    await queuedMailer.sendEmail('a@example.org', mail, {
+      mirror: false,
+      ref: { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'review' },
+    });
+
+    expect(mocks.mailerSend).toHaveBeenCalledWith('a@example.org', mail, { mirror: false });
   });
 
   it('passes an empty options object when the caller gave none', async () => {

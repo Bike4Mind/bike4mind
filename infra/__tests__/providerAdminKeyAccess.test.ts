@@ -353,7 +353,7 @@ describe('provider admin key access alarms', () => {
       'ProviderAdminKeyAgeAlarm-anthropic',
       'ProviderAdminKeyAgeAlarm-openai',
     ]);
-    expect(resources.alarm).toHaveBeenCalledTimes(15);
+    expect(resources.alarm).toHaveBeenCalledTimes(17);
   });
 
   it('creates nothing alarm-related on a stage that does not monitor', async () => {

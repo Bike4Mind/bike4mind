@@ -155,10 +155,11 @@ final class ChatViewModelTests: XCTestCase {
   func testAFinalFrameWithTextOnlyInRepliesShowsTheReplyLive() async throws {
     let realtime = FakeRealtime()
     let model = makeModel(realtime: realtime)
-    model.draft = "Name two colors"
-    await model.send()
     let listener = Task { await model.listen() }
     await eventually { await realtime.listenerCount == 1 }
+    await eventually { await MainActor.run { model.isRealtimeConnected } }
+    model.draft = "Name two colors"
+    await model.send()
 
     func quest(_ fields: JSONObject) -> RealtimeEvent {
       var quest: JSONObject = ["id": "quest-1", "sessionId": "s1", "type": "message", "prompt": "Name two colors"]

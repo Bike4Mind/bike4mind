@@ -1,4 +1,6 @@
+import { createHmac } from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -185,6 +187,24 @@ describe('createDeepAgentToolMaterializer', () => {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+  });
+
+  it('signs web_search image URLs with the derived key when a dedicated signing secret is set', async () => {
+    const resource = Resource as unknown as Record<string, unknown>;
+    buildSharedToolsSpy.mockClear();
+    resource.HMAC_SIGNING_SECRET = { value: 'test-dedicated-secret' };
+    try {
+      await materialize()(['web_search'], 'owner-1');
+    } finally {
+      delete resource.HMAC_SIGNING_SECRET;
+    }
+    const opts = buildSharedToolsSpy.mock.calls[0]?.[2] as {
+      config?: { web_search?: { imageUrlSigningSecret?: string } };
+    };
+    expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe(
+      createHmac('sha256', 'test-dedicated-secret').update('b4m-signing/search-image-url/v1').digest('hex')
+    );
+    expect(opts?.config?.web_search?.imageUrlSigningSecret).not.toBe('test-secret');
   });
 
   it('marks the tool deps as internal-origin with no api key', async () => {

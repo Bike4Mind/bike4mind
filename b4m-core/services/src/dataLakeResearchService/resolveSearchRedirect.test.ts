@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveSearchRedirect } from './resolveSearchRedirect';
+import { isRetryableUnresolved, resolveSearchRedirect, type UnresolvedDetail } from './resolveSearchRedirect';
 
 const GOTO = 'https://www.google.com/goto?url=opaque-token';
 
@@ -314,6 +314,35 @@ describe('resolveSearchRedirect', () => {
       expect(result.detail?.bodyHint).toBe('redirect_notice');
     });
 
+    it('extracts a decoded, collapsed, capped title and flags a verifying page', async () => {
+      const long = 'x'.repeat(200);
+      const titled = await run(vi.fn(async () => page('<title>\n Verifying  &amp; wait \n</title>')));
+      expect(titled.detail).toMatchObject({ bodyTitle: 'Verifying & wait', bodyHint: 'verifying' });
+      const capped = await run(vi.fn(async () => page(`<title>${long}</title>`)));
+      expect(capped.detail?.bodyTitle).toHaveLength(80);
+    });
+
+    it('omits bodyTitle when the page has no title', async () => {
+      const result = await run(vi.fn(async () => page('<html>nothing</html>')));
+      expect(result.detail).not.toHaveProperty('bodyTitle');
+      expect(result.detail?.bodyHint).toBe('other');
+    });
+
+    it.each([
+      ['English', '<title>Verifying your request</title>'],
+      ['German', '<title>Verifizierung Ihrer Anfrage</title>'],
+    ])('hints verifying for a %s title', async (_label, html) => {
+      const result = await run(vi.fn(async () => page(html)));
+      expect(result.detail?.bodyHint).toBe('verifying');
+    });
+
+    it('lets captcha and consent take precedence over verifying', async () => {
+      const captcha = await run(vi.fn(async () => page('<title>Verifying</title> unusual traffic')));
+      expect(captcha.detail?.bodyHint).toBe('captcha');
+      const consent = await run(vi.fn(async () => page('<title>Verifying</title> before you continue')));
+      expect(consent.detail?.bodyHint).toBe('consent');
+    });
+
     it('reports a 5xx without reading a body', async () => {
       const result = await run(vi.fn(async () => new Response('oops', { status: 503 })));
       expect(result.detail).toMatchObject({ reason: 'status', status: 503 });
@@ -351,5 +380,68 @@ describe('resolveSearchRedirect', () => {
       expect(result.detail).toEqual({ reason: 'network_error' });
       noToken(result);
     });
+  });
+});
+
+describe('isRetryableUnresolved', () => {
+  const waiting: UnresolvedDetail = { reason: 'no_meta_refresh', status: 200, bodyHint: 'verifying' };
+  it.each<[string, UnresolvedDetail | undefined, boolean]>([
+    ['a 200 waiting page', waiting, true],
+    ['a 200 other page', { ...waiting, bodyHint: 'other' }, true],
+    ['a timeout', { reason: 'timeout' }, true],
+    ['captcha', { ...waiting, bodyHint: 'captcha' }, false],
+    ['consent', { ...waiting, bodyHint: 'consent' }, false],
+    ['a 4xx', { reason: 'status', status: 429 }, false],
+    ['a 5xx', { reason: 'status', status: 503 }, false],
+    ['a google location', { reason: 'google_location', status: 302 }, false],
+    ['a bad location', { reason: 'bad_location', status: 302 }, false],
+    ['a network error', { reason: 'network_error' }, false],
+    ['no detail', undefined, false],
+  ])('is %s -> %s', (_label, detail, expected) => {
+    expect(isRetryableUnresolved(detail)).toBe(expected);
+  });
+});
+
+describe('resolveSearchRedirect cookies', () => {
+  const waitingPage = (cookies: string[]) => {
+    const headers = new Headers({ 'content-type': 'text/html' });
+    for (const cookie of cookies) headers.append('set-cookie', cookie);
+    return new Response('<title>Google</title>', { status: 200, headers });
+  };
+
+  it('returns name=value pairs from multiple Set-Cookie headers without attributes', async () => {
+    const result = await resolveSearchRedirect(GOTO, {
+      fetchImpl: vi.fn(async () =>
+        waitingPage(['NID=abc; Path=/; HttpOnly', '__Secure-STRP=def; Secure; SameSite=Lax'])
+      ),
+    });
+    expect(result.retryCookies).toEqual(['NID=abc', '__Secure-STRP=def']);
+    expect(JSON.stringify(result.detail)).not.toMatch(/NID|abc|def/);
+  });
+
+  it('caps the pair count and the total size', async () => {
+    const many = Array.from({ length: 30 }, (_v, i) => `c${i}=v`);
+    const counted = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage(many)) });
+    expect(counted.retryCookies).toHaveLength(10);
+    const big = Array.from({ length: 5 }, (_v, i) => `c${i}=${'x'.repeat(1500)}`);
+    const sized = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage(big)) });
+    expect(sized.retryCookies).toHaveLength(2);
+  });
+
+  it('has no retryCookies when none were set', async () => {
+    const result = await resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => waitingPage([])) });
+    expect(result).not.toHaveProperty('retryCookies');
+  });
+
+  it('sends the cookies option as a Cookie header', async () => {
+    const fetchImpl = vi.fn(async () => redirect(302, 'https://example.org/a'));
+    await resolveSearchRedirect(GOTO, { fetchImpl, cookies: ['NID=abc', 'B=c'] });
+    expect(fetchImpl).toHaveBeenCalledWith(GOTO, expect.objectContaining({ headers: { Cookie: 'NID=abc; B=c' } }));
+  });
+
+  it('sends no Cookie header without the option', async () => {
+    const fetchImpl = vi.fn(async () => redirect(302, 'https://example.org/a'));
+    await resolveSearchRedirect(GOTO, { fetchImpl });
+    expect(fetchImpl.mock.calls[0][1]).not.toHaveProperty('headers');
   });
 });

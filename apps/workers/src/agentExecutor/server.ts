@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import type { Message } from '@aws-sdk/client-sqs';
 import type { Context, SQSEvent } from 'aws-lambda';
+import { requireConfiguredSecret } from '@bike4mind/common';
 import {
   ContinuationSchema,
   StartExecutionSchema,
@@ -34,7 +35,7 @@ export function createExecutorApp(options: {
   enqueue: (payload: Record<string, unknown>) => Promise<void>;
   audit?: (event: { outcome: 'accepted' | 'denied'; remoteAddress?: string; executionId?: string }) => void;
 }) {
-  if (!options.secret.trim()) throw new Error('AGENT_EXECUTOR_INTERNAL_SECRET is required');
+  const secret = requireConfiguredSecret('AGENT_EXECUTOR_INTERNAL_SECRET', options.secret).trim();
   const app = express();
   app.get('/health', (_req, res) => {
     const ready = options.ready();
@@ -44,7 +45,7 @@ export function createExecutorApp(options: {
     '/execute',
     (req, res, next) => {
       const provided = Buffer.from(req.headers.authorization ?? '');
-      const expected = Buffer.from(`Bearer ${options.secret.trim()}`);
+      const expected = Buffer.from(`Bearer ${secret}`);
       if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
         options.audit?.({ outcome: 'denied', remoteAddress: req.socket.remoteAddress });
         res.status(401).json({ error: 'Unauthorized' });

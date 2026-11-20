@@ -606,6 +606,40 @@ describe('UserApiKeysTab - skills:write', () => {
   });
 });
 
+describe('UserApiKeysTab - artifacts:publish', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Publish key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('keeps artifacts:publish out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+
+  it('keeps artifacts:publish out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    // A write scope proves the preset click took effect.
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+
+  it('offers artifacts:publish with Full access', () => {
+    expect(mintScopes('full')).toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+});
+
 describe('UserApiKeysTab - API key trust gate', () => {
   const blocked = {
     canCreate: false,

@@ -13,6 +13,7 @@ const h = vi.hoisted(() => {
   }
   return {
     fetch: vi.fn(),
+    ingestToken: 'ingest-token',
     rateLimitLine: '{"type":"RATE_LIMIT_WARNING","integration":"github","usagePercent":95}',
     // Replaces the default connect for one test; it is handed the client's stderr callback.
     connect: undefined as ((onStderrLine: (line: string) => void) => Promise<void>) | undefined,
@@ -43,7 +44,13 @@ vi.mock('@bike4mind/mcp', () => ({
   },
 }));
 
-vi.mock('sst', () => ({ Resource: { RATE_LIMIT_INGEST_TOKEN: { value: 'ingest-token' } } }));
+vi.mock('sst', () => ({
+  Resource: {
+    get RATE_LIMIT_INGEST_TOKEN() {
+      return { value: h.ingestToken };
+    },
+  },
+}));
 
 import { handler } from './mcpCall';
 import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
@@ -63,6 +70,7 @@ describe('mcpCall rate-limit ingest', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    h.ingestToken = 'ingest-token';
   });
 
   it("posts captured rate-limit events under the calling user's tenant", async () => {
@@ -85,6 +93,25 @@ describe('mcpCall rate-limit ingest', () => {
       envVariables: [],
     });
 
+    expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
+  });
+
+  it('hands the events back without posting while the ingest token is a placeholder', async () => {
+    h.ingestToken = 'not-configured';
+    // spyOn reuses an existing spy, so drop calls left by earlier tests in this file.
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    errorSpy.mockClear();
+
+    const result = await handler({
+      name: 'github',
+      action: 'callTool',
+      toolName: 'get_issue',
+      userId: 'user-1',
+      envVariables: [],
+    });
+
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
   });
 

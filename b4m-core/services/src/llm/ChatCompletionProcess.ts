@@ -1330,6 +1330,7 @@ export class ChatCompletionProcess {
   private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo; substituteIds: Set<string> } | null = null;
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
+  private imageUrlSigningSecret?: string;
   private gpcSignalDetected: boolean = false;
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
@@ -1416,6 +1417,7 @@ export class ChatCompletionProcess {
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
     this.telemetryHmacSecret = options.telemetryHmacSecret;
+    this.imageUrlSigningSecret = options.imageUrlSigningSecret;
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
@@ -3801,6 +3803,7 @@ export class ChatCompletionProcess {
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
         disabledMcpConnections: parsedBody.disabledMcpConnections,
+        enabledPlatformMcpConnections: parsedBody.enabledPlatformMcpConnections,
         defaultAdminSettings,
         userMessage: initContext.message,
         logger,
@@ -3957,7 +3960,7 @@ export class ChatCompletionProcess {
           image_generation: imageToolConfig,
           edit_image: imageToolConfig,
           audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
-          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          web_search: { imageUrlSigningSecret: this.imageUrlSigningSecret ?? this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
         },

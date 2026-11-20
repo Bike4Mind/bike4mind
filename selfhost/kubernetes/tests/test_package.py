@@ -110,13 +110,21 @@ class PackageTests(unittest.TestCase):
 
     def test_declared_secret_rotation_restarts_all_runtime_roles(self):
         original = self.render()
-        before = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in original if obj['kind'] in ['Deployment', 'StatefulSet']}
+        before = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in original if obj['kind'] in ['Deployment', 'StatefulSet'] and obj['metadata']['name'] != 'test-mail'}
         for change in [{'initializationRevision': 'rotation-2'}, {'existingSecret': 'replacement-runtime'}]:
             with self.subTest(change=change):
-                after = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in self.render(change) if obj['kind'] in ['Deployment', 'StatefulSet']}
+                after = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in self.render(change) if obj['kind'] in ['Deployment', 'StatefulSet'] and obj['metadata']['name'] != 'test-mail'}
                 self.assertEqual(set(before), set(after))
                 for name in before:
                     self.assertNotEqual(before[name], after[name], name)
+
+    def test_mail_pod_does_not_roll_on_config_or_secret_changes(self):
+        def mail_template(objects):
+            return next(obj for obj in objects if obj['kind'] == 'Deployment' and obj['metadata']['name'] == 'test-mail')['spec']['template']['metadata']
+        before = mail_template(self.render())
+        for change in [{'initializationRevision': 'rotation-2'}, {'existingSecret': 'replacement-runtime'}, {'config': {'MAIL_FROM': 'noreply@example.com'}}]:
+            with self.subTest(change=change):
+                self.assertEqual(mail_template(self.render(change)), before)
 
     def test_fanout_stage_references_configured_application_stage(self):
         objects = self.render({'config': {'APP_STAGE': 'evaluation'}})

@@ -301,6 +301,7 @@ Create and manage API keys for programmatic access.
 |-------|------------|
 | `READ_NOTEBOOKS` | View notebooks and sessions |
 | `WRITE_NOTEBOOKS` | Create/modify notebooks |
+| `ARTIFACTS_PUBLISH` | Publish, republish and unpublish your artifacts as web pages. Does not allow reading artifacts |
 | `READ_FILES` | Download and view files |
 | `WRITE_FILES` | Upload and modify files |
 | `AI_GENERATE` | AI generation features |
