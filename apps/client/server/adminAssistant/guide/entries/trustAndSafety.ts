@@ -180,6 +180,8 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     howTo: [
       'Set the dormant threshold in days (90 by default) to change which admins are flagged as dormant.',
       'Confirm keeps an admin as they are. Revoke asks for a reason, removes their admin access through the audited permission change, then records the decision.',
+      'Filter by Pending, Confirmed or Revoked; pending admins are listed first with Confirm and Revoke buttons. A full admin who is dormant and has no MFA is marked "Suggested: revoke".',
+      'Select several admins and choose Revoke access to revoke them in one step; each revocation is still recorded and audited per admin.',
       'You cannot confirm or revoke your own row; another full admin has to review it. The review completes once every admin has a decision.',
       'Export CSV downloads the quarter with each admin and decision. An overdue banner shows in the admin console when the quarter passes its grace period with no completed review. Only full admins can open this tab.',
     ],

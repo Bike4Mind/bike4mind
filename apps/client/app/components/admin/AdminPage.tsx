@@ -162,6 +162,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
         />
         <AccessReviewOverdueBanner
           isFullAdmin={!!currentUser?.isAdmin}
+          hidden={activeTab === AdminTab.AccessReview}
           onOpen={() => setActiveTab(AdminTab.AccessReview)}
         />
         <Tabs

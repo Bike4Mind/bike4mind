@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCESS_REVIEW_COUNT_LABELS,
   ACCESS_REVIEW_GRACE_DAYS,
+  accessReviewOverdueSince,
   isAccessReviewOverdue,
   isDormant,
   quarterStart,
@@ -352,5 +353,11 @@ describe('isAccessReviewOverdue', () => {
 
   it('is not overdue when a review was completed this quarter', () => {
     expect(isAccessReviewOverdue(start, new Date('2027-06-30T00:00:00.000Z'))).toBe(false);
+  });
+
+  it('dates an overdue review from the end of the grace period, and null otherwise', () => {
+    expect(accessReviewOverdueSince(null, new Date('2027-06-30T00:00:00.000Z'))).toEqual(graceEnd);
+    expect(accessReviewOverdueSince(null, start)).toBeNull();
+    expect(accessReviewOverdueSince(start, new Date('2027-06-30T00:00:00.000Z'))).toBeNull();
   });
 });
