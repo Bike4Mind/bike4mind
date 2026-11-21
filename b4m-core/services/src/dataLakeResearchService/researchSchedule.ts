@@ -44,7 +44,8 @@ export const RESEARCH_SCHEDULE_BATCH_MAX = 50;
  */
 export const RESEARCH_SCHEDULE_RETRY_MS = 60 * 60 * 1000;
 
-const SCHEDULED_START_FAILED_MESSAGE = 'The scheduled run could not be started. It will be retried in about an hour.';
+export const SCHEDULED_START_FAILED_MESSAGE =
+  'The scheduled run could not be started. It will be retried in about an hour.';
 
 const addUtcMonths = (from: Date, months: number): Date => {
   const next = new Date(from);
