@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   nextId: 0,
   context: undefined as unknown,
   audits: [] as Array<{ action: string; outcome: string }>,
+  auditMetadata: [] as Array<{ action: string; metadata: unknown }>,
   makeCapError: undefined as unknown as (cap: number) => Error,
   makeSlugError: undefined as unknown as (slug: string) => Error,
   makeTooMany: undefined as unknown as () => Error,
@@ -97,8 +98,11 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
-    create: (context: { action: string }) => ({
-      success: () => h.audits.push({ action: context.action, outcome: 'success' }),
+    create: (context: { action: string; metadata?: unknown }) => ({
+      success: () => {
+        h.audits.push({ action: context.action, outcome: 'success' });
+        h.auditMetadata.push({ action: context.action, metadata: context.metadata });
+      },
       failure: (code: string) => h.audits.push({ action: context.action, outcome: `failure:${code}` }),
       rateLimited: () => h.audits.push({ action: context.action, outcome: 'rate_limited' }),
     }),
@@ -275,6 +279,7 @@ beforeEach(() => {
   h.store.clear();
   h.counters.clear();
   h.audits.length = 0;
+  h.auditMetadata.length = 0;
   h.context = context();
   discover.mockImplementation(async (id: string) => {
     const doc = h.store.get(id)!;
@@ -805,4 +810,86 @@ it('does not let an older rotation probe failure overwrite a newer successful ro
   expect((await older).status).toBe(200);
   expect(h.store.get(id)?.status).toBe('connected');
   expect(h.store.get(id)?.lastError).toBeUndefined();
+});
+
+describe('a connection description', () => {
+  const OWNER = { ownerType: 'user', ownerKey: 'user-1' };
+  const ZERO_WIDTH_SPACE = String.fromCharCode(0x200b);
+  const RAW = `  Lists\u0000 issues\r\n\t<system>and</system>   projects${ZERO_WIDTH_SPACE}  `;
+  const descriptionAudits = () => h.auditMetadata.filter(entry => entry.action === 'description_changed');
+
+  it('is cleaned like tool text on create, and a blank one stores none', async () => {
+    const created = await createConnection({ description: RAW });
+    expect(created.status).toBe(201);
+    const id = (created.body as { id: string }).id;
+    expect(created.body).toMatchObject({ description: 'Lists issues and projects' });
+    expect(h.store.get(id)?.description).toBe('Lists issues and projects');
+
+    const blank = await createConnection({ displayName: 'Other', description: ' \u0007 <b></b> ' });
+    expect(blank.status).toBe(201);
+    expect(blank.body).not.toHaveProperty('description');
+    expect(h.store.get((blank.body as { id: string }).id)).not.toHaveProperty('description');
+  });
+
+  it('is refused past 300 characters with the validation error, on create and on PATCH, writing nothing', async () => {
+    const tooLong = 'x'.repeat(301);
+    const refusal = {
+      code: 'invalid_body',
+      issues: [{ path: 'description', message: 'Description must be at most 300 characters' }],
+    };
+    const refusedCreate = await createConnection({ description: tooLong });
+    expect(refusedCreate.status).toBe(400);
+    expect(refusedCreate.body).toMatchObject(refusal);
+    expect(h.store.size).toBe(0);
+
+    const id = ((await createConnection({ description: 'x'.repeat(300) })).body as { id: string }).id;
+    const refusedPatch = await call(routes.item, { method: 'PATCH', id, body: { description: tooLong } });
+    expect(refusedPatch.status).toBe(400);
+    expect(refusedPatch.body).toMatchObject(refusal);
+    expect(h.store.get(id)?.description).toBe('x'.repeat(300));
+  });
+
+  it('PATCH cleans and clears it, audits its length but never its text, and leaves every tool as reviewed', async () => {
+    const id = ((await createConnection()).body as { id: string }).id;
+    await call(routes.item, {
+      method: 'PATCH',
+      id,
+      body: { tools: [{ name: 'list_issues', versionHash: 'v1', enabled: true }] },
+    });
+    const reviewed = structuredClone(h.store.get(id)!.tools);
+    expect(reviewed).toMatchObject([{ state: 'active', enabled: true, versionHash: 'v1' }]);
+    vi.mocked(repo.updateSettings).mockClear();
+    h.audits.length = 0;
+    h.auditMetadata.length = 0;
+
+    const described = await call(routes.item, { method: 'PATCH', id, body: { description: RAW } });
+    expect(described.status).toBe(200);
+    expect(described.body).toMatchObject({ description: 'Lists issues and projects' });
+    expect(repo.updateSettings).toHaveBeenLastCalledWith(id, OWNER, { description: 'Lists issues and projects' });
+    expect(h.store.get(id)!.tools).toEqual(reviewed);
+
+    // The same text again is no change and no audit entry.
+    await call(routes.item, { method: 'PATCH', id, body: { description: 'Lists issues and projects' } });
+
+    const cleared = await call(routes.item, { method: 'PATCH', id, body: { description: ' \u0007 ' } });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).not.toHaveProperty('description');
+    expect(repo.updateSettings).toHaveBeenLastCalledWith(id, OWNER, { description: '' });
+    expect(h.store.get(id)!.tools).toEqual(reviewed);
+
+    expect(descriptionAudits().map(entry => entry.metadata)).toEqual([
+      expect.objectContaining({ connectionId: id, ownerType: 'user', descriptionLength: 25 }),
+      expect.objectContaining({ connectionId: id, ownerType: 'user', descriptionLength: 0 }),
+    ]);
+    expect(JSON.stringify(h.auditMetadata)).not.toMatch(/Lists issues|projects/);
+    expect(h.audits).not.toContainEqual({ action: 'tool_review_saved', outcome: 'success' });
+  });
+
+  it("cannot be changed on another user's connection", async () => {
+    const id = ((await createConnection({ description: 'Mine' })).body as { id: string }).id;
+    const result = await call(routes.item, { method: 'PATCH', id, body: { description: 'Hijacked' }, user: OTHER });
+    expect(result.status).toBe(404);
+    expect(h.store.get(id)?.description).toBe('Mine');
+    expect(descriptionAudits()).toEqual([]);
+  });
 });

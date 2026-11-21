@@ -137,6 +137,41 @@ describe('ToolsSection - custom MCP connector rows', () => {
     expect(mocks.useLLM.setState).toHaveBeenCalledWith({ enabledPlatformMcpConnections: [] });
   });
 
+  it('shows a description under the name with the host line below it, and the fixed line when none is set', () => {
+    const LONG = 'Searches the team handbook and returns <b>matching</b> pages. https://data.example.com/help';
+    mocks.connections.value = [
+      { id: 'c1', slug: 'acme', displayName: 'Acme tracker', urlHost: 'mcp.acme.test', description: LONG },
+      {
+        id: 'p1',
+        ownerType: 'platform',
+        slug: 'shared',
+        displayName: 'Shared docs',
+        urlHost: 'mcp.example.com',
+        description: 'Company wiki, read only.',
+      },
+      { id: 'c2', slug: 'docs', displayName: 'Docs', urlHost: 'mcp.docs.test' },
+      { id: 'p2', ownerType: 'platform', slug: 'plain', displayName: 'Plain', urlHost: 'plain.example.com' },
+    ];
+    const { container, getByText, queryByText } = render(<ToolsSection />, { wrapper: Wrapper });
+    const rowOf = (slug: string) =>
+      container.querySelector(`.tool-item-mcp-connection-${slug} .tool-content`) as HTMLElement;
+
+    const personal = getByText(LONG);
+    expect(personal.getAttribute('title')).toBe(LONG);
+    expect(personal.querySelector('a, b')).toBeNull();
+    expect(rowOf('acme').textContent).toBe(`Acme tracker${LONG}Custom connector on mcp.acme.test`);
+
+    expect(getByText('Company wiki, read only.').getAttribute('title')).toBe('Company wiki, read only.');
+    expect(rowOf('shared').textContent).toBe(
+      'Shared docsCompany wiki, read only.Set up by an admin on mcp.example.com'
+    );
+    expect(queryByText('Connector set up by an admin on mcp.example.com')).toBeNull();
+
+    expect(rowOf('docs').textContent).toBe('DocsCustom connector on mcp.docs.test');
+    expect(getByText('Custom connector on mcp.docs.test').getAttribute('title')).toBeNull();
+    expect(rowOf('plain').textContent).toBe('PlainConnector set up by an admin on plain.example.com');
+  });
+
   it('renders no connector row when none is offered', () => {
     mocks.connections.value = [];
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });

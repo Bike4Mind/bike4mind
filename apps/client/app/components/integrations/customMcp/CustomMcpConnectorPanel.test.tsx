@@ -156,6 +156,30 @@ describe('CustomMcpConnectorPanel', () => {
       expect(screen.getByTestId('custom-mcp-add-form')).toBeInTheDocument();
     });
 
+    it('sends the optional description, trimmed', async () => {
+      listReturns([]);
+      vi.mocked(api.post).mockResolvedValueOnce({ data: connection({ description: 'Team handbook search.' }) });
+      renderPanel();
+
+      const description = await screen.findByTestId('custom-mcp-add-description-input');
+      expect(description).toHaveAttribute('maxlength', '300');
+      expect(screen.getByTestId('custom-mcp-add-form')).toHaveTextContent(
+        'Shown under the name in your Tools menu. Plain text. 0/300'
+      );
+      await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Docs server');
+      await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.test/mcp');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-auth-none'));
+      await userEvent.type(description, ' Team handbook search. ');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-submit-btn'));
+      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections', {
+        url: 'https://mcp.example.test/mcp',
+        displayName: 'Docs server',
+        description: 'Team handbook search.',
+        transport: 'auto',
+        auth: { kind: 'none' },
+      });
+    });
+
     it('sends the advanced settings and refuses a reserved tool prefix before submitting', async () => {
       listReturns([]);
       vi.mocked(api.post).mockResolvedValueOnce({ data: connection() });
@@ -361,6 +385,55 @@ describe('CustomMcpConnectorPanel', () => {
       await waitFor(() => expect(screen.getByTestId('custom-mcp-connection-c1-enabled-switch')).not.toBeChecked());
     });
 
+    it('edits the name and description together and sends only what changed', async () => {
+      const current = connection({ description: 'Team handbook search.' });
+      listReturns([current]);
+      vi.mocked(api.patch).mockResolvedValueOnce({
+        data: { ...current, displayName: 'Handbook', description: 'Reads the handbook.' },
+      });
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-edit-btn'));
+      const name = screen.getByTestId('custom-mcp-connection-c1-details-name-input');
+      const description = screen.getByTestId('custom-mcp-connection-c1-details-description-input');
+      expect(name).toHaveValue('Docs server');
+      expect(description).toHaveValue('Team handbook search.');
+      await userEvent.clear(name);
+      await userEvent.type(name, 'Handbook');
+      await userEvent.clear(description);
+      await userEvent.type(description, ' Reads the handbook. ');
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-details-save-btn'));
+
+      expect(api.patch).toHaveBeenCalledWith('/api/mcp-connections/c1', {
+        displayName: 'Handbook',
+        description: 'Reads the handbook.',
+      });
+      await waitFor(() => expect(screen.queryByTestId('custom-mcp-connection-c1-details')).not.toBeInTheDocument());
+      expect(toast.success).toHaveBeenCalledWith('Details saved.');
+    });
+
+    it('clears the description with an empty one and keeps the panel open with the error when saving fails', async () => {
+      listReturns([connection({ description: 'Team handbook search.' })]);
+      vi.mocked(api.patch).mockRejectedValueOnce(
+        Object.assign(new Error('500'), {
+          isAxiosError: true,
+          response: { status: 500, data: { error: 'Could not save the details.' } },
+        })
+      );
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-edit-btn'));
+      await userEvent.clear(screen.getByTestId('custom-mcp-connection-c1-details-description-input'));
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-details-save-btn'));
+
+      expect(api.patch).toHaveBeenCalledWith('/api/mcp-connections/c1', { description: '' });
+      const error = await screen.findByTestId('custom-mcp-connection-c1-details-error');
+      expect(error).toHaveAttribute('role', 'alert');
+      expect(error).toHaveTextContent('Could not save the details.');
+      expect(screen.getByTestId('custom-mcp-connection-c1-details')).toBeInTheDocument();
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
     it('removes a connector after confirmation', async () => {
       listReturns([connection()]);
       vi.mocked(api.delete).mockResolvedValueOnce({});
@@ -446,6 +519,7 @@ describe('CustomMcpConnectorPanel', () => {
       expect(screen.getByTestId('custom-mcp-connection-c1-delete-btn')).toBeInTheDocument();
       expect(screen.queryByTestId('custom-mcp-connection-c1-review-btn')).not.toBeInTheDocument();
       expect(screen.queryByTestId('custom-mcp-connection-c1-refresh-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('custom-mcp-connection-c1-edit-btn')).not.toBeInTheDocument();
       expect(screen.getByTestId('custom-mcp-connection-c1-enabled-switch')).toBeDisabled();
     });
   });

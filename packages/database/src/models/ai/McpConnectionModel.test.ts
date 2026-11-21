@@ -743,6 +743,40 @@ describe('McpConnectionModel', () => {
       ).toBeNull();
     });
 
+    it('updateSettings sets and clears the description without touching a tool, its review hash or the revision', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { versionHash: 'v-a1' }), tool('b', { versionHash: 'v-b1' })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+      });
+      await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        tools: [{ name: 'a', versionHash: 'v-a1', enabled: true, state: 'active' }],
+      });
+      const before = await mcpConnectionRepository.findById(created.id);
+
+      const described = await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        description: 'Searches the team handbook.',
+      });
+      expect(described?.description).toBe('Searches the team handbook.');
+      const cleared = await mcpConnectionRepository.updateSettings(created.id, OWNER, { description: '' });
+      expect(cleared?.description).toBeUndefined();
+      const raw = await McpConnection.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
+      expect(raw).not.toHaveProperty('description');
+      for (const after of [described, cleared, await mcpConnectionRepository.findById(created.id)]) {
+        expect(after?.tools).toEqual(before?.tools);
+        expect(after?.tools.map(t => t.versionHash)).toEqual(['v-a1', 'v-b1']);
+        expect(after).toMatchObject({ toolsRevision: before?.toolsRevision, toolsFingerprint: 'fp-1' });
+      }
+      expect(
+        await mcpConnectionRepository.updateSettings(created.id, OTHER_USER_OWNER, { description: 'Hijacked' })
+      ).toBeNull();
+      await expect(
+        mcpConnectionRepository.create(baseConnection({ slug: 'long_note', description: 'x'.repeat(301) }))
+      ).rejects.toThrow(/description/);
+    });
+
     it('rename and setEnabled only reach the owner', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const stranger = { ownerType: 'user' as const, ownerKey: 'user-2' };
