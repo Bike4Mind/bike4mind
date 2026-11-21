@@ -847,7 +847,7 @@ export function DataLakeSettingsModal({
                 onChange={(_e, value) => setTab(value as DataLakeSettingsTab)}
                 sx={{ mt: 1, background: 'transparent' }}
               >
-                <TabList sx={{ mb: 2 }}>
+                <TabList sx={{ mb: 2, overflowX: 'auto', flexWrap: 'nowrap' }} data-testid="datalake-settings-tablist">
                   <Tab value="settings" data-testid="datalake-settings-tab-settings">
                     Settings
                   </Tab>
@@ -957,6 +957,7 @@ export function DataLakeSettingsModal({
                       onDelete={confirmDeleteResearchConfig}
                       onStartRun={configId => startResearchRun.mutate(configId)}
                       onDirtyChange={setResearchDirty}
+                      onReviewProposals={showProposalsTab ? () => setTab('proposals') : undefined}
                     />
                   </TabPanel>
                 )}

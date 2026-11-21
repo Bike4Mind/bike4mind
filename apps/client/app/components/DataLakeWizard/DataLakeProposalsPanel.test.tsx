@@ -166,6 +166,12 @@ describe('DataLakeProposalsPanel', () => {
     expect(onDecline).toHaveBeenCalledWith('prop-1', 'paywalled');
   });
 
+  it('lets the decline row wrap so it fits a phone', () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    expect(screen.getByTestId('datalake-proposal-decline-row')).toHaveStyle({ flexWrap: 'wrap' });
+  });
+
   it('declines with no reason when the reviewer gives none', () => {
     const { onDecline } = renderPanel();
 
