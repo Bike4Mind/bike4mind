@@ -932,6 +932,8 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
+    // The production_* tools are not defaults: a Direct launch pins them and a directed session adds them each turn
+    // (agentExecutor.directedSession.ts), so an ordinary agent run does not carry their schemas.
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without

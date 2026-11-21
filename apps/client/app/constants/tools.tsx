@@ -47,6 +47,26 @@ export const TOOLS_MAP = {
     description: 'Generate a short video clip',
     icon: <VideoIcon />,
   },
+  production_storyboard: {
+    name: 'Storyboard production',
+    description: 'Write the shot list for a production',
+    icon: <VideoIcon />,
+  },
+  production_generate_shot: {
+    name: 'Generate production shots',
+    description: 'Make image takes and video clips',
+    icon: <VideoIcon />,
+  },
+  production_add_audio: {
+    name: 'Add production audio',
+    description: 'Add music, voiceover and sound effects',
+    icon: <MusicIcon />,
+  },
+  production_assemble: {
+    name: 'Assemble production',
+    description: 'Lay out the production timeline',
+    icon: <VideoIcon />,
+  },
   mermaid_chart: {
     name: 'Mermaid Chart',
     description: 'Generate a mermaid chart',

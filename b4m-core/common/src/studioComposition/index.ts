@@ -5,4 +5,5 @@ export * from './composition';
 export * from './validateComposition';
 export * from './render';
 export * from './ffmpeg';
+export * from './director';
 export * from './voiceCaptions';
