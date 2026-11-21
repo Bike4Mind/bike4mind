@@ -7,7 +7,6 @@ import {
   requireEnv,
   type ArtifactFile,
   type ArtifactType,
-  type ArtifactVersionMeta,
   type PublishAccessGateRequest,
   type PublishVisibility,
   type ValidationViolation,
@@ -32,7 +31,7 @@ import {
 import { validateBundle } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
 import { assertPublicationPublicLink } from './organizationPolicy';
-import { archivedVersionBytes, checkPublishQuota } from './checkPublishQuota';
+import { planVersionedPublish, versionsPushUpdate } from './planPublishVersions';
 import { consumePublishAction } from './publishRateLimit';
 import { renderArtifactIndexHtml } from './renderArtifactHtml';
 import { resolveVisibility } from './resolveVisibility';
@@ -212,38 +211,22 @@ async function writePage(
   }
 
   const now = new Date();
-  const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
-  const versionsToPush: ArtifactVersionMeta[] = [];
-  if (previous?.sha256Index && !haveShas.has(previous.sha256Index)) {
-    versionsToPush.push({
-      publishedAt: previous.publishedAt,
-      publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-      size: previous.size,
-      sha256Index: previous.sha256Index,
-      ...(priorIndex ? { indexBytes: priorIndex.length } : {}),
-    });
-    haveShas.add(previous.sha256Index);
-  }
-  if (!haveShas.has(page.sha256)) {
-    versionsToPush.push({
-      publishedAt: now,
-      publishedBy: user.id,
-      size: { totalBytes: page.buffer.length, fileCount: 1 },
-      sha256Index: page.sha256,
-      indexBytes: page.buffer.length,
-    });
-  }
-
-  const quota = await checkPublishQuota({
-    ownerId: user.id,
-    orgScopeId: null,
-    isAdmin: user.isAdmin,
+  const { versionsToPush, quota } = await planVersionedPublish({
+    previous,
+    priorIndex,
     incoming: {
-      bytes: page.buffer.length,
-      fileCount: 1,
-      archivedBytes: archivedVersionBytes([...(previous?.versions ?? []), ...versionsToPush], page.sha256),
+      sha256: page.sha256,
+      publishedBy: user.id,
+      publishedAt: now,
+      size: { totalBytes: page.buffer.length, fileCount: 1 },
+      indexBytes: page.buffer.length,
     },
-    replacing: { tier: 'user', scopeId: user.id, slug },
+    quota: {
+      ownerId: user.id,
+      orgScopeId: null,
+      isAdmin: user.isAdmin,
+      replacing: { tier: 'user', scopeId: user.id, slug },
+    },
   });
   if (!quota.ok) {
     throw new BadRequestError(quota.error, { errorCode: 'storage_limit_exceeded' });
@@ -305,7 +288,7 @@ async function writePage(
             ...publishedContentSnapshotFilter(previous),
             revisingAt: null,
           },
-          { $set: fields, $push: { versions: { $each: versionsToPush } } },
+          { $set: fields, ...versionsPushUpdate(versionsToPush) },
           { upsert: false, new: true, runValidators: true }
         )
       : await PublishedArtifact.create({
