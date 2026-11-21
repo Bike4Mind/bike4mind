@@ -295,6 +295,30 @@ describe('the live thread, driven by stream events', () => {
     expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
   });
 
+  it('stops the clock while the turn waits on the user and resumes it without the wait', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      const startedAt = Date.now();
+      const turn = { startedAt, tokens: null, lastEventAt: startedAt };
+      await act(async () => root.render(<TurnStatus turn={turn} activity={describeActivity([], false)} />));
+      await act(async () => vi.advanceTimersByTime(65_000));
+      expect(statusText()).toContain('1m 5s');
+
+      const waiting = describeActivity([call('q1', 'ask_user', 'awaiting-approval')], false);
+      await act(async () => root.render(<TurnStatus turn={turn} activity={waiting} />));
+      await act(async () => vi.advanceTimersByTime(40 * 60_000));
+      expect(statusText()).toBe('Waiting for your answer');
+      expect(container.querySelector('[data-waiting="true"]')).not.toBeNull();
+
+      await act(async () => root.render(<TurnStatus turn={turn} activity={describeActivity([], false)} />));
+      await act(async () => vi.advanceTimersByTime(5_000));
+      expect(statusText()).toContain('1m 10s');
+      expect(container.querySelector('[data-waiting="true"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows a self-hosted turn's rate on the line, with its detail in the title", async () => {
     const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
     await act(async () =>
