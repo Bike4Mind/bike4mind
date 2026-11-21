@@ -13,6 +13,9 @@ const SESSION_ID_MAX_LENGTH = 200;
  *
  * `loaded` is the store's first `load`; both handlers wait for it so an early save cannot be
  * overwritten by the file being read in afterwards.
+ *
+ * The renderer sends a save per keystroke, so saves run one at a time in arrival order: a slow
+ * session lookup must not let an older text land after a newer one.
  */
 export function registerComposerDraftsIpc(
   ipc: Pick<IpcMain, 'handle'>,
@@ -24,11 +27,20 @@ export function registerComposerDraftsIpc(
     await loaded;
     return store.all();
   });
-  ipc.handle(IPC_CHANNELS.composerDraftsSave, async (_event, sessionId: unknown, text: unknown): Promise<void> => {
-    if (typeof sessionId !== 'string' || sessionId.length > SESSION_ID_MAX_LENGTH || typeof text !== 'string') return;
+  const save = async (sessionId: string, text: string): Promise<void> => {
     await loaded;
     if (!isKeptDraft(text)) return store.forget(sessionId);
-    if (!(await isKnownSession(sessionId))) return;
+    // A stored draft's session is known: deleting a session forgets its draft.
+    if (!store.has(sessionId) && !(await isKnownSession(sessionId))) return;
     return store.set(sessionId, text);
+  };
+  let saves: Promise<void> = Promise.resolve();
+  ipc.handle(IPC_CHANNELS.composerDraftsSave, (_event, sessionId: unknown, text: unknown): Promise<void> => {
+    if (typeof sessionId !== 'string' || sessionId.length > SESSION_ID_MAX_LENGTH || typeof text !== 'string') {
+      return Promise.resolve();
+    }
+    const next = saves.then(() => save(sessionId, text));
+    saves = next.catch(() => undefined);
+    return next;
   });
 }

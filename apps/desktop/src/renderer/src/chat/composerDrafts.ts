@@ -15,26 +15,20 @@ export type ComposerDraftsStore = {
   state: StoreApi<DraftsState>;
   /** Reads main's saved drafts in. A draft already typed here since launch wins over the saved one. */
   hydrate(): Promise<void>;
-  /** Records a conversation's text. Saving waits for a pause in typing; clearing is immediate. */
+  /** Records a conversation's text and sends it to main at once; main batches the disk writes. */
   update(sessionId: string, text: string): void;
-  /** Saves now whatever is waiting on the debounce: on blur, on a session switch, on unload. */
-  flush(sessionId?: string): void;
 };
-
-/** Typing pause before a draft is written (ms). A crash loses at most this much. */
-export const DRAFT_SAVE_DEBOUNCE_MS = 500;
 
 /**
  * The renderer's copy of the unsent composer text (see @shared/composerDrafts). Held here rather
  * than in Composer so the sidebar can mark conversations with a draft. `bridge` is read per call,
  * so a test or a missing preload just keeps drafts in memory.
+ *
+ * Every change goes to main undelayed: a debounce here would be lost on a quit, because nothing in
+ * the renderer runs reliably before main's `will-quit` flush.
  */
-export function createComposerDraftsStore(
-  bridge: () => DraftsBridge | undefined,
-  debounceMs: number = DRAFT_SAVE_DEBOUNCE_MS
-): ComposerDraftsStore {
+export function createComposerDraftsStore(bridge: () => DraftsBridge | undefined): ComposerDraftsStore {
   const state = createStore<DraftsState>(() => ({ drafts: {}, hydrated: false }));
-  const pending = new Map<string, ReturnType<typeof setTimeout>>();
   // Ids changed since launch, so hydrating cannot bring back text the user has since replaced.
   const touched = new Set<string>();
 
@@ -44,14 +38,6 @@ export function createComposerDraftsStore(
     Promise.resolve(api.save(sessionId, state.getState().drafts[sessionId] ?? '')).catch((error: unknown) => {
       console.warn(`DRAFTS: could not save the composer draft: ${String(error)}`);
     });
-  };
-
-  const flushOne = (sessionId: string) => {
-    const timer = pending.get(sessionId);
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    pending.delete(sessionId);
-    save(sessionId);
   };
 
   return {
@@ -88,25 +74,7 @@ export function createComposerDraftsStore(
       if (kept === undefined) delete next[sessionId];
       else next[sessionId] = kept;
       state.setState({ drafts: next });
-
-      const timer = pending.get(sessionId);
-      if (timer !== undefined) clearTimeout(timer);
-      if (kept === undefined) {
-        pending.delete(sessionId);
-        save(sessionId);
-        return;
-      }
-      pending.set(
-        sessionId,
-        setTimeout(() => {
-          pending.delete(sessionId);
-          save(sessionId);
-        }, debounceMs)
-      );
-    },
-    flush(sessionId) {
-      if (sessionId !== undefined) flushOne(sessionId);
-      else for (const id of [...pending.keys()]) flushOne(id);
+      save(sessionId);
     },
   };
 }
@@ -116,11 +84,7 @@ const bridge = (): DraftsBridge | undefined =>
 
 export const composerDrafts = createComposerDraftsStore(bridge);
 
-if (typeof window !== 'undefined') {
-  // A reload, a window close and a quit all unload the page; the invoke is sent before it goes.
-  window.addEventListener('beforeunload', () => composerDrafts.flush());
-  void composerDrafts.hydrate();
-}
+if (typeof window !== 'undefined') void composerDrafts.hydrate();
 
 /** Whether a conversation has unsent text, for the sidebar's marker. */
 export function useHasComposerDraft(sessionId: string): boolean {
