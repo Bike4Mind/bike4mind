@@ -198,13 +198,15 @@ export const StripeEvents = {
   ),
 };
 
-/** Published by POST /api/v1/briefs; consumed by apps/workers/src/events/briefCompose.ts. */
+/** Published by POST /api/v1/briefs and the schedule reconciler; consumed by apps/workers/src/events/briefCompose.ts. */
 export const BriefEvents = {
   Compose: event(
     'brief.compose',
     z.object({
       briefId: z.string(),
       userId: z.string(),
+      /** Set by the schedule reconciler: an empty window or a refused gate is discarded instead of delivered. */
+      scheduled: z.boolean().optional(),
     })
   ),
 };

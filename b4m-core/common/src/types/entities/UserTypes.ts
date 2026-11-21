@@ -5,6 +5,7 @@ import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
 import type { PushNotificationPreferences } from '../../schemas/pushNotification';
+import type { BriefSchedule } from '../../schemas/brief';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
@@ -264,6 +265,12 @@ export interface IUserPreferences {
   promptCacheTtl?: '5m' | '1h';
   /** Per-category push opt-outs for first-party native clients; a missing key means on (see isPushCategoryEnabled). */
   pushNotifications?: PushNotificationPreferences;
+  /**
+   * Set through `PUT /api/v1/briefs/schedule`, which also sets the top-level `nextBriefAt`. A general
+   * preferences write can still revert or clear it without touching `nextBriefAt`; the reconciler and
+   * the GET route treat a missing or disabled schedule as off.
+   */
+  briefSchedule?: BriefSchedule;
 }
 
 /**
@@ -524,6 +531,8 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** When the next scheduled brief is due; unset while the brief schedule is off. See `preferences.briefSchedule`. */
+  nextBriefAt?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;
