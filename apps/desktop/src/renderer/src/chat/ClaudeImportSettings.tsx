@@ -254,7 +254,6 @@ export function ClaudeImportSettings({
             disabled={!state.signedIn}
             onChange={event => void run(() => api.setCodeSettings({ enabled: event.target.checked }))}
             endDecorator="Keep in sync"
-            sx={{ alignSelf: 'flex-start' }}
             slotProps={{
               input: {
                 'aria-label': 'Keep Claude Code sessions in sync',
@@ -512,7 +511,6 @@ export function ClaudeImportSettings({
             disabled={!state.signedIn}
             onChange={event => void run(() => api.setWebSettings({ enabled: event.target.checked }))}
             endDecorator="Keep in sync"
-            sx={{ alignSelf: 'flex-start' }}
             slotProps={{
               input: {
                 'aria-label': 'Keep Bike4Mind web conversations in sync',

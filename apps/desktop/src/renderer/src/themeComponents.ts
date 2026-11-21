@@ -94,7 +94,8 @@ export const desktopComponents: Components<Theme> = {
         return {
           // Joy sets this variable itself only when the instance names a size.
           ...((ownerState as { instanceSize?: Size }).instanceSize && { '--IconButton-size': CONTROL_HEIGHT[size] }),
-          '--Icon-fontSize': ICON_SIZE[size],
+          // Capped at the size step, but still shrinks with call sites that set a smaller box.
+          '--Icon-fontSize': `min(${ICON_SIZE[size]}, calc(${box} / 1.5))`,
           minWidth: box,
           minHeight: box,
           borderRadius: `var(--IconButton-radius, ${CONTROL_RADIUS[size]})`,

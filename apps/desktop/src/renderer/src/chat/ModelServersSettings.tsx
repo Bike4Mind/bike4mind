@@ -579,7 +579,7 @@ function LaunchSection({
           size="sm"
           variant="outlined"
           color="neutral"
-          aria-pressed={open}
+          aria-expanded={open}
           onClick={() => setOpen(value => !value)}
           data-testid="model-servers-launch-settings-btn"
         >
@@ -804,7 +804,7 @@ function ServerRow({
               variant="outlined"
               color="neutral"
               disabled={settingsDisabled}
-              aria-pressed={editingSpecs}
+              aria-expanded={editingSpecs}
               onClick={() => setEditingSpecs(open => !open)}
               data-testid="model-servers-specs-btn"
             >

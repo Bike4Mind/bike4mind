@@ -174,7 +174,7 @@ export function HuggingFaceToken({
         <Button
           size="sm"
           variant="outlined"
-          color="neutral"
+          color="danger"
           loading={removing}
           onClick={() => void remove()}
           data-testid="models-hf-token-remove-btn"

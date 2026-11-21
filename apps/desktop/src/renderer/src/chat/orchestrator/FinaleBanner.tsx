@@ -289,6 +289,7 @@ export function FinaleBanner({
               borderRadius: look.chip.borderRadius === '2px' ? '2px' : undefined,
               boxShadow: 'none',
               '&:hover': { bgcolor: look.read.hover },
+              '&:active': { boxShadow: 'none' },
               '&:focus-visible': { outline: `2px solid ${look.focus}`, outlineOffset: 2 },
             }}
           >
