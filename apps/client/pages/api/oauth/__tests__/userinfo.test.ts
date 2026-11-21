@@ -24,9 +24,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 import handler from '../userinfo';
 
-const run = (user: unknown) => {
+const run = (user: unknown, apiKeyInfo?: unknown) => {
   const { req, res } = createMocks({ method: 'GET' });
   if (user) (req as Record<string, unknown>).user = user;
+  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
@@ -79,5 +80,18 @@ describe('GET /api/oauth/userinfo', () => {
     const body = res._getJSONData();
     expect(body).toMatchObject({ sub: 'u1', name: 'ada', picture: 'p.png' });
     expect(body.email).toBeUndefined();
+  });
+
+  it('403s a key minted for a connected app and releases no claims', async () => {
+    const { res, promise } = run(fullUser, { scopes: ['me:read'], oauthExchangeClientId: 'client-1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getData()).not.toContain('a@b.co');
+  });
+
+  it('still returns claims for an ordinary API key', async () => {
+    const { res, promise } = run(fullUser, { scopes: ['me:read'] });
+    await promise;
+    expect(res._getJSONData()).toMatchObject({ sub: 'u1', email: 'a@b.co' });
   });
 });

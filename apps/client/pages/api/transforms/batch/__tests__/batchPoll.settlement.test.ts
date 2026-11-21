@@ -18,6 +18,7 @@ const m = vi.hoisted(() => ({
   catalog: vi.fn(),
   record: vi.fn(async () => undefined),
   warn: vi.fn(),
+  options: null as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -27,7 +28,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      m.options = options;
+      return chain;
+    },
+  };
 });
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/utils', () => ({
@@ -65,6 +71,25 @@ async function poll() {
   await m.getHandler!(req, res);
   return JSON.parse(res._getData());
 }
+
+describe('GET /api/transforms/batch/[id] -- API key scope posture', () => {
+  it('declares ai:generate or admin and grandfathers legacy keys', () => {
+    expect(m.options).toEqual({ requiredScopes: ['ai:generate', 'admin:*'], grandfatherLegacyKeys: true });
+  });
+
+  it('refuses a key minted for a connected app and reads nothing', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'msgbatch_1' } });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      apiKeyInfo: { scopes: ['ai:generate'], oauthExchangeClientId: 'client-1' },
+      logger: { info: vi.fn(), warn: m.warn, error: vi.fn() },
+    });
+    await m.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(m.getBatchResults).not.toHaveBeenCalled();
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
