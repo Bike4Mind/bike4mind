@@ -65,7 +65,8 @@ public final class ChatViewModel {
     activities: (any QuestActivityTracking)? = nil,
     agentRuns: (any AgentRunStarting)? = nil,
     pendingActions: (any PendingActionAPI)? = nil,
-    firstTurn: QuestTurn? = nil
+    firstTurn: QuestTurn? = nil,
+    transcriptCache: SettledTranscriptCache? = nil
   ) {
     self.sessionID = sessionID
     self.title = title
@@ -77,7 +78,7 @@ public final class ChatViewModel {
     self.polling = polling
     self.sleep = sleep
     self.now = now
-    transcript = TranscriptViewModel(sessionID: sessionID, api: api)
+    transcript = TranscriptViewModel(sessionID: sessionID, api: api, cache: transcriptCache)
     // A conversation this device just started: its prompt shows at once, not after the transcript round trip.
     if let firstTurn { liveTurns = [firstTurn] }
   }
