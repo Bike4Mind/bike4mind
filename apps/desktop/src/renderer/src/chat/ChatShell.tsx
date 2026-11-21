@@ -1619,19 +1619,7 @@ export function ChatShell({
         sectionActions={sectionActions}
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
-        customize={
-          <>
-            <CustomizeNavItem onOpen={() => setScreen('customize')} />
-            <Button
-              size="sm"
-              variant="plain"
-              data-testid="handoff-server-conversations-btn"
-              onClick={() => void window.b4m.attention.openServerSessions()}
-            >
-              Server conversations / handoff
-            </Button>
-          </>
-        }
+        customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
         syncHints={
           onOpenImportSettings
