@@ -1126,6 +1126,25 @@ describe('mapApiError publish slug collisions', () => {
     expect(message).not.toContain('recommended scope');
   });
 
+  it.each(['You do not have permission to review proposals for this data lake'])(
+    'gives the manage-rights hint for: %s',
+    error => {
+      const message = mapApiError(axiosError(403, { data: { error } }), 'http://x', 'datalake:read');
+      expect(message).toContain(error);
+      expect(message).toContain('manage rights');
+    }
+  );
+
+  it('passes a blocked-owner 403 through without a scope hint', () => {
+    const error = "This data lake's owner account cannot run research. Please contact support.";
+    expect(mapApiError(axiosError(403, { data: { error } }), 'http://x', 'datalake:write')).toBe(error);
+  });
+
+  it('keeps the scope hint when the 403 names required_scopes', () => {
+    const data = { error: 'Insufficient API key permissions', required_scopes: ['datalake:write'] };
+    expect(mapApiError(axiosError(403, { data }), 'http://x', 'datalake:write')).toContain('recommended scope');
+  });
+
   it('keeps the key-scope hint for any other 403', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
       'recommended scope: files:write'

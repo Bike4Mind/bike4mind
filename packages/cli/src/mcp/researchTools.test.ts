@@ -637,7 +637,8 @@ describe('research tool guarded actions', () => {
 });
 
 describe('research tool 403 mapping', () => {
-  const forbidden = () => new B4mApiError(403, { error: 'forbidden' }, new Headers());
+  const forbidden = () =>
+    new B4mApiError(403, { error: 'forbidden', required_scopes: ['datalake:write'] }, new Headers());
 
   it.each([
     ['list_research_configs', 'listResearchConfigs', { lake_id: 'l1', limit: 25 }, 'datalake:read'],

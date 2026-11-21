@@ -921,9 +921,13 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     if (serverMessage && typeof (data as { errorCode?: unknown } | undefined)?.errorCode === 'string') {
       return serverMessage;
     }
-    // The research routes are manage-gated: a caller who can only read the lake is refused whatever the key's scope.
-    if (scope?.startsWith('datalake:') && serverMessage && /\bmanage\b/i.test(serverMessage)) {
-      return `${serverMessage} (the key's owner needs manage rights on this lake; a different scope does not help)`;
+    // Data lake routes answer a scope refusal with required_scopes; any other 403 there is an authorization
+    // refusal (manage rights, lake owner state) whose own message is the useful part.
+    const scopeRefusal = Array.isArray((data as { required_scopes?: unknown } | undefined)?.required_scopes);
+    if (scope?.startsWith('datalake:') && !scopeRefusal && serverMessage) {
+      return /\bmanage\b|review proposals/i.test(serverMessage)
+        ? `${serverMessage} (the key's owner needs manage rights on this lake; a different scope does not help)`
+        : serverMessage;
     }
     if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
     // Must stay in sync with the ForbiddenError text in
