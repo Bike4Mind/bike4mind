@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
+import type { IDataLakeDocument, IDataLakeResearchConfigDocument, ResearchKeysetPage } from '@bike4mind/common';
 import {
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_AUTO_ADMITS_LIMIT,
@@ -233,7 +233,14 @@ describe('listResearchConfigs', () => {
   it('scopes the read to the lake', async () => {
     const { adapters, repo } = makeAdapters();
     await listResearchConfigs(LAKE_ID, adapters);
-    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, undefined);
+  });
+
+  it('forwards a keyset page to the read', async () => {
+    const { adapters, repo } = makeAdapters();
+    const page: ResearchKeysetPage = { limit: 5, after: { createdAt: new Date('2026-01-01'), id: 'cfg-1' } };
+    await listResearchConfigs(LAKE_ID, adapters, page);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, page);
   });
 });
 
