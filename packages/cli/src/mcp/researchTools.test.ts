@@ -9,25 +9,39 @@ import { registerTools } from './tools';
 const mockClient = (overrides: Record<string, unknown>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
 
-const collect = (client: B4mApiClient) => {
+type Elicit = (params: {
+  message: string;
+  requestedSchema: { properties: Record<string, { title: string }> };
+}) => Promise<{
+  action: string;
+  content?: Record<string, unknown>;
+}>;
+
+const collect = (client: B4mApiClient, elicit?: Elicit) => {
   const handlers = new Map<string, (args: unknown) => Promise<CallToolResult>>();
   const schemas = new Map<string, z.ZodRawShape>();
   const descriptions = new Map<string, string>();
+  const annotations = new Map<string, Record<string, unknown>>();
   const server = {
     registerTool: (
       name: string,
-      config: { inputSchema: z.ZodRawShape; description: string },
+      config: { inputSchema: z.ZodRawShape; description: string; annotations?: Record<string, unknown> },
       cb: (args: unknown) => Promise<CallToolResult>
     ) => {
       handlers.set(name, cb);
       schemas.set(name, config.inputSchema);
       descriptions.set(name, config.description);
+      annotations.set(name, config.annotations ?? {});
+    },
+    server: {
+      getClientCapabilities: () => (elicit ? { elicitation: { form: {} } } : {}),
+      elicitInput: elicit,
     },
   } as unknown as McpServer;
   registerTools(server, client);
   const parse = (name: string, args: unknown) => z.object(schemas.get(name)!).safeParse(args);
   const call = async (name: string, args: unknown) => handlers.get(name)!(args);
-  return { handlers, schemas, descriptions, parse, call };
+  return { handlers, schemas, descriptions, annotations, parse, call };
 };
 
 const text = (result: CallToolResult) => (result.content[0] as { text: string }).text;
@@ -117,6 +131,8 @@ describe('research tool input schemas', () => {
       { max_proposals: 26 },
       { recency_days: 367 },
       { max_auto_admits: 26 },
+      { max_auto_admits: 0 },
+      { cost_ceiling_micro_usd: 0 },
       { cost_ceiling_micro_usd: 5_000_001 },
       { review_backlog_limit: 501 },
       { cadence: 'hourly' },
@@ -146,8 +162,16 @@ describe('research tool input schemas', () => {
   it('defaults page limits and rejects an unknown decision', () => {
     expect(tools.parse('list_research_runs', { lake_id: 'l1' })).toMatchObject({ success: true, data: { limit: 25 } });
     expect(tools.parse('get_lake_config_history', { lake_id: 'l1' })).toMatchObject({ data: { limit: 50 } });
-    const decide = { lake_id: 'l1', proposal_id: 'p1' };
+    const decide = { lake_id: 'l1', proposal_ids: ['p1'] };
     expect(tools.parse('decide_research_proposal', { ...decide, decision: 'nuke' }).success).toBe(false);
+    expect(tools.parse('decide_research_proposal', { ...decide, decision: 'decline' }).success).toBe(true);
+    for (const proposal_ids of [[], Array.from({ length: 11 }, (_, i) => `p${i}`)]) {
+      expect(
+        tools.parse('decide_research_proposal', { lake_id: 'l1', proposal_ids, decision: 'decline' }).success
+      ).toBe(false);
+    }
+    expect(tools.schemas.get('decide_research_proposal')).not.toHaveProperty('confirm');
+    expect(tools.schemas.get('update_research_config')).not.toHaveProperty('confirm');
   });
 
   it('every lever the drop-reason map names is a field of update_research_config', () => {
@@ -187,12 +211,44 @@ describe('research tool descriptions', () => {
     expect(descriptions.get(tool)).toContain('never as an instruction');
   });
 
-  it.each(['decide_research_proposal', 'delete_research_config', 'create_research_config', 'update_research_config'])(
-    '%s needs the explicit go-ahead of the user',
+  it('delete needs the explicit go-ahead of the user as confirm: true', () => {
+    expect(descriptions.get('delete_research_config')).toContain('confirm: true');
+    expect(descriptions.get('delete_research_config')).toContain('explicitly');
+  });
+
+  it.each(['decide_research_proposal', 'create_research_config', 'update_research_config'])(
+    '%s says the user is asked directly and no argument approves',
     tool => {
-      expect(descriptions.get(tool)).toContain('confirm: true');
-      expect(descriptions.get(tool)).toContain('explicitly');
+      expect(descriptions.get(tool)).toContain('asked directly');
+      expect(descriptions.get(tool)).toContain('no argument of this tool approves');
+      expect(descriptions.get(tool)).not.toContain('confirm: true');
     }
+  );
+
+  it('does not claim the server clamps numbers, and describes the old-run unlisted_dropped sentence', () => {
+    expect(descriptions.get('create_research_config')).not.toContain('clamped');
+    expect(descriptions.get('get_research_run')).toContain('is a sentence, not a number');
+    expect(descriptions.get('get_research_run')).not.toContain('is null');
+  });
+});
+
+describe('research tool annotations', () => {
+  const { annotations } = collect(mockClient({}));
+
+  it.each([
+    'list_research_configs',
+    'get_research_run',
+    'list_research_runs',
+    'list_research_proposals',
+    'get_lake_config_history',
+  ])('%s is read-only', tool => expect(annotations.get(tool)).toMatchObject({ readOnlyHint: true }));
+
+  it.each(['delete_research_config', 'decide_research_proposal'])('%s is destructive', tool =>
+    expect(annotations.get(tool)).toMatchObject({ destructiveHint: true })
+  );
+
+  it.each(['run_research', 'create_research_config', 'update_research_config'])('%s is not read-only', tool =>
+    expect(annotations.get(tool)).toMatchObject({ readOnlyHint: false })
   );
 });
 
@@ -260,7 +316,7 @@ describe('research tool operations', () => {
     const decideProposal = vi.fn().mockResolvedValue({ data: rawProposal({ status: 'declined' }), file: null });
     await collect(mockClient({ decideProposal })).call('decide_research_proposal', {
       lake_id: 'l1',
-      proposal_id: 'p1',
+      proposal_ids: ['p1'],
       decision: 'decline',
       reason: 'off topic',
     });
@@ -345,32 +401,103 @@ describe('research tool projections', () => {
 });
 
 describe('research tool guarded actions', () => {
-  const decide = (decision: string, confirm?: boolean) => ({
-    lake_id: 'l1',
-    proposal_id: 'p1',
-    decision,
-    ...(confirm === undefined ? {} : { confirm }),
+  const decide = (decision: string, ids = ['p1']) => ({ lake_id: 'l1', proposal_ids: ids, decision });
+  const pending = (...ids: string[]) =>
+    vi.fn().mockResolvedValue({
+      data: ids.map(id =>
+        rawProposal({ id, title: `Title ${id} ${'x'.repeat(150)}`, source_url: `https://${id}.test/a` })
+      ),
+      nextCursor: null,
+    });
+  const approved = (id: string) => ({
+    data: rawProposal({ id, status: 'approved' }),
+    file: { id: `f-${id}`, file_name: 'a' },
   });
 
-  it('refuses approve without confirm and allows it with confirm', async () => {
-    const decideProposal = vi
-      .fn()
-      .mockResolvedValue({ data: rawProposal({ status: 'approved' }), file: { id: 'f1', file_name: 'a' } });
-    const tools = collect(mockClient({ decideProposal }));
-    const refused = await tools.call('decide_research_proposal', decide('approve'));
-    expect(refused.isError).toBe(true);
-    expect(text(refused)).toContain('confirm: true');
-    expect(decideProposal).not.toHaveBeenCalled();
-    const allowed = await tools.call('decide_research_proposal', decide('approve', true));
-    expect(allowed.isError).toBeUndefined();
-    expect(decideProposal).toHaveBeenCalledWith('l1', 'p1', { decision: 'approve' });
+  describe('approve', () => {
+    it('shows one form with a field per proposal and approves only the ticked ones', async () => {
+      const decideProposal = vi.fn().mockImplementation((_l: string, id: string) => Promise.resolve(approved(id)));
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: false, p2: true, p3: true } });
+      const tools = collect(mockClient({ listProposals: pending('p1', 'p2', 'p3'), decideProposal }), elicit);
+      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'p2', 'p3']));
+      expect(elicit).toHaveBeenCalledTimes(1);
+      const form = elicit.mock.calls[0][0];
+      expect(Object.keys(form.requestedSchema.properties)).toEqual(['p1', 'p2', 'p3']);
+      expect(form.requestedSchema.properties.p1.title).toContain('p1.test');
+      expect(form.requestedSchema.properties.p1.title.length).toBeLessThan(130);
+      expect(decideProposal.mock.calls.map(c => c[1])).toEqual(['p2', 'p3']);
+      expect(out(result).results).toHaveLength(2);
+      expect(out(result).left_pending).toEqual(['p1']);
+    });
+
+    it.each([
+      ['declined', { action: 'decline' }],
+      ['cancelled', { action: 'cancel' }],
+      ['accepted with nothing ticked', { action: 'accept', content: { p1: false } }],
+    ])('approves nothing when the form is %s', async (_name, answer) => {
+      const decideProposal = vi.fn();
+      const tools = collect(
+        mockClient({ listProposals: pending('p1'), decideProposal }),
+        vi.fn().mockResolvedValue(answer)
+      );
+      const result = await tools.call('decide_research_proposal', decide('approve'));
+      expect(result.isError).toBeUndefined();
+      expect(decideProposal).not.toHaveBeenCalled();
+      expect(out(result).message).toContain('Nothing was approved');
+    });
+
+    it('refuses on a client that cannot elicit, with no API call', async () => {
+      const listProposals = pending('p1');
+      const decideProposal = vi.fn();
+      const result = await collect(mockClient({ listProposals, decideProposal })).call(
+        'decide_research_proposal',
+        decide('approve')
+      );
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain('Bike4Mind app');
+      expect(listProposals).not.toHaveBeenCalled();
+      expect(decideProposal).not.toHaveBeenCalled();
+    });
+
+    it('reports an id that is not pending and asks only about the found ones', async () => {
+      const decideProposal = vi.fn().mockImplementation((_l: string, id: string) => Promise.resolve(approved(id)));
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: true } });
+      const tools = collect(mockClient({ listProposals: pending('p1'), decideProposal }), elicit);
+      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'gone']));
+      expect(Object.keys(elicit.mock.calls[0][0].requestedSchema.properties)).toEqual(['p1']);
+      expect(out(result).not_pending).toEqual(['gone']);
+      expect(decideProposal).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not ask when none of the ids is pending', async () => {
+      const elicit = vi.fn();
+      const tools = collect(mockClient({ listProposals: pending(), decideProposal: vi.fn() }), elicit);
+      const result = await tools.call('decide_research_proposal', decide('approve', ['gone']));
+      expect(elicit).not.toHaveBeenCalled();
+      expect(out(result).not_pending).toEqual(['gone']);
+    });
+
+    it('ignores a confirm the model supplies', async () => {
+      const decideProposal = vi.fn();
+      const result = await collect(mockClient({ listProposals: pending('p1'), decideProposal })).call(
+        'decide_research_proposal',
+        { ...decide('approve'), confirm: true }
+      );
+      expect(result.isError).toBe(true);
+      expect(decideProposal).not.toHaveBeenCalled();
+    });
   });
 
-  it.each(['decline', 'restore'])('does not need confirm to %s', async decision => {
+  it.each(['decline', 'restore'])('%s takes several ids with no elicitation', async decision => {
     const decideProposal = vi.fn().mockResolvedValue({ data: rawProposal(), file: null });
-    const result = await collect(mockClient({ decideProposal })).call('decide_research_proposal', decide(decision));
+    const elicit = vi.fn();
+    const result = await collect(mockClient({ decideProposal }), elicit).call(
+      'decide_research_proposal',
+      decide(decision, ['p1', 'p2', 'p1'])
+    );
     expect(result.isError).toBeUndefined();
-    expect(decideProposal).toHaveBeenCalled();
+    expect(decideProposal.mock.calls.map(c => c[1])).toEqual(['p1', 'p2']);
+    expect(elicit).not.toHaveBeenCalled();
   });
 
   it('refuses delete_research_config without confirm even if the schema is bypassed', async () => {
@@ -383,40 +510,129 @@ describe('research tool guarded actions', () => {
     expect(deleteResearchConfig).not.toHaveBeenCalled();
   });
 
-  const configTools = [
-    ['create_research_config', { name: 'n', query: 'q' }, 'createResearchConfig'],
-    ['update_research_config', { config_id: 'c1' }, 'updateResearchConfig'],
-  ] as const;
-  const risky = [{ auto_admit_trusted: true }, { trusted_domains: ['example.gov'] }];
+  const current = (over: Record<string, unknown> = {}) => ({
+    id: 'c1',
+    query: 'q',
+    auto_admit_trusted: false,
+    trusted_domains: ['a.gov'],
+    max_auto_admits: 3,
+    blocked_domains: ['spam.test'],
+    item_rules: [{ condition: 'is ad', action: 'block' }],
+    ...over,
+  });
+  const yes: Elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
 
-  it.each(configTools)(
-    '%s refuses auto_admit_trusted or trusted_domains without confirm',
-    async (tool, base, method) => {
-      const api = vi.fn().mockResolvedValue({ id: 'c1' });
-      const tools = collect(mockClient({ [method]: api }));
-      for (const extra of risky) {
-        const refused = await tools.call(tool, { lake_id: 'l1', ...base, ...extra });
-        expect(refused.isError).toBe(true);
-        expect(text(refused)).toContain(Object.keys(extra)[0]);
-      }
-      expect(api).not.toHaveBeenCalled();
-
-      for (const extra of risky) {
-        const allowed = await tools.call(tool, { lake_id: 'l1', ...base, ...extra, confirm: true });
-        expect(allowed.isError).toBeUndefined();
-      }
-      expect(api).toHaveBeenCalledTimes(2);
-    }
-  );
-
-  it.each(configTools)('%s needs no confirm for safe changes', async (tool, base, method) => {
-    const api = vi.fn().mockResolvedValue({ id: 'c1' });
-    const tools = collect(mockClient({ [method]: api }));
-    for (const safe of [{ min_relevance: 0.5 }, { auto_admit_trusted: false }, { trusted_domains: [] }]) {
-      const result = await tools.call(tool, { lake_id: 'l1', ...base, ...safe });
+  describe('create', () => {
+    it.each([{ auto_admit_trusted: true }, { trusted_domains: ['example.gov'] }])('asks for %j', async extra => {
+      const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
+      const result = await collect(mockClient({ createResearchConfig }), elicit).call('create_research_config', {
+        lake_id: 'l1',
+        name: 'n',
+        query: 'q',
+        ...extra,
+      });
+      expect(elicit).toHaveBeenCalledTimes(1);
       expect(result.isError).toBeUndefined();
-    }
-    expect(api).toHaveBeenCalledTimes(3);
+      expect(createResearchConfig).toHaveBeenCalledWith('l1', expect.not.objectContaining({ confirm: true }));
+    });
+
+    it('writes nothing when the user declines', async () => {
+      const createResearchConfig = vi.fn();
+      const elicit = vi.fn().mockResolvedValue({ action: 'decline' });
+      const result = await collect(mockClient({ createResearchConfig }), elicit).call('create_research_config', {
+        lake_id: 'l1',
+        name: 'n',
+        query: 'q',
+        auto_admit_trusted: true,
+      });
+      expect(createResearchConfig).not.toHaveBeenCalled();
+      expect(out(result).applied).toBe(false);
+    });
+
+    it('refuses on a client that cannot elicit, and needs none for safe changes', async () => {
+      const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+      const tools = collect(mockClient({ createResearchConfig }));
+      const refused = await tools.call('create_research_config', {
+        lake_id: 'l1',
+        name: 'n',
+        query: 'q',
+        trusted_domains: ['example.gov'],
+        confirm: true,
+      });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain('Bike4Mind app');
+      expect(createResearchConfig).not.toHaveBeenCalled();
+      for (const safe of [{ min_relevance: 0.5 }, { auto_admit_trusted: false }, { trusted_domains: [] }]) {
+        const ok = await tools.call('create_research_config', { lake_id: 'l1', name: 'n', query: 'q', ...safe });
+        expect(ok.isError).toBeUndefined();
+      }
+      expect(createResearchConfig).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('update', () => {
+    const run = async (cur: Record<string, unknown>, change: Record<string, unknown>, elicit?: Elicit) => {
+      const getResearchConfig = vi.fn().mockResolvedValue(current(cur));
+      const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+      const result = await collect(mockClient({ getResearchConfig, updateResearchConfig }), elicit).call(
+        'update_research_config',
+        { lake_id: 'l1', config_id: 'c1', ...change }
+      );
+      return { result, updateResearchConfig };
+    };
+
+    it.each([
+      ['auto_admit_trusted turns on', {}, { auto_admit_trusted: true }],
+      ['a trusted domain is added', {}, { trusted_domains: ['a.gov', 'b.gov'] }],
+      ['max_auto_admits rises with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 5 }],
+      ['a blocked domain is removed with auto-admit on', { auto_admit_trusted: true }, { blocked_domains: [] }],
+      ['an item rule is removed with auto-admit on', { auto_admit_trusted: true }, { item_rules: [] }],
+      ['the query changes with auto-admit on', { auto_admit_trusted: true }, { query: 'other' }],
+    ])('asks when %s', async (_name, cur, change) => {
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
+      const { result, updateResearchConfig } = await run(cur, change, elicit);
+      expect(elicit).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBeUndefined();
+      expect(updateResearchConfig).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an unchanged trusted_domains resend', {}, { trusted_domains: ['A.gov'] }],
+      ['auto-admit already on and resent', { auto_admit_trusted: true }, { auto_admit_trusted: true }],
+      ['max_auto_admits rises while auto-admit is off', {}, { max_auto_admits: 9 }],
+      ['a blocked domain removed while auto-admit is off', {}, { blocked_domains: [] }],
+      ['the query changes while auto-admit is off', {}, { query: 'other' }],
+      ['max_auto_admits lowers with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 1 }],
+      ['auto-admit is turned off', { auto_admit_trusted: true }, { auto_admit_trusted: false }],
+    ])('does not ask for %s', async (_name, cur, change) => {
+      const elicit = vi.fn();
+      const { result, updateResearchConfig } = await run(cur, change, elicit);
+      expect(elicit).not.toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+      expect(updateResearchConfig).toHaveBeenCalled();
+    });
+
+    it('writes nothing when the user cancels, and refuses without elicitation', async () => {
+      const cancelled = await run({}, { auto_admit_trusted: true }, vi.fn().mockResolvedValue({ action: 'cancel' }));
+      expect(cancelled.updateResearchConfig).not.toHaveBeenCalled();
+      expect(out(cancelled.result).applied).toBe(false);
+      const refused = await run({}, { trusted_domains: ['new.gov'], confirm: true });
+      expect(refused.result.isError).toBe(true);
+      expect(text(refused.result)).toContain('Bike4Mind app');
+      expect(refused.updateResearchConfig).not.toHaveBeenCalled();
+    });
+
+    it('pauses without reading the current config', async () => {
+      const getResearchConfig = vi.fn();
+      const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+      await collect(mockClient({ getResearchConfig, updateResearchConfig }), yes).call('update_research_config', {
+        lake_id: 'l1',
+        config_id: 'c1',
+        schedule_paused: true,
+      });
+      expect(getResearchConfig).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -446,7 +662,7 @@ describe('research tool 403 mapping', () => {
     [
       'decide_research_proposal',
       'decideProposal',
-      { lake_id: 'l1', proposal_id: 'p1', decision: 'decline' },
+      { lake_id: 'l1', proposal_ids: ['p1'], decision: 'decline' },
       'datalake:write',
     ],
   ] as const)('%s maps a 403 to an error naming the scope', async (tool, method, args, scope) => {

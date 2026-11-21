@@ -416,6 +416,10 @@ export class B4mApiClient {
     return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
 
+  async getResearchConfig(lakeId: string, configId: string) {
+    return (await this.sdk.call('getDataLakeResearchConfig', { params: { id: lakeId, config_id: configId } })).data;
+  }
+
   async createResearchConfig(lakeId: string, body: JsonBody<'createDataLakeResearchConfig'>) {
     return (await this.sdk.call('createDataLakeResearchConfig', { params: { id: lakeId }, body })).data;
   }
@@ -913,6 +917,14 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
     const serverMessage = extractServerMessage(data);
+    // A route that classifies its refusal with an errorCode says why; the key-scope guess below would misdirect.
+    if (serverMessage && typeof (data as { errorCode?: unknown } | undefined)?.errorCode === 'string') {
+      return serverMessage;
+    }
+    // The research routes are manage-gated: a caller who can only read the lake is refused whatever the key's scope.
+    if (scope?.startsWith('datalake:') && serverMessage && /\bmanage\b/i.test(serverMessage)) {
+      return `${serverMessage} (the key's owner needs manage rights on this lake; a different scope does not help)`;
+    }
     if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
     // Must stay in sync with the ForbiddenError text in
     // apps/client/server/services/publish/checkScopePermission.ts.

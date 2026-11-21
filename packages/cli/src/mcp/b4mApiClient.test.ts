@@ -1114,6 +1114,18 @@ describe('mapApiError publish slug collisions', () => {
     expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
   });
 
+  it('surfaces the server message for a 403 that carries an errorCode', () => {
+    const err = axiosError(403, { data: { error: 'Spending is paused for this account', errorCode: 'spend_frozen' } });
+    expect(mapApiError(err, 'http://x', 'datalake:write')).toBe('Spending is paused for this account');
+  });
+
+  it('says the key owner needs manage rights for a research manage refusal', () => {
+    const err = axiosError(403, { data: { error: 'You do not have permission to manage this lake' } });
+    const message = mapApiError(err, 'http://x', 'datalake:write');
+    expect(message).toContain('manage rights');
+    expect(message).not.toContain('recommended scope');
+  });
+
   it('keeps the key-scope hint for any other 403', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
       'recommended scope: files:write'
