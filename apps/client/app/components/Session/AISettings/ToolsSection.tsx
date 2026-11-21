@@ -5,6 +5,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
 import AudioIcon from '@mui/icons-material/GraphicEq';
@@ -64,6 +65,7 @@ import {
   isComposerConnectionOn,
   toggleComposerConnection,
 } from '@client/app/components/integrations/customMcp/customMcpModel';
+import McpConnectorToolsDialog from '@client/app/components/integrations/customMcp/McpConnectorToolsDialog';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -369,6 +371,11 @@ const ToolsSection = ({
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
+  // Looked up live, so a refetch updates the open view and a connector that drops out of the menu
+  // closes it for good (reset during render, React's pattern), rather than reopening if it returns.
+  const [toolsViewId, setToolsViewId] = useState<string | null>(null);
+  const toolsViewConnection = customConnections.find(c => c.id === toolsViewId) ?? null;
+  if (toolsViewId !== null && !toolsViewConnection) setToolsViewId(null);
   const imageModel = useLLM(state => state.imageModel);
   const imageToolPrice = useImageToolPrice(imageModel);
 
@@ -384,8 +391,8 @@ const ToolsSection = ({
 
   // Notify parent when modal opens/closes
   useEffect(() => {
-    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen);
-  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, onModalOpenChange]);
+    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen || toolsViewConnection !== null);
+  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, toolsViewConnection, onModalOpenChange]);
 
   // Check if the current model supports thinking
   const modelSupportsThinking = useMemo(() => {
@@ -986,11 +993,28 @@ const ToolsSection = ({
                       detail={text.detail}
                     />
                   </Box>
-                  <SquareSlideToggle
-                    data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
-                    onChange={() => toggleConnection(connection)}
-                    checked={isConnectionOn(connection)}
-                  />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Tooltip title="View tools">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        aria-label={`View tools for ${connection.displayName}`}
+                        data-testid={`tool-info-mcp-connection-${connection.slug}`}
+                        onClick={() => setToolsViewId(connection.id)}
+                        sx={{ '--IconButton-size': '28px' }}
+                      >
+                        <InfoOutlinedIcon
+                          sx={{ fontSize: '20px', color: theme => `${theme.palette.text.primary}80` }}
+                        />
+                      </IconButton>
+                    </Tooltip>
+                    <SquareSlideToggle
+                      data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
+                      onChange={() => toggleConnection(connection)}
+                      checked={isConnectionOn(connection)}
+                    />
+                  </Box>
                 </ToolContainer>
               </Grid>
             );
@@ -1827,6 +1851,8 @@ const ToolsSection = ({
         open={imageGenModelSelectionOpen}
         onClose={() => setImageGenModelSelectionOpen(false)}
       />
+
+      <McpConnectorToolsDialog connection={toolsViewConnection} onClose={() => setToolsViewId(null)} />
     </DeniedToolsContext.Provider>
   );
 };
