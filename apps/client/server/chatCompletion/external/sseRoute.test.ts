@@ -153,14 +153,17 @@ import {
   ApiKeyScope,
   BadRequestError,
   CompletionStreamEventSchema,
+  CompletionsUnprocessableErrorSchema,
   createCompletionContract,
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   ScopeForbiddenErrorSchema,
   TooManyRequestsError,
   UnauthorizedError,
+  UnprocessableEntityError,
   spendCapExceededError,
 } from '@bike4mind/common';
 
@@ -853,6 +856,17 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     const body = await expectJsonError(await post(), 422);
     expect(body.errorCode).toBe('insufficient_credits');
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('answers a run whose credit budget is used up with 422 run_budget_exhausted', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new UnprocessableEntityError("This run's credit budget is used up.", {
+        errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      })
+    );
+    const body = await expectJsonError(await post(), 422);
+    expect(body.errorCode).toBe(RUN_BUDGET_EXHAUSTED_ERROR_CODE);
+    expect(CompletionsUnprocessableErrorSchema.safeParse(body).success).toBe(true);
   });
 
   it('keeps spend_cap_exceeded distinct on a pre-stream 422', async () => {

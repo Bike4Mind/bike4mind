@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1255 routes: 125 contracted, 11 aliases of another route, 346 with no static caller in `apps/client/app`.
+1256 routes: 126 contracted, 11 aliases of another route, 347 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 123 | 119 | 106 | 10 | 0 | 7 | 109 |
+| v1 | 124 | 120 | 107 | 10 | 0 | 7 | 110 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1865,6 +1865,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/client-config/public` | GET | handler | - | - | yes | - | 0 |
 | `/api/v1/completion-runs` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/completion-runs/[runId]/budget` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/completion-runs/[runId]/usage` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | - | yes | - | 0 |
