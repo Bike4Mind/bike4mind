@@ -32,6 +32,7 @@ import {
   Handshake,
   Hash,
   ImageOff,
+  MessageSquareWarning,
   HeartPulse,
   Inbox,
   Key,
@@ -153,6 +154,7 @@ export enum AdminTab {
   Roles = 80,
   AccessReview = 81,
   SpendExplorer = 82,
+  TextModerationReview = 83,
 }
 
 /**
@@ -309,6 +311,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Moderation review',
         testid: 'admin-moderation-incidents-btn',
         badge: 'moderationReview',
+      },
+      {
+        Icon: MessageSquareWarning,
+        tab: AdminTab.TextModerationReview,
+        label: 'Text moderation review',
+        testid: 'admin-text-moderation-review-btn',
+        badge: 'textModerationReview',
       },
       {
         Icon: ScrollText,

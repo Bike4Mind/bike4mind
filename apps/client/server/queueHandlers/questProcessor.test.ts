@@ -50,6 +50,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services/llm', async () => {
@@ -216,6 +217,19 @@ describe('processQuest', () => {
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
     );
+  }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+      logger as never
+    );
+
+    expect(processOptions.mock.calls.at(-1)?.[0].notifyModerationEscalation).toBe(publishModerationEscalation);
   }, 120_000);
 
   it("hands the queued turn's key to the QuestMaster completion meter", async () => {

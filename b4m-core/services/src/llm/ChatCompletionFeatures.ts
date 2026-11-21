@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
 import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
+import type { ModerationEscalationAlert } from '../userService/moderationPolicy';
 
 export type LimitEventRecord = {
   userId: string;
@@ -463,6 +464,12 @@ export interface IChatCompletionServiceOptions {
    */
   coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
+  /**
+   * Delivers a moderation escalation alert to liveops (the app tier publishes it to the event bus).
+   * Called fire-and-forget: a rejection is logged as a warning and never reaches the chat request.
+   * Optional: a host without it still records hits and escalates, it just alerts no one.
+   */
+  notifyModerationEscalation?: (alert: ModerationEscalationAlert) => Promise<void>;
   invokeCreateMemento: (
     questId: string,
     sessionId: string,

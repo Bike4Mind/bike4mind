@@ -76,6 +76,7 @@ const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
 const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
+const TextModerationReviewTab = dynamic(() => import('./TextModerationReviewTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const StripeDisputesTab = dynamic(() => import('./StripeDisputesTab'), { ssr: false });
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
@@ -235,6 +236,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.ModerationIncidents}>
             {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.TextModerationReview}>
+            {activeTab === AdminTab.TextModerationReview && <TextModerationReviewTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ShadowDetections}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}

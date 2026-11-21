@@ -9,6 +9,7 @@ import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
 import { appUrlForLambdaEnv } from './router';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 
 // Stripe events
 const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
@@ -457,6 +458,40 @@ const telemetryAlertSubscription = eventBus.subscribe(
 
 telemetryAlertDeadLetter.allowRules([telemetryAlertSubscription]);
 
+// Moderation escalations (a user entering suspend_pending, a severe-category hit) posted to the abuse
+// alarm channel by apps/workers/src/events/moderationEscalationAlert.ts. Published fire-and-forget from
+// the chat path, so a failed post retries here and then dead-letters rather than touching the request.
+const moderationAlertsDLQ = new sst.aws.Queue('moderationAlertsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const moderationAlertsDeadLetter = createEventBusDeadLetter('moderationAlertsDLQ', moderationAlertsDLQ);
+const moderationAlertMention = alarmSlackMentionFunctionArgs();
+
+const moderationEscalationSubscription = eventBus.subscribe(
+  'moderation-escalation-alert',
+  {
+    handler: 'apps/workers/src/events/moderationEscalationAlert.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    // VPC for the database egress path (the account age and funding lookup reads Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...moderationAlertMention.environment },
+    permissions: [...moderationAlertMention.permissions, moderationAlertsDeadLetter.sendPermission],
+    transform: moderationAlertsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['moderation.escalation'] },
+    transform: moderationAlertsDeadLetter.ruleTarget,
+  }
+);
+
+moderationAlertsDeadLetter.allowRules([moderationEscalationSubscription]);
+
 // Spider events - comprehensive notebook grooming
 const spiderSubscription = eventBus.subscribe(
   'spider-start',
@@ -548,6 +583,7 @@ sst.aws.Queue.createPolicy('RiskEvidenceQueueDLQEventsPolicy', riskEvidenceQueue
 export {
   eventBus,
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
   pushEventsDeadLetter,
