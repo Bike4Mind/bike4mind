@@ -277,6 +277,14 @@ describe('inlineBlessedScripts', () => {
     expect(out).not.toContain('src=');
   });
 
+  it('leaves a tag whose attribute name merely ends in src unchanged, since a leading quote belongs to the name', async () => {
+    const fetchMock = stubFetch(async () => okResponse('x'));
+    const html = `<script "src="${CHART}">BODY()</script>`;
+
+    expect(await inlineBlessedScripts(html)).toBe(html);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('leaves a tag with more than one src unchanged', async () => {
     const fetchMock = stubFetch(async () => okResponse('x'));
     const html = [

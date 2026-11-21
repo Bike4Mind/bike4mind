@@ -9,8 +9,9 @@ export const LIBRARY_FETCH_TIMEOUT_MS = 8000;
 const COMMENT_OR_SCRIPT =
   /<!--(?:-?>|[\s\S]*?(?:--!?>|$))|<script\b((?:[^>=]|=(?:\s*"[^"]*"|\s*'[^']*'|(?!\s*["'])))*)>(?:[\s\S]*?<\/script\s*>)?/gi;
 
-// Captures: 1 name, then the value as 2 (double-quoted), 3 (single-quoted) or 4 (unquoted, may hold quotes).
-const ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>][^\s>]*)))?/g;
+// Captures: 1 name (may start with a quote or `=`, as in HTML), then the value as 2 (double-quoted), 3 (single-quoted)
+// or 4 (unquoted, may hold quotes).
+const ATTRIBUTE = /([^\s/>][^\s/>=]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>][^\s>]*)))?/g;
 
 interface BlessedScript {
   path: string;
