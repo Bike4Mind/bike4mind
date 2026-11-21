@@ -36,7 +36,7 @@ const handler = nextRouteForContract(getDataLakeContract, {
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(req.validatedParams.id, ctx, {
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(req.validatedParams.id, ctx, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -45,9 +45,6 @@ const handler = nextRouteForContract(getDataLakeContract, {
       logger: req.logger,
     });
     const liveStats = await loadRegistryLakeStats(lake, { fabFiles: fabFileRepository, logger: req.logger });
-    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
     return res.json(toPublicDataLake(lake, liveStats, dataLakeService.canManageLake(lake, ctx, grants)));
   });
 

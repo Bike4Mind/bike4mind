@@ -73,7 +73,13 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
-  return { ...actual, dataLakeService: { ...actual.dataLakeService, assertLakeAccess: mockAssertLakeAccess } };
+  // Stands in for the gate and its one grants read: `mockAssertLakeAccess` yields the lake and
+  // `mockListGrants` the grants, as the real service reads them through the same repository.
+  const assertLakeAccessWithGrants = async (...args: unknown[]) => ({
+    lake: await mockAssertLakeAccess(...args),
+    grants: await mockListGrants(),
+  });
+  return { ...actual, dataLakeService: { ...actual.dataLakeService, assertLakeAccessWithGrants } };
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/[id]/index');

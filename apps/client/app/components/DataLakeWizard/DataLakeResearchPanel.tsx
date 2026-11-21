@@ -936,10 +936,16 @@ export function DataLakeResearchPanel({
   // would otherwise change nothing on screen.
   useEffect(() => {
     if (editingId === null) return;
-    const target = focusLever.current
+    let target = focusLever.current
       ? formRef.current?.querySelector<HTMLElement>(`[data-testid="${FOCUS_LEVER_TEST_ID[focusLever.current]}"]`)
       : null;
-    if (target) {
+    // Add rule is disabled at the cap, so land on the first rule instead; with no rule to land on,
+    // fall through to Name. Joy sets the `disabled` attribute only after mount, hence the class.
+    const isDisabled = (el: HTMLElement) => el.matches(':disabled, .Mui-disabled');
+    if (target && isDisabled(target) && focusLever.current === 'itemRules') {
+      target = formRef.current?.querySelector<HTMLElement>('[data-testid="datalake-research-rule-condition-0"]');
+    }
+    if (target && !isDisabled(target)) {
       target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
       target.focus({ preventScroll: true });
       return;

@@ -1914,6 +1914,26 @@ describe('DataLakeResearchPanel run fix hints', () => {
     expect(document.activeElement).toBe(screen.getByTestId(testId));
   });
 
+  it('focuses the first rule from Adjust settings when Add rule is disabled at the cap', () => {
+    renderPanel({
+      configs: [
+        quickConfig({
+          id: 'config-b',
+          name: 'B',
+          itemRules: Array.from({ length: RESEARCH_ITEM_RULES_MAX }, (_, i) => ({
+            condition: `rule ${i}`,
+            action: 'review' as const,
+          })),
+        }),
+      ],
+      runs: [run({ id: 'run-9', configId: 'config-b', totals: totalsWith({ blockedByRule: 6 }) })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId('datalake-research-rule-condition-0'));
+  });
+
   it('focuses Name from Adjust settings when the run has no lever to point at', () => {
     renderPanel({
       configs: [quickConfig({ id: 'config-b', name: 'B' })],

@@ -25599,7 +25599,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26152,7 +26152,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26532,7 +26532,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. Also returned, tagged `errorCode: "insufficient_credits"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. Also returned, tagged `errorCode: "insufficient_credits"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -27139,7 +27139,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

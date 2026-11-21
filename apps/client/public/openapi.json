@@ -59171,7 +59171,7 @@
             }
           },
           "422": {
-            "description": "The body is malformed, has an unknown field, or a value is the wrong type.",
+            "description": "The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range.",
             "content": {
               "application/json": {
                 "schema": {
@@ -60087,7 +60087,7 @@
             }
           },
           "422": {
-            "description": "The body is malformed, has an unknown field, or a value is the wrong type.",
+            "description": "The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range.",
             "content": {
               "application/json": {
                 "schema": {
@@ -60985,7 +60985,7 @@
             }
           },
           "422": {
-            "description": "The body is malformed, has an unknown field, or a value is the wrong type. Also returned, tagged `errorCode: \"insufficient_credits\"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started.",
+            "description": "The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. Also returned, tagged `errorCode: \"insufficient_credits\"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started.",
             "content": {
               "application/json": {
                 "schema": {
@@ -62908,7 +62908,7 @@
             }
           },
           "422": {
-            "description": "The body is malformed, has an unknown field, or a value is the wrong type.",
+            "description": "The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range.",
             "content": {
               "application/json": {
                 "schema": {
