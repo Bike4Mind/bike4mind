@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ADMIN_ACTION_COUNT_KEYS } from './adminActionCounts';
+import { ADMIN_ACTION_COUNT_KEYS } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import {
   AdminTab,
   SIDEBAR_COLLAPSED_STORAGE_KEY,

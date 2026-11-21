@@ -11,11 +11,11 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { setPath, valuesAt } from './documentPaths';
-import { erasureRegistry } from './erasureRegistry';
-import { DATA_HOLDER_REGISTRY } from './registry';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import type { UserReference } from './types';
+import { setPath, valuesAt } from '@bike4mind/server-utils/dataSubject/documentPaths';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import type { UserReference } from '@bike4mind/server-utils/dataSubject/types';
 
 type Outcome = 'deleted' | 'anonymized' | 'retained';
 

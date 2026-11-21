@@ -97,7 +97,7 @@ import {
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
 import { createImageJobs } from '@bike4mind/services/imageJobs';
-import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
