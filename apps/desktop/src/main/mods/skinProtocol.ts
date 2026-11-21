@@ -2,7 +2,12 @@ import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { protocol } from 'electron';
 import { SKIN_FILE_TYPES, SKIN_SCHEME } from '@shared/mods';
-import { matchesSignature, type LoadedSkin } from './skinFolder';
+import { matchesSignature, type SkinAsset } from './skinFolder';
+
+/** Anything with assets to serve: a skin or a sound pack. They share the scheme, and a folder holds one mod, so ids never collide. */
+export interface ServedMod {
+  assets: ReadonlyMap<string, SkinAsset>;
+}
 
 /**
  * Declare the skin scheme before the app is ready. `standard` so a URL parses into host (the skin id)
@@ -16,7 +21,7 @@ export function registerSkinScheme(): void {
 }
 
 /** Serve skin assets. Must run after the app is ready. `skins` is read per request, so a rescan applies at once. */
-export function registerSkinProtocol(skins: () => ReadonlyMap<string, LoadedSkin>): void {
+export function registerSkinProtocol(skins: () => ReadonlyMap<string, ServedMod>): void {
   protocol.handle(SKIN_SCHEME, request => serveSkinAsset(skins(), request.url));
 }
 
@@ -27,7 +32,7 @@ const NOT_FOUND = (): Response => new Response('Not found', { status: 404 });
  * path resolution here to get wrong. The file is re-read whole within its type's cap and its signature
  * re-checked, since it may have changed on disk since the scan.
  */
-export async function serveSkinAsset(skins: ReadonlyMap<string, LoadedSkin>, url: string): Promise<Response> {
+export async function serveSkinAsset(skins: ReadonlyMap<string, ServedMod>, url: string): Promise<Response> {
   let parsed: URL;
   try {
     parsed = new URL(url);

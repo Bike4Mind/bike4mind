@@ -16,7 +16,7 @@ const FIXTURE = [
   agentFixture('d', 'done'),
 ];
 
-const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
+const chime = vi.hoisted(() => ({ playChime: vi.fn(), playSoundEvent: vi.fn() }));
 vi.mock('./chime', () => chime);
 
 const onViewChange = vi.fn();
@@ -666,10 +666,11 @@ describe('OrchestratorStage', () => {
     it('chimes once as the banner comes up', async () => {
       await renderRun([agentFixture('a', 'working')]);
       await renderRun(finished);
-      expect(chime.playChime).not.toHaveBeenCalled();
+      const finaleCalls = () => chime.playSoundEvent.mock.calls.filter(([event]) => event === 'finale');
+      expect(finaleCalls()).toHaveLength(0);
       await settle();
       await renderRun(finished);
-      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(finaleCalls()).toEqual([['finale', undefined]]);
     });
 
     it('reads the report and dismisses the banner', async () => {

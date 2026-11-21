@@ -24,6 +24,7 @@ import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs
 import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
+import { SoundPackMenuSection } from './SoundPackMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -322,6 +323,7 @@ export function ViewSwitcher({
           </>
         )}
         <SkinMenuSection />
+        <SoundPackMenuSection />
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}
