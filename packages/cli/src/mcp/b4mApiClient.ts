@@ -232,6 +232,7 @@ export interface RawDataLake {
   built_in?: boolean;
   status?: string;
   file_count?: number;
+  can_manage?: boolean;
   [key: string]: unknown;
 }
 

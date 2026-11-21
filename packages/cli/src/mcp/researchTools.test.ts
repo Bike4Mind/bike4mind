@@ -605,6 +605,17 @@ describe('research tool guarded actions', () => {
       ['an item rule is removed with auto-admit on', { auto_admit_trusted: true }, { item_rules: [] }],
       ['the query changes with auto-admit on', { auto_admit_trusted: true }, { query: 'other' }],
       [
+        'min_relevance lowers with auto-admit on',
+        { auto_admit_trusted: true, min_relevance: 0.6 },
+        { min_relevance: 0.4 },
+      ],
+      ['the judge model changes with auto-admit on', { auto_admit_trusted: true, model: null }, { model: 'm1' }],
+      [
+        'a different item rule replaces the stored one',
+        { auto_admit_trusted: true },
+        { item_rules: [{ condition: 'extra', action: 'block' }] },
+      ],
+      [
         'feed_url changes with auto-admit on',
         { auto_admit_trusted: true, feed_url: 'https://a.test/f' },
         { feed_url: 'https://b.test/f' },
@@ -637,6 +648,17 @@ describe('research tool guarded actions', () => {
       ['max_auto_admits lowers with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 1 }],
       ['auto-admit is turned off', { auto_admit_trusted: true }, { auto_admit_trusted: false }],
       [
+        'min_relevance raises with auto-admit on',
+        { auto_admit_trusted: true, min_relevance: 0.4 },
+        { min_relevance: 0.6 },
+      ],
+      ['min_relevance lowers with auto-admit off', { min_relevance: 0.6 }, { min_relevance: 0.4 }],
+      [
+        'an item rule resent with different case and spacing',
+        { auto_admit_trusted: true },
+        { item_rules: [{ condition: '  IS   AD ', action: 'block' }] },
+      ],
+      [
         'a review domain is added with auto-admit on',
         { auto_admit_trusted: true, review_domains: ['x.a.gov'] },
         { review_domains: ['x.a.gov', 'new.test'] },
@@ -665,8 +687,9 @@ describe('research tool guarded actions', () => {
 
     it('lists the trusted sites and cap when auto-admit turns on', async () => {
       const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-      await run({}, { auto_admit_trusted: true }, elicit);
+      await run({ min_relevance: 0.7 }, { auto_admit_trusted: true }, elicit);
       const message = elicit.mock.calls[0][0].message;
+      expect(message).toContain('min_relevance: 0.7');
       expect(message).toContain('a.gov');
       expect(message).toContain('cap: 3');
     });
@@ -731,7 +754,7 @@ describe('research tool 403 mapping', () => {
     [
       'update_research_config',
       'updateResearchConfig',
-      { lake_id: 'l1', config_id: 'c1', min_relevance: 0.5 },
+      { lake_id: 'l1', config_id: 'c1', schedule_paused: true },
       'datalake:write',
     ],
     [

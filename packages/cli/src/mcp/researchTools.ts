@@ -20,6 +20,7 @@ import {
   RESEARCH_SOURCES,
   RESEARCH_UNLISTED_SOURCES,
   normalizeDomainEntry,
+  researchItemRuleKey,
 } from '@bike4mind/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
@@ -71,7 +72,7 @@ const MIN_RELEVANCE_NOTE = `min_relevance is a fraction from 0 to 1 (default ${R
 
 const GUARDED_SETTINGS_NOTE =
   'Turning on auto_admit_trusted, adding a trusted_domains entry, or (with auto_admit_trusted on) raising ' +
-  'max_auto_admits, removing a blocked_domains, review_domains or item_rules entry, or changing the query, source or feed_url widens what enters the lake ' +
+  'max_auto_admits, removing a blocked_domains, review_domains or item_rules entry, lowering min_relevance, or changing the query, source, feed_url or judge model widens what enters the lake ' +
   `with no reviewer, so the user is asked directly. ${USER_APPROVES}`;
 
 export const RESEARCH_TOOL_META: ToolMeta[] = [
@@ -387,7 +388,6 @@ const NO_ELICITATION =
 type CurrentConfig = Awaited<ReturnType<B4mApiClient['getResearchConfig']>>;
 
 const domainKey = normalizeDomainEntry;
-const ruleKey = (r: { condition: string; action: string }) => `${r.action}:${r.condition}`;
 
 /** What this change widens, in words; empty when it widens nothing. `current` is absent on create. */
 export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): string[] {
@@ -401,7 +401,8 @@ export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): strin
     const cap = args.max_auto_admits ?? current?.max_auto_admits;
     found.push(
       `turn on auto_admit_trusted: pages from ${sites.length > 0 ? sites.join(', ') : 'no trusted sites yet'} ` +
-        `enter the lake with no reviewer (auto-admit cap: ${cap ?? 'the server default'})`
+        `enter the lake with no reviewer (auto-admit cap: ${cap ?? 'the server default'}, ` +
+        `min_relevance: ${args.min_relevance ?? current?.min_relevance ?? 'the server default'})`
     );
   }
   if (added.length > 0) found.push(`trust new sites: ${added.join(', ')}`);
@@ -415,9 +416,17 @@ export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): strin
       if (removed.length > 0) found.push(`unblock sites: ${removed.join(', ')}`);
     }
     if (args.item_rules) {
-      const kept = new Set(args.item_rules.map(ruleKey));
-      const removed = current.item_rules.filter(r => !kept.has(ruleKey(r)));
+      const kept = new Set(args.item_rules.map(researchItemRuleKey));
+      const removed = current.item_rules.filter(r => !kept.has(researchItemRuleKey(r)));
       if (removed.length > 0) found.push(`remove ${removed.length} item rule(s)`);
+    }
+    if (args.min_relevance !== undefined && args.min_relevance < current.min_relevance) {
+      found.push(`lower min_relevance from ${current.min_relevance} to ${args.min_relevance}`);
+    }
+    if (args.model !== undefined && args.model !== (current.model ?? null)) {
+      found.push(
+        `change the relevance judge model from ${current.model ?? 'the default'} to ${args.model ?? 'the default'}`
+      );
     }
     if (args.query !== undefined && args.query !== current.query) found.push('change the research query');
     if (args.feed_url !== undefined && args.feed_url !== (current.feed_url ?? null))
@@ -501,7 +510,9 @@ export async function updateResearchConfig(
     args.query !== undefined ||
     args.feed_url !== undefined ||
     args.source !== undefined ||
-    args.review_domains !== undefined;
+    args.review_domains !== undefined ||
+    args.min_relevance !== undefined ||
+    args.model !== undefined;
   if (needsCurrent) {
     const current = await client.getResearchConfig(args.lake_id, args.config_id);
     const declined = await requireUserTrust(trustWidenings(args, current), approval);
