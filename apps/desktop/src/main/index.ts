@@ -28,6 +28,7 @@ import { registerTerminals } from './terminal';
 import { registerLocalUsage, registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
+import { registerOrchestrateMini } from './orchestrateMini';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
 import { registerSessionHandoff } from './handoff';
@@ -57,8 +58,8 @@ function buildAppInfo(): AppInfo {
 /** Set once chat is registered; closes the agent's hidden browsers. */
 let closeAgentBrowsers = (): void => undefined;
 let canCloseLastWindow = (): boolean => true;
-/** Set once the watch is registered; closes the mini Tavern. */
-let closeMiniTavern = (): void => undefined;
+/** Set once the watch is registered; closes the mini Tavern and the Orchestrate mini window (floatingWindow.ts). */
+let closeFloatingWindows = (): void => undefined;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -91,9 +92,9 @@ function createWindow(): void {
     if (appWindows().length > 0) return;
     closeAgentBrowsers();
     closeDevLogWindow();
-    // macOS keeps running with no window, and the mini Tavern is how a watcher keeps an eye on it.
-    // Elsewhere the last window closing quits, which needs the mini window gone too.
-    if (process.platform !== 'darwin') closeMiniTavern();
+    // macOS keeps running with no window, and the floating windows are how a watcher keeps an eye on it.
+    // Elsewhere the last window closing quits, which needs them gone too.
+    if (process.platform !== 'darwin') closeFloatingWindows();
   });
 
   attachDevLogShortcut(window.webContents);
@@ -204,6 +205,12 @@ void app.whenReady().then(async () => {
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
   });
+  // The Orchestrate mini window: fed by the stage, toggled from its view menu and the menu-bar item.
+  const orchestrateMini = registerOrchestrateMini({
+    openSession: open => attention.openSession(open),
+    isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
+    ...(rendererDevUrl ? { rendererDevUrl } : {}),
+  });
   // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
   const watch = registerWatch({
     sources: {
@@ -224,9 +231,14 @@ void app.whenReady().then(async () => {
     // quitState is declared below; this only runs on later window and quit events.
     isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
     ...(rendererDevUrl ? { rendererDevUrl } : {}),
+    orchestrateMini,
   });
-  closeMiniTavern = () => watch.closeMini();
+  closeFloatingWindows = () => {
+    watch.closeMini();
+    orchestrateMini.close();
+  };
   void watch.start();
+  void orchestrateMini.start();
   const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
     const scope = sessionScopeForChat(state);
     return scope ? sessionScopeKey(scope) : null;

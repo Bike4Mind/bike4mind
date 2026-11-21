@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: class {}, screen: {}, shell: {} }));
-vi.mock('../windows', () => ({ markCompanionWindow: vi.fn() }));
+vi.mock('./windows', () => ({ markCompanionWindow: vi.fn() }));
 
-const { MINI_MIN_SIZE, restoreBounds } = await import('./miniWindow');
+const { restoreBounds: restoreWithin } = await import('./floatingWindow');
+
+const MINI_MIN_SIZE = { width: 220, height: 56 };
+const restoreBounds = (saved: Parameters<typeof restoreWithin>[0], areas: Parameters<typeof restoreWithin>[1]) =>
+  restoreWithin(saved, areas, MINI_MIN_SIZE);
 
 const laptop = { x: 0, y: 25, width: 1440, height: 850 };
 const external = { x: 1440, y: 0, width: 1920, height: 1080 };
