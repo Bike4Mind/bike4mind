@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Avatar from '@mui/joy/Avatar';
 import Box from '@mui/joy/Box';
@@ -11,7 +11,15 @@ import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
 import { updateAttention } from '@shared/update';
-import { BillingIcon, ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
+import {
+  BillingIcon,
+  ChevronIcon,
+  ConversationIcon,
+  ExternalLinkIcon,
+  GearIcon,
+  SignOutIcon,
+  UserIcon,
+} from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
@@ -185,6 +193,7 @@ export function AccountMenu({
   onProfile: () => void;
   onSendFeedback?: () => void;
 }) {
+  const webConversationsDescriptionId = useId();
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
@@ -240,6 +249,23 @@ export function AccountMenu({
           testId="account-feedback-btn"
         />
       )}
+
+      <NavItem
+        icon={<ExternalLinkIcon />}
+        label="Open web conversations"
+        onClick={() => void window.b4m.attention.openServerSessions()}
+        describedBy={webConversationsDescriptionId}
+        testId="account-web-conversations-btn"
+      />
+      <Typography
+        id={webConversationsDescriptionId}
+        level="body-xs"
+        textColor="text.tertiary"
+        sx={{ px: 1, pb: 0.5 }}
+        data-testid="account-web-conversations-description"
+      >
+        Opens web conversations in a separate window. Local desktop chats stay on this device.
+      </Typography>
 
       <Divider sx={{ my: 0.5 }} />
 

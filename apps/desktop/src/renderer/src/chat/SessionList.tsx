@@ -125,6 +125,7 @@ export function NavItem({
   end,
   loading,
   testId,
+  describedBy,
 }: {
   icon: ReactNode;
   label: string;
@@ -132,6 +133,7 @@ export function NavItem({
   end?: ReactNode;
   loading?: boolean;
   testId: string;
+  describedBy?: string;
 }) {
   return (
     <Button
@@ -145,6 +147,7 @@ export function NavItem({
       onClick={onClick}
       sx={{ justifyContent: 'flex-start', fontWeight: 'md', '--Button-gap': '10px' }}
       data-testid={testId}
+      aria-describedby={describedBy}
     >
       <Box sx={{ flex: 1, textAlign: 'left' }}>{label}</Box>
     </Button>
