@@ -82,7 +82,7 @@ Re-running with the same `{sessionId, messageId}` is idempotent — you get the 
 This is exactly what the gallery **Share** button does under the hood. Host any folder of static files (one `index.html` at the root, plus assets):
 
 ```bash
-KEY=$YOUR_API_KEY
+KEY=$YOUR_API_KEY              # add the artifacts:publish scope to this key
 BASE=https://app.bike4mind.com
 UID=<your-user-id>            # GET /api/v1/me (the key needs the me:read scope)
 SLUG=my-dashboard

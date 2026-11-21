@@ -15,6 +15,7 @@ import { ZodError } from 'zod';
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
   submitted: null as any,
+  options: null as unknown,
 }));
 
 vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
@@ -28,7 +29,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mockRefs.options = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
@@ -85,6 +91,22 @@ const splitRequest = {
     },
   ],
 };
+
+describe('POST /api/transforms/batch -- API key scope posture', () => {
+  it('declares ai:generate or admin and grandfathers legacy keys', () => {
+    expect(mockRefs.options).toMatchObject({ requiredScopes: ['ai:generate', 'admin:*'], grandfatherLegacyKeys: true });
+  });
+
+  it('refuses a key minted for a connected app and submits nothing', async () => {
+    mockRefs.submitted = null;
+    const { req, res } = post({ requests: [splitRequest] });
+    Object.assign(req, { apiKeyInfo: { scopes: ['ai:generate'], oauthExchangeClientId: 'client-1' } });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockRefs.submitted).toBeNull();
+  });
+});
 
 describe('POST /api/transforms/batch -- cache_control pass-through', () => {
   beforeEach(() => {

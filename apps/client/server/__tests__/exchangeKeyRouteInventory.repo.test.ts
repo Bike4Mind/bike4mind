@@ -91,7 +91,9 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/generated-content/:ref',
   'GET /api/identify',
   'GET /api/models',
+  'GET /api/oauth/userinfo',
   'GET /api/quests/:id/files',
+  'GET /api/transforms/batch/:id',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
   'GET /api/v1/completion-runs/:runId/usage',
@@ -126,6 +128,7 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/tools/weather',
   'POST /api/tools/web-fetch',
   'POST /api/tools/web-search',
+  'POST /api/transforms/batch',
   'POST /api/user-api-keys/:id/callback-secret',
   'POST /api/v1/agent-executions',
   'POST /api/v1/completion-runs',
@@ -156,7 +159,14 @@ const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
 // Scoped routes an exchange key may not use (credential management, other users' profiles,
 // gamification): each refuses an exchange key in its handler.
-const REFUSING_ROUTES = ['gears/status.ts', 'user-api-keys/[id]/callback-secret.ts', 'users/[id]/index.ts'];
+const REFUSING_ROUTES = [
+  'gears/status.ts',
+  'oauth/userinfo.ts',
+  'transforms/batch.ts',
+  'transforms/batch/[id].ts',
+  'user-api-keys/[id]/callback-secret.ts',
+  'users/[id]/index.ts',
+];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
 const SCOPE_LESS_CREDENTIAL_ROUTES = [

@@ -21,6 +21,7 @@ import {
   type PublishResult,
   type ValidationViolation,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   validateBundle,
@@ -95,7 +96,10 @@ function decodeReactUpload(raw: string, siblings: string[]): { source: string; f
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const handler = baseApi().post(outboundActionGate(), async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
