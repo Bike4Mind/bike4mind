@@ -1,3 +1,4 @@
+import { CloudScanRequestProvider, useCloudScanRequest } from './SecurityDashboard/CloudScanRequest';
 import { Box, Button, Chip, Sheet, Stack, Switch, Typography, useTheme } from '@mui/joy';
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
@@ -11,7 +12,6 @@ import {
   useRunWebSecurityScan,
   useSecurityDashboardCloud,
   useSecurityDashboardProwler,
-  useRunCloudSecurityScan,
   useSecurityScanSchedule,
   useUpdateSecurityScanSchedule,
 } from '@client/app/hooks/data/admin';
@@ -596,7 +596,7 @@ const CloudFindingCard = ({
 const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: SecurityDashboardCloudSnapshot }) => {
   const { data: liveSnapshot, isLoading, isFetching, refetch } = useSecurityDashboardCloud();
   const snapshot = liveSnapshot ?? initialSnapshot;
-  const runCloudScan = useRunCloudSecurityScan();
+  const runCloudScan = useCloudScanRequest();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const { data: schedule } = useSecurityScanSchedule('cloud');
   const updateSchedule = useUpdateSecurityScanSchedule('cloud');
@@ -619,11 +619,12 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
             variant="soft"
             color="primary"
             size="sm"
-            onClick={() => runCloudScan.mutate()}
-            loading={runCloudScan.isPending}
+            onClick={runCloudScan.start}
+            disabled={runCloudScan.pending || runCloudScan.queued}
+            loading={runCloudScan.pending}
             data-testid="cloud-security-run-scan-btn"
           >
-            Run Cloud Scan
+            {runCloudScan.queued ? 'Cloud scan queued' : 'Run Cloud Scan'}
           </Button>
         </Stack>
         <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md', bgcolor: 'background.surface' }}>
@@ -680,13 +681,13 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
             color="primary"
             size="sm"
             onClick={() => {
-              if (!cooldownActive && !runCloudScan.isPending) runCloudScan.mutate();
+              if (!cooldownActive) runCloudScan.start();
             }}
-            loading={runCloudScan.isPending}
-            disabled={cooldownActive || runCloudScan.isPending}
+            loading={runCloudScan.pending}
+            disabled={cooldownActive || runCloudScan.pending || runCloudScan.queued}
             data-testid="cloud-security-run-scan-btn"
           >
-            Run Cloud Scan
+            {runCloudScan.queued ? 'Cloud scan queued' : 'Run Cloud Scan'}
           </Button>
           <Chip
             variant="soft"
@@ -1029,7 +1030,9 @@ const SecurityDashboardContent: React.FC = () => {
 
 const SecurityDashboard: React.FC = () => (
   <ProwlerScanRequestProvider>
-    <SecurityDashboardContent />
+    <CloudScanRequestProvider>
+      <SecurityDashboardContent />
+    </CloudScanRequestProvider>
   </ProwlerScanRequestProvider>
 );
 

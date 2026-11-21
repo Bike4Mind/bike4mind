@@ -27,7 +27,7 @@ interface AttentionItem {
 
 function decisionAnswer(agent: ViewAgent): AttentionItem['answer'] {
   const decision = agent.decision;
-  if (!decision || decision.multiSelect) return undefined;
+  if (!decision?.oneClick || decision.multiSelect) return undefined;
   const options = oneClickOptions(decision.options);
   return options && { agentId: agent.id, decisionId: decision.id, options };
 }

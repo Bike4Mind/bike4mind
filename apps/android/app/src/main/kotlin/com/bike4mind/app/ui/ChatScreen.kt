@@ -28,13 +28,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
+import com.bike4mind.app.R
+import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.chat.ChatError
+import com.bike4mind.kit.chat.ChatState
+import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 
 class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
@@ -61,8 +65,8 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (sessionId == null && state.sessionId == null) "New chat" else "Chat") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                title = { Text(stringResource(if (sessionId == null && state.sessionId == null) R.string.chat_title_new else R.string.chat_title)) },
+                navigationIcon = { TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) } },
             )
         },
     ) { padding ->
@@ -71,38 +75,40 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.m),
             ) {
-                items(state.turns, key = { it.id }) { turn -> Turn(turn) }
+                items(state.turns, key = { it.id }) { turn ->
+                    Turn(turn, state) { action, decision -> model.controller.respond(turn.id, action, decision) }
+                }
             }
             state.statusMessage?.let {
-                Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 16.dp))
+                Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = Spacing.m))
             }
             state.error?.let { error ->
                 Text(
                     text = when (error) {
-                        is ChatError.Refused -> error.message ?: "The message was refused (${error.errorCode ?: "unknown"})"
+                        is ChatError.Refused -> error.message ?: stringResource(R.string.chat_refused, error.errorCode ?: stringResource(R.string.chat_refused_unknown))
                         is ChatError.Failed -> error.message
                     },
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.m),
                 )
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(Spacing.m),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
             ) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
-                    placeholder = { Text("Message") },
+                    placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
                 )
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
                     model.controller.send(draft)
                     draft = ""
                 }) {
-                    Text("Send")
+                    Text(stringResource(R.string.chat_send))
                 }
             }
         }
@@ -110,16 +116,19 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Turn(turn: Quest) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun Turn(turn: Quest, chat: ChatState, onRespond: (PendingAction, PendingActionDecision) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         turn.prompt?.let { prompt ->
-            Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(12.dp)) }
+            Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(Spacing.m)) }
         }
         val reply = turn.reply
         when {
-            turn.failed -> Text("The reply failed${turn.errorCode?.let { " ($it)" } ?: ""}.", color = MaterialTheme.colorScheme.error)
-            reply.isNullOrEmpty() && !turn.status.isTerminal -> Text("...", style = MaterialTheme.typography.bodyLarge)
+            turn.failed -> Text(turn.errorCode?.let { stringResource(R.string.chat_reply_failed_code, it) } ?: stringResource(R.string.chat_reply_failed), color = MaterialTheme.colorScheme.error)
+            reply.isNullOrEmpty() && !turn.status.isTerminal -> Text(stringResource(R.string.chat_reply_pending), style = MaterialTheme.typography.bodyLarge)
             reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("message-assistant"))
+        }
+        turn.pendingAction?.let { action ->
+            ApprovalCard(action, chat.approval(turn.id, action)) { decision -> onRespond(action, decision) }
         }
     }
 }

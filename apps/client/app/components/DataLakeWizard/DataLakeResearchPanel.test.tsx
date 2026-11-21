@@ -154,6 +154,47 @@ describe('DataLakeResearchPanel', () => {
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
+  describe('opening the form', () => {
+    let scrollIntoView: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    });
+    afterEach(() => {
+      scrollIntoView.mockRestore();
+    });
+
+    it('scrolls the edit form into view and focuses its first field', () => {
+      renderPanel({ configs: [config()] });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId('datalake-research-form'));
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('scrolls and focuses again when Edit is pressed on the config whose form is already open', () => {
+      renderPanel({ configs: [config()] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('does the same for a new configuration', () => {
+      renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+  });
+
   it('starts a run for the configuration whose button was pressed', () => {
     const spies = renderPanel({ configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })] });
 
@@ -901,8 +942,8 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toBe(
-        'Stopped: the relevance judge was unavailable'
+      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(
+        /^Stopped because the relevance judge was unavailable\./
       );
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/3 could not be judged/);
@@ -920,6 +961,48 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
+    });
+
+    it('labels hits whose search link could not be resolved as skipped', () => {
+      renderPanel({
+        runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4, unresolvedRedirect: 3, proposed: 1 } })],
+      });
+      expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(
+        /3 search link never revealed its site \(skipped; usually clears on the next run\)/
+      );
+    });
+
+    it('labels the two source-rule drops apart on a run that stored both', () => {
+      renderPanel({
+        runs: [
+          run({ totals: { ...emptyResearchRunTotals(), searchHits: 6, filteredBySource: 2, unlistedDropped: 4 } }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/2 on your Never these sites list/);
+      expect(summary).toMatch(/4 from sites not on your lists \(Other sites: Ignore\)/);
+    });
+
+    it('keeps the combined label for a run stored before the split', () => {
+      const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+      renderPanel({
+        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } })],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/6 blocked by your site lists/);
+      expect(summary).not.toMatch(/Never these sites/);
+    });
+
+    it('does not report a judge when a run only dropped hits by source', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 4, unlistedDropped: 4 },
+          }),
+        ],
+      });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
     });
 
     it('names the model that judged a run', () => {
@@ -1180,7 +1263,7 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('research-config-schedule')).toBeNull();
     });
 
-    it('names the cadence, the next run time and the pause threshold on the config card', () => {
+    it('names the cadence, the next run time and the hold threshold on the config card', () => {
       renderPanel({
         configs: [
           config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z'), reviewBacklogLimit: 7 }),
@@ -1189,17 +1272,17 @@ describe('DataLakeResearchPanel', () => {
       const line = screen.getByTestId('research-config-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
       expect(line).toMatch(/next .*2026/);
-      expect(line).toMatch(/pauses at 7\b/);
+      expect(line).toMatch(/held at 7\b/);
     });
 
-    it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
+    it('shows the held line once pending proposals reach the limit, and not one below it', () => {
       const scheduled = config({ cadence: 'daily', reviewBacklogLimit: 10 });
       const { unmount } = renderPanel({ configs: [scheduled], pendingProposals: 9 });
-      expect(screen.queryByTestId('research-config-schedule-paused')).toBeNull();
+      expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
       unmount();
 
       renderPanel({ configs: [scheduled], pendingProposals: 10 });
-      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 pending \(pauses at 10\)/);
+      expect(screen.getByTestId('research-config-schedule-held').textContent).toMatch(/10 pending \(held at 10\)/);
     });
 
     it('says why the last scheduled tick did not start a run', () => {
@@ -1218,7 +1301,7 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('research-config-schedule-outcome').textContent).toBe('Could not start.');
     });
 
-    // The paused line already carries a backlog skip; a second line would say it twice.
+    // The held line already carries a backlog skip; a second line would say it twice.
     it('adds no outcome line for a backlog skip or a started run', () => {
       const at = new Date('2026-03-02T00:00:00Z');
       renderPanel({
@@ -1254,6 +1337,72 @@ describe('DataLakeResearchPanel', () => {
         /already waiting for review/
       );
       expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+    });
+
+    describe('pause and resume', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      const pauseBtn = (id = 'config-1') => screen.getByTestId(`datalake-research-pause-btn-${id}`);
+
+      it('offers Pause on a scheduled config and sends only the flag', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly' })] });
+        expect(pauseBtn().textContent).toBe('Pause schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: true });
+      });
+
+      it('offers Resume on a paused config and sends schedulePaused false', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly', schedulePaused: true })] });
+        expect(pauseBtn().textContent).toBe('Resume schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: false });
+      });
+
+      it('has no pause button when the cadence is off', () => {
+        renderPanel({ configs: [config({ id: 'config-1' })] });
+        expect(screen.queryByTestId('datalake-research-pause-btn-config-1')).toBeNull();
+      });
+
+      it('shows the Paused line and hides the held and outcome lines', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              schedulePaused: true,
+              reviewBacklogLimit: 5,
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' },
+            }),
+          ],
+          pendingProposals: 9,
+        });
+        expect(screen.getByTestId('research-config-schedule').textContent).toBe('Paused. Runs weekly when resumed.');
+        expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
+        expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+      });
+
+      it('shows held, not paused, for an unpaused config at its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 9 });
+        expect(screen.getByTestId('research-config-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.getByTestId('research-config-schedule-held')).toBeTruthy();
+      });
+
+      it('shows the normal line for an unpaused config under its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 1 });
+        expect(screen.getByTestId('research-config-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.queryByTestId('research-config-schedule-held')).toBeNull();
+      });
+
+      it('adds no outcome line for a schedule_paused skip, and never prints undefined', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'schedule_paused' },
+            }),
+          ],
+        });
+        expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+        expect(screen.getByTestId('datalake-research-panel').textContent).not.toContain('undefined');
+      });
     });
 
     it('marks a periodic run as Scheduled in the run history', () => {
@@ -1680,5 +1829,144 @@ describe('DataLakeResearchPanel', () => {
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toContain('4 found');
     });
+  });
+});
+
+describe('DataLakeResearchPanel run fix hints', () => {
+  const quickConfig = (overrides: Partial<IDataLakeResearchConfigResponse> = {}) =>
+    config({
+      model: undefined,
+      recencyDays: undefined,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      allowedDomains: [],
+      blockedDomains: [],
+      proposedTags: [],
+      ...overrides,
+    });
+  const totalsWith = (overrides: Partial<ReturnType<typeof emptyResearchRunTotals>>) => ({
+    ...emptyResearchRunTotals(),
+    searchHits: 10,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+  });
+
+  it('opens the run config with Advanced expanded from Adjust settings', () => {
+    const configs = [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })];
+    const first = renderPanel({ configs });
+    fireEvent.click(screen.getAllByTestId('datalake-research-edit-btn')[1]);
+    expect(screen.getByTestId('datalake-research-advanced')).not.toBeVisible();
+    first.unmount();
+
+    renderPanel({ configs, runs: [run({ id: 'run-9', configId: 'config-b' })] });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-advanced')).toBeVisible();
+    expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('B');
+  });
+
+  it('hides Adjust settings when the config was deleted', () => {
+    renderPanel({ configs: [quickConfig()], runs: [run({ id: 'run-9', configId: 'gone' })] });
+    expect(screen.queryByTestId('datalake-research-run-adjust-run-9')).toBeNull();
+  });
+
+  it.each([
+    [
+      'belowRelevance',
+      { minRelevance: 0.7 },
+      'The largest group scored below the minimum relevance. Lower Minimum relevance (0.7) in Advanced settings to keep more.',
+    ],
+    [
+      'filteredBySource',
+      { blockedDomains: ['spam.net'] },
+      'The largest group came from sites on the never list, or had no usable web address. Check Never these sites in Advanced settings.',
+    ],
+    [
+      'unlistedDropped',
+      { unlistedSources: 'drop' },
+      'The largest group came from sites on none of your lists, which are ignored. Check Other sites (Ignore) in Advanced settings.',
+    ],
+    ['blockedByRule', {}, 'The largest group was blocked by an item rule. Check Item rules in Advanced settings.'],
+  ] as const)('renders a hint for the %s bucket from the run levers', (bucket, levers, expected) => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, ...levers },
+          totals: totalsWith({ filteredBySource: 1, unlistedDropped: 1, [bucket]: 6 }),
+        }),
+      ],
+    });
+    expect(screen.getByTestId('datalake-research-run-hint').textContent).toBe(expected);
+  });
+
+  it.each(['unresolvedRedirect', 'judgeFailed', 'fetchFailed', 'alreadyInLake', 'notJudged'] as const)(
+    'renders no hint when the largest bucket (%s) has no setting',
+    bucket => {
+      renderPanel({ runs: [run({ totals: totalsWith({ belowRelevance: 1, [bucket]: 6 }) })] });
+      expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+    }
+  );
+
+  it('renders no hint for a run with no drops', () => {
+    renderPanel({ runs: [run({ totals: totalsWith({ proposed: 4 }) })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint when the largest bucket is filteredBySource but the Never list is empty', () => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, blockedDomains: [] },
+          totals: totalsWith({ filteredBySource: 6, unlistedDropped: 1 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint on a judge-outage run even when source drops are the largest bucket', () => {
+    renderPanel({
+      runs: [
+        run({
+          status: 'failed',
+          stopReason: 'judge_unavailable',
+          levers: { ...run().levers, unlistedSources: 'drop' },
+          totals: totalsWith({ unlistedDropped: 7, judgeFailed: 3 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['saving', { savingConfigId: 'config-b' }],
+    ['deleting', { deletingConfigId: 'config-b' }],
+  ] as const)('disables Adjust settings while its config is %s', (_label, busyProps) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b' }), run({ id: 'run-8', configId: 'config-a' })],
+      ...busyProps,
+    });
+    expect((screen.getByTestId('datalake-research-run-adjust-run-9') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('datalake-research-run-adjust-run-8') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('renders no hint when a run stored before the split cannot say which list dropped hits', () => {
+    const { unlistedDropped: _omitted, ...legacy } = totalsWith({ filteredBySource: 6 });
+    renderPanel({ runs: [run({ totals: legacy })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['cost_ceiling', /^Stopped at the cost ceiling for one run\. Raise Cost ceiling in Advanced settings/],
+    ['proposal_limit', /^Reached the proposals limit for one run\. Raise Proposals per run in Advanced settings/],
+    ['time_budget', /^Stopped at the time limit for one run\. The rest are checked next run\.$/],
+    ['judge_unavailable', /No setting applies/],
+  ] as const)('words the %s stop reason as a setting or as no setting', (stopReason, expected) => {
+    renderPanel({ runs: [run({ stopReason })] });
+    expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(expected);
   });
 });

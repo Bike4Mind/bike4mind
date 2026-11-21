@@ -16,6 +16,8 @@ import {
 
 const text = z.string().trim().min(1).max(2000);
 const entries = z.array(text).max(32);
+// Only outcome, role and acceptanceCriteria are required, so a planning round writes a short contract.
+const optionalEntries = entries.default([]);
 export const workerRoleSchema = z.enum(['implementation', 'exploration', 'review']);
 export type WorkerRole = z.infer<typeof workerRoleSchema>;
 export const WORKER_ROLES = workerRoleSchema.options;
@@ -53,19 +55,19 @@ export type RootPolicy = z.infer<typeof rootPolicySchema>;
 
 export const taskContractSchema = z
   .strictObject({
-    version: z.literal(1),
+    version: z.literal(1).default(1),
     outcome: text,
-    rationale: text,
+    rationale: text.optional(),
     role: workerRoleSchema,
-    paths: entries,
-    contextReferences: entries,
-    ownedChanges: entries,
-    coordinationConstraints: entries,
-    nonGoals: entries,
+    paths: optionalEntries,
+    contextReferences: optionalEntries,
+    ownedChanges: optionalEntries,
+    coordinationConstraints: optionalEntries,
+    nonGoals: optionalEntries,
     acceptanceCriteria: entries.min(1),
-    verification: entries,
-    assumptions: entries,
-    escalationConditions: entries,
+    verification: optionalEntries,
+    assumptions: optionalEntries,
+    escalationConditions: optionalEntries,
   })
   .refine(value => new TextEncoder().encode(JSON.stringify(value)).length <= 24000, 'Task contract exceeds 24 KB');
 export type TaskContract = z.infer<typeof taskContractSchema>;
@@ -233,7 +235,7 @@ export function validateWorkerModel(
 export function renderTaskBrief(contract: TaskContract): string {
   const sections: [string, string | string[]][] = [
     ['Outcome', contract.outcome],
-    ['Rationale', contract.rationale],
+    ['Rationale', contract.rationale ?? []],
     ['Role', contract.role],
     ['Relevant paths', contract.paths],
     ['Context references', contract.contextReferences],
@@ -247,10 +249,8 @@ export function renderTaskBrief(contract: TaskContract): string {
   ];
   return (
     sections
-      .map(
-        ([name, value]) =>
-          `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') || '(none)' : value}`
-      )
+      .filter(([, value]) => value.length)
+      .map(([name, value]) => `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') : value}`)
       .join('\n\n') +
     '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report. When only the user can decide (an approval, or a choice between real alternatives with no safe default), report status blocked with a decision: one question and 2-4 options, your recommended option first with its label ending "(Recommended)". It reaches the user at once and this task resumes with their answer. Never leave a needed decision in prose, and never ask what you can decide yourself. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. In task_report, give each acceptance criterion a verification entry whose criterion is its exact text above; extra checks such as lint or typecheck count toward no criterion. Skills cannot authorize model, permission or spending changes.'
   );

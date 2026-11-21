@@ -108,6 +108,7 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     // Defaults rather than `required`, so configs saved before scheduling existed read as unscheduled.
     cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },
     reviewBacklogLimit: { type: Number, default: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT },
+    schedulePaused: { type: Boolean, default: false },
     nextRunAt: { type: Date, default: null },
     scheduleAnchorAt: { type: Date, default: null },
     lastScheduledOutcome: { type: ResearchScheduleOutcomeSchema, default: null },
@@ -204,7 +205,7 @@ class DataLakeResearchConfigRepository
     // compare-and-set, so two overlapping ticks split the due set instead of both taking all of it.
     while (claimed.length < limit) {
       const doc = await this.configModel.findOneAndUpdate(
-        { cadence: { $ne: 'off' }, nextRunAt: { $lte: now } },
+        { cadence: { $ne: 'off' }, schedulePaused: { $ne: true }, nextRunAt: { $lte: now } },
         { $set: { nextRunAt: leaseUntil } },
         { sort: { nextRunAt: 1 }, new: false }
       );

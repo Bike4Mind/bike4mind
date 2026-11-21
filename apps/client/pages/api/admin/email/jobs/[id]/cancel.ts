@@ -3,6 +3,7 @@ import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/c
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { reconcileEmailJob } from '@bike4mind/server-utils/email/reconcileEmailJob';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
@@ -35,15 +36,9 @@ const handler = adminApi({
       id,
       status: EmailJobStatus.CANCELLED,
       overallStatus: EmailJobOverallStatus.PARTIAL,
-      cancelledCount: (job.cancelledCount || 0) + cancelledCount,
-    });
-  } else {
-    // Just update the cancelled count
-    await emailJobRepository.update({
-      id,
-      cancelledCount: (job.cancelledCount || 0) + cancelledCount,
     });
   }
+  await reconcileEmailJob(id);
 
   await recordAdminActionFromRequest(req, {
     action: 'email.job.cancelled',

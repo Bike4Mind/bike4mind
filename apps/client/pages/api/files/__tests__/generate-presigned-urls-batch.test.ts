@@ -1,6 +1,8 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { getSettingsMap } from '@bike4mind/utils';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
+import { presignPutForReal, signedHeaders } from '@server/files/__tests__/presignPutForReal';
 import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -320,6 +322,14 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     expect(options?.signableHeaders?.has('content-length')).toBe(true);
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });
+  });
+
+  it('signs every upload URL as create-only, so the PUT must carry If-None-Match: *', async () => {
+    await run({ files: [file()], dataLakeSlug: 'acme-2026' }, makeRes().res);
+    const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
+    const input = (command as unknown as { input: PutObjectCommandInput }).input;
+    expect(input.IfNoneMatch).toBe('*');
+    expect(signedHeaders(await presignPutForReal(input, options))).toContain('if-none-match');
   });
 
   it('stamps the lake org as owner of every file uploaded into an org lake', async () => {

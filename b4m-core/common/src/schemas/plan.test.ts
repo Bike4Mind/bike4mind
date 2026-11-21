@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SUBQUEST_STATUS_VALUES, type QuestMasterData } from '../types/entities/QuestTypes';
 import {
   fromClaudeTasks,
   fromClaudeTodoWrite,
@@ -7,10 +8,13 @@ import {
   fromTodoWrite,
   normalizePlan,
   PLAN_ITEM_STATUSES,
+  PLAN_STATUS_DISPLAY,
+  PLAN_TO_SUB_QUEST_STATUS,
   PLAN_TOOL_ADAPTERS,
   PlanItemSchema,
   PlanSchema,
   planProgress,
+  SUB_QUEST_TO_PLAN_STATUS,
 } from './plan';
 
 const item = (content: string, status = 'pending', extra = {}) => ({ content, status, ...extra });
@@ -174,6 +178,42 @@ describe('plan adapters', () => {
     expect(fromCliTodos(todos).plan.items[0]).toMatchObject({ content: 'Skip', status: 'cancelled' });
   });
 
+  it('prefers content over the deprecated description alias and warns once', () => {
+    const result = fromCliTodos([
+      { content: 'New', description: 'Old', status: 'pending' },
+      { description: 'Alias only', status: 'pending' },
+      { description: 'Another alias', status: 'pending' },
+    ]);
+    expect(result.plan.items.map(i => i.content)).toEqual(['New', 'Alias only', 'Another alias']);
+    expect(result.warnings.filter(w => w.includes('deprecated'))).toHaveLength(1);
+    expect(fromCliTodos([{ content: 'Only', status: 'pending' }]).warnings).toEqual([]);
+  });
+
+  it('falls back to a string description only, and warns only for one', () => {
+    const empty = fromCliTodos([{ content: '', description: 'Kept', status: 'pending' }]);
+    expect(empty.plan.items.map(i => i.content)).toEqual(['Kept']);
+    expect(empty.warnings).toEqual(["description is deprecated; use 'content'."]);
+    const nulled = fromCliTodos([{ content: 'Real', description: null, status: 'pending' }]);
+    expect(nulled.plan.items.map(i => i.content)).toEqual(['Real']);
+    expect(nulled.warnings).toEqual([]);
+  });
+
+  it('keeps activeForm and demotes extra in_progress CLI todos without throwing', () => {
+    const result = fromCliTodos([
+      { content: 'A', activeForm: 'Doing A', status: 'in_progress' },
+      { content: 'B', status: 'in_progress' },
+    ]);
+    expect(result.plan.items.map(i => i.status)).toEqual(['in_progress', 'pending']);
+    expect(result.plan.items[0].activeForm).toBe('Doing A');
+    expect(result.warnings).toHaveLength(1);
+  });
+
+  it('gives same-text CLI todos distinct ids without an id warning', () => {
+    const result = fromCliTodos([item('Run tests', 'completed'), item('Run tests')]);
+    expect(new Set(result.plan.items.map(i => i.id)).size).toBe(2);
+    expect(result.warnings).toEqual([]);
+  });
+
   it('folds task creates, partial updates and deletions in creation order', () => {
     const calls = [
       { name: 'TaskCreate', input: { subject: 'First', activeForm: 'Doing first', description: 'Details' } },
@@ -266,5 +306,119 @@ describe('plan adapters', () => {
       write_todos: fromCliTodos,
       quest_master: fromQuestMaster,
     });
+  });
+});
+
+// Shaped like a stored QuestMaster plan mid-run: one finished quest, one in flight, one untouched.
+const QUEST_PLAN_FIXTURE: QuestMasterData[] = [
+  {
+    id: 'quest-research',
+    title: 'Research the market',
+    description: 'Size the opportunity before committing to a build.',
+    complexity: 'Medium',
+    subQuests: [
+      {
+        id: 'sq-competitors',
+        title: 'List the five closest competitors',
+        status: 'completed',
+        evidence: 'Table in notebook',
+      },
+      { id: 'sq-pricing', title: 'Compare their pricing tiers', status: 'completed', evidence: 'Pricing matrix' },
+      { id: 'sq-survey', title: 'Run a customer survey', status: 'skipped' },
+    ],
+  },
+  {
+    id: 'quest-prototype',
+    title: 'Build a clickable prototype',
+    description: 'Validate the core flow with five users.',
+    complexity: 'Hard',
+    subQuests: [
+      { id: 'sq-wireframes', title: 'Sketch the onboarding wireframes', status: 'completed', evidence: 'Figma link' },
+      { id: 'sq-flow', title: 'Wire up the signup flow', status: 'in_progress', startedAt: 1_760_000_000_000 },
+      { id: 'sq-old', title: 'Draft a landing page', status: 'deleted' },
+      { id: 'sq-tests', title: 'Run five usability sessions', status: 'not_started' },
+    ],
+  },
+  {
+    id: 'quest-launch',
+    title: 'Plan the launch',
+    description: 'Pick a date and channels.',
+    complexity: 'Easy',
+    subQuests: [{ id: 'sq-date', title: 'Pick a launch date', status: 'not_started' }],
+  },
+];
+
+describe('QuestMaster plan fixture', () => {
+  const { plan, warnings } = fromQuestMaster(QUEST_PLAN_FIXTURE, { updatedAt: 1_760_000_000_000 });
+
+  it('adapts a stored plan without repairs', () => {
+    expect(warnings).toEqual([]);
+    expect(PlanSchema.safeParse(plan).success).toBe(true);
+    expect(plan.items.map(entry => [entry.id, entry.status])).toEqual([
+      ['quest-research', 'completed'],
+      ['quest-prototype', 'in_progress'],
+      ['quest-launch', 'pending'],
+    ]);
+    expect(planProgress(plan)).toEqual({
+      done: 3,
+      total: 6,
+      current: 'Wire up the signup flow',
+      next: 'Run five usability sessions',
+    });
+  });
+
+  it('round-trips every retained sub-quest back to its stored id, title, status and evidence', () => {
+    const back = plan.items.map(quest => ({
+      id: quest.id,
+      title: quest.content,
+      description: quest.note,
+      subQuests: (quest.children ?? []).map(child => ({
+        id: child.id,
+        title: child.content,
+        status: PLAN_TO_SUB_QUEST_STATUS[child.status],
+        ...(child.note === undefined ? {} : { evidence: child.note }),
+      })),
+    }));
+    expect(back).toEqual(
+      QUEST_PLAN_FIXTURE.map(quest => ({
+        id: quest.id,
+        title: quest.title,
+        description: quest.description,
+        subQuests: quest.subQuests
+          .filter(sub => sub.status !== 'deleted')
+          .map(({ id, title, status, evidence }) => ({ id, title, status, ...(evidence ? { evidence } : {}) })),
+      }))
+    );
+  });
+
+  it('reads retired sub-quest status tokens through the shared normalizer', () => {
+    const result = fromQuestMaster([
+      {
+        id: 'q',
+        title: 'Legacy',
+        subQuests: [
+          { id: 'a', title: 'Hyphenated', status: 'in-progress' },
+          { id: 'b', title: 'V2 initial', status: 'pending' },
+          { id: 'c', title: 'V1 blocked', status: 'blocked' },
+        ],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+    expect(result.plan.items[0].children?.map(child => child.status)).toEqual(['in_progress', 'pending', 'pending']);
+  });
+});
+
+describe('plan status tokens', () => {
+  it('maps every retained sub-quest status to a plan status and back', () => {
+    for (const status of SUBQUEST_STATUS_VALUES) {
+      const planStatus = SUB_QUEST_TO_PLAN_STATUS[status];
+      if (planStatus === null) expect(status).toBe('deleted');
+      else expect(PLAN_TO_SUB_QUEST_STATUS[planStatus]).toBe(status);
+    }
+  });
+
+  it('displays skipped like cancelled and gives every plan status a label', () => {
+    expect(SUB_QUEST_TO_PLAN_STATUS.skipped).toBe('cancelled');
+    for (const status of PLAN_ITEM_STATUSES) expect(PLAN_STATUS_DISPLAY[status].label).not.toBe('');
   });
 });

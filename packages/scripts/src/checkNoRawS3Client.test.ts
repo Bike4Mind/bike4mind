@@ -27,6 +27,8 @@ const ALLOWLIST = new Set([
   'packages/scripts/testEmailIngestLambda.ts',
   'packages/scripts/datalake/ingest-pdf-datalake.ts',
   'packages/scripts/src/uploadTavernIcons.ts',
+  // Test-only: re-signs past the door tests' client-s3 mock, which createS3Client would pick up; sets WHEN_REQUIRED itself
+  'apps/client/server/files/__tests__/presignPutForReal.ts',
 ]);
 
 // This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather

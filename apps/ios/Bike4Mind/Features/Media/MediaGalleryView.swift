@@ -8,7 +8,7 @@ struct MediaGalleryView: View {
   var body: some View {
     GalleryContent(
       api: services.media, onLatestImage: services.latestGeneration, studio: services.studio,
-      tracker: services.studioTracker)
+      tracker: services.studioTracker, models: services.studioModels)
   }
 }
 
@@ -27,11 +27,11 @@ private struct GalleryContent: View {
 
   init(
     api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
-    tracker: GenerationTracker
+    tracker: GenerationTracker, models: StudioModelCatalog
   ) {
     _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
     _exporter = State(initialValue: MediaExportPresenter(media: api))
-    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
+    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker, catalog: models))
     self.tracker = tracker
   }
 
@@ -170,12 +170,8 @@ private struct MediaCell: View {
   private var tile: some View {
     switch item.kind {
     case .image:
-      AsyncImage(url: item.url) { phase in
-        switch phase {
-        case .success(let image): image.resizable().scaledToFill()
-        case .failure: placeholder("photo")
-        default: Tokens.Palette.groupedBackground
-        }
+      CachedThumbnail(url: item.url) { failed in
+        if failed { placeholder("photo") } else { Tokens.Palette.groupedBackground }
       }
     case .video: placeholder("play.rectangle.fill")
     case .audio: placeholder("waveform")

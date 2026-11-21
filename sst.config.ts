@@ -113,6 +113,15 @@ export default $config({
       },
     });
 
+    // Must run before ./infra loads: infra/mailTransport.ts reads the mail env at module top.
+    const { applyPersonalMailDefaults } = await import('./infra/personalMailDefaults');
+    await applyPersonalMailDefaults({
+      stage: $app.stage,
+      env: process.env,
+      appName: $app.name,
+      lookup: name => aws.ssm.getParameter({ name }).then(result => result.value),
+    });
+
     const {
       fabFileBucket,
       generatedImagesBucket,
@@ -210,7 +219,9 @@ export default $config({
     // overlay pattern. Retry-exhaustion failures are still alarmed to Slack via the
     // retained tavern-heartbeat DLQ alarm (infra/dlqAlarms.ts).
     const { contributeInfra: contributeTavernInfra } = await import('./infra/premium-generated/tavern-infra.generated');
-    contributeTavernInfra({
+    // A variable, not an inline literal: an overlay whose params type does not declare eventBus yet
+    // would reject the extra key on a fresh object literal (excess-property check).
+    const tavernInfraContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
@@ -222,7 +233,9 @@ export default $config({
       routePrefix,
       appFilesBucket,
       isSharedRouterConsumer,
-    });
+      eventBus,
+    };
+    contributeTavernInfra(tavernInfraContext);
 
     // OptiHashi premium infra: compute alarm topics, MetricAlarms, run-poller cron.
     // Handler path uses generated stub (server/premium-generated/qworkRunPoller.ts) so

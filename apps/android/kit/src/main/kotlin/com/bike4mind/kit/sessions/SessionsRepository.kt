@@ -27,6 +27,9 @@ class SessionsRepository(private val sessions: SessionsApi, private val ai: AIAp
                 status = QuestStatus.from(it.status),
                 type = it.type,
                 errorCode = it.errorCode,
+                pendingAction = it.pendingAction?.let { action ->
+                    PendingAction(action.tool, PendingAction.display(action.params), action.ts.toLong())
+                },
             )
         }
 

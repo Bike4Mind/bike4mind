@@ -30,7 +30,7 @@ Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become t
 
 If you rotate `SECRET_ENCRYPTION_KEY`, keep the old key configured permanently as `SECRET_ENCRYPTION_KEY_PREVIOUS` so existing ciphertext stays readable. Rotation is not automated.
 
-The three secrets are the **only values you must change** - everything else in the template already points at the bundled services.
+The six secrets (these three plus `CHAT_COMPLETION_INTERNAL_SECRET`, `INTERNAL_WS_SECRET` and `INTERNAL_S3_WEBHOOK_SECRET`) are the **only values you must change**, and the app refuses to run while any of them still holds its `change-me` template value - everything else in the template already points at the bundled services.
 
 ## Local infra backends (bundled services)
 
@@ -69,6 +69,7 @@ Each of these is fully optional; leaving the variables blank disables the integr
 | Okta | `OKTA_CLIENT_ID`, `OKTA_CLIENT_SECRET`, `OKTA_AUDIENCE` | Enterprise SSO |
 | Stripe | `STRIPE_*` | Billing (hosted-service feature; not needed for self-host - credit metering is off by default) |
 | Slack | `SLACK_*` | Slack integration |
+| Signing secret | `HMAC_SIGNING_SECRET`, `HMAC_SIGNING_SECRET_PREVIOUS` | A dedicated key for signed image URLs and hashed identifiers (`openssl rand -hex 32`). While `HMAC_SIGNING_SECRET` is blank, `SECRET_ENCRYPTION_KEY` is used. Put the outgoing secret in `HMAC_SIGNING_SECRET_PREVIOUS` and keep it for at least 90 days, the telemetry retention window |
 
 ## Gotchas
 

@@ -65,6 +65,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/versions',
   },
+  createAssistantInstruction: {
+    method: 'POST',
+    path: '/api/v1/assistant/instructions',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -136,6 +140,10 @@ export const operations = {
   deleteArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}',
+  },
+  deleteAssistantInstruction: {
+    method: 'DELETE',
+    path: '/api/v1/assistant/instructions/{id}',
   },
   deleteFile: {
     method: 'DELETE',
@@ -301,6 +309,10 @@ export const operations = {
     method: 'GET',
     path: '/api/sessions/{id}',
   },
+  getSessionById: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}',
+  },
   getSessionMessage: {
     method: 'GET',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
@@ -341,6 +353,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts',
   },
+  listAssistantInstructions: {
+    method: 'GET',
+    path: '/api/v1/assistant/instructions',
+  },
   listBriefs: {
     method: 'GET',
     path: '/api/v1/briefs',
@@ -364,6 +380,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listHandoffDevices: {
+    method: 'GET',
+    path: '/api/v1/handoff-devices',
   },
   listImageModels: {
     method: 'GET',
@@ -489,6 +509,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
+  replyToBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
+  },
   republishArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/republish',
@@ -524,6 +548,10 @@ export const operations = {
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
+  },
+  sendSessionHandoff: {
+    method: 'POST',
+    path: '/api/v1/session-handoffs',
   },
   startAgentExecution: {
     method: 'POST',

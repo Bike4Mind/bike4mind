@@ -104,6 +104,19 @@ describe('ViewSwitcher', () => {
     expect(el('orchestrator-view-option-table').querySelectorAll('svg')).toHaveLength(1);
   });
 
+  it('offers the Presenter switch, and Reset leaves it on', async () => {
+    const onToggle = vi.fn();
+    await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} presenter={{ on: true, onToggle }} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    const toggle = el('orchestrator-presenter-toggle');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    act(() => el('orchestrator-view-reset').click());
+    expect(onToggle).not.toHaveBeenCalled();
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-presenter-toggle').click());
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+  });
+
   it('offers the Focus switch on every view and toggles it from the menu and the shortcut', async () => {
     const onToggle = vi.fn();
     await themed.render(<ViewSwitcher view="board" onViewChange={onViewChange} focus={{ on: false, onToggle }} />);

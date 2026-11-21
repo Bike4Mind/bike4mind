@@ -7,11 +7,13 @@ const mocks = vi.hoisted(() => ({
   findDueForReminder: vi.fn(),
   findPendingReview: vi.fn(),
   markAlerted: vi.fn(async () => undefined),
+  markAlertQueued: vi.fn(async () => undefined),
   markReminded: vi.fn(async () => undefined),
   findDueForEscalation: vi.fn(),
   escalate: vi.fn(),
   findEscalationUnalerted: vi.fn(),
   markEscalationAlerted: vi.fn(async () => undefined),
+  markEscalationAlertQueued: vi.fn(async () => undefined),
   findDueForEscalationReminder: vi.fn(),
   countPendingReview: vi.fn(async () => 1),
   markEscalationReminded: vi.fn(async () => undefined),
@@ -28,11 +30,13 @@ vi.mock('@bike4mind/database', () => ({
     findDueForReminder: mocks.findDueForReminder,
     findPendingReview: mocks.findPendingReview,
     markAlerted: mocks.markAlerted,
+    markAlertQueued: mocks.markAlertQueued,
     markReminded: mocks.markReminded,
     findDueForEscalation: mocks.findDueForEscalation,
     escalate: mocks.escalate,
     findEscalationUnalerted: mocks.findEscalationUnalerted,
     markEscalationAlerted: mocks.markEscalationAlerted,
+    markEscalationAlertQueued: mocks.markEscalationAlertQueued,
     findDueForEscalationReminder: mocks.findDueForEscalationReminder,
     countPendingReview: mocks.countPendingReview,
     markEscalationReminded: mocks.markEscalationReminded,
@@ -124,7 +128,8 @@ describe('imageModerationReviewSweep handler', () => {
     expect(mocks.escalate).toHaveBeenCalledExactlyOnceWith('inc-3', { trigger: 'timeout' }, expect.any(Date));
     expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
       'second-one@example.com',
-      expect.objectContaining({ subject: 'Moderation review escalated' })
+      expect.objectContaining({ subject: 'Moderation review escalated' }),
+      { kind: 'incidentAlert', incidentId: 'inc-3', alert: 'escalation' }
     );
     expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('inc-3', expect.any(Date));
     expect(result).toMatchObject({ escalated: 1, escalationAlerted: 1 });

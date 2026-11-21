@@ -175,6 +175,14 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
+  it('rejects every request while the webhook secret is the example placeholder', async () => {
+    process.env.INTERNAL_S3_WEBHOOK_SECRET = 'change-me-openssl-rand-hex-32';
+    const res = makeRes();
+    await handler(makeReq('change-me-openssl-rand-hex-32', 'uploads/a.pdf'), res);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
   it('accepts a Bearer-prefixed secret', async () => {
     const res = makeRes();
     await handler(makeReq('Bearer secret-token', 'uploads/a.pdf'), res);

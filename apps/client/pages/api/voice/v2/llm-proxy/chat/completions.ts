@@ -38,6 +38,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';

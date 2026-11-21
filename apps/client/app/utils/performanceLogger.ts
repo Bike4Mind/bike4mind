@@ -14,35 +14,44 @@ const isVerbosePerformance = (() => {
 // Runtime configuration (can be changed dynamically)
 let runtimeVerbosePerformance = isVerbosePerformance;
 
+declare global {
+  interface Window {
+    enablePerfLogs?: () => void;
+    disablePerfLogs?: () => void;
+    togglePerfLogs?: () => boolean;
+    isPerfLogsEnabled?: () => boolean;
+  }
+}
+
 interface PerformanceLogger {
-  log: (...args: any[]) => void;
-  info: (...args: any[]) => void;
-  warn: (...args: any[]) => void;
-  error: (...args: any[]) => void;
+  log: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
   group: (label: string) => void;
   groupEnd: () => void;
   time: (label: string) => void;
   timeEnd: (label: string) => void;
-  trace: (...args: any[]) => void;
+  trace: (...args: unknown[]) => void;
 }
 
 export const perfLogger: PerformanceLogger = {
-  log: (...args: any[]) => {
+  log: (...args: unknown[]) => {
     if (runtimeVerbosePerformance) {
       console.log(...args);
     }
   },
-  info: (...args: any[]) => {
+  info: (...args: unknown[]) => {
     if (runtimeVerbosePerformance) {
       console.info(...args);
     }
   },
-  warn: (...args: any[]) => {
+  warn: (...args: unknown[]) => {
     if (runtimeVerbosePerformance) {
       console.warn(...args);
     }
   },
-  error: (...args: any[]) => {
+  error: (...args: unknown[]) => {
     // Always show errors, even in production
     console.error(...args);
   },
@@ -66,7 +75,7 @@ export const perfLogger: PerformanceLogger = {
       console.timeEnd(label);
     }
   },
-  trace: (...args: any[]) => {
+  trace: (...args: unknown[]) => {
     if (runtimeVerbosePerformance) {
       console.trace(...args);
     }
@@ -96,10 +105,10 @@ export const togglePerformanceLogging = () => {
 
 // Global window function for runtime control (development only)
 if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
-  (window as any).enablePerfLogs = enablePerformanceLogging;
-  (window as any).disablePerfLogs = disablePerformanceLogging;
-  (window as any).togglePerfLogs = togglePerformanceLogging;
-  (window as any).isPerfLogsEnabled = isPerformanceLoggingEnabled;
+  window.enablePerfLogs = enablePerformanceLogging;
+  window.disablePerfLogs = disablePerformanceLogging;
+  window.togglePerfLogs = togglePerformanceLogging;
+  window.isPerfLogsEnabled = isPerformanceLoggingEnabled;
 }
 
 export default perfLogger;

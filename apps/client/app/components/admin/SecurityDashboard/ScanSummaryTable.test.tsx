@@ -1,3 +1,4 @@
+import { CloudScanRequestProvider } from './CloudScanRequest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -25,6 +26,13 @@ const mocks = vi.hoisted(() => ({
   currentUser: { isAdmin: true } as Record<string, unknown>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({
+  SECURITY_DASHBOARD_CLOUD_QUERY_KEY: ['admin', 'security-dashboard', 'cloud'],
+  useSecurityDashboardCloud: () => ({
+    data: {
+      checkedAt: mocks.overview().data?.checks.find((check: { id: string }) => check.id === 'cloud')?.lastCheckedAt,
+    },
+    isLoading: false,
+  }),
   SECURITY_DASHBOARD_PROWLER_QUERY_KEY: ['admin', 'security-dashboard', 'cloud-prowler'],
   useSecurityDashboardOverview: mocks.overview,
   useSecurityScanSchedules: mocks.schedules,
@@ -132,9 +140,11 @@ const renderTable = (onSelect = vi.fn()) => {
   render(
     <QueryClientProvider client={client}>
       <ProwlerScanRequestProvider>
-        <CssVarsProvider theme={theme}>
-          <ScanSummaryTable activeScan="web" onSelect={onSelect} />
-        </CssVarsProvider>
+        <CloudScanRequestProvider>
+          <CssVarsProvider theme={theme}>
+            <ScanSummaryTable activeScan="web" onSelect={onSelect} />
+          </CssVarsProvider>
+        </CloudScanRequestProvider>
       </ProwlerScanRequestProvider>
     </QueryClientProvider>
   );
@@ -285,7 +295,7 @@ describe('ScanSummaryTable', () => {
 
     it.each([
       ['web', mocks.runWeb, 'Website scan queued. Results appear here when it finishes.'],
-      ['cloud', mocks.runCloud, 'Cloud baseline scan finished.'],
+      ['cloud', mocks.runCloud, 'Cloud baseline scan queued. Results appear here when it finishes.'],
       ['prowler', mocks.runProwler, 'Prowler scan queued. Results arrive in about 10 minutes.'],
       ['active-defense', mocks.runProbes, 'Active defense probes started.'],
     ] as const)('starts the %s scan with its own request without selecting the row', (id, runner, message) => {
@@ -295,7 +305,8 @@ describe('ScanSummaryTable', () => {
       expect(runner.mutate).toHaveBeenCalledTimes(1);
       expect(onSelect).not.toHaveBeenCalled();
       act(() => {
-        if (id === 'prowler') runner.mutate.mock.calls[0][1].onSuccess({ queued: true, environment: 'fixture' });
+        if (id === 'cloud') runner.mutate.mock.calls[0][1].onSuccess({ canRun: true, queued: true });
+        else if (id === 'prowler') runner.mutate.mock.calls[0][1].onSuccess({ queued: true, environment: 'fixture' });
         else runner.mutate.mock.calls[0][1].onSuccess();
       });
       expect(toast.success).toHaveBeenCalledWith(message);

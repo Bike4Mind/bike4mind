@@ -2,6 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import { REPLY_STATS } from './replyStats';
 import { isSettingsSection, SETTINGS_SECTIONS, SettingsScreen, type SettingsSection } from './SettingsPanel';
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
@@ -52,9 +53,9 @@ describe('the Settings screen', () => {
     expect(groups).toHaveLength(5);
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
-      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
       ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
-      ['local-context', 'token-rate', 'curated-list'],
+      ['local-context', 'reply-stats', 'curated-list'],
       ['local-history', 'local-data-export'],
       ['server', 'updates'],
     ];
@@ -65,6 +66,14 @@ describe('the Settings screen', () => {
         expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
       }
     });
+  });
+
+  it('offers the notify scope next to the chime, agents only by default', () => {
+    expect(html).toContain('data-testid="settings-notify-scope-group"');
+    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(html).toContain('Agents only');
+    expect(html).toContain('All sessions');
   });
 
   it('keeps advanced worker settings behind an expandable disclosure', () => {
@@ -136,8 +145,12 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
   });
 
-  it('offers the self-hosted model speed preference', () => {
-    expect(html).toContain('data-testid="settings-token-rate-switch"');
+  it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
+    expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
+    for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(html).toContain('Share of draft tokens accepted');
+    expect(html).toContain('Draft acceptance is reported by llama-server');
+    expect(html).not.toContain('settings-token-rate-switch');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {

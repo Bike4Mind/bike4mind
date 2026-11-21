@@ -174,6 +174,22 @@ describe('runDueResearchSchedules', () => {
     expect(summary.skipped).toBe(1);
   });
 
+  it('records a paused periodic start as skipped and writes the next regular slot, not the lease or a retry', async () => {
+    const { adapters, configs, runs, enqueue } = makeAdapters({ due: [scheduledConfig({ schedulePaused: true })] });
+
+    const summary = await runDueResearchSchedules(adapters);
+
+    expect(runs.createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
+      'config-1',
+      'daily',
+      { outcome: 'skipped', at: NOW, reason: 'schedule_paused' },
+      new Date('2026-03-11T09:00:00.000Z')
+    );
+    expect(summary).toEqual({ claimed: 1, started: 0, skipped: 1, failed: 0 });
+  });
+
   it('lets the next due run go ahead once the queue drops below the limit', async () => {
     const { adapters, runs } = makeAdapters({ pending: { 'lake-1': 9 } });
 
