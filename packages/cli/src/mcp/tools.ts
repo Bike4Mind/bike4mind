@@ -131,7 +131,8 @@ export const TOOL_META: ToolMeta[] = [
     name: 'list_lakes',
     title: 'List data lakes',
     description:
-      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it.",
+      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it. " +
+      'The research config and proposal tools need canManage: true on the lake.',
     scope: 'datalake:read',
   },
   { name: 'list_files', title: 'List files', description: "Search the caller's files.", scope: 'files:read' },
@@ -492,6 +493,7 @@ function lakeSummary(l: RawDataLake) {
     builtIn: l.built_in,
     status: l.status,
     fileCount: l.file_count,
+    canManage: l.can_manage,
   };
 }
 
