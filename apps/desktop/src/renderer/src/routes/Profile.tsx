@@ -37,7 +37,7 @@ function SignInPrompt({ onBack }: { onBack?: () => void }) {
         Credit history belongs to an account, so there is nothing to show until this app is signed in to one.
       </Typography>
       {onBack && (
-        <Button size="sm" variant="soft" color="neutral" onClick={onBack} data-testid="profile-back-btn">
+        <Button size="sm" variant="outlined" color="neutral" onClick={onBack} data-testid="profile-back-btn">
           Back
         </Button>
       )}

@@ -226,7 +226,7 @@ export function PullDialog({
           >
             Download {formatBytes(build.sizeBytes)}
           </Button>
-          <Button variant="plain" color="neutral" onClick={onClose} data-testid="models-pull-dialog-cancel-btn">
+          <Button variant="outlined" color="neutral" onClick={onClose} data-testid="models-pull-dialog-cancel-btn">
             Not now
           </Button>
         </DialogActions>

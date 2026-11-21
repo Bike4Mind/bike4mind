@@ -276,6 +276,7 @@ export function OrchestratorStage({
       agents={quest}
       spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
+      look={view === 'office' ? 'office' : 'tavern'}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);

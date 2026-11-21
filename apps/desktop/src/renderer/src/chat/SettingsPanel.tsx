@@ -449,6 +449,7 @@ function LocalDataExport() {
       <Button
         size="sm"
         variant="outlined"
+        color="neutral"
         loading={pending}
         onClick={() => void run()}
         data-testid="settings-export-local-btn"

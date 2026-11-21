@@ -68,6 +68,11 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <BoardIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#eef0e6', border: '#aebbab' },
+      dark: { background: '#222d2a', border: '#4c5f58' },
+      radius: '2px',
+    },
   },
   board: {
     label: 'Board',

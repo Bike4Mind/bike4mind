@@ -357,7 +357,7 @@ function ApprovalPrompt({
             {!noAlways && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 onClick={() => onRespond(approvalId, { decision: 'always' })}
                 data-testid="chat-tool-approve-always"
@@ -368,7 +368,7 @@ function ApprovalPrompt({
             {!noAlways && call.approvalProjectRules && call.approvalProjectRules.length > 0 && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 title={call.approvalProjectRules.join('\n')}
                 onClick={() => onRespond(approvalId, { decision: 'always', project: true })}
@@ -380,7 +380,7 @@ function ApprovalPrompt({
             {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 title={call.approvalRules.join('\n')}
                 onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
@@ -391,7 +391,7 @@ function ApprovalPrompt({
             )}
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               onClick={() => onRespond(approvalId, { decision: 'deny' })}
               data-testid="chat-tool-deny"

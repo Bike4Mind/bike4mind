@@ -124,7 +124,7 @@ export function SendFeedbackDialog({ onClose }: { onClose: () => void }) {
               }}
             >
               <Button
-                variant="plain"
+                variant="outlined"
                 color="neutral"
                 disabled={sending}
                 onClick={onClose}

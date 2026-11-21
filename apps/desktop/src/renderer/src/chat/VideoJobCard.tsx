@@ -218,7 +218,8 @@ export function VideoJobCard({ job, actions }: { job: ChatVideoJob; actions: Vid
             </Button>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               onClick={() => void copyLink()}
               data-testid="video-job-card-copy-link-btn"
             >

@@ -107,7 +107,7 @@ function HeldRelayRow({
         <Stack direction="row" spacing={1} justifyContent="flex-end">
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={busy}
             onClick={() => void resolve(false)}
