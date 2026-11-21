@@ -301,7 +301,7 @@ describe('POST /api/artifacts API key scope posture', () => {
   it.each([
     ['a notebooks:write key', { scopes: ['notebooks:write'] }],
     ['an admin key', { scopes: ['admin:*'] }],
-    ['a legacy read-only key', { scopes: ['notebooks:read'] }],
+    ['a legacy read-only key', { scopes: ['notebooks:read'], createdAt: new Date('2024-01-01') }],
     ['a JWT caller', undefined],
   ])('creates the artifact for %s', async (_label, apiKeyInfo) => {
     const { req, res } = postWithKey(apiKeyInfo);
