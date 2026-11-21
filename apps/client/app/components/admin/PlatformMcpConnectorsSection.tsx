@@ -412,7 +412,6 @@ function EditDetailsDialog({ connection, onClose }: { connection: Connection; on
             scope="platform"
             testIdPrefix="platform-mcp-details"
             size="md"
-            autoFocus
           />
         </Stack>
         {error && <ErrorState message={error} onRetry={save} retrying={update.isPending} />}
