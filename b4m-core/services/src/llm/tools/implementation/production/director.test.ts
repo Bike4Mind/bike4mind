@@ -367,17 +367,20 @@ describe('production director tools', () => {
     ).toMatch(/^Error: there is no current shot with id Editor Packshot to keep .*shot-1, shot-2, shot-3/);
     expect(harness.composition().shots).toEqual(before);
 
-    const result = JSON.parse(
-      await run(productionStoryboardTool, harness, {
-        compositionId: COMPOSITION_ID,
-        shots: [
-          { keep: 'shot-1' },
-          { keep: 'shot-2', voiceLine: 'Meet it.' },
-          { keep: 'shot-3', voiceLine: 'Shop the' },
-          { title: 'CTA end', prompt: 'The bottle beside a shop sign', durationSeconds: 2, voiceLine: 'spring sale.' },
-        ],
-      })
+    const reworded = {
+      compositionId: COMPOSITION_ID,
+      shots: [
+        { keep: 'shot-1' },
+        { keep: 'shot-2', voiceLine: 'Meet it.' },
+        { keep: 'shot-3', voiceLine: 'Shop the' },
+        { title: 'CTA end', prompt: 'The bottle beside a shop sign', durationSeconds: 2, voiceLine: 'spring sale.' },
+      ],
+    };
+    expect(await run(productionStoryboardTool, harness, reworded)).toMatch(
+      /^Error: this storyboard no longer says these current voice lines word for word: "Meet the bottle.", "Shop now."/
     );
+    expect(harness.composition().shots).toEqual(before);
+    const result = JSON.parse(await run(productionStoryboardTool, harness, { ...reworded, rewriteLines: true }));
     expect(result.shots.map((shot: { takesKept?: boolean }) => shot.takesKept ?? false)).toEqual([
       true,
       true,
@@ -389,7 +392,9 @@ describe('production director tools', () => {
       { shot: 'shot-2', was: 'Meet the bottle.', now: 'Meet it.' },
       { shot: 'shot-3', was: 'Shop now.', now: 'Shop the' },
     ]);
+    expect(result.linesRemoved).toEqual(['Meet the bottle.', 'Shop now.']);
     expect(result.next).toContain('linesChanged');
+    expect(result.next).toContain('linesRemoved');
     const after = harness.composition().shots;
     expect(after.slice(0, 3).map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])).toEqual(
       before.map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])
@@ -513,6 +518,7 @@ describe('production director tools', () => {
       shots: STORYBOARD.shots.map((shot, index) =>
         index === 0 ? { ...shot, durationSeconds: 20 } : { ...shot, voiceLine: 'Shorter.' }
       ),
+      rewriteLines: true,
     };
 
     const refused = await run(productionStoryboardTool, harness, retimed);
@@ -614,8 +620,44 @@ describe('production director tools', () => {
     const rewritten = {
       ...squeezed,
       shots: squeezed.shots.map((shot, index) => (index === 0 ? { ...shot, voiceLine: 'Hi.' } : shot)),
+      rewriteLines: true,
     };
     expect(await run(productionStoryboardTool, harness, rewritten)).not.toMatch(/^Error/);
+  });
+
+  it('lets a line be split over shots word for word without rewriteLines', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const split = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [
+          { keep: 'shot-1', voiceLine: 'Spring is' },
+          { keep: 'shot-2', voiceLine: 'here! Meet the bottle.' },
+          { keep: 'shot-3' },
+        ],
+      })
+    );
+    expect(split.linesRemoved).toBeUndefined();
+    expect(split.linesChanged).toHaveLength(2);
+  });
+
+  it('refuses a second reorder in one run, so a repeated swap does not undo the first', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const swap = { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-1' }, { keep: 'shot-3' }, { keep: 'shot-2' }] };
+    const titles = () => harness.composition().shots.map(shot => shot.title);
+    const original = titles();
+
+    expect(await run(productionStoryboardTool, harness, swap)).not.toMatch(/^Error/);
+    const swapped = titles();
+    expect(swapped).toEqual([original[0], original[2], original[1]]);
+
+    expect(await run(productionStoryboardTool, harness, swap)).toMatch(/^Error: this run already moved the shots/);
+    expect(titles()).toEqual(swapped);
+    const retime = {
+      compositionId: COMPOSITION_ID,
+      shots: [{ keep: 'shot-1' }, { keep: 'shot-2' }, { keep: 'shot-3' }],
+    };
+    expect(await run(productionStoryboardTool, harness, retime)).not.toMatch(/^Error/);
   });
 
   it('keeps stills on the timeline when animate is false', async () => {

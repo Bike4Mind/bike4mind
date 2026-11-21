@@ -69,6 +69,13 @@ const schema = z.object({
     'The product photo (a Files id) to keep in every shot; saved to the brand kit.'
   ),
   shots: z.array(ShotArg).min(1).max(STORYBOARD_MAX_SHOTS),
+  rewriteLines: z
+    .boolean()
+    .optional()
+    .describe(
+      'Only when the user asked to reword or remove current voice lines. Without it every current line must ' +
+        'still be said word for word, though it may be split over shots.'
+    ),
   replace: z
     .boolean()
     .optional()
@@ -187,6 +194,36 @@ function previousShot(
   return current.find(shot => normalizedPrompt(shot.prompt) === wanted) ?? atIndex;
 }
 
+const spokenWords = (line: string | undefined): string =>
+  (line ?? '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}']+/gu, ' ')
+    .trim();
+
+/** Current voice lines whose words are no longer said, in order, anywhere in the new storyboard. */
+function linesDropped(current: readonly StudioShot[], next: readonly ResolvedShot[]): string[] {
+  const said = ` ${next
+    .map(shot => spokenWords(shot.voiceLine))
+    .filter(Boolean)
+    .join(' ')} `;
+  return current.flatMap(shot => {
+    const words = spokenWords(shot.voiceLine);
+    return words && !said.includes(` ${words} `) ? [shot.voiceLine ?? ''] : [];
+  });
+}
+
+/** True when kept shots appear in a different order relative to each other than they do now. */
+function reordersKeptShots(current: readonly StudioShot[], sources: readonly (StudioShot | undefined)[]): boolean {
+  const positions = sources.flatMap(source => (source ? [current.indexOf(source)] : []));
+  return positions.some((position, index) => index > 0 && position < positions[index - 1]);
+}
+
+/**
+ * Runs that already moved shots, keyed by the run's config (built once per run). A director that loses track of
+ * its own storyboard call repeats it, and repeating a swap undoes it, so a second reorder in one run is refused.
+ */
+const reorderedRuns = new WeakMap<object, true>();
+
 export const productionStoryboardTool: ToolDefinition = {
   name: 'production_storyboard',
   implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
@@ -200,6 +237,31 @@ export const productionStoryboardTool: ToolDefinition = {
           const twice = keeps.find((id, index) => keeps.indexOf(id) !== index);
           if (twice) throw new ProductionToolError(`${twice} is kept twice; keep each shot once.`);
           const resolved = args.shots.map(shot => resolveShot(shot, current.shots));
+          const reorders = reordersKeptShots(
+            current.shots,
+            resolved.map(({ source }) => source)
+          );
+          if (reorders && reorderedRuns.has(config)) {
+            throw new ProductionToolError(
+              'this run already moved the shots with production_storyboard, so they are now in this order: ' +
+                `${current.shots.map(shot => `${shot.id} "${shot.title}"`).join(', ')}. Calling it again with the ` +
+                'same moves would undo them. Do not move shots again this run; carry on from this order.'
+            );
+          }
+          const dropped = args.rewriteLines
+            ? []
+            : linesDropped(
+                current.shots,
+                resolved.map(({ shot }) => shot)
+              );
+          if (dropped.length > 0) {
+            throw new ProductionToolError(
+              `this storyboard no longer says these current voice lines word for word: ${dropped
+                .map(line => `"${line}"`)
+                .join(', ')}. Keep every line the user did not ask to change, word for word (you may split one ` +
+                'over shots). If the user asked to reword or remove them, pass rewriteLines: true.'
+            );
+          }
           const totalMs = resolved.reduce((sum, { shot }) => sum + shot.durationMs, 0);
           if (totalMs > STUDIO_TIMELINE_LIMITS.maxDurationMs) {
             throw new ProductionToolError('the shots run longer than a production can.');
@@ -269,6 +331,13 @@ export const productionStoryboardTool: ToolDefinition = {
                 },
               }),
           });
+          if (reorders) reorderedRuns.set(config, true);
+          const linesRemoved = args.rewriteLines
+            ? linesDropped(
+                current.shots,
+                resolved.map(({ shot }) => shot)
+              )
+            : [];
           // A kept shot whose voice line changed: the user's own words may be gone, so the result names them.
           const linesChanged = resolved.flatMap(({ shot, source }) =>
             source?.voiceLine && source.voiceLine !== shot.voiceLine
@@ -290,12 +359,14 @@ export const productionStoryboardTool: ToolDefinition = {
             totalSeconds: totalMs / 1000,
             ...(lost.length > 0 && { takesDropped: lost }),
             ...(linesChanged.length > 0 && { linesChanged }),
+            ...(linesRemoved.length > 0 && { linesRemoved }),
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
               'unless it needs a clip.' +
               (linesChanged.length > 0
                 ? ' Tell the user each line in linesChanged as it now reads; never say a changed line was kept.'
                 : '') +
+              (linesRemoved.length > 0 ? ' Tell the user each line in linesRemoved is no longer said.' : '') +
               (staleCut
                 ? " The old cut's voiceover and sound effects were cleared: call production_add_audio again with " +
                   'them, and with the music, which is remade only if the cut grew past it.'
