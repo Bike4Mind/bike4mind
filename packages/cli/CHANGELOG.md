@@ -1,5 +1,25 @@
 # @bike4mind/cli
 
+## 4.9.0
+
+### Minor Changes
+
+- [#7933](https://github.com/Bike4Mind/bike4mind/pull/7933) [`1aa4837`](https://github.com/Bike4Mind/bike4mind/commit/1aa48370bae652aa38e9168be06dbda93358b965) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in fullscreen terminal rendering
+
+- [#7950](https://github.com/Bike4Mind/bike4mind/pull/7950) [`8b06612`](https://github.com/Bike4Mind/bike4mind/commit/8b0661274bb784d7e2c7e5596b4bc0c13412cd6e) Thanks [@poysama](https://github.com/poysama)! - classify a moderated chat turn as content_blocked
+
+- [#8066](https://github.com/Bike4Mind/bike4mind/pull/8066) [`c42dbc5`](https://github.com/Bike4Mind/bike4mind/commit/c42dbc5eece3a386388916a5240fa34560f789ac) Thanks [@jjmarfa](https://github.com/jjmarfa)! - write_todos on the shared plan schema with an Ink plan block
+
+- [#8081](https://github.com/Bike4Mind/bike4mind/pull/8081) [`c26dfbd`](https://github.com/Bike4Mind/bike4mind/commit/c26dfbd83dfa1102d716242200b4a95c9571b148) Thanks [@ken-b4m](https://github.com/ken-b4m)! - let Spaces be a listing audience
+
+- [#8182](https://github.com/Bike4Mind/bike4mind/pull/8182) [`693ce9e`](https://github.com/Bike4Mind/bike4mind/commit/693ce9e68710b1675531f2f056ed332a0cd4a88f) Thanks [@ken-b4m](https://github.com/ken-b4m)! - MCP tools to set up and maintain lake research
+
+### Patch Changes
+
+- [#7881](https://github.com/Bike4Mind/bike4mind/pull/7881) [`5fbab72`](https://github.com/Bike4Mind/bike4mind/commit/5fbab7254c6c4767b420bf87c67b591e31b0a771) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - show the real site on web search source chips
+
+- [#7929](https://github.com/Bike4Mind/bike4mind/pull/7929) [`b394721`](https://github.com/Bike4Mind/bike4mind/commit/b394721a8a5413aac2e59a51f0faffa42de58615) Thanks [@juicewaa](https://github.com/juicewaa)! - drop unused picomatch dependency
+
 ## 4.8.0
 
 ### Minor Changes
