@@ -81,6 +81,26 @@ describe('DataLakeResearchConfigRepository', () => {
     expect(listed.map(c => c.name)).toEqual(['newer', 'older']);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const name of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createConfig(input({ name }))).id);
+    await DataLakeResearchConfigModel.collection.updateMany(
+      { dataLakeId: LAKE },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   describe('lake scoping', () => {
     it('will not read a config through another lake id', async () => {
       const created = await repo.createConfig(input());

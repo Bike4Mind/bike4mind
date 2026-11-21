@@ -696,7 +696,7 @@ export interface SettleResearchRunInput {
 export interface IDataLakeResearchConfigRepository extends IBaseRepository<IDataLakeResearchConfigDocument> {
   createConfig(input: CreateDataLakeResearchConfigInput): Promise<IDataLakeResearchConfigDocument>;
   /** One lake's saved configs, newest first. */
-  listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchConfigDocument[]>;
   /**
    * Fetch a config only if it belongs to the named lake. Scoped rather than a bare findById so a
    * caller cannot reach another lake's config by id through a route that only gated the lake.
@@ -741,7 +741,7 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
     input: Omit<IDataLakeResearchRun, 'status' | 'spentMicroUsd' | 'totals'>
   ): Promise<IDataLakeResearchRunDocument>;
   /** One lake's run history, newest first. */
-  listByLake(dataLakeId: string, options?: { limit?: number }): Promise<IDataLakeResearchRunDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchRunDocument[]>;
   findByIdInLake(id: string, dataLakeId: string): Promise<IDataLakeResearchRunDocument | null>;
   /**
    * Atomically move a QUEUED run to `running`, returning null when it was not queued. The whole
@@ -778,4 +778,10 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    */
   countActiveByLake(dataLakeId: string): Promise<number>;
   deleteForLake(dataLakeId: string): Promise<number>;
+}
+
+/** Keyset window over `{createdAt: -1, _id: -1}`: `after` is the last row of the previous page. */
+export interface ResearchKeysetPage {
+  limit?: number;
+  after?: { createdAt: Date; id: string };
 }

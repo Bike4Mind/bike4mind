@@ -77,6 +77,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/completion-runs',
   },
+  createDataLakeResearchConfig: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/research/configs',
+  },
   createDecision: {
     method: 'POST',
     path: '/api/v1/decisions',
@@ -133,6 +137,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/voice/sessions',
   },
+  decideDataLakeProposal: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/proposals/{proposal_id}',
+  },
   deleteAgent: {
     method: 'DELETE',
     path: '/api/v1/agents/{id}',
@@ -144,6 +152,10 @@ export const operations = {
   deleteAssistantInstruction: {
     method: 'DELETE',
     path: '/api/v1/assistant/instructions/{id}',
+  },
+  deleteDataLakeResearchConfig: {
+    method: 'DELETE',
+    path: '/api/v1/data-lakes/{id}/research/configs/{config_id}',
   },
   deleteFile: {
     method: 'DELETE',
@@ -265,9 +277,21 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}',
   },
+  getDataLakeConfigHistory: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/config-history',
+  },
   getDataLakeFile: {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
+  },
+  getDataLakeResearchConfig: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/research/configs/{config_id}',
+  },
+  getDataLakeResearchRun: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/research/runs/{run_id}',
   },
   getFile: {
     method: 'GET',
@@ -364,6 +388,18 @@ export const operations = {
   listCreditTransactions: {
     method: 'GET',
     path: '/api/v1/credits/transactions',
+  },
+  listDataLakeProposals: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/proposals',
+  },
+  listDataLakeResearchConfigs: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/research/configs',
+  },
+  listDataLakeResearchRuns: {
+    method: 'GET',
+    path: '/api/v1/data-lakes/{id}/research/runs',
   },
   listDataLakes: {
     method: 'GET',
@@ -557,6 +593,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agent-executions',
   },
+  startDataLakeResearchRun: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/research/runs',
+  },
   submitSkillMarketListingVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/listings/{id}/versions',
@@ -584,6 +624,10 @@ export const operations = {
   updateArtifact: {
     method: 'PATCH',
     path: '/api/v1/artifacts/{id}',
+  },
+  updateDataLakeResearchConfig: {
+    method: 'PATCH',
+    path: '/api/v1/data-lakes/{id}/research/configs/{config_id}',
   },
   updateFile: {
     method: 'PATCH',

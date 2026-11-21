@@ -1,6 +1,7 @@
 import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchKeysetPage,
   ResearchItemRule,
   ResearchRunLevers,
   ResearchRunTrigger,
@@ -340,9 +341,10 @@ const leversMoved = (next: ResearchRunLevers, current: ResearchRunLevers) =>
 
 export function listResearchConfigs(
   dataLakeId: string,
-  { db }: ResearchConfigAdapters
+  { db }: ResearchConfigAdapters,
+  page?: ResearchKeysetPage
 ): Promise<IDataLakeResearchConfigDocument[]> {
-  return db.dataLakeResearchConfigs.listByLake(dataLakeId);
+  return db.dataLakeResearchConfigs.listByLake(dataLakeId, page);
 }
 
 export async function updateResearchConfig(
