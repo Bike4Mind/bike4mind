@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -170,6 +171,67 @@ describe('ToolsSection - custom MCP connector rows', () => {
     expect(rowOf('docs').textContent).toBe('DocsCustom connector on mcp.docs.test');
     expect(getByText('Custom connector on mcp.docs.test').getAttribute('title')).toBeNull();
     expect(rowOf('plain').textContent).toBe('PlainConnector set up by an admin on plain.example.com');
+  });
+
+  it("opens a connector's tools from its row without switching it, and Escape closes them back to the row", async () => {
+    const user = userEvent.setup();
+    mocks.connections.value = [
+      {
+        id: 'p1',
+        ownerType: 'platform',
+        slug: 'shared',
+        displayName: 'Shared docs',
+        urlHost: 'mcp.example.com',
+        tools: [{ name: 'search_pages', description: 'Finds pages.', enabled: true, state: 'active' }],
+      },
+    ];
+    const onModalOpenChange = vi.fn();
+    const { container } = render(<ToolsSection onModalOpenChange={onModalOpenChange} />, { wrapper: Wrapper });
+    const control = screen.getByRole('button', { name: 'View tools for Shared docs' });
+
+    await user.click(control);
+    const dialog = screen.getByRole('dialog', { name: 'Shared docs' });
+    expect(within(dialog).getByText('Finds pages.')).toBeTruthy();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(mocks.useLLM.setState).not.toHaveBeenCalled();
+    expect(toggleOf(container, 'shared')!.getAttribute('aria-checked')).toBe('false');
+    // The Tools dropdown stays open while the view is.
+    expect(onModalOpenChange).toHaveBeenLastCalledWith(true);
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(control);
+    expect(onModalOpenChange).toHaveBeenLastCalledWith(false);
+
+    control.blur();
+    for (let step = 0; step < 100 && document.activeElement !== control; step++) await user.tab();
+    expect(document.activeElement).toBe(control);
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('dialog', { name: 'Shared docs' })).toBeTruthy();
+    expect(mocks.useLLM.setState).not.toHaveBeenCalled();
+  });
+
+  it('closes the view when its connector drops out of the menu, and does not reopen it when it returns', async () => {
+    const shared = {
+      id: 'p1',
+      ownerType: 'platform',
+      slug: 'shared',
+      displayName: 'Shared docs',
+      urlHost: 'mcp.example.com',
+      tools: [{ name: 'search_pages', description: 'Finds pages.', enabled: true, state: 'active' }],
+    };
+    mocks.connections.value = [shared];
+    const { rerender } = render(<ToolsSection />, { wrapper: Wrapper });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'View tools for Shared docs' }));
+    expect(screen.getByRole('dialog', { name: 'Shared docs' })).toBeTruthy();
+
+    mocks.connections.value = [];
+    rerender(<ToolsSection />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    mocks.connections.value = [shared];
+    rerender(<ToolsSection />);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('renders no connector row when none is offered', () => {
