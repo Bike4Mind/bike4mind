@@ -18,6 +18,7 @@ import type {
   ChatStreamEvent,
   CreateCodeSessionRequest,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
   StartSideChatRequest,
@@ -293,6 +294,8 @@ const api: DesktopApi = {
     },
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    editMessage: (request: EditMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatEditMessage, request),
+    regenerateReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRegenerateReply, sessionId),
     clearContext: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatClearContext, sessionId),
     compactContext: (sessionId: string, focus?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCompactContext, sessionId, focus),

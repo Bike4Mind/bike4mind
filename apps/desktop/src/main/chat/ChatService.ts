@@ -108,6 +108,7 @@ import {
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRewind';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -481,6 +482,11 @@ type SendOptions = {
   /** Main submitted this message, so the renderer needs its persisted copy. */
   announce?: boolean;
   notes?: readonly string[];
+  /**
+   * An edit of a sent prompt: this message id and every turn after it are dropped just before
+   * the edited text is stored in its place. See editMessage.
+   */
+  replaces?: string;
 };
 
 /**
@@ -3215,6 +3221,8 @@ export class ChatService {
     }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (options.loop) return { ok: false, error: 'Loop paused because another turn started. Start /loop again.' };
+      // Queued, an edit would rewind the thread under the turn now running.
+      if (options.replaces) return { ok: false, error: 'This conversation is still replying.' };
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -3360,7 +3368,15 @@ export class ChatService {
       }
     }
     if (taskClosed) notes = [...(notes ?? []), CLOSED_TASK_NOTE];
-    await this.autoCompact(reconciled);
+    // An edit rewinds here: after every refusal (a refused edit leaves the thread as it was) and
+    // before autoCompact, which must measure and summarise the thread the edited prompt follows.
+    let compactable = reconciled;
+    if (options.replaces) {
+      const truncated = await this.deps.store.truncateFrom(sessionId, options.replaces, isTypedPrompt);
+      if (!truncated) return { ok: false, error: 'That message is no longer in this conversation.' };
+      compactable = { ...reconciled, messages: truncated.messages };
+    }
+    await this.autoCompact(compactable);
     timer?.lap('autoCompact');
     if (options.loop) {
       const current = await this.deps.store.get(sessionId);
@@ -3495,32 +3511,8 @@ export class ChatService {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
-    if (session.workerSelection) {
-      try {
-        validateWorkerModel(session.model, (await this.listModels()).models, {
-          localOnly: this.workerLocality(isLocalModel(session.model)),
-          ...session.workerSelection?.requirements,
-        });
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    // A canceled task stays canceled: the Continue carries the conversation on, not the task.
-    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
-      const updated = await this.updateTask(sessionId, task =>
-        task.state.status === 'canceled'
-          ? task
-          : {
-              ...task,
-              state: { status: 'running' },
-            }
-      );
-      if (!updated) return { ok: false, error: 'This task no longer exists.' };
-      if (updated.workerTask?.state.status !== 'canceled') {
-        this.deps.summaryChanged?.(updated);
-        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
-      }
-    }
+    const unready = await this.resumeWorker(sessionId, session);
+    if (unready) return { ok: false, error: unready };
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
     // A reply stored before it was stamped still says what it started on in its context snapshot.
@@ -3549,6 +3541,111 @@ export class ChatService {
       ...(earlierStats ? { stats: earlierStats } : {}),
     });
     return { ok: true, messageId: replyId };
+  }
+
+  /**
+   * For a turn that re-runs the conversation without a new prompt (Continue, Regenerate): check
+   * the worker model is still offered and mark a worker task running again. The error to show,
+   * or null when the turn may start.
+   */
+  private async resumeWorker(sessionId: string, session: ChatSession): Promise<string | null> {
+    if (session.workerSelection) {
+      try {
+        validateWorkerModel(session.model, (await this.listModels()).models, {
+          localOnly: this.workerLocality(isLocalModel(session.model)),
+          ...session.workerSelection?.requirements,
+        });
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
+    // A canceled task stays canceled: the turn carries the conversation on, not the task.
+    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
+      const updated = await this.updateTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+            }
+      );
+      if (!updated) return 'This task no longer exists.';
+      if (updated.workerTask?.state.status !== 'canceled') {
+        this.deps.summaryChanged?.(updated);
+        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Edit a sent prompt and send it again: the prompt and every turn after it are dropped from
+   * the stored thread (so from what the model is sent next), then the edited text goes out as an
+   * ordinary turn. Side effects of the dropped turns (files written, commands run) are not
+   * undone; the renderer warns about that before calling this (turnsChangedThings).
+   *
+   * Refused rather than queued while a turn is running, and the truncation happens inside the
+   * send's own claim on the session (startAcceptedTurn), after every refusal - so a refused edit
+   * leaves the thread as it was. The original's attachments and point-and-edit note ride with the
+   * edit (see carriedNotes).
+   */
+  async editMessage(sessionId: string, messageId: string, text: string): Promise<SendMessageResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.hasTurnInFlight(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    const original = session.messages.find(message => message.id === messageId);
+    if (!original || !isTypedPrompt(original)) {
+      return { ok: false, error: 'That message is no longer in this conversation.' };
+    }
+    const notes = carriedNotes(original);
+    return this.send(sessionId, text, original.attachments ?? [], {
+      replaces: messageId,
+      ...(notes.length ? { notes } : {}),
+    });
+  }
+
+  /**
+   * Run the last prompt again and replace the reply it got: the reply is dropped from the
+   * stored thread and a new one starts with the conversation's current settings. As with an
+   * edit, what the dropped reply's tools did is not undone.
+   */
+  async regenerateReply(sessionId: string): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.hasTurnInFlight(sessionId) || this.abandoning.has(sessionId)) {
+      return { ok: false, error: 'This conversation is still replying.' };
+    }
+
+    // Claimed with no await since the check above, as acceptTurn does, so a send arriving
+    // during the awaits below queues behind this turn instead of racing the truncation.
+    this.accepting.add(sessionId);
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+      const api = this.deps.getApiClient();
+      if (!api && !isLocalModel(session.model) && !this.deviceLocal()) {
+        return { ok: false, error: 'Sign in to regenerate this reply.' };
+      }
+      const reply = regenerableReply(session.messages);
+      if (!reply) return { ok: false, error: 'There is no reply to regenerate.' };
+      const unready = await this.resumeWorker(sessionId, session);
+      if (unready) return { ok: false, error: unready };
+
+      const truncated = await this.deps.store.truncateFrom(
+        sessionId,
+        reply.id,
+        (message, stored) => regenerableReply(stored.messages)?.id === message.id
+      );
+      if (!truncated) return { ok: false, error: 'There is no reply to regenerate.' };
+      void this.pruneAttachments(truncated);
+      this.attendedTurns.add(sessionId);
+      return { ok: true, messageId: this.startReply(truncated, api, historyScope) };
+    } finally {
+      this.accepting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
   }
 
   /**
