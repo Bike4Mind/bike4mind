@@ -26,7 +26,7 @@ vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import PartnerSignupRulesTab from './PartnerSignupRulesTab';
+import PartnerRulesSection from './PartnerRulesSection';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -73,7 +73,7 @@ const renderTab = () => {
   return render(
     <QueryClientProvider client={client}>
       <CssVarsProvider theme={appTheme}>
-        <PartnerSignupRulesTab />
+        <PartnerRulesSection />
       </CssVarsProvider>
     </QueryClientProvider>
   );
@@ -82,7 +82,7 @@ const renderTab = () => {
 const openRowMenu = async (domain: string) =>
   userEvent.click(await screen.findByTestId(`partner-rule-actions-${domain}`));
 
-describe('PartnerSignupRulesTab tags', () => {
+describe('PartnerRulesSection tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.searchOrganizations.mockResolvedValue([]);
@@ -145,7 +145,7 @@ describe('PartnerSignupRulesTab tags', () => {
   });
 });
 
-describe('PartnerSignupRulesTab subscription', () => {
+describe('PartnerRulesSection subscription', () => {
   const plan = SUBSCRIPTION_PLANS[0];
 
   beforeEach(() => {
@@ -214,7 +214,7 @@ describe('PartnerSignupRulesTab subscription', () => {
   });
 });
 
-describe('PartnerSignupRulesTab grant package', () => {
+describe('PartnerRulesSection grant package', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.searchOrganizations.mockResolvedValue([]);
@@ -248,7 +248,7 @@ describe('PartnerSignupRulesTab grant package', () => {
   });
 });
 
-describe('PartnerSignupRulesTab admin frame', () => {
+describe('PartnerRulesSection admin frame', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.searchOrganizations.mockResolvedValue([]);
@@ -256,11 +256,11 @@ describe('PartnerSignupRulesTab admin frame', () => {
     api.runPartnerRuleBackfill.mockResolvedValue({ added: 1 });
   });
 
-  it('shows one h1 with the count and no count chip', async () => {
+  it('shows a section heading with the count and no count chip', async () => {
     api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
     renderTab();
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Partner signups (1)' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Partner signups (1)' })).toBeInTheDocument();
     expect(screen.queryByTestId('partner-rule-count')).not.toBeInTheDocument();
   });
 

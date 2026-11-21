@@ -4,7 +4,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RegInviteStatusType } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import RegistrationInvitesTab from './index';
+import RegistrationInvitesTab from './InviteCodesSection';
 import { useRegistrationInvitesStore } from './store';
 
 type MutationOptions = { onSuccess?: () => void; onError?: () => void };
@@ -38,7 +38,9 @@ vi.mock('@client/app/hooks/data/regInvites', () => ({
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mocks.isMobile }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
-vi.mock('../../common/UsernameText', () => ({ default: ({ id }: { id: string }) => <span>{id}</span> }));
+vi.mock('@client/app/components/common/UsernameText', () => ({
+  default: ({ id }: { id: string }) => <span>{id}</span>,
+}));
 vi.mock('./components/CreateInviteModal', () => ({
   CreateInviteModal: ({ onSubmit }: { onSubmit: (data: { multiple: number }) => void }) => (
     <button data-testid="mock-create-submit" onClick={() => onSubmit({ multiple: 2 })} />

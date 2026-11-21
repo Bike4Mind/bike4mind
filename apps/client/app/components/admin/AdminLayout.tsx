@@ -4,7 +4,7 @@ import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/reac
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
 import { Box, Drawer, IconButton, Sheet, Typography } from '@mui/joy';
-import { isFullAdmin } from '@bike4mind/common';
+import { hasAdminPermission, isFullAdmin } from '@bike4mind/common';
 import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -82,8 +82,10 @@ export const AdminLayout = ({
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const impersonating = useAccessToken(s => s.impersonating);
-  // Every counted queue is a full-admin tab; the server still gates each count by its own permission.
-  const actionCounts = useAdminActionCounts({ enabled: isFullAdmin(currentUser) && !impersonating });
+  // The route needs support:read and gates each count by its own permission, so a delegate sees only the held grants count.
+  const actionCounts = useAdminActionCounts({
+    enabled: (isFullAdmin(currentUser) || hasAdminPermission(currentUser, 'support:read')) && !impersonating,
+  });
   const queryClient = useQueryClient();
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
@@ -142,6 +144,7 @@ export const AdminLayout = ({
     actionCounts: actionCounts.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
+    isFullAdmin: isFullAdmin(currentUser),
     hiddenNotifications,
     canOpenTab,
     onTabSelect: selectTab,
