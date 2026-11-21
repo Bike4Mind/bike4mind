@@ -4,6 +4,7 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import type { WatchBounds, WatchSnapshot } from '@shared/watch';
 import { markCompanionWindow } from '../windows';
+import { fitBoundsToDisplays } from '../windowBounds';
 import type { WatchPreferencesStore } from './WatchPreferencesStore';
 
 export const MINI_DEFAULT_SIZE = { width: 420, height: 300 } as const;
@@ -14,37 +15,9 @@ export const BOUNDS_SAVE_DELAY_MS = 400;
 /** The renderer route this window shows; hash history, so it works over file:// too. */
 const ROUTE = 'mini-tavern';
 
-/**
- * Saved bounds, moved fully onto the screen they overlap most. A window saved on an unplugged
- * display, or under a menu bar or dock that has since grown, would otherwise reopen where its top
- * strip (the drag handle) cannot be reached; null, when it overlaps no screen, means "use the default".
- */
+/** The mini window's saved bounds fitted to the connected displays; see fitBoundsToDisplays. */
 export function restoreBounds(saved: WatchBounds | null, workAreas: readonly Rectangle[]): WatchBounds | null {
-  if (!saved) return null;
-  let best: Rectangle | null = null;
-  let bestOverlap = 0;
-  for (const area of workAreas) {
-    const overlapX = Math.min(saved.x + saved.width, area.x + area.width) - Math.max(saved.x, area.x);
-    const overlapY = Math.min(saved.y + saved.height, area.y + area.height) - Math.max(saved.y, area.y);
-    const overlap = overlapX > 0 && overlapY > 0 ? overlapX * overlapY : 0;
-    if (overlap > bestOverlap) {
-      best = area;
-      bestOverlap = overlap;
-    }
-  }
-  if (!best) return null;
-  const width = clamp(saved.width, MINI_MIN_SIZE.width, best.width);
-  const height = clamp(saved.height, MINI_MIN_SIZE.height, best.height);
-  return {
-    x: clamp(saved.x, best.x, best.x + best.width - width),
-    y: clamp(saved.y, best.y, best.y + best.height - height),
-    width,
-    height,
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
+  return fitBoundsToDisplays(saved, workAreas, MINI_MIN_SIZE);
 }
 
 export interface MiniWindowController {
