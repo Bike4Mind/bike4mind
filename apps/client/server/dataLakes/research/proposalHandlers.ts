@@ -8,6 +8,7 @@ import {
 import type { AccessContext, IDataLakeProposalDocument } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import type { Request } from 'express';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
@@ -29,7 +30,9 @@ export async function decideLakeProposal(
   lakeId: string,
   proposalId: string,
   ctx: AccessContext,
-  parseInput: () => { decision: ProposalDecision; reason?: string }
+  parseInput: () => { decision: ProposalDecision; reason?: string },
+  // v1 only: a malformed id names no proposal, so it answers 404 after the lake gate rather than a CastError.
+  { requireObjectId = false }: { requireObjectId?: boolean } = {}
 ): Promise<ProposalDecisionResult> {
   const { decision, reason } = parseInput();
 
@@ -42,7 +45,8 @@ export async function decideLakeProposal(
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    const proposal = await dataLakeProposalRepository.findById(proposalId);
+    const proposal =
+      requireObjectId && !isValidObjectId(proposalId) ? null : await dataLakeProposalRepository.findById(proposalId);
     // Belongs-to check: reviewing through another lake's URL would let a caller who manages lake A
     // rule on lake B's queue, since the service authorizes against the proposal's own lake.
     if (!proposal || proposal.dataLakeId !== lake.id) throw new NotFoundError('Proposal not found');
