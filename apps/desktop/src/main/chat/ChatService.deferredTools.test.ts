@@ -463,10 +463,27 @@ describe('ChatService deferred tools', () => {
         expect(live.role).toBe('system');
         expect(blockNames(live, change)).toContain('mcp__echo_echo');
         expectChangesDeclared(second);
+        expect(JSON.stringify(second.messages).match(/Your tools and access from this turn on:/g)).toHaveLength(1);
+        expect((result.content as { type: string }[]).map(block => block.type)).not.toContain('text');
 
         streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
         streams[before + 1].write(frame('[DONE]'));
         await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+        service = createService({
+          ensureConnected: async () => {},
+          tools: () => bindings,
+          state: async () => ({ servers: [] }),
+          findTool: (name: string) => bindings.find(binding => binding.definition.schema.name === name),
+        } as unknown as McpManager);
+        const replay = await turn(id, 'continue after service restart');
+        expect(headHash(replay)).toBe(headHash(second));
+        expectDeclaredBeforeUse(replay);
+        // After a removal the next turn's record drops the withdrawn tool, so it replays a second reminder.
+        expect(JSON.stringify(replay.messages).match(/Your tools and access from this turn on:/g)).toHaveLength(
+          change === 'tool_removal' ? 2 : 1
+        );
+        expect(replay.messages.map(unmarked)).toContainEqual(unmarked(result));
+        expectChangesDeclared(replay);
       }
     );
 

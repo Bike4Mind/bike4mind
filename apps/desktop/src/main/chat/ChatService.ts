@@ -4618,7 +4618,7 @@ export class ChatService {
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
-            appendLiveToolChange(wire, liveState.tools, next);
+            appendLiveToolChange(wire, liveState, next);
             pin(next.tools);
             [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
             await this.recordMidTurnToolState(session, next);
@@ -6333,9 +6333,9 @@ export class ChatService {
   /**
    * A mid-turn change, recorded on the newest user turn so the next turn replays it there. It keeps
    * every tool the turn already had, so nothing this turn called is replayed before its addition;
-   * the next turn's record drops what is no longer offered. Live, the change rode on the newest
-   * tool result instead, so the next turn misses the cache from that prompt on (a known cost,
-   * paid once per mid-turn change).
+   * the next turn's record drops what is no longer offered. Live, the change message (plus the
+   * guidance, when its text changed) rode on the newest tool result instead, so the next turn misses
+   * the cache from that prompt on (a known cost, paid once per mid-turn change).
    */
   private async recordMidTurnToolState(session: ChatSession, next: ChatToolState): Promise<void> {
     const history = sentHistory(session.messages);
