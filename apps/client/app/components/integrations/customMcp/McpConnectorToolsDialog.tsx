@@ -13,8 +13,7 @@ import {
 } from './customMcpModel';
 
 const TEST_ID = 'mcp-connector-tools';
-// A middle dot, spelled as a char code to keep the source ASCII.
-const META_SEPARATOR = ` ${String.fromCharCode(0xb7)} `;
+const META_SEPARATOR = ' \u00b7 ';
 
 const countText = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
@@ -94,6 +93,9 @@ const ConnectorTools = ({
           ].join(META_SEPARATOR)}
         </Typography>
       </Stack>
+      <Typography level="body-xs" data-testid={`${TEST_ID}-provenance`} sx={{ color: 'text.tertiary' }}>
+        Descriptions and labels are the server&apos;s own claims.
+      </Typography>
       {tools.length > TOOL_FILTER_THRESHOLD && (
         <Input
           size="sm"

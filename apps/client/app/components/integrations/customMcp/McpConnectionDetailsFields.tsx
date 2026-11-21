@@ -4,7 +4,7 @@ import type { McpConnectionScope } from '@client/app/hooks/data/mcpConnections';
 
 const DESCRIPTION_HELP: Record<McpConnectionScope, string> = {
   user: 'Shown under the name in your Tools menu. Plain text.',
-  platform: 'Every user sees it under the name in their Tools menu. Plain text.',
+  platform: 'Users offered this connector see it under the name in their Tools menu. Plain text.',
 };
 
 /** The optional description a connector's manager writes; the server cleans it and caps its length. */
@@ -13,16 +13,18 @@ export const McpDescriptionField = ({
   onChange,
   scope = 'user',
   testId,
+  size = 'sm',
 }: {
   value: string;
   onChange: (value: string) => void;
   scope?: McpConnectionScope;
   testId: string;
+  size?: 'sm' | 'md';
 }) => (
   <FormControl>
     <FormLabel>Description</FormLabel>
     <Textarea
-      size="sm"
+      size={size}
       minRows={2}
       maxRows={5}
       value={value}
@@ -47,12 +49,14 @@ const McpConnectionDetailsFields = ({
   scope = 'user',
   testIdPrefix,
   autoFocus = false,
+  size = 'sm',
 }: {
   draft: McpConnectionDetailsDraft;
   onChange: (draft: McpConnectionDetailsDraft) => void;
   scope?: McpConnectionScope;
   testIdPrefix: string;
   autoFocus?: boolean;
+  size?: 'sm' | 'md';
 }) => {
   const nameMissing = draft.displayName.trim() === '';
   return (
@@ -60,7 +64,7 @@ const McpConnectionDetailsFields = ({
       <FormControl required error={nameMissing}>
         <FormLabel>Name</FormLabel>
         <Input
-          size="sm"
+          size={size}
           value={draft.displayName}
           autoFocus={autoFocus}
           onChange={event => onChange({ ...draft, displayName: event.target.value })}
@@ -77,6 +81,7 @@ const McpConnectionDetailsFields = ({
         value={draft.description}
         onChange={description => onChange({ ...draft, description })}
         scope={scope}
+        size={size}
         testId={`${testIdPrefix}-description-input`}
       />
     </Stack>

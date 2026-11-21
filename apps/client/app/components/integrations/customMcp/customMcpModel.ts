@@ -63,6 +63,7 @@ export const toolTitle = (tool: Pick<McpConnectionTool, 'title' | 'annotations'>
 /**
  * The server's hints as short labels. Read and Write follow the tool review (same rule, same
  * words); the other hints show only when declared true, and on a read-only tool only open world.
+ * Every label is the server's own claim, and the wording says so where it asserts safety.
  */
 export const toolHintLabels = (
   tool: Pick<McpConnectionTool, 'annotations'>
@@ -74,8 +75,10 @@ export const toolHintLabels = (
     ...(!readOnly && hints.destructiveHint === true
       ? [{ label: 'May delete or overwrite', color: 'neutral' as const }]
       : []),
-    ...(!readOnly && hints.idempotentHint === true ? [{ label: 'Safe to repeat', color: 'neutral' as const }] : []),
-    ...(hints.openWorldHint === true ? [{ label: 'Reaches outside services', color: 'neutral' as const }] : []),
+    ...(!readOnly && hints.idempotentHint === true
+      ? [{ label: 'Server says it is safe to repeat', color: 'neutral' as const }]
+      : []),
+    ...(hints.openWorldHint === true ? [{ label: 'May reach other services', color: 'neutral' as const }] : []),
   ];
 };
 

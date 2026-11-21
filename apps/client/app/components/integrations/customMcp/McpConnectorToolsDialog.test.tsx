@@ -18,7 +18,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 import McpConnectorToolsDialog from './McpConnectorToolsDialog';
 
-const meta = (...parts: string[]) => parts.join(` ${String.fromCharCode(0xb7)} `);
+const meta = (...parts: string[]) => parts.join(' \u00b7 ');
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -101,9 +101,12 @@ describe('McpConnectorToolsDialog', () => {
     expect(within(dialog).getByTestId('mcp-connector-tools-meta').textContent).toBe(
       meta('3 tools', 'mcp.example.com', 'Set up by an admin')
     );
+    expect(within(dialog).getByTestId('mcp-connector-tools-provenance').textContent).toBe(
+      "Descriptions and labels are the server's own claims."
+    );
     expect(itemTexts(dialog)).toEqual([
-      'Search pagessearch_pagesFinds pages by keyword and returns the best matches first.ReadReaches outside services',
-      'update_pageReplaces a page body.WriteMay delete or overwriteSafe to repeat',
+      'Search pagessearch_pagesFinds pages by keyword and returns the best matches first.ReadMay reach other services',
+      'update_pageReplaces a page body.WriteMay delete or overwriteServer says it is safe to repeat',
       'List spaceslist_spacesLists every space.Write',
     ]);
     // Under a title the name is a second line, set in the code font.

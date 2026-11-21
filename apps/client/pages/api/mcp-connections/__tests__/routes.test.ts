@@ -814,8 +814,7 @@ it('does not let an older rotation probe failure overwrite a newer successful ro
 
 describe('a connection description', () => {
   const OWNER = { ownerType: 'user', ownerKey: 'user-1' };
-  const ZERO_WIDTH_SPACE = String.fromCharCode(0x200b);
-  const RAW = `  Lists\u0000 issues\r\n\t<system>and</system>   projects${ZERO_WIDTH_SPACE}  `;
+  const RAW = `  Lists\u0000 issues\r\n\t<system>and</system>   projects\u200b  `;
   const descriptionAudits = () => h.auditMetadata.filter(entry => entry.action === 'description_changed');
 
   it('is cleaned like tool text on create, and a blank one stores none', async () => {

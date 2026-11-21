@@ -411,6 +411,7 @@ function EditDetailsDialog({ connection, onClose }: { connection: Connection; on
             onChange={setDraft}
             scope="platform"
             testIdPrefix="platform-mcp-details"
+            size="md"
             autoFocus
           />
         </Stack>

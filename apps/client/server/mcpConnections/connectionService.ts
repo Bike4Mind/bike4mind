@@ -137,7 +137,7 @@ export function deriveMcpConnectionSlug(displayName: string, urlHost: string): s
 }
 
 /** The tool-text cleaning (control and invisible characters, markup, whitespace runs); empty means none. */
-export const cleanConnectionDescription = (raw: string): string =>
+const cleanConnectionDescription = (raw: string): string =>
   cleanMcpToolText(raw, MCP_CONNECTION_LIMITS.descriptionLength);
 
 function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {

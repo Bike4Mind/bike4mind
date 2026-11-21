@@ -438,7 +438,7 @@ describe('PlatformMcpConnectorsSection', () => {
 
       await userEvent.click(await screen.findByTestId('platform-mcp-add-btn'));
       expect(screen.getByTestId('platform-mcp-add')).toHaveTextContent(
-        'Every user sees it under the name in their Tools menu. Plain text. 0/300'
+        'Users offered this connector see it under the name in their Tools menu. Plain text. 0/300'
       );
       await userEvent.type(screen.getByTestId('custom-mcp-add-description-input'), '  Searches the team handbook.  ');
       await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');

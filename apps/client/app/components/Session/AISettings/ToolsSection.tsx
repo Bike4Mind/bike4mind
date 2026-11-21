@@ -390,9 +390,10 @@ const ToolsSection = ({
   }, [updatePreferences, userSettings.showFunTools]);
 
   // Notify parent when modal opens/closes
+  const toolsViewOpen = toolsViewConnection !== null;
   useEffect(() => {
-    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen || toolsViewConnection !== null);
-  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, toolsViewConnection, onModalOpenChange]);
+    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen || toolsViewOpen);
+  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, toolsViewOpen, onModalOpenChange]);
 
   // Check if the current model supports thinking
   const modelSupportsThinking = useMemo(() => {
