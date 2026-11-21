@@ -1,0 +1,86 @@
+import { FormControl, FormHelperText, FormLabel, Input, Stack, Textarea } from '@mui/joy';
+import { MCP_CONNECTION_LIMITS } from '@bike4mind/common';
+import type { McpConnectionScope } from '@client/app/hooks/data/mcpConnections';
+
+const DESCRIPTION_HELP: Record<McpConnectionScope, string> = {
+  user: 'Shown under the name in your Tools menu. Plain text.',
+  platform: 'Every user sees it under the name in their Tools menu. Plain text.',
+};
+
+/** The optional description a connector's manager writes; the server cleans it and caps its length. */
+export const McpDescriptionField = ({
+  value,
+  onChange,
+  scope = 'user',
+  testId,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  scope?: McpConnectionScope;
+  testId: string;
+}) => (
+  <FormControl>
+    <FormLabel>Description</FormLabel>
+    <Textarea
+      size="sm"
+      minRows={2}
+      maxRows={5}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      slotProps={{ textarea: { maxLength: MCP_CONNECTION_LIMITS.descriptionLength, 'data-testid': testId } }}
+    />
+    <FormHelperText>
+      {`${DESCRIPTION_HELP[scope]} ${value.length}/${MCP_CONNECTION_LIMITS.descriptionLength}`}
+    </FormHelperText>
+  </FormControl>
+);
+
+export interface McpConnectionDetailsDraft {
+  displayName: string;
+  description: string;
+}
+
+/** Name and description of an existing connector, edited together. */
+const McpConnectionDetailsFields = ({
+  draft,
+  onChange,
+  scope = 'user',
+  testIdPrefix,
+  autoFocus = false,
+}: {
+  draft: McpConnectionDetailsDraft;
+  onChange: (draft: McpConnectionDetailsDraft) => void;
+  scope?: McpConnectionScope;
+  testIdPrefix: string;
+  autoFocus?: boolean;
+}) => {
+  const nameMissing = draft.displayName.trim() === '';
+  return (
+    <Stack gap="12px">
+      <FormControl required error={nameMissing}>
+        <FormLabel>Name</FormLabel>
+        <Input
+          size="sm"
+          value={draft.displayName}
+          autoFocus={autoFocus}
+          onChange={event => onChange({ ...draft, displayName: event.target.value })}
+          slotProps={{
+            input: {
+              maxLength: MCP_CONNECTION_LIMITS.displayNameLength,
+              'data-testid': `${testIdPrefix}-name-input`,
+            },
+          }}
+        />
+        {nameMissing && <FormHelperText>Enter a name.</FormHelperText>}
+      </FormControl>
+      <McpDescriptionField
+        value={draft.description}
+        onChange={description => onChange({ ...draft, description })}
+        scope={scope}
+        testId={`${testIdPrefix}-description-input`}
+      />
+    </Stack>
+  );
+};
+
+export default McpConnectionDetailsFields;

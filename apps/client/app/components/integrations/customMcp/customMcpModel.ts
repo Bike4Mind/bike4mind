@@ -48,6 +48,40 @@ export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>
 export const composerConnections = (connections: readonly McpConnectionListEntry[]): McpConnectionListEntry[] =>
   connections.filter(c => c.status === 'connected' && c.enabled && offeredToolCount(c) > 0);
 
+/**
+ * What a Tools-menu row reads under the connector's name: the description with a host line under
+ * it, else the host line alone. The host stays visible either way.
+ */
+export const connectionMenuText = (
+  connection: Pick<McpConnectionListEntry, 'ownerType' | 'urlHost' | 'description'>
+): { description: string; detail?: string } => {
+  const platform = connection.ownerType === 'platform';
+  if (!connection.description) {
+    return {
+      description: platform
+        ? `Connector set up by an admin on ${connection.urlHost}`
+        : `Custom connector on ${connection.urlHost}`,
+    };
+  }
+  return {
+    description: connection.description,
+    detail: platform ? `Set up by an admin on ${connection.urlHost}` : `Custom connector on ${connection.urlHost}`,
+  };
+};
+
+/** The trimmed fields an Edit details save changes; an emptied description is sent as '' to clear it. */
+export const connectionDetailsPatch = (
+  connection: Pick<IMcpConnectionPublic, 'displayName' | 'description'>,
+  draft: { displayName: string; description: string }
+): { displayName?: string; description?: string } => {
+  const displayName = draft.displayName.trim();
+  const description = draft.description.trim();
+  return {
+    ...(displayName !== connection.displayName ? { displayName } : {}),
+    ...(description !== (connection.description ?? '') ? { description } : {}),
+  };
+};
+
 /** The Tools-menu choices that decide which connectors a chat is offered (see LLMContext). */
 export interface ComposerConnectionChoices {
   disabledMcpConnections: readonly string[];

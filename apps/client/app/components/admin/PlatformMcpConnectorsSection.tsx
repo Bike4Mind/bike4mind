@@ -16,8 +16,15 @@ import AddIcon from '@mui/icons-material/Add';
 import { toast } from 'sonner';
 import type { IMcpConnectionPublic } from '@bike4mind/common';
 import AddMcpConnectorForm from '@client/app/components/integrations/customMcp/AddMcpConnectorForm';
+import McpConnectionDetailsFields, {
+  type McpConnectionDetailsDraft,
+} from '@client/app/components/integrations/customMcp/McpConnectionDetailsFields';
 import McpToolReview from '@client/app/components/integrations/customMcp/McpToolReview';
-import { offeredToolCount, pendingReviewCount } from '@client/app/components/integrations/customMcp/customMcpModel';
+import {
+  connectionDetailsPatch,
+  offeredToolCount,
+  pendingReviewCount,
+} from '@client/app/components/integrations/customMcp/customMcpModel';
 import {
   mcpConnectionErrorMessage,
   useDeleteMcpConnection,
@@ -38,6 +45,7 @@ import {
   Dash,
   DataTable,
   EmptyState,
+  ErrorState,
   RelativeTime,
   SettingsSection,
   StatusChip,
@@ -48,7 +56,7 @@ import { AdminPermissionAction, useMissingAdminPermission } from './shared/Missi
 import { RowActionsMenu } from './shared/RowActionsMenu';
 
 type Connection = IMcpConnectionPublic;
-type Dialog = { kind: 'review' | 'api-key' | 'remove'; connection: Connection };
+type Dialog = { kind: 'review' | 'api-key' | 'details' | 'remove'; connection: Connection };
 
 const ADD_BUTTON_ID = 'platform-mcp-add-btn';
 const rowMenuId = (id: string) => `platform-mcp-row-actions-${id}`;
@@ -170,12 +178,14 @@ function ConnectorRowMenu({
   connection,
   featureOffReason,
   onReview,
+  onEditDetails,
   onReplaceKey,
   onRemove,
 }: {
   connection: Connection;
   featureOffReason: string | null;
   onReview: (connection: Connection) => void;
+  onEditDetails: (connection: Connection) => void;
   onReplaceKey: (connection: Connection) => void;
   onRemove: (connection: Connection) => void;
 }) {
@@ -211,6 +221,18 @@ function ConnectorRowMenu({
           Review tools
         </MenuItem>
       )}
+      {/* Text only: it reaches no remote server, so neither the switch nor the policy gates it. */}
+      <AdminPermissionAction requirement="settings:manage">
+        {disabled => (
+          <MenuItem
+            disabled={disabled}
+            onClick={() => onEditDetails(connection)}
+            data-testid={`platform-mcp-edit-${id}`}
+          >
+            Edit details
+          </MenuItem>
+        )}
+      </AdminPermissionAction>
       {!blocked && connection.status !== 'pending_auth' && (
         <AdminPermissionAction requirement="settings:manage" blockedReason={featureOffReason}>
           {disabled => (
@@ -339,6 +361,84 @@ function ReplaceKeyDialog({
   );
 }
 
+function EditDetailsDialog({ connection, onClose }: { connection: Connection; onClose: () => void }) {
+  const update = useUpdateMcpConnection('platform');
+  const [draft, setDraft] = useState<McpConnectionDetailsDraft>({
+    displayName: connection.displayName,
+    description: connection.description ?? '',
+  });
+  const [error, setError] = useState<string | null>(null);
+  const canSave = draft.displayName.trim() !== '' && !update.isPending;
+
+  const save = () => {
+    const changes = connectionDetailsPatch(connection, draft);
+    if (Object.keys(changes).length === 0) {
+      onClose();
+      return;
+    }
+    setError(null);
+    update.mutate(
+      { id: connection.id, ...changes },
+      {
+        onSuccess: () => {
+          toast.success('Details saved.');
+          onClose();
+        },
+        onError: failure => setError(mcpConnectionErrorMessage(failure, 'Could not save the details.')),
+      }
+    );
+  };
+
+  return (
+    <AdminDialog
+      onClose={onClose}
+      closeDisabled={update.isPending}
+      title={`Edit details for ${connection.displayName}`}
+      width={520}
+      data-testid="platform-mcp-details-dialog"
+    >
+      <DialogContent>
+        <Stack
+          component="form"
+          gap={1.5}
+          onSubmit={event => {
+            event.preventDefault();
+            if (canSave) save();
+          }}
+        >
+          <McpConnectionDetailsFields
+            draft={draft}
+            onChange={setDraft}
+            scope="platform"
+            testIdPrefix="platform-mcp-details"
+            autoFocus
+          />
+        </Stack>
+        {error && <ErrorState message={error} onRetry={save} retrying={update.isPending} />}
+      </DialogContent>
+      <AdminDialogFooter>
+        <Button
+          variant="plain"
+          color="neutral"
+          disabled={update.isPending}
+          onClick={onClose}
+          data-testid="platform-mcp-details-cancel-btn"
+        >
+          Cancel
+        </Button>
+        <Button
+          loading={update.isPending}
+          disabled={!canSave}
+          onClick={save}
+          data-testid="platform-mcp-details-save-btn"
+        >
+          Save details
+        </Button>
+      </AdminDialogFooter>
+    </AdminDialog>
+  );
+}
+
 /** Platform MCP connectors: set up once by an admin, offered in every user's Tools menu. */
 const PlatformMcpConnectorsSection = () => {
   const impersonating = useAccessToken(s => s.impersonating);
@@ -459,6 +559,7 @@ const PlatformMcpConnectorsSection = () => {
                 connection={connection}
                 featureOffReason={featureOffReason}
                 onReview={openReview}
+                onEditDetails={target => setDialog({ kind: 'details', connection: target })}
                 onReplaceKey={target => setDialog({ kind: 'api-key', connection: target })}
                 onRemove={target => setDialog({ kind: 'remove', connection: target })}
               />
@@ -510,6 +611,7 @@ const PlatformMcpConnectorsSection = () => {
       {dialog?.kind === 'api-key' && (
         <ReplaceKeyDialog connection={dialog.connection} onClose={closeDialog} onReview={openReview} />
       )}
+      {dialog?.kind === 'details' && <EditDetailsDialog connection={dialog.connection} onClose={closeDialog} />}
       {/* The delete route takes no reason, so the dialog collects one without sending it. */}
       <ActionDialog
         open={!!removing}
