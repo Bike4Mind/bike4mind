@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { BadRequestError, ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveInstantWindow } from '@server/utils/orgFeedbackWindow';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request, Response } from 'express';
@@ -60,7 +60,7 @@ const handler = baseApi()
       if (!req.user) throw new ForbiddenError('Authentication required');
 
       const organizationId = String(req.query.id ?? '');
-      await verifyOrgAccess(req.user, organizationId);
+      await verifyOrgPermission(req.user, organizationId, 'manageContent');
 
       const { startDate, endDate } = windowSchema.parse({
         startDate: req.query.startDate,
@@ -114,7 +114,7 @@ const handler = baseApi()
       // from the same rows. NotFoundError covers both a missing org and one the caller may not
       // administer - do not split that branch, or this becomes an org-id oracle.
       const organizationId = String(req.query.id ?? '');
-      await verifyOrgAccess(req.user, organizationId);
+      await verifyOrgPermission(req.user, organizationId, 'manageContent');
 
       const body = req.body;
       if (!body || typeof body !== 'object') throw new BadRequestError('Missing request body');

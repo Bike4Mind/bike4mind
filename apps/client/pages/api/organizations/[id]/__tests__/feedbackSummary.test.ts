@@ -54,8 +54,8 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   },
 }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 const sendToQueue = vi.hoisted(() => vi.fn(async () => 'message-id'));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue }));
@@ -96,23 +96,32 @@ const notFound = () => Object.assign(new Error('Organization not found'), { stat
 describe('POST /api/organizations/:id/feedback-summary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    verifyOrgAccess.mockResolvedValue({ id: 'org1' } as never);
+    verifyOrgPermission.mockResolvedValue({ id: 'org1' } as never);
     jobCreate.mockResolvedValue({} as never);
     jobFindOne.mockReturnValue({ lean: async () => null } as never);
     sendToQueue.mockResolvedValue('message-id' as never);
   });
 
   it('answers the org gate before writing a job or enqueuing anything', async () => {
-    verifyOrgAccess.mockRejectedValue(notFound() as never);
+    verifyOrgPermission.mockRejectedValue(notFound() as never);
 
     await expect(invoke(WINDOW)).rejects.toThrow('Organization not found');
     expect(jobCreate).not.toHaveBeenCalled();
     expect(sendToQueue).not.toHaveBeenCalled();
   });
 
+  it('gates on the manageContent permission', async () => {
+    await invoke(WINDOW);
+    expect(verifyOrgPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner1' }),
+      'org1',
+      'manageContent'
+    );
+  });
+
   it('refuses an unauthenticated caller before touching the org', async () => {
     await expect(invoke(WINDOW, null)).rejects.toThrow('Authentication required');
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('enqueues one tagged message and answers 202', async () => {
@@ -213,7 +222,7 @@ describe('GET /api/organizations/:id/feedback-summary', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    verifyOrgAccess.mockResolvedValue({ id: 'org1' } as never);
+    verifyOrgPermission.mockResolvedValue({ id: 'org1' } as never);
     jobFindOne.mockReturnValue({ sort: () => ({ lean: async () => null }) } as never);
   });
 
@@ -289,7 +298,7 @@ describe('GET /api/organizations/:id/feedback-summary', () => {
   });
 
   it('refuses a caller who may not administer the org', async () => {
-    verifyOrgAccess.mockRejectedValue(notFound() as never);
+    verifyOrgPermission.mockRejectedValue(notFound() as never);
 
     await expect(runGet()).rejects.toThrow('Organization not found');
     expect(jobFindOne).not.toHaveBeenCalled();

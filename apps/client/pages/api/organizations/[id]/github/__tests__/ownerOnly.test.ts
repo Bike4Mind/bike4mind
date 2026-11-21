@@ -6,7 +6,7 @@ type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
 const h = vi.hoisted(() => ({
   registered: {} as Record<string, Handler>,
-  verifyOrgOwner: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   forOrganization: vi.fn(),
   connectionRepo: {
     findByOrganizationId: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: { forOrganization: h.forOrganization },
 }));
@@ -70,12 +70,12 @@ const routes: Array<[string, string, () => Promise<unknown>]> = [
 ];
 
 // These routes read or rotate the org's GitHub App key / PAT, so a manager must be refused before
-// any connection, secret or GitHub call is touched. Only `verifyOrgOwner` is mocked from orgAccess,
+// any connection, secret or GitHub call is touched. Only `verifyOrgPermission` is mocked from orgAccess,
 // so a route reverted to another gate would throw on a missing export instead of passing.
 describe('GitHub integration routes are owner-only', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.verifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
   });
 
   it.each(routes)('%s %s refuses a non-owner and touches nothing', async (_name, method, loader) => {
@@ -91,7 +91,7 @@ describe('GitHub integration routes are owner-only', () => {
 
     await expect(handlers[method](req, res)).rejects.toThrow(NotFoundError);
 
-    expect(h.verifyOrgOwner).toHaveBeenCalledWith(req.user, 'org-1');
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org-1', 'manageIntegrations');
     for (const spy of Object.values(h.connectionRepo)) expect(spy).not.toHaveBeenCalled();
     expect(h.forOrganization).not.toHaveBeenCalled();
     expect(h.decryptSecret).not.toHaveBeenCalled();

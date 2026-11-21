@@ -2,11 +2,12 @@ import {
   canAdministerOrganization,
   canRevokeOrgMember,
   canManageMemberCreditBudgets,
+  hasOrgPermission,
   InviteType,
   IOrganizationDocument,
   isOrgMember,
-  isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
+  organizationMemberRole,
   ORG_INVITE_ROLES,
   OrgInviteRole,
 } from '@bike4mind/common';
@@ -140,10 +141,12 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
-  // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
+  // Invites (create + cancel) gate on isOrgMember, then manageMembers, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =
-    !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+    !!currentUser &&
+    isOrgMember(currentUser, organization) &&
+    hasOrgPermission(currentUser, organization, 'manageMembers');
   // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
   // also depends on the target; this coarse flag only decides whether the seats card and the
   // roster's selection column show.
@@ -155,16 +158,15 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
   // Alerts live on this tab rather than Settings because an appointed manager with only a read
-  // row cannot open Settings. Prefs mirror the my-notification-prefs route: owner or current
-  // manager only, never a platform admin, never a personal org.
+  // row cannot open Settings. Prefs mirror the my-notification-prefs route: the Owner or Manager
+  // role only (a role, not a permission), never a platform admin, never a personal org.
   const canManageBudgetAlerts = canManageCreditBudgets && !organization.personal;
-  const isOrgAlertRecipient =
-    !!currentUser &&
-    !organization.personal &&
-    isOrgOwnerOrCurrentAdmin({ id: currentUser.id, isAdmin: false }, organization);
+  const viewerRole = currentUser ? organizationMemberRole(organization, currentUser.id) : null;
+  const isOrgAlertRecipient = !organization.personal && (viewerRole === 'owner' || viewerRole === 'manager');
 
   // Mirrors OrganizationMfaPolicy's own gate, so the policies heading never shows over nothing.
-  const canManageMfa = !!currentUser && !organization.personal && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  const canManageMfa =
+    !!currentUser && !organization.personal && hasOrgPermission(currentUser, organization, 'managePolicies');
 
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
   const canManageManagers =

@@ -5,7 +5,8 @@ import {
   IOrganizationRepository,
   IUserDocument,
   IUserRepository,
-  isOrgOwnerOrCurrentAdmin,
+  hasOrgPermission,
+  type OrgRoleSubject,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
@@ -51,15 +52,11 @@ interface GroupMembershipParams {
 }
 
 /**
- * Who may manage an org's group memberships: a platform admin, the org's billing owner, or an
- * appointed org admin (`adminUserIds`) who still holds a `users[]` row. A plain member, or an admin
- * left with a stale `adminUserIds` entry, has no group-management authority.
+ * Who may manage an org's group memberships and invites: `manageMembers`. A role entry left without
+ * a `users[]` row confers nothing (orgRoles.ts).
  */
-export const assertCanManageOrgGroups = (
-  actingUser: IUserDocument,
-  organization: Parameters<typeof isOrgOwnerOrCurrentAdmin>[1]
-): void => {
-  if (!isOrgOwnerOrCurrentAdmin(actingUser, organization)) {
+export const assertCanManageOrgGroups = (actingUser: IUserDocument, organization: OrgRoleSubject): void => {
+  if (!hasOrgPermission(actingUser, organization, 'manageMembers')) {
     throw new ForbiddenError("Not authorized to manage this organization's groups");
   }
 };

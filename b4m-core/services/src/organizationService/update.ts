@@ -1,12 +1,11 @@
 import {
+  ForbiddenError,
+  hasOrgPermission,
   IOrganizationRepository,
   IUserDocument,
   MAX_STORAGE_LIMIT_MB,
   OrganizationSharingPolicySchema,
-  ForbiddenError,
-  canAdministerOrganization,
   isOrgMember,
-  isOrgOwnerOrPlatformAdmin,
 } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
@@ -47,7 +46,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   ) as NonNullable<typeof organization>;
 
   // Every field here is org-wide, so the gate is the team role, never a sharing-ACL row.
-  if (!canAdministerOrganization(user, plain)) {
+  if (!hasOrgPermission(user, plain, 'managePolicies')) {
     if (!isOrgMember(user, plain)) throw new NotFoundError('Organization not found');
     throw new ForbiddenError('Only organization owners and managers can change organization settings.');
   }
@@ -58,8 +57,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Owner or platform admin only; a manager's value is ignored, matching the client, which never sends it.
-  if (rest.billingContact !== undefined && isOrgOwnerOrPlatformAdmin(user, plain)) {
+  if (rest.billingContact !== undefined && hasOrgPermission(user, plain, 'manageBilling')) {
     update.billingContact = rest.billingContact;
   }
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;

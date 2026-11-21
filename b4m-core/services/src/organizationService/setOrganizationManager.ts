@@ -18,7 +18,7 @@ type SetOrganizationManagerParameters = z.infer<typeof setOrganizationManagerSch
 
 interface SetOrganizationManagerAdapters {
   db: {
-    organizations: Pick<IOrganizationRepository, 'findById' | 'addAdmin' | 'removeAdmin'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'addAdmin' | 'removeAdmin' | 'update'>;
   };
 }
 
@@ -65,6 +65,12 @@ export async function setOrganizationManager(
     // False when the row vanished between the read and the write (a concurrent removal).
     if (!(await organizations.addAdmin(organizationId, userId))) {
       throw new BadRequestError('Only a member of the organization can be made a manager');
+    }
+    if ((organization.billingManagerUserIds ?? []).some(id => String(id) === userId)) {
+      await organizations.update({
+        id: organizationId,
+        billingManagerUserIds: (organization.billingManagerUserIds ?? []).filter(id => String(id) !== userId),
+      });
     }
   } else {
     await organizations.removeAdmin(organizationId, userId);

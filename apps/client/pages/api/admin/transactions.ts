@@ -12,7 +12,7 @@ import {
   type ILedgerRow,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -52,13 +52,14 @@ const QuerySchema = z.object({
  * (metadata.actingUserId - API/CLI org-billed rows); web org-billed usage does
  * not carry it, so those rows have no member.
  *
- * Access: admins with `support:read` (cross-org), the org owner and current managers,
- * via verifyOrgAccess. This endpoint only reads the ledger.
+ * Access: admins with `support:read` (cross-org) plus `viewUsage` holders (owner, manager, billing
+ * manager), via `verifyOrgPermission` - which pins everyone else to their org and 404s the rest.
+ * This endpoint only reads the ledger.
  *
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read an
  * org's ledger just because its owner is an admin. JWT/browser callers (admin or
- * org owner/manager) skip that check and still go through verifyOrgAccess below.
+ * org role holder) skip that check and still go through `verifyOrgPermission` below.
  * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
  * rejected server-side), so this closes the API-key path entirely for a
  * non-admin org owner - only a JWT/browser session still works for them.
@@ -69,7 +70,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   }
 
   const { organizationId, page = 1, limit = 25, days, type, source, model } = QuerySchema.parse(req.query);
-  await verifyOrgAccess({ id: req.user.id, isAdmin: hasAdminPermission(req.user, 'support:read') }, organizationId);
+  await verifyOrgPermission(
+    { id: req.user.id, isAdmin: hasAdminPermission(req.user, 'support:read') },
+    organizationId,
+    'viewUsage'
+  );
 
   const { data, total } = await creditTransactionRepository.queryLedgerPage(
     organizationId,
