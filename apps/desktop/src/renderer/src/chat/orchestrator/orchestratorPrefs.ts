@@ -1,17 +1,7 @@
-export type OrchestratorViewId =
-  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
-/** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
-  'tavern',
-  'aquarium',
-  'office',
-  'board',
-  'table',
-  'tile-wall',
-  'swimlanes',
-  'constellation',
-  'transit',
-];
+import { parseStoredLayout, singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout';
+import { toViewId, type OrchestratorViewId } from './orchestratorViews';
+
+export { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorViews';
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
@@ -19,6 +9,9 @@ const SURFACE_KEY = 'b4m.orchestrator.surface.';
 const VIEW_KEY = 'b4m.orchestrator.view.';
 const PROJECT_VIEW_KEY = 'b4m.orchestrator.projectView.';
 const LAST_VIEW_KEY = 'b4m.orchestrator.lastView';
+const LAYOUT_KEY = 'b4m.orchestrator.layout.';
+const PROJECT_LAYOUT_KEY = 'b4m.orchestrator.projectLayout.';
+const LAST_LAYOUT_KEY = 'b4m.orchestrator.lastLayout';
 const DOCK_OPEN_KEY = 'b4m.orchestrator.dockOpen';
 const DOCK_WIDTH_KEY = 'b4m.orchestrator.dockWidth';
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
@@ -64,10 +57,6 @@ export function writeSurface(sessionId: string, surface: SessionSurface): void {
   }
 }
 
-function parseView(stored: string | null): OrchestratorViewId | undefined {
-  return ORCHESTRATOR_VIEWS.find(view => view === stored);
-}
-
 /**
  * The view a session opens on: its own choice, else the last one picked in its project (the folder
  * the session is bound to; omit for a session without one), else the last one picked anywhere, else
@@ -75,9 +64,9 @@ function parseView(stored: string | null): OrchestratorViewId | undefined {
  */
 export function readView(sessionId: string, projectDirectory?: string): OrchestratorViewId {
   return (
-    parseView(readItem(VIEW_KEY + sessionId)) ??
-    (projectDirectory ? parseView(readItem(PROJECT_VIEW_KEY + projectDirectory)) : undefined) ??
-    parseView(readItem(LAST_VIEW_KEY)) ??
+    toViewId(readItem(VIEW_KEY + sessionId)) ??
+    (projectDirectory ? toViewId(readItem(PROJECT_VIEW_KEY + projectDirectory)) : undefined) ??
+    toViewId(readItem(LAST_VIEW_KEY)) ??
     'tavern'
   );
 }
@@ -89,6 +78,41 @@ export function writeView(sessionId: string, view: OrchestratorViewId, projectDi
   writeItem(LAST_VIEW_KEY, view);
 }
 
+/** One remembered level: its layout, else (a store from before layouts, or a bad layout) its single view. */
+function readLayoutLevel(layoutKey: string, viewKey: string): OrchestratorLayout | undefined {
+  const layout = parseStoredLayout(readItem(layoutKey));
+  if (layout) return layout;
+  const view = toViewId(readItem(viewKey));
+  return view && singlePaneLayout(view);
+}
+
+/**
+ * The layout a session opens on, at the same levels as readView: the session's, its project's, the last one
+ * anywhere, else the Tavern alone. Each level migrates a stored single view into a single-pane layout.
+ */
+export function readLayout(sessionId: string, projectDirectory?: string): OrchestratorLayout {
+  return (
+    readLayoutLevel(LAYOUT_KEY + sessionId, VIEW_KEY + sessionId) ??
+    (projectDirectory
+      ? readLayoutLevel(PROJECT_LAYOUT_KEY + projectDirectory, PROJECT_VIEW_KEY + projectDirectory)
+      : undefined) ??
+    readLayoutLevel(LAST_LAYOUT_KEY, LAST_VIEW_KEY) ??
+    singlePaneLayout('tavern')
+  );
+}
+
+/**
+ * Records the layout wherever writeView records a view. The first pane's view is written as the single view
+ * too, so a level whose layout is later unreadable still opens on it.
+ */
+export function writeLayout(sessionId: string, layout: OrchestratorLayout, projectDirectory?: string): void {
+  const stored = JSON.stringify(layout);
+  writeItem(LAYOUT_KEY + sessionId, stored);
+  if (projectDirectory) writeItem(PROJECT_LAYOUT_KEY + projectDirectory, stored);
+  writeItem(LAST_LAYOUT_KEY, stored);
+  writeView(sessionId, layout.panes[0].view, projectDirectory);
+}
+
 /**
  * Forgets a deleted session's surface and view. Called from the delete path only: the session list is
  * scoped to the signed-in account while storage is install-wide, so "not listed" never means "gone".
@@ -98,6 +122,7 @@ export function forgetSessionPrefs(sessionId: string): void {
   try {
     window.localStorage.removeItem(SURFACE_KEY + sessionId);
     window.localStorage.removeItem(VIEW_KEY + sessionId);
+    window.localStorage.removeItem(LAYOUT_KEY + sessionId);
     window.localStorage.removeItem(FINALE_SEEN_KEY + sessionId);
   } catch {
     // A stale preference is harmless; it only applies if the same id ever comes back.
