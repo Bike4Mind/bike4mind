@@ -520,6 +520,88 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   reviewedByRule: 0,
 });
 
+/** The `ResearchRunTotals` keys that count a candidate dropped without a proposal. The rest are totals or sub-counts of `proposed`. */
+export type ResearchDropBucket = Exclude<
+  keyof ResearchRunTotals,
+  'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'
+>;
+
+export interface ResearchDropReason {
+  /** The setting that changes this bucket, or null when no setting applies. */
+  lever: keyof ResearchRunLevers | null;
+  /** `edit_list` for a lever that is a list or a choice the manager edits rather than a number to move. */
+  direction: 'raise' | 'lower' | 'edit_list' | null;
+  /** Surface-neutral: names no setting label, so a panel, an API client and the docs can each add their own nouns. */
+  reason: string;
+}
+
+/**
+ * Where each drop bucket points. Keyed on `ResearchDropBucket`, so a new drop bucket fails the build
+ * until it is placed here. The panel renders it in its own nouns; keep `reason` free of them.
+ */
+export const RESEARCH_DROP_REASONS: Record<ResearchDropBucket, ResearchDropReason> = {
+  filteredBySource: {
+    lever: 'blockedDomains',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on the never list, or had no usable web address.',
+  },
+  unlistedDropped: {
+    lever: 'unlistedSources',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on none of your lists, which are ignored.',
+  },
+  unresolvedRedirect: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was search links that did not reveal their site. This usually clears on the next run.',
+  },
+  belowRelevance: {
+    lever: 'minRelevance',
+    direction: 'lower',
+    reason: 'The largest group scored below the minimum relevance.',
+  },
+  judgeFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group could not be scored because the relevance judge failed. Try the run again.',
+  },
+  fetchFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group of pages could not be fetched or read.',
+  },
+  duplicatePending: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already waiting for review.',
+  },
+  alreadyInLake: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already in the lake.',
+  },
+  suppressedByTombstone: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was declined before and has not changed.',
+  },
+  unusableSource: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group had no usable web address.',
+  },
+  notJudged: {
+    lever: null,
+    direction: null,
+    reason: 'The relevance judge was unavailable, so the rest were not scored. Try the run again later.',
+  },
+  blockedByRule: {
+    lever: 'itemRules',
+    direction: 'edit_list',
+    reason: 'The largest group was blocked by an item rule.',
+  },
+};
+
 export interface IDataLakeResearchRun {
   dataLakeId: string;
   /**
