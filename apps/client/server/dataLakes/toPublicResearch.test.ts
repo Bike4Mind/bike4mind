@@ -156,7 +156,8 @@ describe('producer prefixes still exist at their source', () => {
     ['feed[3]', RESEARCH_ERROR_PREFIXES.feed[3], worker],
     ['feed[4]', RESEARCH_ERROR_PREFIXES.feed[4], worker],
   ])('%s', (_name, prefix, source) => {
-    expect(source).toContain(prefix);
+    // The mapper matches with startsWith, so the prefix must open a string literal at the source.
+    expect(["'", '"', '`'].some(quote => source.includes(`${quote}${prefix}`))).toBe(true);
   });
 });
 
@@ -288,6 +289,12 @@ describe('toPublicConfigHistory', () => {
             before: `user:${'c'.repeat(24)}=read`,
           },
           { field: 'name', kind: 'literal', before: 'a', after: 'b' },
+          {
+            field: 'effectiveOwnerUserId',
+            kind: 'literal',
+            before: `${USER_ID},${OTHER_USER_ID}`,
+            after: `${USER_ID},${USER_ID}`,
+          },
         ],
       },
     ],
@@ -306,6 +313,10 @@ describe('toPublicConfigHistory', () => {
     expect(owner).toMatchObject({ before: 'Casey', after: 'unknown user' });
     expect(grant).toMatchObject({ after: 'user:Casey=curator', before: 'user:unknown user=read' });
     expect(name).toMatchObject({ before: 'a', after: 'b' });
+    expect(mapped.data.entries[0].changes[3]).toMatchObject({
+      before: 'Casey, unknown user',
+      after: 'Casey, Casey',
+    });
     expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
   });
 });

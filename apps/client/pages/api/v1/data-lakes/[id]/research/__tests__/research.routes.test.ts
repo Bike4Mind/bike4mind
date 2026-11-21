@@ -599,6 +599,27 @@ describe('proposals', () => {
     );
   });
 
+  it('records only the served rows as read, not the look-ahead row', async () => {
+    const second = '65a0000000000000000000e2';
+    h.listProposals.mockResolvedValueOnce([
+      proposalDoc(PROP, { admittedFabFileId: 'served-file' }),
+      proposalDoc(second, { admittedFabFileId: 'lookahead-file' }),
+    ]);
+    const res = await call(proposalsIndex, { query: { limit: '1' } });
+    expect(res.status).toBe(200);
+    expect((res.body as { data: unknown[] }).data).toHaveLength(1);
+    expect(h.recordRead).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ fileIds: ['served-file'] }));
+  });
+
+  it('rejects a cursor minted under a different status filter with 422', async () => {
+    h.listProposals.mockResolvedValueOnce([proposalDoc(PROP), proposalDoc('65a0000000000000000000e2')]);
+    const page = await call(proposalsIndex, { query: { status: 'pending', limit: '1' } });
+    const cursor = (page.body as { next_cursor: string }).next_cursor;
+    expect(typeof cursor).toBe('string');
+    expect((await call(proposalsIndex, { query: { status: 'declined', cursor } })).status).toBe(422);
+    expect((await call(proposalsIndex, { query: { cursor } })).status).toBe(422);
+  });
+
   describe('decide', () => {
     beforeEach(() => {
       h.findProposal.mockResolvedValue(proposalDoc(PROP));

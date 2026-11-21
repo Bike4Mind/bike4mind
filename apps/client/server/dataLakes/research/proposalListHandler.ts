@@ -19,6 +19,8 @@ export interface ProposalListInput {
   status?: DataLakeProposalStatus;
   limit: number;
   after?: { createdAt: Date; id: string };
+  /** Rows actually returned to the caller when `limit` carries a look-ahead row; only those count as read. */
+  servedLimit?: number;
 }
 
 export async function listLakeProposals(
@@ -43,10 +45,12 @@ export async function listLakeProposals(
     throw new ForbiddenError('You do not have permission to review proposals for this data lake');
   }
 
-  const proposals = await dataLakeProposalRepository.listByLake(lake.id, input);
+  const { servedLimit, ...window } = input;
+  const proposals = await dataLakeProposalRepository.listByLake(lake.id, window);
 
-  if (proposals.length > 0) {
-    const fileIds = proposals.flatMap(p => (p.admittedFabFileId ? [p.admittedFabFileId] : []));
+  const served = servedLimit === undefined ? proposals : proposals.slice(0, servedLimit);
+  if (served.length > 0) {
+    const fileIds = served.flatMap(p => (p.admittedFabFileId ? [p.admittedFabFileId] : []));
     await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface });
   }
   return proposals;

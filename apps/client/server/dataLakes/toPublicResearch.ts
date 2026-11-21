@@ -275,7 +275,13 @@ function toPublicChange(change: LakeConfigHistoryFieldChange, userNames: Record<
   }
   const redact = (value: string | number | boolean | null | undefined) => {
     if (typeof value !== 'string') return value;
-    if (IDENTITY_FIELDS.has(change.field)) return userNames[value] ?? UNKNOWN_USER;
+    if (IDENTITY_FIELDS.has(change.field)) {
+      // An ownership change can carry several prior owners as comma-joined ids.
+      return value
+        .split(',')
+        .map(id => userNames[id] ?? UNKNOWN_USER)
+        .join(', ');
+    }
     if (change.field === 'accessGrant') {
       return value.replace(USER_GRANT_ID, match => `user:${userNames[match.slice(5)] ?? UNKNOWN_USER}`);
     }

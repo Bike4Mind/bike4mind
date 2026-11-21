@@ -20,7 +20,13 @@ import {
   UpdateResearchConfigRequestSchema,
 } from '../../schemas/dataLakeResearchPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 /**
  * Lake research over the public API: saved research configs, runs, the proposal review queue and
@@ -221,7 +227,8 @@ export const startDataLakeResearchRunContract = defineEndpoint({
     'in the background: poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is ' +
     '`completed` or `failed`. A lake runs one at a time, and a run can be refused for a daily cap, ' +
     'spending paused for the owner, or credits that cannot cover its cost ceiling. A key that ' +
-    'authenticates an unpaid account counts this call against its daily completion quota.',
+    "authenticates an unpaid account is refused with 429 while that account's token use over the last " +
+    'minute is over its limit; retry after the `Retry-After` interval.',
   tags: ['Data Lake Research'],
   auth: 'apiKeyOrJwt',
   scopes: DATA_LAKE_WRITE_API_KEY_SCOPES,
@@ -232,18 +239,31 @@ export const startDataLakeResearchRunContract = defineEndpoint({
   responses: {
     202: { description: 'The run was queued.', schema: ResearchRunResponseSchema },
     400: {
-      description: 'The run cannot start: another run is in flight, a cap was reached, or credits fall short.',
+      description: 'The run cannot start: another run is in flight or a cap was reached.',
       schema: ApiErrorSchema,
     },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: {
+      description:
+        `${WRITE_FORBIDDEN} The same status also answers a run refused because the lake owner's account ` +
+        `cannot run research. ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
+    },
     404: {
       description: `${NOT_VISIBLE_LAKE} The same 404 answers a config that does not exist in this lake.`,
       schema: ApiErrorSchema,
     },
-    422: { description: BODY_422, schema: ApiErrorSchema },
+    422: {
+      description:
+        `${BODY_422} Also returned, tagged \`errorCode: "insufficient_credits"\`, when the lake owner's ` +
+        'credits cannot cover the run cost ceiling. Nothing is started.',
+      schema: InsufficientCreditsErrorSchema,
+    },
     429: {
-      description: `${RATE_LIMITED} Also returned when an unpaid account has used its daily completion quota.`,
+      description:
+        `${RATE_LIMITED} Also returned when the key authenticates an unpaid account whose token use over the ` +
+        'last minute is over its limit; the response carries a `Retry-After`.',
       schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     500: { description: 'Research runs are not available on this deployment.', schema: ApiErrorSchema },
   },

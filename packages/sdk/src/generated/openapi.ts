@@ -1273,7 +1273,7 @@ export interface paths {
     put?: never;
     /**
      * Start a research run
-     * @description Starts a run from a saved config and returns at once with the run in `queued`. The run executes in the background: poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`. A lake runs one at a time, and a run can be refused for a daily cap, spending paused for the owner, or credits that cannot cover its cost ceiling. A key that authenticates an unpaid account counts this call against its daily completion quota.
+     * @description Starts a run from a saved config and returns at once with the run in `queued`. The run executes in the background: poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`. A lake runs one at a time, and a run can be refused for a daily cap, spending paused for the owner, or credits that cannot cover its cost ceiling. A key that authenticates an unpaid account is refused with 429 while that account's token use over the last minute is over its limit; retry after the `Retry-After` interval.
      */
     post: operations['startDataLakeResearchRun'];
     delete?: never;
@@ -8788,6 +8788,51 @@ export interface components {
         /** @description A fixed sentence. Set only on a `completed` run whose relevance judge had trouble. */
         judge_warning: string | null;
       };
+    };
+    startDataLakeResearchRunResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
+    startDataLakeResearchRunResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -26337,7 +26382,7 @@ export interface operations {
           'application/json': components['schemas']['startDataLakeResearchRunResponse202'];
         };
       };
-      /** @description The run cannot start: another run is in flight, a cap was reached, or credits fall short. */
+      /** @description The run cannot start: another run is in flight or a cap was reached. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26371,7 +26416,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment. */
+      /** @description The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment. The same status also answers a run refused because the lake owner's account cannot run research. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26391,7 +26436,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['startDataLakeResearchRunResponse403'];
         };
       };
       /** @description No lake with that id is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. The same 404 answers a config that does not exist in this lake. */
@@ -26430,7 +26475,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, or a value is the wrong type. Also returned, tagged `errorCode: "insufficient_credits"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26450,7 +26495,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['startDataLakeResearchRunResponse422'];
         };
       };
       /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
@@ -26476,11 +26521,13 @@ export interface operations {
           'application/json': components['schemas']['UpgradeRequiredResponse'];
         };
       };
-      /** @description Per-user rate limit exceeded. Also returned when an unpaid account has used its daily completion quota. */
+      /** @description Per-user rate limit exceeded. Also returned when the key authenticates an unpaid account whose token use over the last minute is over its limit; the response carries a `Retry-After`. */
       429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */

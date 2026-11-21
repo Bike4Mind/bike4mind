@@ -19,14 +19,14 @@ const handler = nextRouteForContract(listDataLakeProposalsContract, {
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req, res) => {
     const lakeId = req.validatedParams.id;
-    const scope = cursorScope('data-lake-proposals', lakeId);
     const { limit, status } = req.validatedQuery;
+    const scope = cursorScope('data-lake-proposals', `${lakeId}:${status ?? 'all'}`);
     const proposals = await listLakeProposals(
       req,
       lakeId,
       await toMemberAccessContext(req),
       'data-lake-api-v1-proposals',
-      () => ({ status, ...keysetWindow(scope, req.validatedQuery) })
+      () => ({ status, servedLimit: limit, ...keysetWindow(scope, req.validatedQuery) })
     );
     const page = sliceKeysetPage(proposals, limit, scope);
     return res.json({ data: page.items.map(toPublicProposal), next_cursor: page.next_cursor });
