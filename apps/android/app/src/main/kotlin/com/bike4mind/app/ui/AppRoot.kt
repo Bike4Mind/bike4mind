@@ -30,6 +30,7 @@ fun AppRoot(
     val graph = app.graph.collectAsStateWithLifecycle().value ?: return
     val upgrade by graph.upgradeSignal.notice.collectAsStateWithLifecycle()
     val signedIn by graph.session.isSignedIn.collectAsStateWithLifecycle()
+    val onboardingCompleted by app.onboarding.isCompleted.collectAsStateWithLifecycle()
     val deletion by graph.deletionSignal.notice.collectAsStateWithLifecycle()
     var restored by remember(graph) { mutableStateOf(false) }
     // A chat is identified by its session id; NEW_CHAT is a conversation the first message will create.
@@ -48,6 +49,8 @@ fun AppRoot(
     // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
     LaunchedEffect(graph, signedIn) {
         if (signedIn) {
+            // Someone who got this far never needs the welcome, e.g. a session restored after an upgrade.
+            app.onboarding.complete()
             onSignedIn()
             graph.startPush()
         } else {
@@ -88,6 +91,7 @@ fun AppRoot(
     when {
         upgrade != null -> UpgradeScreen(minimumVersion = upgrade?.minimumVersion, recheck = graph::recheckUpgrade)
         !restored -> Unit
+        !signedIn && !onboardingCompleted -> OnboardingScreen(onFinish = app.onboarding::complete)
         !signedIn -> ScreenScope(key = Screen.SignIn(graph)) {
             SignInScreen(app = app, graph = graph, signInError = signInError)
         }
