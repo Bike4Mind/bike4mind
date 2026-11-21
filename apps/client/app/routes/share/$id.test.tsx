@@ -289,6 +289,69 @@ describe('SharePage', () => {
     });
   });
 
+  describe('space link', () => {
+    const spaceLink = {
+      name: 'Guild',
+      type: 'Space',
+      isLinkOnly: true,
+      documentId: 'space-1',
+      username: 'owner',
+    } as never;
+
+    it('offers Accept but not Refuse', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(spaceLink);
+      renderPage();
+
+      expect(await screen.findByLabelText('Accept')).toBeTruthy();
+      expect(screen.queryByLabelText('Refuse')).toBeNull();
+      expect(screen.getByText(/invited you to join a space/)).toBeTruthy();
+    });
+
+    it('accepts with the single-invite call and goes home', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(spaceLink);
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+
+      await vi.waitFor(() => expect(inviteMutations.accept).toHaveBeenCalledWith('abc'));
+      await vi.waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+    });
+
+    it.each([
+      ['This space is full', 403, 'full'],
+      ['You cannot join this space', 403, 'removed'],
+      ['This invite is limited to verified email addresses at example.com', 403, 'domain'],
+      ['Space not found', 404, 'unavailable'],
+      ['The inviter can no longer grant access to this space', 403, 'unavailable'],
+      ['Feature not available', 403, 'unavailable'],
+      ['Invite has no remaining users', 422, 'used'],
+      ['Invite has been revoked', 422, 'revoked'],
+      ['Invite has expired', 422, 'expired'],
+    ])('explains a refused join (%s) instead of going home', async (message, status, kind) => {
+      vi.mocked(fetchInvite).mockResolvedValue(spaceLink);
+      acceptRejects(message, status);
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+
+      expect(await screen.findByTestId(`share-accept-${kind}-modal`)).toBeTruthy();
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
+
+    it('sends an existing member to the space', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(spaceLink);
+      acceptRejects('You are already a member of this space', 409);
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+      const button = await screen.findByTestId('share-accept-member-btn');
+      expect(button).toHaveTextContent('Open space');
+      fireEvent.click(button);
+
+      expect(navigateMock).toHaveBeenCalledWith({ to: '/spaces/$id', params: { id: 'space-1' } });
+    });
+  });
+
   it('still goes home on an unmapped accept failure', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(orgLink);
     acceptRejects('Something else', 500);

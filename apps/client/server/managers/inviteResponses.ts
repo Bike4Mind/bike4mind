@@ -1,6 +1,7 @@
 import { sharingService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isDisabledSpaceInviteKey } from '@server/managers/inviteManager';
 import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
@@ -145,6 +146,7 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
 }
 
 export async function refuseInviteForUser(req: InviteResponder, id: string) {
+  if (await isDisabledSpaceInviteKey(id)) return null;
   // Public-ness (link vs email invite) is derived from invite state in the service;
   // no client-supplied flag is trusted for the recipient check. Revoking the whole
   // invite (rather than just the caller's own slot) needs the share-authority
