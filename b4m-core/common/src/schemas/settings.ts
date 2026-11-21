@@ -395,6 +395,7 @@ export const SettingKeySchema = z.enum([
   'ReferralSecondPaymentCredits',
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
+  'ReferralLinkSignupsPerMonth',
   'ReferralAlertRewardsPerDay',
   'BedrockNewsPuzzleCredits5',
   'BedrockNewsPuzzleCredits6',
@@ -4649,6 +4650,17 @@ export const settingsMap = {
     max: 1000,
     description:
       'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralLinkSignupsPerMonth: makeNumberSetting({
+    key: 'ReferralLinkSignupsPerMonth',
+    name: 'Referral Link Signups Per Month',
+    defaultValue: 10,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      "Most signups a user's share link can be credited with in any 30 days. Signups past it still create the account but credit nobody, so they earn no referral reward. 0 stops share links from crediting anyone.",
     category: 'Referrals',
   }),
   ReferralAlertRewardsPerDay: makeNumberSetting({

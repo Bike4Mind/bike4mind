@@ -36,6 +36,7 @@ export const REWARD_KEYS = {
     'ReferralSecondPaymentCredits',
     'ReferralHoldDays',
     'ReferralInvitesPerUser',
+    'ReferralLinkSignupsPerMonth',
     'ReferralAlertRewardsPerDay',
   ],
   gear: ['gearRewardMinAccountAgeDays'],

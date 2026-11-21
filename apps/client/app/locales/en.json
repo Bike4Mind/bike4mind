@@ -78,7 +78,11 @@
     "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL",
     "reward_first_answer": "You earn <strong>{{credits}} credits</strong> when your friend verifies their email and gets their first answer.",
     "reward_first_payment": "You earn <strong>{{credits}} credits</strong> on your friend's first full-price Professional subscription payment, usable after a hold.",
-    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold."
+    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold.",
+    "share_link_label": "Your share link",
+    "share_link_copy": "Copy",
+    "share_link_copied": "Copied",
+    "share_link_hint": "Anyone who signs up through this link counts as your referral."
   },
   "activateVoice": "Activate this voice",
   "liveVoice": "Live voice",
