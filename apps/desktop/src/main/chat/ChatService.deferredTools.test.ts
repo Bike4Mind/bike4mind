@@ -12,6 +12,9 @@ import type { ModelCatalog } from './ModelCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { CompletionMessage } from './completions';
+import type { WireTool as DeclaredTool } from './deferredTools';
+import { promptFootprint, type BlockFootprint } from '../../../test-utils/requestFootprint';
 
 type WireTool = { toolSchema: { name: string; defer_loading?: boolean } };
 type WireMessage = { role: string; content: unknown; cache?: boolean };
@@ -202,6 +205,55 @@ describe('ChatService deferred tools', () => {
   }
 
   const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
+
+  it('measures the opt-in smaller loaded-tools block on matched reading tasks without claiming billed savings', async () => {
+    const samples: {
+      startSetMaxTokens: number;
+      blocks: Omit<BlockFootprint, 'sha256'>[];
+      requestBytes: number;
+      providerUsage: null;
+      providerCost: null;
+      acceptedLiveResult: null;
+    }[] = [];
+    for (const startSetMaxTokens of [100_000, 0]) {
+      deferredTools = { startSetMaxTokens };
+      const { id } = await service.createSession();
+      const before = post.mock.calls.length;
+      await readingTurn(id, 'Read the fixture.', 'fixture_call');
+      const first = body(before);
+      const second = body(before + 1);
+      expectChangesDeclared(second);
+      expectDeclaredBeforeUse(second);
+      const results = second.messages.flatMap(message => (Array.isArray(message.content) ? message.content : []));
+      expect(results).toContainEqual(
+        expect.objectContaining({ type: 'tool_result', content: expect.stringContaining('z') })
+      );
+      expect(headHash(first)).toBe(headHash(second));
+      const stored = await store.get(id);
+      expect(stored?.messages.some(message => message.content === 'It says z.')).toBe(true);
+      const next = await turn(id, 'Repeat after restart.');
+      service.dispose();
+      service = createService();
+      const restarted = await turn(id, 'Continue.');
+      expect(headHash(next)).toBe(headHash(restarted));
+      expectDeclaredBeforeUse(restarted);
+      const footprint = promptFootprint(first.messages as CompletionMessage[], first.options.tools as DeclaredTool[]);
+      samples.push({
+        startSetMaxTokens,
+        blocks: footprint.map(({ block, bytes, estimatedTokens }) => ({ block, bytes, estimatedTokens })),
+        requestBytes: Buffer.byteLength(JSON.stringify(first)),
+        providerUsage: null,
+        providerCost: null,
+        acceptedLiveResult: null,
+      });
+    }
+    const loaded = (index: number) => samples[index].blocks.find(part => part.block === 'loaded-tools')!;
+    expect(loaded(1).estimatedTokens, 'loaded-tools estimate with zero start set').toBeLessThan(
+      loaded(0).estimatedTokens
+    );
+    if (process.env.B4M_PROMPT_BASELINE === '1')
+      console.info('Sanitized deterministic overhead comparison:', JSON.stringify(samples));
+  });
 
   describe('a tool removed, then called on a turn that was not deferred', () => {
     it('is added back before the replayed call', async () => {
