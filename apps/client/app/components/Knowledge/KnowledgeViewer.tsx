@@ -1428,14 +1428,16 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             if (!response.ok) {
               throw new Error(`Download failed: ${response.status}`);
             }
+            const blob = await response.blob();
+            let data: Blob | string = blob;
             if (isHtmlFile) {
               // A saved HTML artifact still has root-relative library srcs that break off the app host.
-              const html = await inlineBlessedScripts(await response.text());
-              downloadData(html, currentItem.content.fileName, currentItem.content.mimeType);
-            } else {
-              const blob = await response.blob();
-              downloadData(blob, currentItem.content.fileName, currentItem.content.mimeType);
+              // Only a changed result replaces the blob, so an untouched file keeps its bytes and encoding.
+              const text = await blob.text();
+              const inlined = await inlineBlessedScripts(text);
+              if (inlined !== text) data = inlined;
             }
+            downloadData(data, currentItem.content.fileName, currentItem.content.mimeType);
           } catch (error) {
             console.error('Error fetching file content:', error);
             toast.error('Failed to download file');

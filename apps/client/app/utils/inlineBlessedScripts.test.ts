@@ -229,10 +229,94 @@ describe('inlineBlessedScripts', () => {
     }
   });
 
-  it('preserves the case of </SCRIPT when escaping library text', async () => {
+  it('preserves the case of </SCRIPT> when escaping library text', async () => {
     stubFetch(async () => okResponse('var a = "</SCRIPT>" + "</Script>";'));
     const out = await inlineBlessedScripts(`<script src="${CHART}"></script>`);
 
     expect(out).toBe('<script>var a = "<\\/SCRIPT>" + "<\\/Script>";</script>');
+  });
+
+  it('clears the timeout timer once the fetch settles', async () => {
+    vi.useFakeTimers();
+    try {
+      stubFetch(async url => (url.endsWith(CHART) ? okResponse('var lib;') : ({ ok: false } as Response)));
+      await inlineBlessedScripts(`<script src="${CHART}"></script><script src="${REACT}"></script>`);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the timeout timer when the fetch rejects', async () => {
+    vi.useFakeTimers();
+    try {
+      stubFetch(async () => {
+        throw new Error('offline');
+      });
+      await inlineBlessedScripts(`<script src="${CHART}"></script>`);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('inlines a tag whose unquoted attribute value holds an apostrophe, without leaking the library as page text', async () => {
+    stubFetch(async () => okResponse('var lib;'));
+    const out = await inlineBlessedScripts(`<script data-who=Bob's src="${CHART}"></script><p>It's live</p>`);
+
+    expect(out).toBe(`<script data-who=Bob's>var lib;</script><p>It's live</p>`);
+  });
+
+  it('still rewrites a tag that carries a stray quote after the src value', async () => {
+    stubFetch(async () => okResponse('var lib;'));
+    const out = await inlineBlessedScripts(`<script src="${CHART}""></script><p>hi</p>`);
+
+    expect(out).toBe('<script ">var lib;</script><p>hi</p>');
+    expect(out).not.toContain('src=');
+  });
+
+  it('leaves a tag with more than one src unchanged', async () => {
+    const fetchMock = stubFetch(async () => okResponse('x'));
+    const html = [
+      `<script src="${CHART}" src="${REACT}"></script>`,
+      `<script src="https://cdn.example.com/lib.js" src="${CHART}"></script>`,
+    ].join('');
+
+    expect(await inlineBlessedScripts(html)).toBe(html);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([['<!-->'], ['<!--->']])('does not let the abrupt comment %s hide a live blessed tag', async comment => {
+    stubFetch(async () => okResponse('var lib;'));
+    const out = await inlineBlessedScripts(`${comment}<script src="${CHART}"></script>`);
+
+    expect(out).toBe(`${comment}<script>var lib;</script>`);
+  });
+
+  it('treats --!> as the end of a comment', async () => {
+    stubFetch(async () => okResponse('var lib;'));
+    const out = await inlineBlessedScripts(
+      `<!-- <script src="${REACT}"></script> --!><script src="${CHART}"></script>`
+    );
+
+    expect(out).toBe(`<!-- <script src="${REACT}"></script> --!><script>var lib;</script>`);
+  });
+
+  it('treats an unterminated comment as running to the end of the document', async () => {
+    const fetchMock = stubFetch(async () => okResponse('x'));
+    const html = `<p>hi</p><!-- <script src="${CHART}"></script>`;
+
+    expect(await inlineBlessedScripts(html)).toBe(html);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns promptly on an unterminated open tag with many quoted attributes', async () => {
+    const fetchMock = stubFetch(async () => okResponse('x'));
+    const html = `<script ${Array.from({ length: 40 }, (_, i) => `a${i} = "v${i}"`).join(' ')}`;
+
+    expect(await inlineBlessedScripts(html)).toBe(html);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

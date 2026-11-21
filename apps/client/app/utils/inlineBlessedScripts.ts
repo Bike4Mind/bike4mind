@@ -3,11 +3,14 @@ import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
 export const LIBRARY_FETCH_TIMEOUT_MS = 8000;
 
 // Comments and whole script elements, so a tag inside a comment or another script's body is never rewritten.
-// Group 1 is the open tag's attributes (quote-aware: a `>` in a value does not end the tag); undefined for a comment.
-const COMMENT_OR_SCRIPT = /<!--[\s\S]*?-->|<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>(?:[\s\S]*?<\/script\s*>)?/gi;
+// Comment forms follow the HTML parser: `<!-->` and `<!--->` are empty, `--!>` closes, an unterminated one runs to the end.
+// Group 1 is the open tag's attributes, undefined for a comment. A quote delimits only right after `=`, so a stray or
+// apostrophe quote cannot swallow the page, while `>` inside a quoted value still does not end the tag.
+const COMMENT_OR_SCRIPT =
+  /<!--(?:-?>|[\s\S]*?(?:--!?>|$))|<script\b((?:[^>=]|=(?:\s*"[^"]*"|\s*'[^']*'|(?!\s*["'])))*)>(?:[\s\S]*?<\/script\s*>)?/gi;
 
-// Captures: 1 name, then the value as 2 (double-quoted), 3 (single-quoted) or 4 (unquoted).
-const ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+// Captures: 1 name, then the value as 2 (double-quoted), 3 (single-quoted) or 4 (unquoted, may hold quotes).
+const ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>][^\s>]*)))?/g;
 
 interface BlessedScript {
   path: string;
@@ -26,7 +29,7 @@ const parseBlessedScript = (attrs: string, blessed: Set<string>): BlessedScript 
   for (const match of attrs.matchAll(ATTRIBUTE)) {
     const name = match[1].toLowerCase();
     if (name === 'src') {
-      if (sawSrc) continue;
+      if (sawSrc) return null;
       sawSrc = true;
       const path = match[2] ?? match[3] ?? match[4];
       if (path === undefined || !blessed.has(path)) continue;

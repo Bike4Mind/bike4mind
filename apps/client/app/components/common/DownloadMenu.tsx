@@ -43,12 +43,15 @@ const saveHtmlDownload = async (item: ReplyDownload, done: () => void) => {
   );
   try {
     downloadFile(await inlineBlessedScripts(item.content), item.fileName, item.mimeType);
-    done();
+  } catch (error) {
+    console.error('Error preparing HTML download:', error);
+    toast.error('Failed to download HTML');
   } finally {
     clearTimeout(slowTimer);
     toast.dismiss(toastId);
     htmlDownloadsInFlight.delete(key);
   }
+  done();
 };
 
 // Utility: Convert Markdown to DOCX

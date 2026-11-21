@@ -184,6 +184,31 @@ describe('DownloadMenu', () => {
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
     });
 
+    it('reports a failed download with an error toast and releases the in-flight guard', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ ok: true, status: 200, text: async () => 'window.Chart = {};' }) as Response)
+      );
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { createObjectURL } = stubDownloadApis();
+      createObjectURL.mockImplementationOnce(() => {
+        throw new Error('blob failed');
+      });
+      const onClose = vi.fn();
+      renderMenu({ content: HTML_REPLY, fileName: 'reply.md', onClose });
+      openMenu();
+      fireEvent.click(screen.getByTestId('download-menu-detected-sales-chart.html'));
+
+      await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Failed to download HTML'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(toastMock.dismiss).toHaveBeenCalled();
+
+      if (!screen.queryByTestId('download-menu-detected-sales-chart.html')) openMenu();
+      fireEvent.click(await screen.findByTestId('download-menu-detected-sales-chart.html'));
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
+      expect(toastMock.info).not.toHaveBeenCalled();
+    });
+
     it('shows a loading toast only when preparing takes a while, and dismisses it afterwards', async () => {
       vi.useFakeTimers();
       try {

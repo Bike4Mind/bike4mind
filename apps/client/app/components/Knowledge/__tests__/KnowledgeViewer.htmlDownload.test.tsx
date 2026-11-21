@@ -199,20 +199,16 @@ describe('KnowledgeViewer stored file download', () => {
     }) as unknown as IFabFileDocument;
 
   // Routes the signed file URL and the library fetch to separate responses.
-  const stubFileFetch = (body: string) => {
+  const stubFileFetch = (body: BlobPart) => {
+    const blob = new Blob([body]);
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith(CHART_SRC)) {
         return { ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response;
       }
-      return {
-        ok: true,
-        status: 200,
-        text: async () => body,
-        blob: async () => new Blob([body]),
-      } as Response;
+      return { ok: true, status: 200, blob: async () => blob } as Response;
     });
     vi.stubGlobal('fetch', fetchMock);
-    return fetchMock;
+    return { fetchMock, blob };
   };
 
   const openFile = (file: IFabFileDocument) =>
@@ -233,10 +229,11 @@ describe('KnowledgeViewer stored file download', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('inlines blessed libraries into a stored text/html file and keeps its filename', async () => {
-    const fetchMock = stubFileFetch(SAVED_HTML);
+    const { fetchMock } = stubFileFetch(SAVED_HTML);
     openFile(storedFile('text/html', 'sales-chart.html'));
     await renderViewer();
 
@@ -267,5 +264,55 @@ describe('KnowledgeViewer stored file download', () => {
     expect(content).toBeInstanceOf(Blob);
     expect(fileName).toBe('notes.txt');
     expect(mimeType).toBe('text/plain');
+  });
+
+  it('downloads a non-UTF-8 text/html file byte-identical when there is nothing to inline', async () => {
+    // "caf" + 0xE9 is windows-1252 for "cafe" with an acute accent; decoding it as UTF-8 and re-encoding would corrupt it.
+    const bytes = new Uint8Array([...Buffer.from('<html><body><p>caf'), 0xe9, ...Buffer.from('</p></body></html>')]);
+    const { blob } = stubFileFetch(bytes);
+    openFile(storedFile('text/html', 'cafe.html'));
+    await renderViewer();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('knowledgeviewer-download-btn'));
+    });
+
+    expect(h.downloadData).toHaveBeenCalledTimes(1);
+    const [content, fileName, mimeType] = h.downloadData.mock.calls[0];
+    expect(content).toBe(blob);
+    expect(Array.from(new Uint8Array(await (content as Blob).arrayBuffer()))).toEqual(Array.from(bytes));
+    expect(fileName).toBe('cafe.html');
+    expect(mimeType).toBe('text/html');
+  });
+
+  it('resets the busy state when fetching a stored html file fails', async () => {
+    let fail: (reason: Error) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            fail = reject;
+          })
+      )
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    openFile(storedFile('text/html', 'sales-chart.html'));
+    await renderViewer();
+    const button = screen.getByTestId('knowledgeviewer-download-btn');
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(button).toBeDisabled();
+    expect(within(button).getByRole('progressbar')).toBeInTheDocument();
+
+    await act(async () => {
+      fail(new Error('offline'));
+    });
+
+    expect(button).not.toBeDisabled();
+    expect(within(button).queryByRole('progressbar')).toBeNull();
+    expect(h.downloadData).not.toHaveBeenCalled();
   });
 });
