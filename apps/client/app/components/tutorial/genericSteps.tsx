@@ -120,6 +120,16 @@ export interface AttachCue {
 const byTestid = (root: ParentNode, testid: string) =>
   root.querySelector<HTMLElement>(`[data-testid="${CSS.escape(testid)}"]`);
 
+/** The text a node shows. `textContent` also reads a label that CSS hides, as a phone hides Add's. */
+const shownText = (node: Node): string => {
+  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
+  if (node instanceof Element && getComputedStyle(node).display === 'none') return '';
+  return Array.from(node.childNodes).map(shownText).join('');
+};
+
+const ICON_ONLY_ADD = 'the + button';
+const iconOnly = (add: HTMLElement | null) => !!add && !shownText(add).trim();
+
 /**
  * What the attach card points at and says. In the File Browser it rings the sheet itself, then Add once a
  * file is selected. The card finds anchors by testid, so a row is rung only while it is the first one.
@@ -133,8 +143,7 @@ export function readAttachCue(fileId: string | null, fileName: string): AttachCu
   }
   const add = byTestid(dialog, ADD_BUTTON);
   if (add && !(add as HTMLButtonElement).disabled) {
-    const label = add.textContent?.trim() || DEFAULT_ADD_LABEL;
-    return { anchor: ADD_BUTTON, hint: `Press ${label} to add ${fileName}.` };
+    return { anchor: ADD_BUTTON, hint: `Press ${shownText(add).trim() || ICON_ONLY_ADD} to add ${fileName}.` };
   }
   if (fileId && byTestid(dialog, `recent-file-${fileId}`)) {
     return { anchor: `recent-file-${fileId}`, hint: `Select ${fileName}.` };
@@ -150,7 +159,10 @@ export function readAttachCue(fileId: string | null, fileName: string): AttachCu
   if (byTestid(dialog, 'file-browser-search-input')) {
     return { anchor: 'file-browser-search-input', hint: `Search for ${fileName}, then select it.` };
   }
-  return { anchor: ADD_BUTTON, hint: `Select ${fileName}, then press ${DEFAULT_ADD_LABEL}.` };
+  return {
+    anchor: ADD_BUTTON,
+    hint: `Select ${fileName}, then press ${iconOnly(add) ? ICON_ONLY_ADD : DEFAULT_ADD_LABEL}.`,
+  };
 }
 
 /** Follows the attach flow as the user opens it, searches, and selects. */

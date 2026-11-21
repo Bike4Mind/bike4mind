@@ -1171,6 +1171,23 @@ describe('readAttachCue', () => {
     expect(readAttachCue('f1', 'a.csv')).toEqual({ anchor: 'file-browser-list-item', hint: 'Select a.csv.' });
   });
 
+  it('names the + button where a narrow screen hides the Add label', () => {
+    const { add } = browser();
+    add.textContent = '';
+    const label = document.createElement('span');
+    label.style.display = 'none';
+    label.textContent = 'Add 1 File to Notebook';
+    add.appendChild(label);
+    expect(readAttachCue('f1', 'a.csv').hint).toBe('Select a.csv, then press the + button.');
+    add.disabled = false;
+    expect(readAttachCue('f1', 'a.csv')).toEqual({
+      anchor: 'file-browser-add-files-btn',
+      hint: 'Press the + button to add a.csv.',
+    });
+    label.style.display = '';
+    expect(readAttachCue('f1', 'a.csv').hint).toBe('Press Add 1 File to Notebook to add a.csv.');
+  });
+
   it('does not take a longer name for the sheet', () => {
     const { dialog } = browser();
     row(dialog, 'old-a.csv');
