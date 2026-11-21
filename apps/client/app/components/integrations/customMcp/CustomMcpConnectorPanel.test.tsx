@@ -164,7 +164,7 @@ describe('CustomMcpConnectorPanel', () => {
       const description = await screen.findByTestId('custom-mcp-add-description-input');
       expect(description).toHaveAttribute('maxlength', '300');
       expect(screen.getByTestId('custom-mcp-add-form')).toHaveTextContent(
-        'Shown under the name in your Tools menu. Plain text. 0/300'
+        'Shown under the name in your Tools menu. One paragraph of plain text: line breaks and <tags> are removed. 0/300'
       );
       await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Docs server');
       await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.test/mcp');
@@ -178,6 +178,19 @@ describe('CustomMcpConnectorPanel', () => {
         transport: 'auto',
         auth: { kind: 'none' },
       });
+    });
+
+    it('keeps the description to one paragraph: Enter adds no line break and a paste has its breaks folded', async () => {
+      listReturns([]);
+      renderPanel();
+
+      const description = await screen.findByTestId('custom-mcp-add-description-input');
+      await userEvent.type(description, 'a{Enter}{Shift>}{Enter}{/Shift}b');
+      expect(description).toHaveValue('ab');
+      await userEvent.clear(description);
+      await userEvent.click(description);
+      await userEvent.paste('a\n\n b');
+      expect(description).toHaveValue('a b');
     });
 
     it('sends the advanced settings and refuses a reserved tool prefix before submitting', async () => {

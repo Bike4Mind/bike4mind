@@ -3,8 +3,9 @@ import { MCP_CONNECTION_LIMITS } from '@bike4mind/common';
 import type { McpConnectionScope } from '@client/app/hooks/data/mcpConnections';
 
 const DESCRIPTION_HELP: Record<McpConnectionScope, string> = {
-  user: 'Shown under the name in your Tools menu. Plain text.',
-  platform: 'Users offered this connector see it under the name in their Tools menu. Plain text.',
+  user: 'Shown under the name in your Tools menu. One paragraph of plain text: line breaks and <tags> are removed.',
+  platform:
+    'Users offered this connector see it under the name in their Tools menu. One paragraph of plain text: line breaks and <tags> are removed.',
 };
 
 /** The optional description a connector's manager writes; the server cleans it and caps its length. */
@@ -28,7 +29,11 @@ export const McpDescriptionField = ({
       minRows={2}
       maxRows={5}
       value={value}
-      onChange={event => onChange(event.target.value)}
+      onChange={event => onChange(event.target.value.replace(/ *[\r\n]+[ \r\n]*/g, ' '))}
+      onKeyDown={event => {
+        // The server collapses line breaks, so the box never takes one.
+        if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.preventDefault();
+      }}
       slotProps={{ textarea: { maxLength: MCP_CONNECTION_LIMITS.descriptionLength, 'data-testid': testId } }}
     />
     <FormHelperText>
