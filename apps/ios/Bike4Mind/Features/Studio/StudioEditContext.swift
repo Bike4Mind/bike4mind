@@ -5,6 +5,8 @@ import SwiftUI
 struct StudioEditContext {
   let api: any StudioAPI
   let media: any MediaAPI
+  /// The gallery's page-1 source, so the "Morph into" picker shows what the gallery already has.
+  let firstPages: MediaFirstPageStore
   let tracker: GenerationTracker
   let frames: FrameUploader
   /// What the create bar already holds, so "Arrive at this" can keep an attached start frame.

@@ -149,6 +149,8 @@ struct RootView: View {
     let realtime = services.realtime
     Task { await realtime.stop() }
     Task { await services.sessionListCache.clear() }
+    let mediaFirstPages = services.mediaFirstPages
+    Task { await mediaFirstPages.invalidate() }
     services.push.sessionDidEnd()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.
     services.questActivities.sessionDidEnd()

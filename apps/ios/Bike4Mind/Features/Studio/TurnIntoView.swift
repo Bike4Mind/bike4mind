@@ -56,7 +56,7 @@ private struct TurnIntoFlow: ViewModifier {
       }
       .sheet(item: $picking) { source in
         if let context {
-          MorphPickerView(source: source, media: context.media) { second in
+          MorphPickerView(source: source, firstPages: context.firstPages) { second in
             if let seed = TurnInto.seed(.morph, from: source, secondImage: second, current: context.currentInputs()) {
               context.apply(seed)
             }
@@ -84,13 +84,17 @@ private struct TurnIntoFlow: ViewModifier {
 /// Pick the image a morph ends on.
 private struct MorphPickerView: View {
   let source: MediaItem
-  let media: any MediaAPI
+  let firstPages: MediaFirstPageStore
   let onPick: (MediaItem) -> Void
   @State private var images: [MediaItem] = []
   @State private var failed = false
   @Environment(\.dismiss) private var dismiss
 
   private let columns = [GridItem(.adaptive(minimum: 100), spacing: 2)]
+
+  private func pickable(_ page: MediaPage) -> [MediaItem] {
+    page.items.filter { $0.id != source.id }
+  }
 
   var body: some View {
     NavigationStack {
@@ -122,11 +126,12 @@ private struct MorphPickerView: View {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
       }
       .task {
+        if let seeded = await firstPages.seeded(kind: .image) { images = pickable(seeded) }
         do {
-          let page = try await media.listMedia(kind: .image, page: 1, limit: 60)
-          images = page.items.filter { $0.id != source.id }
+          images = pickable(try await firstPages.refresh(kind: .image))
+          failed = false
         } catch {
-          failed = true
+          failed = images.isEmpty
         }
       }
     }
