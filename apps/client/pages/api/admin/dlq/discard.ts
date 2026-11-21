@@ -117,6 +117,7 @@ const handler = adminApi({
     sourceQueue: entry.displayName,
     reason,
     adminUserId,
+    aiSuggestionId,
     messages,
     // A message acquired by ID is hidden; release it so it reappears for a retry right away.
     releaseUnretained: Boolean(messageIds),

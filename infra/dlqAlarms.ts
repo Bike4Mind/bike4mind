@@ -98,7 +98,7 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions } from './dlqTriagePermissions';
 import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
@@ -191,6 +191,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...mentionArgs.permissions,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
         { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
