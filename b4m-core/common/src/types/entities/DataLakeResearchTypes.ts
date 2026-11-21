@@ -388,6 +388,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'lake_inactive',
   /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
   'spend_frozen',
+  /** A manager paused this schedule after the scheduler had already claimed the config. */
+  'schedule_paused',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 
@@ -417,6 +419,11 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   cadence: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See the default's comment. */
   reviewBacklogLimit: number;
+  /**
+   * A manager stopped the scheduled runs without clearing the cadence. Absent reads as false. The
+   * scheduler does not claim a paused config; run now still works.
+   */
+  schedulePaused?: boolean;
   /** When the scheduler next fires this config. Null exactly when `cadence` is `off`. */
   nextRunAt?: Date | null;
   /**
@@ -520,6 +527,88 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   reviewedByRule: 0,
 });
 
+/** The `ResearchRunTotals` keys that count a candidate dropped without a proposal. The rest are totals or sub-counts of `proposed`. */
+export type ResearchDropBucket = Exclude<
+  keyof ResearchRunTotals,
+  'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'
+>;
+
+export interface ResearchDropReason {
+  /** The setting that changes this bucket, or null when no setting applies. */
+  lever: keyof ResearchRunLevers | null;
+  /** `edit_list` for a lever that is a list or a choice the manager edits rather than a number to move. */
+  direction: 'raise' | 'lower' | 'edit_list' | null;
+  /** Surface-neutral: names no setting label, so a panel, an API client and the docs can each add their own nouns. */
+  reason: string;
+}
+
+/**
+ * Where each drop bucket points. Keyed on `ResearchDropBucket`, so a new drop bucket fails the build
+ * until it is placed here. The panel renders it in its own nouns; keep `reason` free of them.
+ */
+export const RESEARCH_DROP_REASONS: Record<ResearchDropBucket, ResearchDropReason> = {
+  filteredBySource: {
+    lever: 'blockedDomains',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on the never list, or had no usable web address.',
+  },
+  unlistedDropped: {
+    lever: 'unlistedSources',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on none of your lists, which are ignored.',
+  },
+  unresolvedRedirect: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was search links that did not reveal their site. This usually clears on the next run.',
+  },
+  belowRelevance: {
+    lever: 'minRelevance',
+    direction: 'lower',
+    reason: 'The largest group scored below the minimum relevance.',
+  },
+  judgeFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group could not be scored because the relevance judge failed. Try the run again.',
+  },
+  fetchFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group of pages could not be fetched or read.',
+  },
+  duplicatePending: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already waiting for review.',
+  },
+  alreadyInLake: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already in the lake.',
+  },
+  suppressedByTombstone: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was declined before and has not changed.',
+  },
+  unusableSource: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group had no usable web address.',
+  },
+  notJudged: {
+    lever: null,
+    direction: null,
+    reason: 'The relevance judge was unavailable, so the rest were not scored. Try the run again later.',
+  },
+  blockedByRule: {
+    lever: 'itemRules',
+    direction: 'edit_list',
+    reason: 'The largest group was blocked by an item rule.',
+  },
+};
+
 export interface IDataLakeResearchRun {
   dataLakeId: string;
   /**
@@ -585,9 +674,10 @@ export type UpdateDataLakeResearchConfigInput = Partial<Omit<ResearchRunLevers, 
   trigger?: ResearchRunTrigger;
   cadence?: ResearchScheduleCadence;
   reviewBacklogLimit?: number;
+  schedulePaused?: boolean;
   nextRunAt?: Date | null;
   scheduleAnchorAt?: Date | null;
-  lastScheduledOutcome?: null;
+  lastScheduledOutcome?: ResearchScheduleOutcome | null;
   lastUpdatedByUserId: string;
 };
 
@@ -606,7 +696,7 @@ export interface SettleResearchRunInput {
 export interface IDataLakeResearchConfigRepository extends IBaseRepository<IDataLakeResearchConfigDocument> {
   createConfig(input: CreateDataLakeResearchConfigInput): Promise<IDataLakeResearchConfigDocument>;
   /** One lake's saved configs, newest first. */
-  listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchConfigDocument[]>;
   /**
    * Fetch a config only if it belongs to the named lake. Scoped rather than a bare findById so a
    * caller cannot reach another lake's config by id through a route that only gated the lake.
@@ -651,7 +741,7 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
     input: Omit<IDataLakeResearchRun, 'status' | 'spentMicroUsd' | 'totals'>
   ): Promise<IDataLakeResearchRunDocument>;
   /** One lake's run history, newest first. */
-  listByLake(dataLakeId: string, options?: { limit?: number }): Promise<IDataLakeResearchRunDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchRunDocument[]>;
   findByIdInLake(id: string, dataLakeId: string): Promise<IDataLakeResearchRunDocument | null>;
   /**
    * Atomically move a QUEUED run to `running`, returning null when it was not queued. The whole
@@ -688,4 +778,10 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    */
   countActiveByLake(dataLakeId: string): Promise<number>;
   deleteForLake(dataLakeId: string): Promise<number>;
+}
+
+/** Keyset window over `{createdAt: -1, _id: -1}`: `after` is the last row of the previous page. */
+export interface ResearchKeysetPage {
+  limit?: number;
+  after?: { createdAt: Date; id: string };
 }

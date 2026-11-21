@@ -1,5 +1,6 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import type {
+  ResearchKeysetPage,
   CreateDataLakeResearchConfigInput,
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
@@ -108,6 +109,7 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     // Defaults rather than `required`, so configs saved before scheduling existed read as unscheduled.
     cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },
     reviewBacklogLimit: { type: Number, default: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT },
+    schedulePaused: { type: Boolean, default: false },
     nextRunAt: { type: Date, default: null },
     scheduleAnchorAt: { type: Date, default: null },
     lastScheduledOutcome: { type: ResearchScheduleOutcomeSchema, default: null },
@@ -125,9 +127,15 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
 );
 
 // One lake's configs, newest first.
-DataLakeResearchConfigSchema.index({ dataLakeId: 1, createdAt: -1 });
+DataLakeResearchConfigSchema.index({ dataLakeId: 1, createdAt: -1, _id: -1 });
 // The research scheduler's due-config scan (claimDueConfigs).
 DataLakeResearchConfigSchema.index({ nextRunAt: 1 });
+
+/** Rows strictly after `after` in `{createdAt: -1, _id: -1}` order; the id breaks createdAt ties. */
+export const keysetFilter = (after: ResearchKeysetPage['after']) =>
+  after
+    ? { $or: [{ createdAt: { $lt: after.createdAt } }, { createdAt: after.createdAt, _id: { $lt: after.id } }] }
+    : {};
 
 export const DataLakeResearchConfigModel: IDataLakeResearchConfigModel =
   (mongoose.models[ModelName] as IDataLakeResearchConfigModel) ||
@@ -163,8 +171,12 @@ class DataLakeResearchConfigRepository
     return this.toConfig(doc);
   }
 
-  async listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]> {
-    const docs = await this.configModel.find({ dataLakeId }).sort({ createdAt: -1 });
+  async listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchConfigDocument[]> {
+    const query = this.configModel
+      .find({ dataLakeId, ...keysetFilter(options?.after) })
+      .sort({ createdAt: -1, _id: -1 });
+    if (options?.limit) query.limit(options.limit);
+    const docs = await query;
     return docs.map(d => this.toConfig(d));
   }
 
@@ -204,7 +216,7 @@ class DataLakeResearchConfigRepository
     // compare-and-set, so two overlapping ticks split the due set instead of both taking all of it.
     while (claimed.length < limit) {
       const doc = await this.configModel.findOneAndUpdate(
-        { cadence: { $ne: 'off' }, nextRunAt: { $lte: now } },
+        { cadence: { $ne: 'off' }, schedulePaused: { $ne: true }, nextRunAt: { $lte: now } },
         { $set: { nextRunAt: leaseUntil } },
         { sort: { nextRunAt: 1 }, new: false }
       );

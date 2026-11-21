@@ -55,7 +55,7 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -135,6 +135,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
     '- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll ' +
       '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
+    '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +
+      '`GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +
@@ -414,6 +416,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       description:
         'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
         "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
+    {
+      name: 'Data Lake Research',
+      description:
+        "Saved research configs, on-demand and scheduled runs, the proposal review queue they fill, and the lake's configuration history. Reading and changing these needs manage rights on the lake.",
     },
     {
       name: 'Projects',
