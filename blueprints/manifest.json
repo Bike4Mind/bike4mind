@@ -166,7 +166,7 @@
     {
       "blueprint": "in-product-tutorials",
       "entry": "base",
-      "blueprintHash": "a1e3977da7a0",
+      "blueprintHash": "6aaab84cd405",
       "appliedAt": "2026-11-21T16:52:23Z",
       "generatedFiles": [
         "b4m-core/common/src/tutorials/",
