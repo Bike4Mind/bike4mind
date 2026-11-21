@@ -92,6 +92,7 @@ export * from './imageGenerationTemplate';
 export * from './qa';
 export * from './imageApi';
 export * from './imageModels';
+export * from './imageJobs';
 export * from './videoGenerations';
 export * from './musicGenerations';
 export * from './sceneCompositions';

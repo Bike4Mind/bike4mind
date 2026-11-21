@@ -31,6 +31,7 @@ import {
 } from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
 import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
+import { IMAGE_JOB_API_ERROR_CODES, IMAGE_JOB_PUBLIC_ERROR_CODES } from './schemas/imageJobs';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
@@ -69,6 +70,8 @@ describe('API_ERROR_CODES', () => {
       VIDEO_JOB_PUBLIC_ERROR_CODES,
       MUSIC_GENERATION_API_ERROR_CODES,
       MUSIC_JOB_PUBLIC_ERROR_CODES,
+      IMAGE_JOB_API_ERROR_CODES,
+      IMAGE_JOB_PUBLIC_ERROR_CODES,
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,

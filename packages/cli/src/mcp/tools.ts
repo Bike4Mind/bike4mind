@@ -10,9 +10,7 @@ import {
   ArtifactTypeSchema,
   CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
-  GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
-  ImagePromptResolutionSchema,
   joinReplySlots,
   PROMPT_TEXT_MAX,
   PublishVisibilitySchema,
@@ -24,8 +22,10 @@ import {
   type TTSRequest,
   type UploadUrlRequest,
   type UploadUrlResponse,
+  type PublicImageJob,
 } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
+import { B4mApiError } from '@bike4mind/sdk';
 import {
   apiErrorCode,
   apiErrorRetryAfterSeconds,
@@ -165,7 +165,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'generate_image',
     title: 'Generate image',
     description:
-      "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
+      'Generate an image from a text prompt and wait for the render. The prompt is sent as written. The image is saved to your Files; returns the job id, the file id and a signed download URL (valid about 15 minutes).',
     scope: 'ai:generate',
   },
   {
@@ -362,11 +362,6 @@ const generateImageShape = {
   prompt: z.string().min(1).describe('Text description of the image to generate'),
   model: z.string().default(ImageModels.GPT_IMAGE_2).describe('Image model id, e.g. gpt-image-2'),
   size: z.string().optional().describe("Image size as 'widthxheight', e.g. 1024x1024; omit for the model default"),
-  notebookId: z.string().optional().describe('Notebook to add the image to; omit to create a new one'),
-  projectId: z.string().optional().describe('Project for the new notebook when notebookId is omitted'),
-  promptResolution: ImagePromptResolutionSchema.optional().describe(
-    "'auto' (default) rewrites the prompt against the notebook history; 'literal' sends it as written"
-  ),
 };
 
 // A new page publishes at the user tier, where 'project' is not allowed (SCOPE_POLICY.user)
@@ -724,7 +719,7 @@ export interface PollOptions<T = QuestResponse> {
 }
 
 const IMAGE_POLL_INTERVAL_MS = 2000;
-// Renders typically finish well under a minute; the cap only stops a wedged quest from
+// Renders typically finish well under a minute; the cap only stops a wedged job from
 // holding the tool call open indefinitely.
 const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_POLL_INTERVAL_MS = 2000;
@@ -745,13 +740,24 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 const chatPollInterval = (elapsedMs: number, intervalMs: number) =>
   elapsedMs < CHAT_POLL_FAST_WINDOW_MS ? intervalMs : Math.max(intervalMs, CHAT_POLL_SLOW_INTERVAL_MS);
 
+/**
+ * Only a cancel stops the job. A running one refuses with a 409 and finishes, which is expected; any other failure
+ * leaves a job running that the caller aborted, so it is logged.
+ */
+async function cancelImageJobAfterAbort(client: B4mApiClient, jobId: string, ref: string): Promise<void> {
+  try {
+    await client.cancelImageJob(jobId);
+  } catch (err) {
+    if (err instanceof B4mApiError && err.status === 409) return;
+    logger.warn(
+      `mcp: cancelling the aborted image job failed (${ref}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 // A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
 // stays 'running', so the type check is what ends the poll on it.
 const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
-
-// `status` is optional on the poll response; a render that already carries its images is
-// finished whatever its status says.
-const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.images?.length);
 
 // Derived here rather than read from the poll's `reply` because older servers return the stored
 // scalar, which can be a stale rapid-reply prefix of the streamed slots.
@@ -863,49 +869,64 @@ async function pollQuest(
   return outcome.value;
 }
 
+const TERMINAL_IMAGE_FAILURES = new Set(['failed', 'blocked', 'cancelled']);
+
+// A succeeded job whose saved file is still being scanned has no url yet, so keep polling past it.
+const isImageJobSettled = (job: PublicImageJob) =>
+  TERMINAL_IMAGE_FAILURES.has(job.state) || (job.state === 'succeeded' && job.output?.availability !== 'pending_scan');
+
 /**
- * Queue an image render and poll its quest to completion. A failed render still
- * resolves `status: 'done'`, so `type: 'error'` (reason in `reply`) is the failure signal.
- * Generated images are not FabFiles, so there is no file id: the quest id is the handle,
- * and each image is its generated-file name plus the URL the quest poll resolves for it
- * (`fileUrl` is a short-lived presigned URL, valid for about an hour).
+ * Create an image job and poll it to completion. The image lands in the user's Files, so the
+ * handle is the job id plus the file id and a short-lived signed URL.
  */
 export async function generateImage(
   client: B4mApiClient,
-  args: Parameters<B4mApiClient['generateImage']>[0],
-  { intervalMs = IMAGE_POLL_INTERVAL_MS, timeoutMs = IMAGE_POLL_TIMEOUT_MS, ...poll }: PollOptions = {}
+  args: Parameters<B4mApiClient['createImageJob']>[0],
+  {
+    intervalMs = IMAGE_POLL_INTERVAL_MS,
+    timeoutMs = IMAGE_POLL_TIMEOUT_MS,
+    baseURL = '',
+    ...poll
+  }: PollOptions<PublicImageJob> = {}
 ) {
-  const ack = await client.generateImage(args);
-  const questId = ack.quest.id;
-  const ref = questRef(questId, ack.quest.sessionId);
-  const quest = await pollQuest(
-    client,
-    { questId, ref, task: 'image generation', scope: 'ai:generate', isFinished: isImageSettled },
-    { ...poll, timeoutMs, interval: () => intervalMs }
-  );
-
-  if (quest.status === 'stopped') {
-    throw new Error(`image generation was stopped (${ref})`);
+  const created = await client.createImageJob(args, randomUUID());
+  const ref = `image job ${created.id}`;
+  let outcome: Awaited<ReturnType<typeof pollUntil<PublicImageJob>>>;
+  try {
+    outcome = await pollUntil(
+      {
+        read: () => client.getImageJob(created.id),
+        ref,
+        task: 'image generation',
+        isFinished: isImageJobSettled,
+        describeError: err => mapApiError(err, baseURL, 'ai:generate'),
+      },
+      { ...poll, timeoutMs, interval: () => intervalMs }
+    );
+  } catch (err) {
+    if (poll.signal?.aborted) await cancelImageJobAfterAbort(client, created.id, ref);
+    throw err;
   }
-  if (quest.type === 'error') {
-    const code = quest.errorCode ? `${quest.errorCode}: ` : '';
-    throw new Error(`${code}${quest.reply || 'image generation failed'} (${ref})`);
+  if (!outcome.finished) {
+    throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
   }
 
-  const urls = new Map((quest.files ?? []).map(f => [f.name, f.url]));
-  const images = (quest.images ?? [])
-    .filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name))
-    .map(name => ({ fileName: name, fileUrl: urls.get(name) }));
-  if (images.length === 0) {
-    throw new Error(`${quest.reply || 'image generation finished without producing an image'} (${ref})`);
+  const job = outcome.value;
+  if (TERMINAL_IMAGE_FAILURES.has(job.state)) {
+    const code = job.error?.code ? `${job.error.code}: ` : '';
+    throw new Error(`${code}${job.error?.message || `image generation ${job.state}`} (${ref})`);
+  }
+  const output = job.output;
+  if (!output || output.availability !== 'ready' || !output.url) {
+    throw new Error(`image generation finished but the image is not available to download (${ref})`);
   }
 
   return {
-    notebookId: quest.sessionId ?? ack.quest.sessionId,
-    questId,
-    model: args.model,
-    enhancedPrompt: ack.enhancedPrompt,
-    images,
+    jobId: job.id,
+    model: job.model,
+    fileId: output.file_id,
+    url: output.url,
+    contentType: output.content_type,
   };
 }
 
