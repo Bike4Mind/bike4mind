@@ -5,6 +5,14 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DownloadMenu from './DownloadMenu';
 
+const toastMock = vi.hoisted(() => ({
+  info: vi.fn(),
+  error: vi.fn(),
+  loading: vi.fn(),
+  dismiss: vi.fn(),
+}));
+vi.mock('sonner', () => ({ toast: toastMock }));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -43,6 +51,7 @@ function stubDownloadApis() {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  Object.values(toastMock).forEach(mock => mock.mockClear());
 });
 
 describe('DownloadMenu', () => {
@@ -138,6 +147,73 @@ describe('DownloadMenu', () => {
       expect(text).not.toContain('src="/static/lib/');
       expect(text).toContain('<script>window.Chart = {};</script>');
       expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a second trigger while the first download is still being prepared', async () => {
+      let release: (response: Response) => void = () => undefined;
+      const fetchMock = vi.fn(
+        () =>
+          new Promise<Response>(resolve => {
+            release = resolve;
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { createObjectURL } = stubDownloadApis();
+      const onClose = vi.fn();
+      renderMenu({ content: HTML_REPLY, fileName: 'reply.md', onClose });
+      openMenu();
+      fireEvent.click(screen.getByTestId('download-menu-detected-sales-chart.html'));
+
+      // The menu closes on pick, so reopen it for the second trigger.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      if (!screen.queryByTestId('download-menu-detected-sales-chart.html')) openMenu();
+      fireEvent.click(await screen.findByTestId('download-menu-detected-sales-chart.html'));
+
+      expect(toastMock.info).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(createObjectURL).not.toHaveBeenCalled();
+
+      release({ ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response);
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      // The guard clears once the download finishes.
+      if (!screen.queryByTestId('download-menu-detected-sales-chart.html')) openMenu();
+      fireEvent.click(await screen.findByTestId('download-menu-detected-sales-chart.html'));
+      release({ ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response);
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
+    });
+
+    it('shows a loading toast only when preparing takes a while, and dismisses it afterwards', async () => {
+      vi.useFakeTimers();
+      try {
+        let release: (response: Response) => void = () => undefined;
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            () =>
+              new Promise<Response>(resolve => {
+                release = resolve;
+              })
+          )
+        );
+        const { createObjectURL } = stubDownloadApis();
+        renderMenu({ content: HTML_REPLY, fileName: 'reply.md' });
+        openMenu();
+        fireEvent.click(screen.getByTestId('download-menu-detected-sales-chart.html'));
+
+        await vi.advanceTimersByTimeAsync(100);
+        expect(toastMock.loading).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(400);
+        expect(toastMock.loading).toHaveBeenCalledTimes(1);
+
+        release({ ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(createObjectURL).toHaveBeenCalledTimes(1);
+        expect(toastMock.dismiss).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('still downloads when the library cannot be fetched, with an absolute src', async () => {

@@ -24,6 +24,33 @@ export const downloadFile = (content: string, fileName: string, mimeType: string
   URL.revokeObjectURL(url);
 };
 
+const SLOW_PREPARE_TOAST_DELAY_MS = 400;
+
+// Module scope: the menu unmounts on every pick, so a per-instance guard would reset on reopen.
+const htmlDownloadsInFlight = new Set<string>();
+
+const saveHtmlDownload = async (item: ReplyDownload, done: () => void) => {
+  const key = `${item.fileName}\n${item.content}`;
+  if (htmlDownloadsInFlight.has(key)) {
+    toast.info('This download is still being prepared');
+    return;
+  }
+  htmlDownloadsInFlight.add(key);
+  const toastId = `download-prepare-${item.fileName}`;
+  const slowTimer = setTimeout(
+    () => toast.loading('Preparing download...', { id: toastId }),
+    SLOW_PREPARE_TOAST_DELAY_MS
+  );
+  try {
+    downloadFile(await inlineBlessedScripts(item.content), item.fileName, item.mimeType);
+    done();
+  } finally {
+    clearTimeout(slowTimer);
+    toast.dismiss(toastId);
+    htmlDownloadsInFlight.delete(key);
+  }
+};
+
 // Utility: Convert Markdown to DOCX
 export const convertMarkdownToDocx = async (markdown: string): Promise<Blob> => {
   const html = await marked.parse(markdown, {
@@ -238,12 +265,12 @@ export const ReplyDownloadMenuItems: React.FC<{ content: string; fileName: strin
           className="download-menu-item-detected"
           data-testid={`download-menu-detected-${item.key}`}
           onClick={() => {
-            const save = (content: string) => {
-              downloadFile(content, item.fileName, item.mimeType);
-              done();
-            };
-            if (item.mimeType === 'text/html') void inlineBlessedScripts(item.content).then(save);
-            else save(item.content);
+            if (item.mimeType === 'text/html') {
+              void saveHtmlDownload(item, done);
+              return;
+            }
+            downloadFile(item.content, item.fileName, item.mimeType);
+            done();
           }}
         >
           {item.label}

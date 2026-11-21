@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, act, cleanup, screen, fireEvent } from '@testing-library/react';
+import { render, act, cleanup, screen, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { HtmlArtifact } from '@bike4mind/common';
+import type { HtmlArtifact, IFabFileDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   downloadFile: vi.fn(),
+  downloadData: vi.fn(),
+}));
+
+vi.mock('@client/app/utils/download', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/download')>()),
+  downloadData: h.downloadData,
 }));
 
 vi.mock('@client/app/contexts/SessionsContext', () => ({
@@ -145,5 +151,121 @@ describe('KnowledgeViewer html artifact download', () => {
     const [content] = h.downloadFile.mock.calls[0];
     expect(content).not.toContain('src="/static/lib/');
     expect(content).toContain(`src="${window.location.origin}${CHART_SRC}"`);
+  });
+
+  it('disables the download button and shows a spinner while the html download is being prepared', async () => {
+    let release: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>(resolve => {
+          release = resolve;
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await renderViewer();
+    const button = screen.getByTestId('knowledgeviewer-download-btn');
+    expect(button).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(button).toBeDisabled();
+    expect(within(button).getByRole('progressbar')).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(h.downloadFile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      release({ ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response);
+    });
+
+    expect(button).not.toBeDisabled();
+    expect(within(button).queryByRole('progressbar')).toBeNull();
+    expect(h.downloadFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('KnowledgeViewer stored file download', () => {
+  const SAVED_HTML = `<html><body><script src="${CHART_SRC}"></script></body></html>`;
+
+  const storedFile = (mimeType: string, fileName: string) =>
+    ({
+      id: 'file-1',
+      fileName,
+      mimeType,
+      fileUrl: 'https://files.example.com/signed/file-1',
+      createdAt: new Date(),
+    }) as unknown as IFabFileDocument;
+
+  // Routes the signed file URL and the library fetch to separate responses.
+  const stubFileFetch = (body: string) => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith(CHART_SRC)) {
+        return { ok: true, status: 200, text: async () => 'window.Chart = {};' } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => body,
+        blob: async () => new Blob([body]),
+      } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+
+  const openFile = (file: IFabFileDocument) =>
+    useSessionLayout.setState({
+      layout: 'vertical',
+      recentArtifacts: [],
+      artifactData: undefined,
+      selectedArtifactId: undefined,
+      previewFile: file,
+    });
+
+  beforeEach(() => {
+    h.downloadData.mockClear();
+    h.downloadFile.mockClear();
+    setKnowledgeViewer({ selectedTabIndex: 0, showLineNumbers: false });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('inlines blessed libraries into a stored text/html file and keeps its filename', async () => {
+    const fetchMock = stubFileFetch(SAVED_HTML);
+    openFile(storedFile('text/html', 'sales-chart.html'));
+    await renderViewer();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('knowledgeviewer-download-btn'));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('https://files.example.com/signed/file-1');
+    expect(h.downloadData).toHaveBeenCalledTimes(1);
+    const [content, fileName, mimeType] = h.downloadData.mock.calls[0];
+    expect(fileName).toBe('sales-chart.html');
+    expect(mimeType).toBe('text/html');
+    expect(content).not.toContain('src="/static/lib/');
+    expect(content).toContain('<script>window.Chart = {};</script>');
+  });
+
+  it('downloads other stored files as the untouched blob', async () => {
+    stubFileFetch(SAVED_HTML);
+    openFile(storedFile('text/plain', 'notes.txt'));
+    await renderViewer();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('knowledgeviewer-download-btn'));
+    });
+
+    expect(h.downloadData).toHaveBeenCalledTimes(1);
+    const [content, fileName, mimeType] = h.downloadData.mock.calls[0];
+    expect(content).toBeInstanceOf(Blob);
+    expect(fileName).toBe('notes.txt');
+    expect(mimeType).toBe('text/plain');
   });
 });
