@@ -8147,6 +8147,8 @@ export interface components {
         organization_id: string | null;
         is_public: boolean;
         built_in: boolean;
+        /** @description True when the caller can manage research, proposals and settings on this lake. False for a lake the caller can only read, and for built-in lakes. Research routes answer 403 when this is false. */
+        can_manage: boolean;
         /** @enum {string} */
         status:
           | 'draft'
@@ -8175,6 +8177,8 @@ export interface components {
       organization_id: string | null;
       is_public: boolean;
       built_in: boolean;
+      /** @description True when the caller can manage research, proposals and settings on this lake. False for a lake the caller can only read, and for built-in lakes. Research routes answer 403 when this is false. */
+      can_manage: boolean;
       /** @enum {string} */
       status:
         | 'draft'
@@ -8307,18 +8311,23 @@ export interface components {
         query: string;
         /** @description The relevance judge model. Null means the platform default. */
         model: string | null;
+        /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
         max_results: number;
+        /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
         max_proposals: number;
-        /** @description Null means no recency constraint. */
+        /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
         recency_days: number | null;
         trusted_domains: string[];
         review_domains: string[];
         /** @enum {string} */
         unlisted_sources: 'review' | 'drop';
         auto_admit_trusted: boolean;
+        /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
         max_auto_admits: number;
         blocked_domains: string[];
+        /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
         min_relevance: number;
+        /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
         cost_ceiling_micro_usd: number;
         proposed_tags: string[];
         item_rules: {
@@ -8337,6 +8346,7 @@ export interface components {
         trigger: 'on_demand' | 'periodic' | 'scheduled';
         /** @enum {string} */
         cadence: 'off' | 'daily' | 'weekly' | 'monthly';
+        /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
         review_backlog_limit: number;
         /** @description Scheduled runs are stopped. The cadence is kept and run-now still works. */
         schedule_paused: boolean;
@@ -8389,18 +8399,23 @@ export interface components {
         query: string;
         /** @description The relevance judge model. Null means the platform default. */
         model: string | null;
+        /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
         max_results: number;
+        /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
         max_proposals: number;
-        /** @description Null means no recency constraint. */
+        /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
         recency_days: number | null;
         trusted_domains: string[];
         review_domains: string[];
         /** @enum {string} */
         unlisted_sources: 'review' | 'drop';
         auto_admit_trusted: boolean;
+        /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
         max_auto_admits: number;
         blocked_domains: string[];
+        /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
         min_relevance: number;
+        /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
         cost_ceiling_micro_usd: number;
         proposed_tags: string[];
         item_rules: {
@@ -8419,6 +8434,7 @@ export interface components {
         trigger: 'on_demand' | 'periodic' | 'scheduled';
         /** @enum {string} */
         cadence: 'off' | 'daily' | 'weekly' | 'monthly';
+        /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
         review_backlog_limit: number;
         /** @description Scheduled runs are stopped. The cadence is kept and run-now still works. */
         schedule_paused: boolean;
@@ -8480,17 +8496,23 @@ export interface components {
       /** @description What each run researches. */
       query: string;
       model?: string | null;
+      /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
       max_results?: number;
+      /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
       max_proposals?: number;
+      /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
       recency_days?: number | null;
       trusted_domains?: string[];
       review_domains?: string[];
       /** @enum {string} */
       unlisted_sources?: 'review' | 'drop';
       auto_admit_trusted?: boolean;
+      /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
       max_auto_admits?: number;
       blocked_domains?: string[];
+      /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
       min_relevance?: number;
+      /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
       cost_ceiling_micro_usd?: number;
       proposed_tags?: string[];
       item_rules?: {
@@ -8504,6 +8526,7 @@ export interface components {
       }[];
       /** @enum {string} */
       cadence?: 'off' | 'daily' | 'weekly' | 'monthly';
+      /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
       review_backlog_limit?: number;
       schedule_paused?: boolean;
       name: string;
@@ -8516,18 +8539,23 @@ export interface components {
         query: string;
         /** @description The relevance judge model. Null means the platform default. */
         model: string | null;
+        /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
         max_results: number;
+        /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
         max_proposals: number;
-        /** @description Null means no recency constraint. */
+        /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
         recency_days: number | null;
         trusted_domains: string[];
         review_domains: string[];
         /** @enum {string} */
         unlisted_sources: 'review' | 'drop';
         auto_admit_trusted: boolean;
+        /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
         max_auto_admits: number;
         blocked_domains: string[];
+        /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
         min_relevance: number;
+        /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
         cost_ceiling_micro_usd: number;
         proposed_tags: string[];
         item_rules: {
@@ -8546,6 +8574,7 @@ export interface components {
         trigger: 'on_demand' | 'periodic' | 'scheduled';
         /** @enum {string} */
         cadence: 'off' | 'daily' | 'weekly' | 'monthly';
+        /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
         review_backlog_limit: number;
         /** @description Scheduled runs are stopped. The cadence is kept and run-now still works. */
         schedule_paused: boolean;
@@ -8597,18 +8626,23 @@ export interface components {
         query: string;
         /** @description The relevance judge model. Null means the platform default. */
         model: string | null;
+        /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
         max_results: number;
+        /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
         max_proposals: number;
-        /** @description Null means no recency constraint. */
+        /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
         recency_days: number | null;
         trusted_domains: string[];
         review_domains: string[];
         /** @enum {string} */
         unlisted_sources: 'review' | 'drop';
         auto_admit_trusted: boolean;
+        /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
         max_auto_admits: number;
         blocked_domains: string[];
+        /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
         min_relevance: number;
+        /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
         cost_ceiling_micro_usd: number;
         proposed_tags: string[];
         item_rules: {
@@ -8627,6 +8661,7 @@ export interface components {
         trigger: 'on_demand' | 'periodic' | 'scheduled';
         /** @enum {string} */
         cadence: 'off' | 'daily' | 'weekly' | 'monthly';
+        /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
         review_backlog_limit: number;
         /** @description Scheduled runs are stopped. The cadence is kept and run-now still works. */
         schedule_paused: boolean;
@@ -8681,17 +8716,23 @@ export interface components {
       feed_url?: string | null;
       query?: string;
       model?: string | null;
+      /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
       max_results?: number;
+      /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
       max_proposals?: number;
+      /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
       recency_days?: number | null;
       trusted_domains?: string[];
       review_domains?: string[];
       /** @enum {string} */
       unlisted_sources?: 'review' | 'drop';
       auto_admit_trusted?: boolean;
+      /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
       max_auto_admits?: number;
       blocked_domains?: string[];
+      /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
       min_relevance?: number;
+      /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
       cost_ceiling_micro_usd?: number;
       proposed_tags?: string[];
       item_rules?: {
@@ -8705,6 +8746,7 @@ export interface components {
       }[];
       /** @enum {string} */
       cadence?: 'off' | 'daily' | 'weekly' | 'monthly';
+      /** @description Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500. */
       review_backlog_limit?: number;
       schedule_paused?: boolean;
       name?: string;
@@ -8733,18 +8775,23 @@ export interface components {
           query: string;
           /** @description The relevance judge model. Null means the platform default. */
           model: string | null;
+          /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
           max_results: number;
+          /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
           max_proposals: number;
-          /** @description Null means no recency constraint. */
+          /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
           recency_days: number | null;
           trusted_domains: string[];
           review_domains: string[];
           /** @enum {string} */
           unlisted_sources: 'review' | 'drop';
           auto_admit_trusted: boolean;
+          /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
           max_auto_admits: number;
           blocked_domains: string[];
+          /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
           min_relevance: number;
+          /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
           cost_ceiling_micro_usd: number;
           proposed_tags: string[];
           item_rules: {
@@ -8867,18 +8914,23 @@ export interface components {
           query: string;
           /** @description The relevance judge model. Null means the platform default. */
           model: string | null;
+          /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
           max_results: number;
+          /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
           max_proposals: number;
-          /** @description Null means no recency constraint. */
+          /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
           recency_days: number | null;
           trusted_domains: string[];
           review_domains: string[];
           /** @enum {string} */
           unlisted_sources: 'review' | 'drop';
           auto_admit_trusted: boolean;
+          /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
           max_auto_admits: number;
           blocked_domains: string[];
+          /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
           min_relevance: number;
+          /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
           cost_ceiling_micro_usd: number;
           proposed_tags: string[];
           item_rules: {
@@ -8948,18 +9000,23 @@ export interface components {
           query: string;
           /** @description The relevance judge model. Null means the platform default. */
           model: string | null;
+          /** @description How many search results or feed items one run looks at. An integer from 1 to 50. */
           max_results: number;
+          /** @description The most proposals one run may add to the queue. An integer from 1 to 25. */
           max_proposals: number;
-          /** @description Null means no recency constraint. */
+          /** @description Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint. */
           recency_days: number | null;
           trusted_domains: string[];
           review_domains: string[];
           /** @enum {string} */
           unlisted_sources: 'review' | 'drop';
           auto_admit_trusted: boolean;
+          /** @description The most sources one run may admit without a reviewer. An integer from 1 to 25. */
           max_auto_admits: number;
           blocked_domains: string[];
+          /** @description The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%. */
           min_relevance: number;
+          /** @description The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00). */
           cost_ceiling_micro_usd: number;
           proposed_tags: string[];
           item_rules: {
@@ -25542,7 +25599,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26095,7 +26152,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26475,7 +26532,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. Also returned, tagged `errorCode: "insufficient_credits"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. Also returned, tagged `errorCode: "insufficient_credits"`, when the lake owner's credits cannot cover the run cost ceiling. Nothing is started. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -27082,7 +27139,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, has an unknown field, or a value is the wrong type. */
+      /** @description The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

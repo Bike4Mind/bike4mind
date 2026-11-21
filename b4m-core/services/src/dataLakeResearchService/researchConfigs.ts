@@ -25,6 +25,8 @@ import {
   researchAutoAdmitChange,
   researchConfigChange,
   researchItemRulesChange,
+  researchReviewBacklogLimitChange,
+  researchScheduleCadenceChange,
   researchSchedulePausedChange,
   researchSourceChange,
   researchTrustedSitesChange,
@@ -431,9 +433,22 @@ export async function updateResearchConfig(
   // Switching the cadence off clears the flag, but that is the schedule going off, not a resume.
   const pauseChanges =
     nextPaused !== wasPaused && cadence !== 'off' ? [researchSchedulePausedChange(updated.name, nextPaused)] : [];
-  if (nothingMoved && pauseChanges.length > 0) {
+  // Cadence and the backlog limit are schedule settings, not levers, so `leversMoved` never sees them.
+  const previousBacklogLimit = normalizeReviewBacklogLimit(existing.reviewBacklogLimit);
+  const nextBacklogLimit =
+    input.reviewBacklogLimit !== undefined
+      ? normalizeReviewBacklogLimit(input.reviewBacklogLimit)
+      : previousBacklogLimit;
+  const scheduleChanges = [
+    ...pauseChanges,
+    ...(cadence !== currentCadence ? [researchScheduleCadenceChange(updated.name, currentCadence, cadence)] : []),
+    ...(nextBacklogLimit !== previousBacklogLimit
+      ? [researchReviewBacklogLimitChange(updated.name, previousBacklogLimit, nextBacklogLimit)]
+      : []),
+  ];
+  if (nothingMoved && scheduleChanges.length > 0) {
     await recordLakeConfigChange(
-      { actor, lake, grants, action: 'update-research-config', changes: pauseChanges },
+      { actor, lake, grants, action: 'update-research-config', changes: scheduleChanges },
       { db, logger }
     );
   } else if (!nothingMoved) {
@@ -447,7 +462,7 @@ export async function updateResearchConfig(
         // reads by its current name here rather than by whatever this caller happened to submit.
         changes: [
           researchConfigChange(updated.name, 'updated'),
-          ...pauseChanges,
+          ...scheduleChanges,
           ...(merged.autoAdmitTrusted !== (existing.autoAdmitTrusted === true)
             ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
             : []),
