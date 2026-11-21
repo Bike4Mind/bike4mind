@@ -71,6 +71,16 @@ describe('TOOL_NAMES', () => {
       'get_bob_comparison',
       'list_bob_reports',
       'bob_runs_left',
+      'list_research_configs',
+      'create_research_config',
+      'update_research_config',
+      'delete_research_config',
+      'run_research',
+      'get_research_run',
+      'list_research_runs',
+      'list_research_proposals',
+      'decide_research_proposal',
+      'get_lake_config_history',
     ]);
   });
 });

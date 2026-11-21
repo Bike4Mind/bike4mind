@@ -44,6 +44,7 @@ import {
   type RawProject,
   NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
+import { RESEARCH_TOOL_META, registerResearchTools } from './researchTools.js';
 import { logger } from '../utils/Logger.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -232,6 +233,7 @@ export const TOOL_META: ToolMeta[] = [
       "How many Bob runs the key owner can start now under the daily limit, when the next one frees up, and whether the account's credits cover a full read. A comparison uses two runs.",
     scope: 'bob:read',
   },
+  ...RESEARCH_TOOL_META,
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -1640,4 +1642,6 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     },
     args => runBob('bob:read', () => bobRunsLeft(client, args))
   );
+
+  registerResearchTools(server, client, run);
 }

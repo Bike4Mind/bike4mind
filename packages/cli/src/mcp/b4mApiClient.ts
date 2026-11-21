@@ -317,6 +317,13 @@ export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> 
   promptText?: string;
 };
 
+interface Page {
+  limit: number;
+  cursor?: string;
+}
+
+const pageQuery = ({ limit, cursor }: Page) => ({ limit, ...(cursor ? { cursor } : {}) });
+
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
  * endpoints the MCP tools call. All routes are `baseApi()` routes that accept
@@ -399,6 +406,65 @@ export class B4mApiClient {
       query: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
     });
     return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listResearchConfigs(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchConfigs', {
+      params: { id: lakeId },
+      query: pageQuery(page),
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async createResearchConfig(lakeId: string, body: JsonBody<'createDataLakeResearchConfig'>) {
+    return (await this.sdk.call('createDataLakeResearchConfig', { params: { id: lakeId }, body })).data;
+  }
+
+  async updateResearchConfig(lakeId: string, configId: string, body: JsonBody<'updateDataLakeResearchConfig'>) {
+    return (await this.sdk.call('updateDataLakeResearchConfig', { params: { id: lakeId, config_id: configId }, body }))
+      .data;
+  }
+
+  async deleteResearchConfig(lakeId: string, configId: string): Promise<void> {
+    await this.sdk.call('deleteDataLakeResearchConfig', {
+      params: { id: lakeId, config_id: configId },
+      redirect: 'manual',
+    });
+  }
+
+  async startResearchRun(lakeId: string, configId: string) {
+    return (await this.sdk.call('startDataLakeResearchRun', { params: { id: lakeId }, body: { config_id: configId } }))
+      .data;
+  }
+
+  async getResearchRun(lakeId: string, runId: string) {
+    return (await this.sdk.call('getDataLakeResearchRun', { params: { id: lakeId, run_id: runId } })).data;
+  }
+
+  async listResearchRuns(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchRuns', { params: { id: lakeId }, query: pageQuery(page) });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listProposals(lakeId: string, args: Page & { status?: 'pending' | 'approved' | 'declined' }) {
+    const result = await this.sdk.call('listDataLakeProposals', {
+      params: { id: lakeId },
+      query: { ...pageQuery(args), ...(args.status ? { status: args.status } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async decideProposal(lakeId: string, proposalId: string, body: JsonBody<'decideDataLakeProposal'>) {
+    return this.sdk.call('decideDataLakeProposal', { params: { id: lakeId, proposal_id: proposalId }, body });
+  }
+
+  async getConfigHistory(lakeId: string, limit?: number) {
+    return (
+      await this.sdk.call('getDataLakeConfigHistory', {
+        params: { id: lakeId },
+        query: limit === undefined ? {} : { limit },
+      })
+    ).data;
   }
 
   async sendChat(args: {
