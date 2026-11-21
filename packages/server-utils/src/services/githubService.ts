@@ -74,6 +74,7 @@ export interface GitHubIssue {
   html_url: string;
   labels: Array<{ name: string; color: string }>;
   assignees: Array<{ login: string }>;
+  user: { login: string } | null;
   created_at: string;
   updated_at: string;
   closed_at?: string | null; // Available for closed issues
@@ -187,7 +188,8 @@ export interface GitHubCommit {
  * Options for listing merged pull requests
  */
 export interface ListMergedPRsOptions {
-  base: string;
+  /** Target branch; omit to include PRs merged into any branch. */
+  base?: string;
   since: Date;
   perPage?: number;
 }
@@ -924,6 +926,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
@@ -981,6 +984,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
@@ -1027,6 +1031,7 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
@@ -1064,6 +1069,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+          user: result.data.user ? { login: result.data.user.login } : null,
           created_at: result.data.created_at,
           updated_at: result.data.updated_at,
           closed_at: result.data.closed_at ?? null,
@@ -1117,6 +1123,7 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
@@ -1467,7 +1474,7 @@ export class GitHubService {
         owner,
         repo: repoName,
         state: 'closed',
-        base: options.base,
+        ...(options.base ? { base: options.base } : {}),
         sort: 'updated',
         direction: 'desc',
         per_page: options.perPage || 100,
