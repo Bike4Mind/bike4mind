@@ -211,6 +211,18 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  async hasLapsedSubscriptionsByOwners(
+    ownerType: SubscriptionOwnerType,
+    ownerIds: readonly string[]
+  ): Promise<boolean> {
+    if (ownerIds.length === 0) return false;
+    return !!(await this.model.exists({
+      ownerType,
+      ownerId: { $in: [...ownerIds] },
+      status: { $in: ['canceled', 'past_due', 'unpaid', 'paused'] },
+    }));
+  }
+
   /**
    * Same read as findActiveSubscriptionsByOwner minus the active-only predicate: a
    * deny-list on the terminal states, so a `past_due` owner still sees the subscription

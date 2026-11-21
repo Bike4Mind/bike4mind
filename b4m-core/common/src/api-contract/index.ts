@@ -77,6 +77,7 @@ export {
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
+export { getSessionByIdContract } from './contracts/sessionGetById.contract';
 export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
 export { listSessionFilesContract } from './contracts/sessionFiles.contract';
 export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
@@ -95,6 +96,19 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
+export {
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+} from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
   cancelVideoGenerationContract,

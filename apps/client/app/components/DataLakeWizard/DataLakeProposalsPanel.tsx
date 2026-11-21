@@ -417,7 +417,12 @@ export function DataLakeProposalsPanel({
                   </Stack>
                 )
               ) : decliningId === proposal.id ? (
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}
+                  data-testid="datalake-proposal-decline-row"
+                >
                   <Input
                     size="sm"
                     value={reason}
@@ -425,7 +430,7 @@ export function DataLakeProposalsPanel({
                     disabled={busy}
                     placeholder="Why are you declining? (optional)"
                     onChange={e => setReason(e.target.value)}
-                    sx={{ flex: 1 }}
+                    sx={{ flex: 1, minWidth: '12rem' }}
                     slotProps={{ input: { 'data-testid': 'datalake-proposal-decline-reason' } }}
                   />
                   <Button

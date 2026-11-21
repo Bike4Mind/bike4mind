@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1250 routes: 120 contracted, 11 aliases of another route, 341 with no static caller in `apps/client/app`.
+1258 routes: 128 contracted, 11 aliases of another route, 349 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 118 | 114 | 101 | 10 | 0 | 7 | 104 |
+| v1 | 126 | 122 | 109 | 10 | 0 | 7 | 112 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1870,7 +1870,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | - | yes | - | 0 |
 | `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/files/[file_id]` | GET, POST, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST, DELETE: `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/proposals` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/proposals/[proposal_id]` | POST | jwt+key | `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/research/configs` | GET, POST | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST: `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/research/configs/[config_id]` | GET, PATCH, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; PATCH, DELETE: `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/research/runs` | GET, POST | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST: `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/research/runs/[run_id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/search` | POST | jwt+key | `datalake:query` | - | yes | - | 0 |
 | `/api/v1/decision-models` | GET | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/decisions` | POST | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
@@ -1921,6 +1928,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/scene-compositions/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/session-handoffs` | POST | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/[id]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/sessions/[id]/files` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/sessions/[id]/messages/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | - | 0 |

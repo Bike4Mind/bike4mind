@@ -109,7 +109,7 @@ final class CreditsViewModelTests: XCTestCase {
   func testLoadsBalance() async {
     let api = FakeAPI()
     await api.setBalance(CreditBalance(credits: 31667))
-    let model = CreditsViewModel(api: api)
+    let model = CreditsViewModel(fetch: { try await api.creditBalance() })
     await model.load()
     XCTAssertEqual(model.balance?.credits, 31667)
     XCTAssertEqual(model.state, .loaded)
@@ -118,10 +118,10 @@ final class CreditsViewModelTests: XCTestCase {
   func testFailureKeepsThePreviousBalance() async {
     let api = FakeAPI()
     await api.setBalance(CreditBalance(credits: 5))
-    let model = CreditsViewModel(api: api)
+    let model = CreditsViewModel(fetch: { try await api.creditBalance() })
     await model.load()
     await api.setFailure(.offline)
-    await model.load()
+    await model.load(force: true)
     XCTAssertEqual(model.balance?.credits, 5)
     XCTAssertEqual(model.state, .failed(.offline))
   }

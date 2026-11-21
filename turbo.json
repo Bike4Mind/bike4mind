@@ -288,6 +288,7 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
@@ -312,6 +313,7 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },

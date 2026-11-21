@@ -81,6 +81,26 @@ describe('DataLakeResearchConfigRepository', () => {
     expect(listed.map(c => c.name)).toEqual(['newer', 'older']);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const name of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createConfig(input({ name }))).id);
+    await DataLakeResearchConfigModel.collection.updateMany(
+      { dataLakeId: LAKE },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   describe('lake scoping', () => {
     it('will not read a config through another lake id', async () => {
       const created = await repo.createConfig(input());
@@ -180,6 +200,28 @@ describe('DataLakeResearchConfigRepository', () => {
       expect(claimed.map(c => c.id)).toEqual([due.id]);
       expect(claimed[0].nextRunAt).toEqual(new Date('2026-03-10T09:00:00.000Z'));
       expect((await repo.findByIdInLake(due.id, LAKE))?.nextRunAt).toEqual(LEASE);
+    });
+
+    it('does not claim a paused config, and still records an outcome for one paused mid-tick', async () => {
+      const paused = await scheduled(new Date('2026-03-10T09:00:00.000Z'), { schedulePaused: true });
+
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(0);
+
+      const next = new Date('2026-03-17T09:00:00.000Z');
+      await repo.recordScheduleOutcome(
+        paused.id,
+        'daily',
+        { outcome: 'skipped', at: NOW, reason: 'schedule_paused' },
+        next
+      );
+      const stored = await repo.findByIdInLake(paused.id, LAKE);
+      expect(stored?.nextRunAt).toEqual(next);
+      expect(stored?.lastScheduledOutcome).toMatchObject({ reason: 'schedule_paused' });
+    });
+
+    it('reads a config with no schedulePaused as not paused, and claims it', async () => {
+      await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(1);
     });
 
     // The lease is what stops two overlapping ticks from both starting the same config.

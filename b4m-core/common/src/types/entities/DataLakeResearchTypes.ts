@@ -64,7 +64,7 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'time_budget',
   /**
    * The judge failed several times in a row before scoring anything, so the run stopped instead of
-   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or `totals.filteredBySource` if a source rule blocks them.
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or in a source-rule bucket (`totals.filteredBySource`, `totals.unlistedDropped`) if a rule drops them.
    */
   'judge_unavailable',
 ] as const;
@@ -388,6 +388,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'lake_inactive',
   /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
   'spend_frozen',
+  /** A manager paused this schedule after the scheduler had already claimed the config. */
+  'schedule_paused',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 
@@ -417,6 +419,11 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   cadence: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See the default's comment. */
   reviewBacklogLimit: number;
+  /**
+   * A manager stopped the scheduled runs without clearing the cadence. Absent reads as false. The
+   * scheduler does not claim a paused config; run now still works.
+   */
+  schedulePaused?: boolean;
   /** When the scheduler next fires this config. Null exactly when `cadence` is `off`. */
   nextRunAt?: Date | null;
   /**
@@ -442,15 +449,25 @@ export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocume
 };
 
 /**
- * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
+ * What the run loop counted. Each candidate the run reaches lands in exactly one outcome bucket, so the buckets sum
+ * to `searchHits` only for a run that stopped `exhausted` or `judge_unavailable`; `cost_ceiling`, `time_budget` and
+ * `proposal_limit` leave the unreached candidates uncounted.
  * `autoAdmitted`, `autoAdmitSkipped` and `reviewedByRule` are not buckets: they are sub-counts of `proposed`.
  */
 export interface ResearchRunTotals {
   /** Hits the search provider returned. */
   searchHits: number;
-  /** Hits dropped by the allow/deny lists, before any model or network cost. */
+  /**
+   * Hits on the Never list, or whose address is not a web address, dropped before any model or network cost.
+   * On a run stored before `unlistedDropped` existed, this is the combined count of both drops.
+   */
   filteredBySource: number;
-  /** Hits still on a search provider's redirect link, so their real site is unknown. Counted apart from `filteredBySource`: no source rule saw the real host. */
+  /**
+   * Hits from sites on none of the lists while "Other sites" is set to ignore, dropped before any model or network cost.
+   * Absent on a run stored before the split, which is how a reader tells `filteredBySource` is then the combined count.
+   */
+  unlistedDropped?: number;
+  /** Hits still on a search provider's redirect link, so their real site is unknown. Skipped, never judged or fetched, under every site-list setting, and counted apart from `filteredBySource`: no source rule saw the real host. */
   unresolvedRedirect: number;
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
@@ -478,9 +495,10 @@ export interface ResearchRunTotals {
   unusableSource: number;
   /**
    * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
-   * buckets summing to `searchHits`. Unreached candidates a source rule blocks are still counted in
-   * `filteredBySource`, since source rules are free and are checked for them. Only that stop fills it: `cost_ceiling`, `time_budget` and
-   * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
+   * buckets summing to `searchHits`. Unreached candidates a source rule drops are still counted in
+   * `filteredBySource` or `unlistedDropped`, and unresolved links in `unresolvedRedirect`, since those checks are free.
+   * Only that stop fills it: `cost_ceiling`, `time_budget` and `proposal_limit` leave it 0, so their buckets can fall short.
+   * Older stored runs read it as 0.
    */
   notJudged: number;
   /** Candidates an item rule with action `block` removed before they were proposed. */
@@ -492,6 +510,7 @@ export interface ResearchRunTotals {
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   searchHits: 0,
   filteredBySource: 0,
+  unlistedDropped: 0,
   unresolvedRedirect: 0,
   belowRelevance: 0,
   judgeFailed: 0,
@@ -507,6 +526,88 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   blockedByRule: 0,
   reviewedByRule: 0,
 });
+
+/** The `ResearchRunTotals` keys that count a candidate dropped without a proposal. The rest are totals or sub-counts of `proposed`. */
+export type ResearchDropBucket = Exclude<
+  keyof ResearchRunTotals,
+  'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'
+>;
+
+export interface ResearchDropReason {
+  /** The setting that changes this bucket, or null when no setting applies. */
+  lever: keyof ResearchRunLevers | null;
+  /** `edit_list` for a lever that is a list or a choice the manager edits rather than a number to move. */
+  direction: 'raise' | 'lower' | 'edit_list' | null;
+  /** Surface-neutral: names no setting label, so a panel, an API client and the docs can each add their own nouns. */
+  reason: string;
+}
+
+/**
+ * Where each drop bucket points. Keyed on `ResearchDropBucket`, so a new drop bucket fails the build
+ * until it is placed here. The panel renders it in its own nouns; keep `reason` free of them.
+ */
+export const RESEARCH_DROP_REASONS: Record<ResearchDropBucket, ResearchDropReason> = {
+  filteredBySource: {
+    lever: 'blockedDomains',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on the never list, or had no usable web address.',
+  },
+  unlistedDropped: {
+    lever: 'unlistedSources',
+    direction: 'edit_list',
+    reason: 'The largest group came from sites on none of your lists, which are ignored.',
+  },
+  unresolvedRedirect: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was search links that did not reveal their site. This usually clears on the next run.',
+  },
+  belowRelevance: {
+    lever: 'minRelevance',
+    direction: 'lower',
+    reason: 'The largest group scored below the minimum relevance.',
+  },
+  judgeFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group could not be scored because the relevance judge failed. Try the run again.',
+  },
+  fetchFailed: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group of pages could not be fetched or read.',
+  },
+  duplicatePending: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already waiting for review.',
+  },
+  alreadyInLake: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group is already in the lake.',
+  },
+  suppressedByTombstone: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group was declined before and has not changed.',
+  },
+  unusableSource: {
+    lever: null,
+    direction: null,
+    reason: 'The largest group had no usable web address.',
+  },
+  notJudged: {
+    lever: null,
+    direction: null,
+    reason: 'The relevance judge was unavailable, so the rest were not scored. Try the run again later.',
+  },
+  blockedByRule: {
+    lever: 'itemRules',
+    direction: 'edit_list',
+    reason: 'The largest group was blocked by an item rule.',
+  },
+};
 
 export interface IDataLakeResearchRun {
   dataLakeId: string;
@@ -573,9 +674,10 @@ export type UpdateDataLakeResearchConfigInput = Partial<Omit<ResearchRunLevers, 
   trigger?: ResearchRunTrigger;
   cadence?: ResearchScheduleCadence;
   reviewBacklogLimit?: number;
+  schedulePaused?: boolean;
   nextRunAt?: Date | null;
   scheduleAnchorAt?: Date | null;
-  lastScheduledOutcome?: null;
+  lastScheduledOutcome?: ResearchScheduleOutcome | null;
   lastUpdatedByUserId: string;
 };
 
@@ -594,7 +696,7 @@ export interface SettleResearchRunInput {
 export interface IDataLakeResearchConfigRepository extends IBaseRepository<IDataLakeResearchConfigDocument> {
   createConfig(input: CreateDataLakeResearchConfigInput): Promise<IDataLakeResearchConfigDocument>;
   /** One lake's saved configs, newest first. */
-  listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchConfigDocument[]>;
   /**
    * Fetch a config only if it belongs to the named lake. Scoped rather than a bare findById so a
    * caller cannot reach another lake's config by id through a route that only gated the lake.
@@ -639,7 +741,7 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
     input: Omit<IDataLakeResearchRun, 'status' | 'spentMicroUsd' | 'totals'>
   ): Promise<IDataLakeResearchRunDocument>;
   /** One lake's run history, newest first. */
-  listByLake(dataLakeId: string, options?: { limit?: number }): Promise<IDataLakeResearchRunDocument[]>;
+  listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchRunDocument[]>;
   findByIdInLake(id: string, dataLakeId: string): Promise<IDataLakeResearchRunDocument | null>;
   /**
    * Atomically move a QUEUED run to `running`, returning null when it was not queued. The whole
@@ -676,4 +778,10 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    */
   countActiveByLake(dataLakeId: string): Promise<number>;
   deleteForLake(dataLakeId: string): Promise<number>;
+}
+
+/** Keyset window over `{createdAt: -1, _id: -1}`: `after` is the last row of the previous page. */
+export interface ResearchKeysetPage {
+  limit?: number;
+  after?: { createdAt: Date; id: string };
 }

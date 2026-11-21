@@ -248,6 +248,15 @@ export function researchAutoAdmitChange(configName: string, enabled: boolean): I
   return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
 }
 
+/** A research config's schedule being paused or resumed by a manager. */
+export function researchSchedulePausedChange(configName: string, paused: boolean): ILakeConfigLiteralChange {
+  return literalChange(
+    'researchConfig',
+    undefined,
+    `research schedule ${paused ? 'paused' : 'resumed'}: ${configName}`
+  );
+}
+
 /** The trusted-site list of a research config changing, naming the entries added and removed. */
 export function researchTrustedSitesChange(
   configName: string,
