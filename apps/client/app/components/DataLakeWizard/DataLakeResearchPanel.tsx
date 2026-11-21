@@ -585,7 +585,7 @@ const RUN_STATUS_COLOR = {
  * exception is `judge_unavailable`, which the run records as `failed`.
  */
 const STOP_REASON_LABEL = {
-  exhausted: 'Reviewed every search result',
+  exhausted: 'Went through every search result',
   cost_ceiling: 'Stopped at the cost ceiling for one run. Raise Cost ceiling in Advanced settings to check more.',
   proposal_limit: 'Reached the proposals limit for one run. Raise Proposals per run in Advanced settings to see more.',
   time_budget: 'Stopped at the time limit for one run. The rest are checked next run.',
@@ -603,7 +603,7 @@ const runStatusWord = (run: IDataLakeResearchRunDocument): string => {
 const isFeedRun = (run: IDataLakeResearchRunDocument): boolean => run.levers.source === 'feed';
 
 const stopReasonLabel = (run: IDataLakeResearchRunDocument, reason: keyof typeof STOP_REASON_LABEL): string =>
-  reason === 'exhausted' && isFeedRun(run) ? 'Reviewed every new feed item' : STOP_REASON_LABEL[reason];
+  reason === 'exhausted' && isFeedRun(run) ? 'Went through every new feed item' : STOP_REASON_LABEL[reason];
 
 /** The panel's name for each lever a drop bucket can point at, and how to show the value the run used. */
 const DROP_LEVER_NOUN: Partial<
@@ -618,13 +618,25 @@ const DROP_LEVER_NOUN: Partial<
   itemRules: { label: 'Item rules' },
 };
 
+const FOCUS_LEVER_TEST_ID = {
+  minRelevance: 'datalake-research-min-relevance-input',
+  blockedDomains: 'datalake-research-blocked-input',
+  unlistedSources: 'datalake-research-unlisted-select',
+  itemRules: 'datalake-research-rule-add',
+  costCeilingMicroUsd: 'datalake-research-cost-ceiling-input',
+  maxProposals: 'datalake-research-max-proposals-input',
+} as const;
+type FocusLever = keyof typeof FOCUS_LEVER_TEST_ID;
+
 const DROP_HINT_VERB = { raise: 'Raise', lower: 'Lower', edit_list: 'Check' } as const;
 
 /**
  * One line for the run's largest drop bucket, naming the setting that explains it and the value the
  * run actually used. Null when nothing was dropped or the largest bucket has no setting to point at.
  */
-const runDropHint = (run: IDataLakeResearchRunDocument): string | null => {
+const runDropHintParts = (
+  run: IDataLakeResearchRunDocument
+): { text: string; lever: keyof ResearchRunLevers } | null => {
   // The breaker sweep counts source drops that no setting explains, and the stop line already says so.
   if (run.stopReason === 'judge_unavailable') return null;
   const { totals } = run;
@@ -647,7 +659,18 @@ const runDropHint = (run: IDataLakeResearchRunDocument): string | null => {
   if (!lever || !direction || !noun) return null;
   const value = noun.value ? ` (${noun.value(run.levers)})` : '';
   const tail = direction === 'lower' ? ' to keep more' : '';
-  return `${reason} ${DROP_HINT_VERB[direction]} ${noun.label}${value} in Advanced settings${tail}.`;
+  return { text: `${reason} ${DROP_HINT_VERB[direction]} ${noun.label}${value} in Advanced settings${tail}.`, lever };
+};
+
+const runDropHint = (run: IDataLakeResearchRunDocument): string | null => runDropHintParts(run)?.text ?? null;
+
+/** The form field a run row's "Adjust settings" should land on: the hinted lever, else the lever a stop reason names. */
+const runFocusLever = (run: IDataLakeResearchRunDocument): FocusLever | undefined => {
+  const hinted = runDropHintParts(run)?.lever;
+  if (hinted && hinted in FOCUS_LEVER_TEST_ID) return hinted as FocusLever;
+  if (run.stopReason === 'cost_ceiling') return 'costCeilingMicroUsd';
+  if (run.stopReason === 'proposal_limit') return 'maxProposals';
+  return undefined;
 };
 
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
@@ -905,6 +928,7 @@ export function DataLakeResearchPanel({
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
   const [formOpenCount, setFormOpenCount] = useState(0);
+  const focusLever = useRef<FocusLever | undefined>(undefined);
   const formRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const isDirty = editingId !== null && JSON.stringify(draft) !== JSON.stringify(draftBaseline);
@@ -912,6 +936,14 @@ export function DataLakeResearchPanel({
   // would otherwise change nothing on screen.
   useEffect(() => {
     if (editingId === null) return;
+    const target = focusLever.current
+      ? formRef.current?.querySelector<HTMLElement>(`[data-testid="${FOCUS_LEVER_TEST_ID[focusLever.current]}"]`)
+      : null;
+    if (target) {
+      target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      target.focus({ preventScroll: true });
+      return;
+    }
     formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
     nameInputRef.current?.focus({ preventScroll: true });
   }, [editingId, formOpenCount]);
@@ -925,7 +957,8 @@ export function DataLakeResearchPanel({
 
   // Age-bounded on purpose: this mirrors the server's own active-run count, so the button unlocks
   // for exactly the lakes a POST would be accepted for rather than staying dead on an abandoned row.
-  const runInFlight = useMemo(() => (runs ?? []).some(run => isResearchRunInFlight(run)), [runs]);
+  const activeRun = useMemo(() => (runs ?? []).find(run => isResearchRunInFlight(run)), [runs]);
+  const runInFlight = !!activeRun;
   const configById = useMemo(() => new Map((configs ?? []).map(config => [config.id, config])), [configs]);
   const modelLabelById = useMemo(() => new Map(modelOptions.map(option => [option.id, option.label])), [modelOptions]);
   // The config's own `lastRunAt` is stamped when the run is queued; the newest run row, when this
@@ -962,6 +995,7 @@ export function DataLakeResearchPanel({
   };
 
   const openCreate = () => {
+    focusLever.current = undefined;
     setSaveNotice(null);
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
@@ -970,7 +1004,11 @@ export function DataLakeResearchPanel({
     formSession.current += 1;
     setFormOpenCount(count => count + 1);
   };
-  const openEdit = (config: IDataLakeResearchConfigResponse, options: { forceAdvanced?: boolean } = {}) => {
+  const openEdit = (
+    config: IDataLakeResearchConfigResponse,
+    options: { forceAdvanced?: boolean; focusLever?: FocusLever } = {}
+  ) => {
+    focusLever.current = options.focusLever;
     setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
@@ -1200,7 +1238,13 @@ export function DataLakeResearchPanel({
                   onClick={() => onStartRun(config.id)}
                   data-testid={`datalake-research-run-btn-${config.id}`}
                 >
-                  {runInFlight ? 'Run in progress' : unsaved ? 'Save changes to run' : 'Run now'}
+                  {runInFlight
+                    ? activeRun?.configId === config.id
+                      ? 'Run in progress'
+                      : 'Another run in progress'
+                    : unsaved
+                      ? 'Save changes to run'
+                      : 'Run now'}
                 </Button>
                 <Button
                   size="sm"
@@ -1849,7 +1893,9 @@ export function DataLakeResearchPanel({
                       size="sm"
                       variant="plain"
                       disabled={savingConfigId === run.configId || deletingConfigId === run.configId}
-                      onClick={() => openEdit(configById.get(run.configId)!, { forceAdvanced: true })}
+                      onClick={() =>
+                        openEdit(configById.get(run.configId)!, { forceAdvanced: true, focusLever: runFocusLever(run) })
+                      }
                       data-testid={`datalake-research-run-adjust-${run.id}`}
                     >
                       Adjust settings
