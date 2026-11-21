@@ -1105,7 +1105,7 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('Stopped early');
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('Did not finish');
     });
   });
 
@@ -1988,10 +1988,10 @@ describe('DataLakeResearchPanel usability copy', () => {
     });
 
     it('saves an unedited stored value unchanged', () => {
-      const spies = renderPanel({ configs: [config({ minRelevance: 0.637 })] });
+      const spies = renderPanel({ configs: [config({ minRelevance: 0.123456 })] });
       editConfig();
       saveEdit();
-      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ minRelevance: 0.637 }));
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ minRelevance: 0.123456 }));
     });
 
     it('saves an edited percent as a fraction', () => {
@@ -2008,6 +2008,7 @@ describe('DataLakeResearchPanel usability copy', () => {
       fireEvent.change(relevanceInput(), { target: { value: '0.6' } });
       expect(screen.getByText('Enter a percent, for example 60')).toBeTruthy();
       expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+      saveEdit();
       expect(spies.onUpdate).not.toHaveBeenCalled();
     });
 
@@ -2128,7 +2129,7 @@ describe('DataLakeResearchPanel usability copy', () => {
       const text = screen
         .getByTestId('datalake-research-cost-ceiling-input')
         .closest('.MuiFormControl-root')?.textContent;
-      expect(text).toContain("paid from the lake owner's credits");
+      expect(text).toContain("paid from the lake owner's credits (their organization's pool if they belong to one)");
       expect(text).toContain('Approving a proposal also costs indexing.');
     });
 
@@ -2141,13 +2142,13 @@ describe('DataLakeResearchPanel usability copy', () => {
       ['Daily', '$7.75'],
       ['Weekly', '$1.25'],
       ['Monthly', '$0.25'],
-    ] as const)('shows the most a %s schedule can cost in a month', (label, amount) => {
+    ] as const)('shows roughly the most a %s schedule can cost in a month', (label, amount) => {
       openNew();
       fireEvent.change(screen.getByTestId('datalake-research-cost-ceiling-input'), { target: { value: '0.25' } });
       fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
       fireEvent.click(screen.getByRole('option', { name: label }));
       expect(screen.getByTestId('datalake-research-monthly-cost').textContent).toBe(
-        `Up to ${amount} a month at this schedule.`
+        `Roughly up to ${amount} a month at this schedule.`
       );
     });
   });

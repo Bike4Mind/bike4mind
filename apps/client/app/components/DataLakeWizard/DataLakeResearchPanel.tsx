@@ -148,7 +148,7 @@ const relevanceBase = (value: number): ConfigDraft['minRelevanceBase'] => ({
   value,
 });
 
-/** Unedited text keeps the stored value, so an API-set 0.637 never drifts on an unrelated save. */
+/** Unedited text keeps the stored value, so an API-set 0.123456 never drifts on an unrelated save. */
 const minRelevanceFromDraft = (draft: ConfigDraft): number => {
   const trimmed = draft.minRelevance.trim();
   if (trimmed === draft.minRelevanceBase.text) return draft.minRelevanceBase.value;
@@ -188,7 +188,7 @@ const formatCeiling = (micro: number): string =>
     ? `$${microUsdToUsdInput(micro)}`
     : formatSpend(micro);
 
-/** The most runs a schedule can start in one month, so the monthly figure is a real upper bound. */
+/** Approximate ceiling on runs per month; an hourly retry can carry one extra run across a month boundary. */
 const MAX_RUNS_PER_MONTH: Record<Exclude<ResearchScheduleCadence, 'off'>, number> = {
   daily: 31,
   weekly: 5,
@@ -595,7 +595,7 @@ const STOP_REASON_LABEL = {
 /** The status chip in words. A completed run that hit a limit says so; `abandoned` is a run that stopped without settling. */
 const runStatusWord = (run: IDataLakeResearchRunDocument): string => {
   const state = runStateLabel(run);
-  if (state === 'abandoned') return 'Stopped early';
+  if (state === 'abandoned') return 'Did not finish';
   if (state === 'completed') return run.stopReason && run.stopReason !== 'exhausted' ? 'Stopped early' : 'Finished';
   return { queued: 'Queued', running: 'Running', failed: 'Failed' }[state];
 };
@@ -1039,7 +1039,7 @@ export function DataLakeResearchPanel({
   const hasErrors = Object.keys(errors).some(key => key !== 'feedUrl');
   const monthlyCostText =
     draft.cadence !== 'off' && !errors.costCeilingUsd
-      ? `Up to ${formatCeiling(
+      ? `Roughly up to ${formatCeiling(
           Math.round(
             parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) *
               1_000_000 *
@@ -1547,7 +1547,7 @@ export function DataLakeResearchPanel({
                 />
                 <FormHelperText>
                   {errors.costCeilingUsd ??
-                    `Judgement spend for one run, paid from the lake owner's credits. The run stops when it would exceed this. Approving a proposal also costs indexing. Maximum $${microUsdToUsdInput(
+                    `Judgement spend for one run, paid from the lake owner's credits (their organization's pool if they belong to one). The run stops when it would exceed this. Approving a proposal also costs indexing. Maximum $${microUsdToUsdInput(
                       RESEARCH_COST_CEILING_MICRO_USD_LIMIT
                     )}.`}
                 </FormHelperText>
