@@ -255,6 +255,27 @@ describe('side apps board reads', () => {
       expect(users.users[0]).toMatchObject({ userId: String(u1), requests: 3, failedRequests: 2 });
     });
 
+    it('lists the top failure codes of failed completions, most frequent first', async () => {
+      const clientId = 'coded-app';
+      await OAuthClientModel.collection.insertOne({ clientId, name: 'Coded App' });
+      const failed = (failureCode?: string) => ({
+        completionObservation: { requestId: 'r', requestedModel: 'm', startedAt: 's', outcome: 'failed', failureCode },
+      });
+      await ApiKeyUsageLog.collection.insertMany([
+        request({ oauthClientId: clientId, ...failed('http_503') }),
+        request({ oauthClientId: clientId, ...failed('http_503') }),
+        request({ oauthClientId: clientId, ...failed('rate_limited') }),
+        request({ oauthClientId: clientId, ...failed() }),
+        request({ oauthClientId: clientId, ...completion('completed') }),
+      ]);
+
+      const app = (await readSideApps(30, now)).apps.find(row => row.clientId === clientId);
+      expect(app?.topFailureCodes).toEqual([
+        { code: 'http_503', count: 2 },
+        { code: 'rate_limited', count: 1 },
+      ]);
+    });
+
     it('clamps the windows and caps requests at the log retention', async () => {
       const wide = await readSideApps(1000, now);
       expect(wide.spendWindowDays).toBe(365);

@@ -59,6 +59,7 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
           requestedModel: { type: String, required: true, maxlength: 256 },
           startedAt: { type: String, required: true },
           outcome: { type: String, required: true, enum: API_COMPLETION_OUTCOMES },
+          failureCode: { type: String, maxlength: 64 },
         },
         { _id: false }
       ),
