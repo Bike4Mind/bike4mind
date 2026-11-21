@@ -52,7 +52,7 @@ import {
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
 import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } from '@shared/terminal';
-import type { SkinSummary } from '@shared/mods';
+import type { SkinSummary, SoundPackSummary } from '@shared/mods';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
@@ -86,6 +86,14 @@ const api: DesktopApi = {
       const handler = (_event: unknown, skins: SkinSummary[]) => listener(skins);
       ipcRenderer.on(IPC_CHANNELS.skinsChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.skinsChanged, handler);
+    },
+  },
+  soundPacks: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.soundPacksList),
+    onChanged: listener => {
+      const handler = (_event: unknown, packs: SoundPackSummary[]) => listener(packs);
+      ipcRenderer.on(IPC_CHANNELS.soundPacksChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.soundPacksChanged, handler);
     },
   },
   update: {
@@ -173,6 +181,8 @@ const api: DesktopApi = {
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.usageGetHistory, window, force ?? false),
+    getLocal: (window: UsageWindowId, force?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetLocal, window, force ?? false),
   },
   fleet: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.fleetGetState),

@@ -197,7 +197,11 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
   /** The review queue for a lake, newest first, optionally narrowed to one status. */
   listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: {
+      status?: DataLakeProposalStatus;
+      limit?: number;
+      after?: { createdAt: Date; id: string };
+    }
   ): Promise<IDataLakeProposalDocument[]>;
   /**
    * Atomically move a PENDING proposal to a terminal status, stamping the reviewer. Returns the

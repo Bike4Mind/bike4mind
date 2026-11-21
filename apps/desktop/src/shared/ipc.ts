@@ -1,4 +1,4 @@
-import type { SkinSummary } from './mods';
+import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -140,7 +140,7 @@ import type {
   ModelRuntimeStatus,
   LoadedModelState,
 } from './models';
-import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type {
   ModelBuildReport,
@@ -194,6 +194,7 @@ export const IPC_CHANNELS = {
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
+  usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
   fleetSetConsent: 'fleet:set-consent',
@@ -620,6 +621,10 @@ export const IPC_CHANNELS = {
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
   skinsChanged: 'skins:changed',
+  /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
+  soundPacksList: 'soundpacks:list',
+  /** Pushed with the fresh list when the mods folder changes. */
+  soundPacksChanged: 'soundpacks:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -785,6 +790,11 @@ export interface DesktopApi {
     list(): Promise<SkinSummary[]>;
     onChanged(listener: (skins: SkinSummary[]) => void): () => void;
   };
+  /** Data-only sound packs for the Orchestrate events; validated in main, like skins. */
+  soundPacks: {
+    list(): Promise<SoundPackSummary[]>;
+    onChanged(listener: (packs: SoundPackSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -878,6 +888,11 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+    /**
+     * Self-hosted model usage in the current conversation scope, signed in or not. Computed in
+     * main from the sessions stored on this device; nothing is requested from any server.
+     */
+    getLocal(window: UsageWindowId, force?: boolean): Promise<LocalUsageResult>;
   };
   fleet: {
     getState(): Promise<FleetState>;

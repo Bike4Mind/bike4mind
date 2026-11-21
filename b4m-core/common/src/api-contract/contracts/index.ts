@@ -68,6 +68,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { getSessionByIdContract } from './sessionGetById.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
 import { listSessionFilesContract } from './sessionFiles.contract';
 import { searchSessionsContract } from './sessionSemanticSearch.contract';
@@ -86,6 +87,19 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import {
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+} from './dataLakeResearch.contract';
 import { listImageModelsContract } from './imageModels.contract';
 import {
   cancelVideoGenerationContract,
@@ -225,6 +239,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
+  getSessionByIdContract,
   listSessionQuestsContract,
   listSessionFilesContract,
   searchSessionsContract,
@@ -238,6 +253,17 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
   listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,

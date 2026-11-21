@@ -7,6 +7,7 @@ import type { ChatArtifact, ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -58,6 +59,7 @@ async function createFixture() {
     store,
     access: { list: async () => [] } as unknown as AccessStore,
     logger: { debug: vi.fn(), warn: vi.fn() },
+    queue: new MessageQueue(() => undefined),
     artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
     browser: { context: vi.fn(), closeSession: vi.fn(async () => undefined), refreshArtifacts },
     getApiClient: () => apiClient,
@@ -68,7 +70,7 @@ async function createFixture() {
     service.dispose();
     for (const response of streams) response.destroy();
   });
-  return { service, events, stream: initialStream, post, get, refreshArtifacts, artifactSave, enqueueResponse };
+  return { service, store, events, stream: initialStream, post, get, refreshArtifacts, artifactSave, enqueueResponse };
 }
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
@@ -86,6 +88,8 @@ describe('ChatService artifacts', () => {
   let events: ChatStreamEvent[];
   let post: ReturnType<typeof vi.fn>;
   let refreshArtifacts: Fixture['refreshArtifacts'];
+  let store: SessionStore;
+  let stream: PassThrough;
 
   beforeEach(async () => {
     fixture = await createFixture();
@@ -93,6 +97,8 @@ describe('ChatService artifacts', () => {
     events = fixture.events;
     post = fixture.post;
     refreshArtifacts = fixture.refreshArtifacts;
+    store = fixture.store;
+    stream = fixture.stream;
   });
   afterEach(() => {
     for (const cleanup of cleanups.splice(0)) cleanup();
@@ -205,6 +211,140 @@ describe('ChatService artifacts', () => {
       title: 'Counter',
       content: expect.stringContaining('<button>0</button>'),
       save: { status: 'failed' },
+    });
+  });
+
+  // Only Date is faked: every wait below is moved by advancing the clock, never by real time.
+  describe("a reply's total time", () => {
+    const UPLOAD_MS = 400;
+    const ARRIVAL_WAIT_MS = 500;
+    const TOOL_MS = 100;
+    const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
+    const tool = (id: string) =>
+      frame({ type: 'tool_use', tools: [{ id, name: 'glob_files', arguments: '{"pattern":"*"}' }] });
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 10, 2) });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    const slowUpload = () =>
+      post.mockImplementation((endpoint: string) => {
+        if (endpoint !== '/api/artifacts') return Promise.resolve({ data: stream, status: 200 });
+        advance(UPLOAD_MS);
+        return Promise.resolve({ status: 201, data: {} });
+      });
+
+    const spyOnWaits = (arrivalWaitMs = ARRIVAL_WAIT_MS) => {
+      const proto = ChatService.prototype as unknown as Record<
+        'runTools' | 'takeArrivals',
+        (...a: unknown[]) => unknown
+      >;
+      const runTools = proto.runTools;
+      const takeArrivals = proto.takeArrivals;
+      vi.spyOn(proto, 'runTools').mockImplementation(function (this: unknown, ...args: unknown[]) {
+        advance(TOOL_MS);
+        return runTools.apply(this, args);
+      });
+      vi.spyOn(proto, 'takeArrivals').mockImplementation(function (this: unknown, ...args: unknown[]) {
+        advance(arrivalWaitMs);
+        return takeArrivals.apply(this, args);
+      });
+    };
+
+    // Polls on the real clock: vi.waitUntil moves a faked Date forward as it waits.
+    const until = async (check: () => boolean) => {
+      for (let attempt = 0; attempt < 400 && !check(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+      expect(check()).toBe(true);
+    };
+    const completions = () => post.mock.calls.filter(call => call[0] !== '/api/artifacts').length;
+    const ended = (type: 'done' | 'error') => events.filter(event => event.type === type).length;
+
+    const replies = async (id: string) =>
+      ((await service.getSession(id))?.messages ?? []).filter(message => message.role === 'assistant');
+
+    it('leaves the artifact upload out', async () => {
+      slowUpload();
+      const { id } = await service.createSession();
+      await service.send(id, 'build me something');
+      await until(() => completions() === 1);
+      advance(50);
+      stream.write(frame({ type: 'content', text: `Here.\n${HTML_ARTIFACT}`, stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await until(() => ended('done') === 1);
+
+      expect(createCalls()).toHaveLength(1);
+      expect((await replies(id))[0].stats?.totalMs).toBe(50);
+    });
+
+    it('adds a continued run to the earlier total and leaves its artifact upload out', async () => {
+      slowUpload();
+      const { id } = await service.createSession();
+      await store.appendMessage(id, { id: 'u1', role: 'user', content: 'go', createdAt: new Date().toISOString() });
+      await store.appendMessage(id, {
+        id: 'a1',
+        role: 'assistant',
+        content: 'partway',
+        createdAt: new Date().toISOString(),
+        stopReason: 'tool_turn_limit',
+        stats: { totalMs: 8_000, modelMs: 3_000, toolMs: 5_000 },
+      });
+
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await until(() => completions() === 1);
+      advance(70);
+      stream.write(frame({ type: 'content', text: `More.\n${HTML_ARTIFACT}`, stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await until(() => ended('done') === 1);
+
+      expect(createCalls()).toHaveLength(1);
+      expect((await replies(id))[0].stats).toMatchObject({ totalMs: 8_070, modelMs: 3_070, toolMs: 5_000 });
+    });
+
+    it('leaves the wait for a mid-turn message out of both replies it splits', async () => {
+      spyOnWaits();
+      const { id } = await service.createSession();
+      await service.send(id, 'list');
+      await until(() => completions() === 1);
+      expect(await service.send(id, 'and the hidden ones?')).toMatchObject({ ok: true, queued: true });
+      advance(20);
+      const second = fixture.enqueueResponse();
+      stream.write(tool('c1'));
+      stream.write(frame('[DONE]'));
+      await until(() => completions() === 2);
+      advance(30);
+      second.write(frame({ type: 'content', text: 'none', stopReason: 'end_turn' }));
+      second.write(frame('[DONE]'));
+      await until(() => ended('done') === 2);
+
+      const [first, next] = await replies(id);
+      expect(first.stats).toMatchObject({ totalMs: 20 + TOOL_MS, modelMs: 20, toolMs: TOOL_MS });
+      expect(next.stats).toMatchObject({ totalMs: 30, modelMs: 30, toolMs: 0 });
+    });
+
+    it('ends a failed reply at the time of the failure', async () => {
+      spyOnWaits(0);
+      const FAILURE_AFTER_MS = 300;
+      let requests = 0;
+      post.mockImplementation(() => {
+        requests++;
+        if (requests === 1) return Promise.resolve({ data: stream, status: 200 });
+        advance(FAILURE_AFTER_MS);
+        return Promise.reject(new Error('network down'));
+      });
+      const { id } = await service.createSession();
+      await service.send(id, 'list');
+      await until(() => requests === 1);
+      advance(20);
+      stream.write(tool('c1'));
+      stream.write(frame('[DONE]'));
+      await until(() => ended('error') === 1);
+
+      expect((await replies(id))[0].stats).toMatchObject({ totalMs: 20 + TOOL_MS + FAILURE_AFTER_MS, toolMs: TOOL_MS });
     });
   });
 

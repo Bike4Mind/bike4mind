@@ -1,14 +1,12 @@
 import { useState } from 'react';
-import { isAxiosError } from 'axios';
-import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { Alert } from '@mui/joy';
-import { sortAdminPermissions, sortAdminRoleIds } from '@bike4mind/common';
 import { useAccessReviewDecision, type AccessReviewRow } from '@client/app/hooks/data/adminAccessReview';
 import { ActionDialog } from '../shared';
 import { useAdminUserPermissionsUpdate } from '../Users/Profile/actions/useAdminUserPermissionsUpdate';
 import { useAdminUserRoleUpdate } from '../Users/Profile/actions/useAdminUserRoleUpdate';
+import { isUncertainFailure, permissionsRemoval } from './revokeAdminAccess';
 
-const REASON_PRESETS = ['No longer needs admin access', 'Left the team', 'Dormant account'] as const;
+export const REVOKE_REASON_PRESETS = ['No longer needs admin access', 'Left the team', 'Dormant account'] as const;
 
 type RevokeAccessDialogProps = {
   admin: AccessReviewRow;
@@ -32,16 +30,8 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
 
   const removeAccess = async (reason: string) => {
     if (admin.fullAdmin) await updateRole({ isAdmin: false, reason });
-    if (admin.directPermissions.length > 0 || admin.adminRoleIds.length > 0) {
-      await updatePermissions({
-        // The permissions route compares the cleaned set and its schema rejects an id no longer listed.
-        before: sortAdminPermissions(admin.directPermissions),
-        adminPermissions: [],
-        beforeAdminRoleIds: sortAdminRoleIds(admin.adminRoleIds),
-        adminRoleIds: [],
-        reason,
-      });
-    }
+    const removal = permissionsRemoval(admin, reason);
+    if (removal) await updatePermissions(removal);
   };
 
   // A rejection from the update hooks (already toasted, e.g. the last super admin) keeps the dialog open.
@@ -52,8 +42,7 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
         setRemovalState('removed');
       } catch (error) {
         // A lost response can follow a committed removal. Never replay its stale permission CAS.
-        // Step-up cancellation happens before the write and can safely offer the original action.
-        if (!isStepUpCancelled(error) && (!isAxiosError(error) || !error.response || error.response.status >= 500)) {
+        if (isUncertainFailure(error)) {
           setRemovalState('uncertain');
           setRecordFailed(true);
         }
@@ -79,7 +68,7 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
           ? `This removes the Super Admin role and any delegated admin permissions.${rolesNote}`
           : `This removes every delegated admin permission and admin role.${rolesNote}`
       }
-      reasonPresets={REASON_PRESETS}
+      reasonPresets={REVOKE_REASON_PRESETS}
       reasonRequired={removalState === 'pending'}
       confirmLabel={recordFailed ? 'Retry recording' : 'Revoke access'}
       onConfirm={confirm}

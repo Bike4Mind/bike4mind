@@ -50,7 +50,7 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon } from './icons';
+import { PanelRightIcon, StatsIcon } from './icons';
 import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
@@ -60,6 +60,7 @@ import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
+import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
   chatShellRootSx,
@@ -1034,6 +1035,12 @@ export function ChatShell({
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
+  // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
+  // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
+  const statsRailFits =
+    !orchestratorShown && railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
+  const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1485,6 +1492,8 @@ export function ChatShell({
                   onReplyToSelection={onReplyToSelection}
                   onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                  statsRail={statsRailFits && statsRailOn}
+                  liveTurn={conversation.turn}
                   // At the foot of the thread rather than above the composer: a background command is
                   // something this conversation started, so it reads as the last thing that happened
                   // in it. It scrolls with the transcript, which is the trade - the panel is reached
@@ -1792,6 +1801,35 @@ export function ChatShell({
                     panes={paneControls}
                     historyOn={!opening && conversation.session?.historyEnabled === true}
                   />
+                  {/* Drawn at every width, so the buttons beside it never shift and focus is never
+                  dropped as the window crosses the breakpoint; narrower, the tooltip says why
+                  nothing shows beside the conversation. */}
+                  <Tooltip
+                    size="sm"
+                    variant="soft"
+                    placement="bottom-end"
+                    title={replyStatsToggleTitle({
+                      persisted: !!persistedId,
+                      orchestratorShown,
+                      railFits: statsRailFits,
+                      railOn: statsRailOn,
+                    })}
+                  >
+                    <Box component="span" sx={{ display: 'inline-flex' }}>
+                      <IconButton
+                        size="sm"
+                        variant={statsRailOn && persistedId ? 'soft' : 'plain'}
+                        color="neutral"
+                        disabled={!persistedId}
+                        aria-pressed={statsRailOn}
+                        aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                        onClick={() => setReplyStatsRail(!statsRailOn)}
+                        data-testid="chat-toggle-reply-stats-btn"
+                      >
+                        <StatsIcon />
+                      </IconButton>
+                    </Box>
+                  </Tooltip>
                 </Box>
               </Box>
             </Box>

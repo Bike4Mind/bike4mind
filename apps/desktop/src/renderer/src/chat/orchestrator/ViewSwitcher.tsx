@@ -33,6 +33,7 @@ import {
 import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
+import { SoundPackMenuSection } from './SoundPackMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -360,6 +361,7 @@ export function ViewSwitcher({
             </>
           )}
           <SkinMenuSection />
+          <SoundPackMenuSection />
           <ListDivider />
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
             {split ? `${SHORTCUT_HINT} to switch the focused pane's view` : `${SHORTCUT_HINT} to switch views`}

@@ -1,17 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { dataLakeService } from '@bike4mind/services';
-import {
-  dataLakeRepository,
-  dataLakeAccessGrantRepository,
-  lakeConfigChangeEventRepository,
-  userRepository,
-  userApiKeyRepository,
-} from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { readLakeConfigHistory } from '@server/dataLakes/research/configHistoryHandler';
 
 /**
  * GET /api/data-lakes/:id/config-history[?limit=]
@@ -21,9 +13,10 @@ import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessConte
  * of the config-change collection - it was written dormant so the audit trail would already have
  * depth by the time this shipped.
  *
- * Two gates, in order. FORWARD REFERENCE: the owner-facing access view (#1672) is expected to land
- * with this same pair, so the two halves of the audit trail cannot diverge on who may read them -
- * that route does not exist yet, so this is the shape to match, not a shape copied from one:
+ * Two gates, in order (in `readLakeConfigHistory`, shared with the public v1 route). FORWARD
+ * REFERENCE: the owner-facing access view (#1672) is expected to land with this same pair, so the
+ * two halves of the audit trail cannot diverge on who may read them - that route does not exist
+ * yet, so this is the shape to match, not a shape copied from one:
  *  1. `assertLakeAccess` - existence + read access, denying with a not-found-style error so a lake
  *     the caller cannot even see is not disclosed.
  *  2. `resolveCanManageLake` - MANAGE, not access. The history describes editor-only fields
@@ -38,29 +31,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id, limit } = req.query;
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
-    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    if (!canManage) {
-      throw new ForbiddenError('You must be able to manage this data lake to view its configuration history.');
-    }
-
     // Parsed permissively rather than validated: the service clamps into [1, MAX] and falls back to
     // the default for anything non-finite, so a garbage ?limit= serves a page instead of a 400.
-    const view = await dataLakeService.assembleLakeConfigHistory(lake, {
-      db: {
-        lakeConfigChangeEvents: lakeConfigChangeEventRepository,
-        users: userRepository,
-        userApiKeys: userApiKeyRepository,
-      },
-      // `limit ?` not `limit == null ?`: a bare `?limit=` arrives as '' and `Number('')` is 0, which
-      // the clamp floors to 1 - silently serving a one-row history instead of the default page.
-      limit: limit ? Number(limit) : undefined,
-    });
+    // `limit ?` not `limit == null ?`: a bare `?limit=` arrives as '' and `Number('')` is 0, which
+    // the clamp floors to 1 - silently serving a one-row history instead of the default page.
+    const view = await readLakeConfigHistory(id, ctx, limit ? Number(limit) : undefined);
 
     return res.json({ data: view });
   });
