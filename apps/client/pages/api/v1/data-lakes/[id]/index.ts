@@ -45,7 +45,10 @@ const handler = nextRouteForContract(getDataLakeContract, {
       logger: req.logger,
     });
     const liveStats = await loadRegistryLakeStats(lake, { fabFiles: fabFileRepository, logger: req.logger });
-    return res.json(toPublicDataLake(lake, liveStats));
+    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+    return res.json(toPublicDataLake(lake, liveStats, dataLakeService.canManageLake(lake, ctx, grants)));
   });
 
 export const config = {

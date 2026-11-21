@@ -14459,6 +14459,10 @@
                 "built_in": {
                   "type": "boolean"
                 },
+                "can_manage": {
+                  "type": "boolean",
+                  "description": "True when the caller can manage research, proposals and settings on this lake. False for a lake the caller can only read, and for built-in lakes. Research routes answer 403 when this is false."
+                },
                 "status": {
                   "type": "string",
                   "enum": [
@@ -14509,6 +14513,7 @@
                 "organization_id",
                 "is_public",
                 "built_in",
+                "can_manage",
                 "status",
                 "file_count",
                 "total_size_bytes",
@@ -14563,6 +14568,10 @@
           "built_in": {
             "type": "boolean"
           },
+          "can_manage": {
+            "type": "boolean",
+            "description": "True when the caller can manage research, proposals and settings on this lake. False for a lake the caller can only read, and for built-in lakes. Research routes answer 403 when this is false."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -14613,6 +14622,7 @@
           "organization_id",
           "is_public",
           "built_in",
+          "can_manage",
           "status",
           "file_count",
           "total_size_bytes",
@@ -14985,17 +14995,19 @@
                   "description": "The relevance judge model. Null means the platform default."
                 },
                 "max_results": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
                 },
                 "max_proposals": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
                 },
                 "recency_days": {
                   "type": [
                     "integer",
                     "null"
                   ],
-                  "description": "Null means no recency constraint."
+                  "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
                 },
                 "trusted_domains": {
                   "type": "array",
@@ -15020,7 +15032,8 @@
                   "type": "boolean"
                 },
                 "max_auto_admits": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
                 },
                 "blocked_domains": {
                   "type": "array",
@@ -15029,10 +15042,12 @@
                   }
                 },
                 "min_relevance": {
-                  "type": "number"
+                  "type": "number",
+                  "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
                 },
                 "cost_ceiling_micro_usd": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
                 },
                 "proposed_tags": {
                   "type": "array",
@@ -15091,7 +15106,8 @@
                   ]
                 },
                 "review_backlog_limit": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
                 },
                 "schedule_paused": {
                   "type": "boolean",
@@ -15299,17 +15315,19 @@
                 "description": "The relevance judge model. Null means the platform default."
               },
               "max_results": {
-                "type": "integer"
+                "type": "integer",
+                "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
               },
               "max_proposals": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
               },
               "recency_days": {
                 "type": [
                   "integer",
                   "null"
                 ],
-                "description": "Null means no recency constraint."
+                "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
               },
               "trusted_domains": {
                 "type": "array",
@@ -15334,7 +15352,8 @@
                 "type": "boolean"
               },
               "max_auto_admits": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
               },
               "blocked_domains": {
                 "type": "array",
@@ -15343,10 +15362,12 @@
                 }
               },
               "min_relevance": {
-                "type": "number"
+                "type": "number",
+                "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
               },
               "cost_ceiling_micro_usd": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
               },
               "proposed_tags": {
                 "type": "array",
@@ -15405,7 +15426,8 @@
                 ]
               },
               "review_backlog_limit": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
               },
               "schedule_paused": {
                 "type": "boolean",
@@ -15603,16 +15625,25 @@
             ]
           },
           "max_results": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
           },
           "max_proposals": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
           },
           "recency_days": {
             "type": [
-              "number",
+              "integer",
               "null"
-            ]
+            ],
+            "minimum": 0,
+            "maximum": 366,
+            "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
           },
           "trusted_domains": {
             "type": "array",
@@ -15637,7 +15668,10 @@
             "type": "boolean"
           },
           "max_auto_admits": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
           },
           "blocked_domains": {
             "type": "array",
@@ -15646,10 +15680,16 @@
             }
           },
           "min_relevance": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
           },
           "cost_ceiling_micro_usd": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000000,
+            "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
           },
           "proposed_tags": {
             "type": "array",
@@ -15691,7 +15731,10 @@
             ]
           },
           "review_backlog_limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
           },
           "schedule_paused": {
             "type": "boolean"
@@ -15746,17 +15789,19 @@
                 "description": "The relevance judge model. Null means the platform default."
               },
               "max_results": {
-                "type": "integer"
+                "type": "integer",
+                "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
               },
               "max_proposals": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
               },
               "recency_days": {
                 "type": [
                   "integer",
                   "null"
                 ],
-                "description": "Null means no recency constraint."
+                "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
               },
               "trusted_domains": {
                 "type": "array",
@@ -15781,7 +15826,8 @@
                 "type": "boolean"
               },
               "max_auto_admits": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
               },
               "blocked_domains": {
                 "type": "array",
@@ -15790,10 +15836,12 @@
                 }
               },
               "min_relevance": {
-                "type": "number"
+                "type": "number",
+                "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
               },
               "cost_ceiling_micro_usd": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
               },
               "proposed_tags": {
                 "type": "array",
@@ -15852,7 +15900,8 @@
                 ]
               },
               "review_backlog_limit": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
               },
               "schedule_paused": {
                 "type": "boolean",
@@ -16052,17 +16101,19 @@
                 "description": "The relevance judge model. Null means the platform default."
               },
               "max_results": {
-                "type": "integer"
+                "type": "integer",
+                "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
               },
               "max_proposals": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
               },
               "recency_days": {
                 "type": [
                   "integer",
                   "null"
                 ],
-                "description": "Null means no recency constraint."
+                "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
               },
               "trusted_domains": {
                 "type": "array",
@@ -16087,7 +16138,8 @@
                 "type": "boolean"
               },
               "max_auto_admits": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
               },
               "blocked_domains": {
                 "type": "array",
@@ -16096,10 +16148,12 @@
                 }
               },
               "min_relevance": {
-                "type": "number"
+                "type": "number",
+                "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
               },
               "cost_ceiling_micro_usd": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
               },
               "proposed_tags": {
                 "type": "array",
@@ -16158,7 +16212,8 @@
                 ]
               },
               "review_backlog_limit": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
               },
               "schedule_paused": {
                 "type": "boolean",
@@ -16354,16 +16409,25 @@
             ]
           },
           "max_results": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
           },
           "max_proposals": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
           },
           "recency_days": {
             "type": [
-              "number",
+              "integer",
               "null"
-            ]
+            ],
+            "minimum": 0,
+            "maximum": 366,
+            "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
           },
           "trusted_domains": {
             "type": "array",
@@ -16388,7 +16452,10 @@
             "type": "boolean"
           },
           "max_auto_admits": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
           },
           "blocked_domains": {
             "type": "array",
@@ -16397,10 +16464,16 @@
             }
           },
           "min_relevance": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
           },
           "cost_ceiling_micro_usd": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000000,
+            "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
           },
           "proposed_tags": {
             "type": "array",
@@ -16442,7 +16515,10 @@
             ]
           },
           "review_backlog_limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to 500."
           },
           "schedule_paused": {
             "type": "boolean"
@@ -16551,17 +16627,19 @@
                     "description": "The relevance judge model. Null means the platform default."
                   },
                   "max_results": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
                   },
                   "max_proposals": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
                   },
                   "recency_days": {
                     "type": [
                       "integer",
                       "null"
                     ],
-                    "description": "Null means no recency constraint."
+                    "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
                   },
                   "trusted_domains": {
                     "type": "array",
@@ -16586,7 +16664,8 @@
                     "type": "boolean"
                   },
                   "max_auto_admits": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
                   },
                   "blocked_domains": {
                     "type": "array",
@@ -16595,10 +16674,12 @@
                     }
                   },
                   "min_relevance": {
-                    "type": "number"
+                    "type": "number",
+                    "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
                   },
                   "cost_ceiling_micro_usd": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
                   },
                   "proposed_tags": {
                     "type": "array",
@@ -17008,17 +17089,19 @@
                       "description": "The relevance judge model. Null means the platform default."
                     },
                     "max_results": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
                     },
                     "max_proposals": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
                     },
                     "recency_days": {
                       "type": [
                         "integer",
                         "null"
                       ],
-                      "description": "Null means no recency constraint."
+                      "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
                     },
                     "trusted_domains": {
                       "type": "array",
@@ -17043,7 +17126,8 @@
                       "type": "boolean"
                     },
                     "max_auto_admits": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
                     },
                     "blocked_domains": {
                       "type": "array",
@@ -17052,10 +17136,12 @@
                       }
                     },
                     "min_relevance": {
-                      "type": "number"
+                      "type": "number",
+                      "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
                     },
                     "cost_ceiling_micro_usd": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
                     },
                     "proposed_tags": {
                       "type": "array",
@@ -17346,17 +17432,19 @@
                     "description": "The relevance judge model. Null means the platform default."
                   },
                   "max_results": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "How many search results or feed items one run looks at. An integer from 1 to 50."
                   },
                   "max_proposals": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most proposals one run may add to the queue. An integer from 1 to 25."
                   },
                   "recency_days": {
                     "type": [
                       "integer",
                       "null"
                     ],
-                    "description": "Null means no recency constraint."
+                    "description": "Only results from the last this many days. An integer from 0 to 366. Null or 0 means no recency constraint."
                   },
                   "trusted_domains": {
                     "type": "array",
@@ -17381,7 +17469,8 @@
                     "type": "boolean"
                   },
                   "max_auto_admits": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most sources one run may admit without a reviewer. An integer from 1 to 25."
                   },
                   "blocked_domains": {
                     "type": "array",
@@ -17390,10 +17479,12 @@
                     }
                   },
                   "min_relevance": {
-                    "type": "number"
+                    "type": "number",
+                    "description": "The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%."
                   },
                   "cost_ceiling_micro_usd": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to 5000000 (5000000 is $5.00)."
                   },
                   "proposed_tags": {
                     "type": "array",
