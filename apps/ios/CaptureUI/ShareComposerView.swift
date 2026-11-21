@@ -94,7 +94,17 @@ struct ShareComposerView: View {
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
-      if !asksQuestion { noteSection }
+      if !asksQuestion {
+        noteSection
+        Section {
+          TextField("Ask your assistant (optional)", text: $model.intent)
+            .accessibilityIdentifier("share-intent-field")
+        } header: {
+          Text("Assistant")
+        } footer: {
+          Text("Your assistant handles it and reports back in your next brief.")
+        }
+      }
       if case .failed(let message) = model.phase {
         Section {
           Label(message, systemImage: "exclamationmark.octagon").foregroundStyle(BrandTheme.destructive)

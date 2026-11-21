@@ -73,6 +73,46 @@ describe('serializeBrief', () => {
     expect(wire.happened[0].source).toEqual({ kind: 'email', emailId: 'e3' });
   });
 
+  it('carries a delegation source through to the wire', async () => {
+    const stored = {
+      _id: { toString: () => 'b3' },
+      status: 'ready',
+      createdAt: new Date('2026-11-17T00:00:00Z'),
+      composedAt: new Date('2026-11-17T00:01:00Z'),
+      periodStart: new Date('2026-11-16T00:00:00Z'),
+      periodEnd: new Date('2026-11-17T00:00:00Z'),
+      headline: 'Delegated.',
+      happened: [],
+      handled: [{ id: 'x1', text: 'Summarized the report', source: { kind: 'delegation', delegationId: 'g1' } }],
+      decisions: [],
+    } as unknown as IAssistantBrief;
+
+    const deps = { findPendingActionStates: vi.fn(), findQuestionStates: vi.fn() };
+
+    const wire = await serializeBrief(stored, NOW, deps);
+    expect(BriefSchema.parse(wire)).toEqual(wire);
+    expect(wire.handled[0].source).toEqual({ kind: 'delegation', delegationId: 'g1' });
+  });
+
+  it('serializes a composing brief with no composed time yet', async () => {
+    const stored = {
+      _id: { toString: () => 'b4' },
+      status: 'composing',
+      createdAt: new Date('2026-11-17T00:00:00Z'),
+      composedAt: null,
+      periodStart: new Date('2026-11-16T00:00:00Z'),
+      periodEnd: new Date('2026-11-17T00:00:00Z'),
+      headline: null,
+      happened: [],
+      handled: [],
+      decisions: [],
+    } as unknown as IAssistantBrief;
+
+    const deps = { findPendingActionStates: vi.fn(), findQuestionStates: vi.fn() };
+
+    expect(await serializeBrief(stored, NOW, deps)).toMatchObject({ status: 'composing', composedAt: null });
+  });
+
   it('looks up every cited quest once across a page of briefs, and not at all with no approvals', async () => {
     const approval = (questId: string) => ({ questId, sessionId: 's1', pendingActionTs: TS });
     const deps = { findPendingActionStates: vi.fn().mockResolvedValue([]), findQuestionStates: vi.fn() };

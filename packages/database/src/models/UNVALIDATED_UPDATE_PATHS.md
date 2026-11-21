@@ -145,6 +145,8 @@ The table below remains the literal-update inventory, not proof that all databas
 | DataLakeResearchRun | `status` | enum | `ai/DataLakeResearchRunModel.ts#DataLakeResearchRunRepository.claimForExecution` | repository-check | `literal` | writes "running" |
 | DataLakeSpendNotification | `kind` | enum | `ai/DataLakeSpendNotificationModel.ts#DataLakeSpendNotificationRepository.claimNotification` | route-schema | `b4m-core/services/src/dataLakeService/renderSpendNotificationEmail.ts#renderSpendNotificationEmail` | Sole caller renders first; the renderer throws on an unhandled kind/scope pair |
 | DataLakeSpendNotification | `scope` | enum | `ai/DataLakeSpendNotificationModel.ts#DataLakeSpendNotificationRepository.claimNotification` | route-schema | `b4m-core/services/src/dataLakeService/renderSpendNotificationEmail.ts#renderSpendNotificationEmail` | Sole caller renders first; the renderer throws on an unhandled kind/scope pair |
+| DelegatedItem | `status` | enum | `content/DelegatedItemModel.ts#failStale` | schema | `runValidators` | writes "failed" |
+| DelegatedItem | `status` | enum | `content/DelegatedItemModel.ts#markFailed` | schema | `runValidators` | writes "failed" |
 | DeviceAuthorization | `status` | enum | `auth/DeviceAuthorizationModel.ts#DeviceAuthorizationRepository.claimApproved` | repository-check | `literal` | writes "consumed" |
 | DlqReplayLog | `status` | enum | `infra/webhooks/DlqReplayLogModel.ts#DlqReplayLogRepository.finalizeDiscard` | route-schema | `apps/client/pages/api/admin/dlq/discard.ts#handler` | Caller uses a ternary between the literals 'discarded' and 'failed' |
 | DlqTriageDelivery | `state` | enum | `infra/webhooks/DlqTriageDeliveryModel.ts#delivered` | repository-check | `literal` | writes "delivered" |

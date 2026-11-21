@@ -12,6 +12,7 @@ public enum CaptureFixtures {
   /// Both the submitter and the job tracker, so a fixture send shows up in the app's upload indicator.
   public static let jobs = FixtureCaptureJobs()
   public static let submitter: any CaptureSubmitting = jobs
+  public static let delegator: any DelegationSubmitting = FixtureDelegator()
   public static let transcription: any TranscriptionService = FixtureTranscription()
   public static let recorder: any AudioRecording = FixtureRecorder()
 
@@ -26,6 +27,10 @@ public enum CaptureFixtures {
           firstCreated: now.addingTimeInterval(-86_400), lastUpdated: now.addingTimeInterval(-Double(index) * 3_600))
       }
     }
+  }
+
+  private struct FixtureDelegator: DelegationSubmitting {
+    func delegate(_ request: DelegationRequest) async throws {}
   }
 
   private struct FixtureTranscription: TranscriptionService {

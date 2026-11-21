@@ -4,6 +4,7 @@ import {
   type BriefApprovalState,
   type BriefItem,
   type BriefQuestionState,
+  type BriefSourceRef,
 } from '@bike4mind/common';
 import { questRepository, type IAssistantBrief } from '@bike4mind/database';
 
@@ -117,5 +118,11 @@ export async function serializeBrief(brief: IAssistantBrief, now?: Date, deps?: 
 }
 
 function serializeItem({ id, text, source }: BriefItem): BriefItem {
-  return { id, text, ...(source && { source: { kind: source.kind, emailId: source.emailId } }) };
+  return { id, text, ...(source && { source: serializeSource(source) }) };
+}
+
+function serializeSource(source: BriefSourceRef): BriefSourceRef {
+  return source.kind === 'email'
+    ? { kind: 'email', emailId: source.emailId }
+    : { kind: 'delegation', delegationId: source.delegationId };
 }

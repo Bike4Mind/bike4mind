@@ -149,3 +149,26 @@ describe('assistant brief settlement', () => {
     );
   });
 });
+
+describe('AssistantBriefModel source refs', () => {
+  const brief = (source: Record<string, unknown>) => ({
+    userId: 'user-me',
+    status: 'ready',
+    periodStart: new Date('2026-11-01T00:00:00.000Z'),
+    periodEnd: new Date('2026-11-02T00:00:00.000Z'),
+    handled: [{ id: 'x1', text: 'Summarized the report', source }],
+  });
+
+  it('stores a delegation source', async () => {
+    const created = await AssistantBriefModel.create(brief({ kind: 'delegation', delegationId: 'g1' }));
+    const stored = await AssistantBriefModel.findById(created._id).lean();
+    expect(stored?.handled[0].source).toEqual({ kind: 'delegation', delegationId: 'g1' });
+  });
+
+  it('requires the id that matches the kind', async () => {
+    await expect(AssistantBriefModel.create(brief({ kind: 'delegation', emailId: 'e1' }))).rejects.toThrow(
+      /delegationId/
+    );
+    await expect(AssistantBriefModel.create(brief({ kind: 'email', delegationId: 'g1' }))).rejects.toThrow(/emailId/);
+  });
+});
