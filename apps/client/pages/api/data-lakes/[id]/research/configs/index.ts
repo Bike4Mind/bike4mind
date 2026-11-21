@@ -39,7 +39,7 @@ const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository, ...lakeC
  * service, not here, so a config written through any future second path means the same thing.
  *
  * The GET also returns the lake's live `pendingProposals` - the same count the research scheduler
- * compares against each config's `reviewBacklogLimit` - so the panel can say scheduling is paused.
+ * compares against each config's `reviewBacklogLimit` - so the panel can say scheduling is held.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))

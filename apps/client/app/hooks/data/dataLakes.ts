@@ -2488,6 +2488,8 @@ export type ResearchConfigInput = {
   cadence?: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT. */
   reviewBacklogLimit?: number;
+  /** Sent alone to pause or resume the schedule without re-validating the levers. */
+  schedulePaused?: boolean;
   source?: ResearchSource;
   /** Absolute http(s) address of an RSS or Atom feed; sent when `source` is 'feed', null clears it. */
   feedUrl?: string | null;

@@ -639,26 +639,27 @@ const configReviewBacklogLimit = (config: IDataLakeResearchConfigResponse): numb
   config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT;
 
 /** Why the scheduler skipped a tick, in the manager's terms. No entry for `review_backlog` - the
- *  paused line above already covers that reason, and repeating it here would say the same thing twice. */
+ *  held line above already covers that reason, and repeating it here would say the same thing twice. */
 const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> = {
   run_in_progress: 'another run was in progress',
   daily_cap: 'the lake reached its daily run limit',
   insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
   spend_frozen: 'spending is paused for the lake owner',
+  schedule_paused: 'the schedule was paused',
 };
 
 /**
  * The one line a config card shows for what the scheduler did the last time this config came due.
  * Null when there is nothing worth a separate line: a `started` tick needs no comment, and a
- * `review_backlog` skip is already the paused line above.
+ * `review_backlog` skip is already the held line above, and a `schedule_paused` skip is the Paused line.
  */
 const scheduleOutcomeMessage = (
   outcome: ResearchScheduleOutcome | null | undefined
 ): { text: string; color: 'danger' | 'neutral' } | null => {
   if (!outcome) return null;
   if (outcome.outcome === 'failed') return { text: outcome.error, color: 'danger' };
-  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog') {
+  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog' && outcome.reason !== 'schedule_paused') {
     return {
       text: `Last scheduled run was skipped: ${SCHEDULE_SKIP_LABEL[outcome.reason]}. It will be retried in about an hour.`,
       color: 'neutral',
@@ -1000,9 +1001,10 @@ export function DataLakeResearchPanel({
         const unsaved = editingId === config.id && hasUnsavedEdits;
         const cadence = configCadence(config);
         const reviewBacklogLimit = configReviewBacklogLimit(config);
-        // Same comparison the scheduler makes, so "paused" here always means the scheduler agrees.
+        // Same comparison the scheduler makes, so "held" here always means the scheduler agrees.
         const atOrOverBacklogLimit = pendingProposals !== undefined && pendingProposals >= reviewBacklogLimit;
-        const scheduleOutcome = scheduleOutcomeMessage(config.lastScheduledOutcome);
+        const schedulePaused = cadence !== 'off' && config.schedulePaused === true;
+        const scheduleOutcome = schedulePaused ? null : scheduleOutcomeMessage(config.lastScheduledOutcome);
         const trailingFailures = trailingScheduledFailureCount(config.id, runs);
         return (
           <Box
@@ -1069,11 +1071,13 @@ export function DataLakeResearchPanel({
               {cadence !== 'off' && (
                 <>
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="research-config-schedule">
-                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)} \u00b7 pauses at ${reviewBacklogLimit}`}
+                    {schedulePaused
+                      ? `Paused. Runs ${SCHEDULE_CADENCE_LABEL[cadence]} when resumed.`
+                      : `Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)} \u00b7 held at ${reviewBacklogLimit}`}
                   </Typography>
-                  {atOrOverBacklogLimit && (
-                    <Typography level="body-xs" color="warning" data-testid="research-config-schedule-paused">
-                      {`${pendingProposals} pending (pauses at ${reviewBacklogLimit}). They resume once the queue is below ${reviewBacklogLimit}.`}
+                  {atOrOverBacklogLimit && !schedulePaused && (
+                    <Typography level="body-xs" color="warning" data-testid="research-config-schedule-held">
+                      {`${pendingProposals} pending (held at ${reviewBacklogLimit}). They resume once the queue is below ${reviewBacklogLimit}.`}
                     </Typography>
                   )}
                   {scheduleOutcome && (
@@ -1117,6 +1121,24 @@ export function DataLakeResearchPanel({
                 >
                   Edit
                 </Button>
+                {cadence !== 'off' && (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    disabled={busy}
+                    title={
+                      schedulePaused
+                        ? 'Start scheduled runs again on the same schedule.'
+                        : 'Stop scheduled runs and keep the schedule. Run now still works.'
+                    }
+                    // The mutation toasts its own refusal; nothing else to do with a rejection here.
+                    onClick={() => void onUpdate(config.id, { schedulePaused: !schedulePaused }).catch(() => undefined)}
+                    data-testid={`datalake-research-pause-btn-${config.id}`}
+                  >
+                    {schedulePaused ? 'Resume schedule' : 'Pause schedule'}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="plain"
@@ -1321,7 +1343,7 @@ export function DataLakeResearchPanel({
 
               {draft.cadence !== 'off' && (
                 <FormControl size="sm" error={!!errors.reviewBacklogLimit}>
-                  <FormLabel>Pause scheduled runs at</FormLabel>
+                  <FormLabel>Hold scheduled runs at</FormLabel>
                   <Input
                     type="number"
                     value={draft.reviewBacklogLimit}

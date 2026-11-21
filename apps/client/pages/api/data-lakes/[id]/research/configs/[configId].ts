@@ -37,10 +37,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
       const input = UpdateInput.parse(req.body);
 
-      const result = await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, {
-        db,
-        logger: req.logger,
-      });
+      // Only a pause-only body skips the lever validation, so a config saved before a limit
+      // tightened can still be stopped. A mixed body is a full edit.
+      const definedKeys = Object.keys(input).filter(key => input[key as keyof typeof input] !== undefined);
+      const pauseOnly = definedKeys.length === 1 && input.schedulePaused !== undefined;
+      const adapters = { db, logger: req.logger };
+      const result = pauseOnly
+        ? await dataLakeResearchService.setResearchSchedulePaused(
+            configId,
+            lake,
+            input.schedulePaused === true,
+            actor,
+            grants,
+            adapters
+          )
+        : await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, adapters);
       // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
       await dataLakeRepository.touchIfStable(lake.id);
       return result;

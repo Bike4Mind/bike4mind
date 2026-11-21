@@ -182,6 +182,28 @@ describe('DataLakeResearchConfigRepository', () => {
       expect((await repo.findByIdInLake(due.id, LAKE))?.nextRunAt).toEqual(LEASE);
     });
 
+    it('does not claim a paused config, and still records an outcome for one paused mid-tick', async () => {
+      const paused = await scheduled(new Date('2026-03-10T09:00:00.000Z'), { schedulePaused: true });
+
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(0);
+
+      const next = new Date('2026-03-17T09:00:00.000Z');
+      await repo.recordScheduleOutcome(
+        paused.id,
+        'daily',
+        { outcome: 'skipped', at: NOW, reason: 'schedule_paused' },
+        next
+      );
+      const stored = await repo.findByIdInLake(paused.id, LAKE);
+      expect(stored?.nextRunAt).toEqual(next);
+      expect(stored?.lastScheduledOutcome).toMatchObject({ reason: 'schedule_paused' });
+    });
+
+    it('reads a config with no schedulePaused as not paused, and claims it', async () => {
+      await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(1);
+    });
+
     // The lease is what stops two overlapping ticks from both starting the same config.
     it('does not hand a claimed config to a second tick while its lease holds', async () => {
       await scheduled(new Date('2026-03-10T09:00:00.000Z'));
