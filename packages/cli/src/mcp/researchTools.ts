@@ -19,6 +19,7 @@ import {
   RESEARCH_SCHEDULE_CADENCES,
   RESEARCH_SOURCES,
   RESEARCH_UNLISTED_SOURCES,
+  normalizeDomainEntry,
 } from '@bike4mind/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
@@ -70,7 +71,7 @@ const MIN_RELEVANCE_NOTE = `min_relevance is a fraction from 0 to 1 (default ${R
 
 const GUARDED_SETTINGS_NOTE =
   'Turning on auto_admit_trusted, adding a trusted_domains entry, or (with auto_admit_trusted on) raising ' +
-  'max_auto_admits, removing a blocked_domains or item_rules entry, or changing the query widens what enters the lake ' +
+  'max_auto_admits, removing a blocked_domains, review_domains or item_rules entry, or changing the query, source or feed_url widens what enters the lake ' +
   `with no reviewer, so the user is asked directly. ${USER_APPROVES}`;
 
 export const RESEARCH_TOOL_META: ToolMeta[] = [
@@ -385,7 +386,7 @@ const NO_ELICITATION =
 
 type CurrentConfig = Awaited<ReturnType<B4mApiClient['getResearchConfig']>>;
 
-const domainKey = (d: string) => d.trim().toLowerCase();
+const domainKey = normalizeDomainEntry;
 const ruleKey = (r: { condition: string; action: string }) => `${r.action}:${r.condition}`;
 
 /** What this change widens, in words; empty when it widens nothing. `current` is absent on create. */
@@ -393,11 +394,16 @@ export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): strin
   const found: string[] = [];
   const wasAuto = current?.auto_admit_trusted ?? false;
   const nowAuto = args.auto_admit_trusted ?? wasAuto;
-  if (args.auto_admit_trusted === true && !wasAuto) {
-    found.push('turn on auto_admit_trusted: pages from trusted sites enter the lake with no reviewer');
-  }
   const known = new Set((current?.trusted_domains ?? []).map(domainKey));
-  const added = (args.trusted_domains ?? []).filter(d => !known.has(domainKey(d)));
+  const added = [...new Set((args.trusted_domains ?? []).map(domainKey).filter(d => !known.has(d)))];
+  if (args.auto_admit_trusted === true && !wasAuto) {
+    const sites = [...new Set((args.trusted_domains ?? current?.trusted_domains ?? []).map(domainKey))];
+    const cap = args.max_auto_admits ?? current?.max_auto_admits;
+    found.push(
+      `turn on auto_admit_trusted: pages from ${sites.length > 0 ? sites.join(', ') : 'no trusted sites yet'} ` +
+        `enter the lake with no reviewer (auto-admit cap: ${cap ?? 'the server default'})`
+    );
+  }
   if (added.length > 0) found.push(`trust new sites: ${added.join(', ')}`);
   if (nowAuto && current) {
     if (args.max_auto_admits !== undefined && args.max_auto_admits > current.max_auto_admits) {
@@ -405,7 +411,7 @@ export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): strin
     }
     if (args.blocked_domains) {
       const kept = new Set(args.blocked_domains.map(domainKey));
-      const removed = current.blocked_domains.filter(d => !kept.has(domainKey(d)));
+      const removed = current.blocked_domains.map(domainKey).filter(d => !kept.has(d));
       if (removed.length > 0) found.push(`unblock sites: ${removed.join(', ')}`);
     }
     if (args.item_rules) {
@@ -414,8 +420,25 @@ export function trustWidenings(args: ConfigArgs, current?: CurrentConfig): strin
       if (removed.length > 0) found.push(`remove ${removed.length} item rule(s)`);
     }
     if (args.query !== undefined && args.query !== current.query) found.push('change the research query');
+    if (args.feed_url !== undefined && args.feed_url !== (current.feed_url ?? null))
+      found.push('change the feed address');
+    if (args.source !== undefined && args.source !== current.source) found.push(`change the source to ${args.source}`);
+    if (args.review_domains) {
+      const kept = new Set(args.review_domains.map(domainKey));
+      const removed = current.review_domains.map(domainKey).filter(d => !kept.has(d));
+      if (removed.length > 0) found.push(`stop sending these sites to review: ${removed.join(', ')}`);
+    }
   }
   return found;
+}
+
+/** Refuse a domain entry the server would normalize to nothing, so the prompt never hides what is stored. */
+function assertDomainsUsable(args: ConfigArgs) {
+  for (const field of ['trusted_domains', 'review_domains', 'blocked_domains'] as const) {
+    for (const entry of args[field] ?? []) {
+      if (!domainKey(entry)) throw new Error(`${field} entry "${entry}" is not a usable domain. Nothing was changed.`);
+    }
+  }
 }
 
 const NOT_APPLIED = 'The user did not approve this change. Nothing was changed.';
@@ -457,6 +480,7 @@ export async function createResearchConfig(
   args: Args<'create_research_config'>,
   approval: UserApproval = {}
 ) {
+  assertDomainsUsable(args);
   const declined = await requireUserTrust(trustWidenings(args), approval);
   if (declined) return declined;
   return client.createResearchConfig(args.lake_id, configBody(args) as Args<'create_research_config'>);
@@ -467,13 +491,17 @@ export async function updateResearchConfig(
   args: Args<'update_research_config'>,
   approval: UserApproval = {}
 ) {
+  assertDomainsUsable(args);
   const needsCurrent =
     args.auto_admit_trusted === true ||
     (args.trusted_domains?.length ?? 0) > 0 ||
     args.max_auto_admits !== undefined ||
     args.blocked_domains !== undefined ||
     args.item_rules !== undefined ||
-    args.query !== undefined;
+    args.query !== undefined ||
+    args.feed_url !== undefined ||
+    args.source !== undefined ||
+    args.review_domains !== undefined;
   if (needsCurrent) {
     const current = await client.getResearchConfig(args.lake_id, args.config_id);
     const declined = await requireUserTrust(trustWidenings(args, current), approval);
@@ -546,11 +574,15 @@ function hostOf(url: string): string {
 function approvalForm(proposals: Proposal[]): ElicitRequestFormParams {
   const properties: Record<string, { type: 'boolean'; title: string; description: string; default: boolean }> = {};
   proposals.forEach((p, i) => {
-    const title = p.title.replace(/\s+/g, ' ').trim();
+    const title = p.title
+      .replace(/\s+/g, ' ')
+      .replace(/[\p{Cf}\p{Cc}]/gu, '')
+      .replace(/ {2,}/g, ' ')
+      .trim();
     const shown = title.length > TITLE_MAX_CHARS ? `${title.slice(0, TITLE_MAX_CHARS)}...` : title;
     properties[`p${i + 1}`] = {
       type: 'boolean',
-      title: `${shown} (${hostOf(p.source_url)})`,
+      title: `${hostOf(p.source_url)}: ${shown}`,
       description: 'Tick to approve admitting this page into the lake. Unticked proposals stay pending.',
       default: false,
     };

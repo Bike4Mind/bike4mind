@@ -1116,7 +1116,7 @@ describe('mapApiError publish slug collisions', () => {
 
   it('surfaces the server message for a 403 that carries an errorCode', () => {
     const err = axiosError(403, { data: { error: 'Spending is paused for this account', errorCode: 'spend_frozen' } });
-    expect(mapApiError(err, 'http://x', 'datalake:write')).toBe('Spending is paused for this account');
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Spending is paused for this account');
   });
 
   it('says the key owner needs manage rights for a research manage refusal', () => {

@@ -430,6 +430,21 @@ describe('research tool guarded actions', () => {
       expect(out(result).left_pending).toEqual(['p1']);
     });
 
+    it('strips format and control characters from titles and leads with the host', async () => {
+      const listProposals = vi.fn().mockResolvedValue({
+        data: [
+          rawProposal({ id: 'p1', title: 'Real\u202E\u200B page (nih.gov)\n', source_url: 'https://evil.test/a' }),
+        ],
+        nextCursor: null,
+      });
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: false } });
+      await collect(mockClient({ listProposals, decideProposal: vi.fn() }), elicit).call(
+        'decide_research_proposal',
+        decide('approve')
+      );
+      expect(elicit.mock.calls[0][0].requestedSchema.properties.p1.title).toBe('evil.test: Real page (nih.gov)');
+    });
+
     it.each([
       ['declined', { action: 'decline' }],
       ['cancelled', { action: 'cancel' }],
@@ -589,6 +604,22 @@ describe('research tool guarded actions', () => {
       ['a blocked domain is removed with auto-admit on', { auto_admit_trusted: true }, { blocked_domains: [] }],
       ['an item rule is removed with auto-admit on', { auto_admit_trusted: true }, { item_rules: [] }],
       ['the query changes with auto-admit on', { auto_admit_trusted: true }, { query: 'other' }],
+      [
+        'feed_url changes with auto-admit on',
+        { auto_admit_trusted: true, feed_url: 'https://a.test/f' },
+        { feed_url: 'https://b.test/f' },
+      ],
+      ['source changes with auto-admit on', { auto_admit_trusted: true, source: 'search' }, { source: 'feed' }],
+      [
+        'a review domain is removed with auto-admit on',
+        { auto_admit_trusted: true, review_domains: ['x.a.gov', 'y.test'] },
+        { review_domains: ['y.test'] },
+      ],
+      [
+        'blocked_domains removal is compared after normalization',
+        { auto_admit_trusted: true, blocked_domains: ['spam.test'] },
+        { blocked_domains: ['other.test'] },
+      ],
     ])('asks when %s', async (_name, cur, change) => {
       const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
       const { result, updateResearchConfig } = await run(cur, change, elicit);
@@ -605,12 +636,62 @@ describe('research tool guarded actions', () => {
       ['the query changes while auto-admit is off', {}, { query: 'other' }],
       ['max_auto_admits lowers with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 1 }],
       ['auto-admit is turned off', { auto_admit_trusted: true }, { auto_admit_trusted: false }],
+      [
+        'a review domain is added with auto-admit on',
+        { auto_admit_trusted: true, review_domains: ['x.a.gov'] },
+        { review_domains: ['x.a.gov', 'new.test'] },
+      ],
+      ['a URL form of a stored trusted domain', {}, { trusted_domains: ['https://a.gov'] }],
+      [
+        'a blocked domain kept in URL form',
+        { auto_admit_trusted: true, blocked_domains: ['spam.test'] },
+        { blocked_domains: ['https://www.spam.test/x'] },
+      ],
     ])('does not ask for %s', async (_name, cur, change) => {
       const elicit = vi.fn();
       const { result, updateResearchConfig } = await run(cur, change, elicit);
       expect(elicit).not.toHaveBeenCalled();
       expect(result.isError).toBeUndefined();
       expect(updateResearchConfig).toHaveBeenCalled();
+    });
+
+    it('shows the normalized host for a credentialed trusted domain', async () => {
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
+      await run({}, { trusted_domains: ['nih.gov@evil.com'] }, elicit);
+      const message = elicit.mock.calls[0][0].message;
+      expect(message).toContain('evil.com');
+      expect(message).not.toContain('nih.gov');
+    });
+
+    it('lists the trusted sites and cap when auto-admit turns on', async () => {
+      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
+      await run({}, { auto_admit_trusted: true }, elicit);
+      const message = elicit.mock.calls[0][0].message;
+      expect(message).toContain('a.gov');
+      expect(message).toContain('cap: 3');
+    });
+
+    it('refuses a domain that normalizes to empty before any API call', async () => {
+      const getResearchConfig = vi.fn();
+      const updateResearchConfig = vi.fn();
+      const result = await collect(mockClient({ getResearchConfig, updateResearchConfig }), yes).call(
+        'update_research_config',
+        { lake_id: 'l1', config_id: 'c1', review_domains: ['https://'] }
+      );
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain('https://');
+      expect(getResearchConfig).not.toHaveBeenCalled();
+      expect(updateResearchConfig).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing when the form is accepted with approve false', async () => {
+      const { result, updateResearchConfig } = await run(
+        {},
+        { auto_admit_trusted: true },
+        vi.fn().mockResolvedValue({ action: 'accept', content: { approve: false } })
+      );
+      expect(updateResearchConfig).not.toHaveBeenCalled();
+      expect(out(result).applied).toBe(false);
     });
 
     it('writes nothing when the user cancels, and refuses without elicitation', async () => {
