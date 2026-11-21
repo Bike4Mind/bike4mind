@@ -13,7 +13,10 @@ B4M_PROMPT_BASELINE=1 VITEST_MAX_WORKERS=25% pnpm exec vitest run src/main/chat/
 
 With `B4M_PROMPT_BASELINE=1` the deferred-tools suite prints a sanitized comparison
 of the same reading task at deferred start limits of 100,000 and 0: per-block bytes
-and estimates plus total request bytes. Without it nothing is printed.
+and estimates plus total request bytes. The agent-wake suite prints an
+`orchestration-request-shape` report with per-block bytes and estimates for the
+parent's first request, the parent after spawning workers, both workers and
+the parent's automatic wake. Without the variable nothing is printed.
 
 ## Method
 
