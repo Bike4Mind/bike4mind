@@ -7,6 +7,7 @@ chess, lattice, Python). Each type has a dedicated viewer.
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { downloadData } from '@client/app/utils/download';
+import { inlineBlessedScripts } from '@client/app/utils/inlineBlessedScripts';
 import {
   useSessions,
   useWorkBenchFiles,
@@ -1449,7 +1450,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         downloadFile(currentItem.content.content, `${currentItem.content.title || 'component'}.tsx`, 'text/typescript');
         break;
       case 'html':
-        downloadFile(currentItem.content.content, `${currentItem.content.title || 'page'}.html`, 'text/html');
+        downloadFile(
+          await inlineBlessedScripts(currentItem.content.content),
+          `${currentItem.content.title || 'page'}.html`,
+          'text/html'
+        );
         break;
       case 'svg':
         downloadFile(currentItem.content.content, `${currentItem.content.title || 'graphic'}.svg`, 'image/svg+xml');

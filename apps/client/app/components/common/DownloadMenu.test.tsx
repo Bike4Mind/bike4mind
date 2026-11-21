@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DownloadMenu from './DownloadMenu';
@@ -42,6 +42,7 @@ function stubDownloadApis() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('DownloadMenu', () => {
@@ -101,5 +102,60 @@ describe('DownloadMenu', () => {
     fireEvent.click(screen.getByTestId('download-menu-detected-reply-1.csv'));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe('html artifact items', () => {
+    const HTML_REPLY = [
+      'Here is the chart:',
+      '<artifact type="text/html" title="Sales Chart">',
+      '<html><body><canvas id="c"></canvas><script src="/static/lib/chart.js@4.x.js"></script></body></html>',
+      '</artifact>',
+    ].join('\n');
+
+    const blobText = (blob: Blob) =>
+      new Promise<string>(resolve => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsText(blob);
+      });
+
+    it('downloads the html with the blessed library inlined instead of a root-relative src', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ ok: true, status: 200, text: async () => 'window.Chart = {};' }) as Response)
+      );
+      const { createObjectURL, getAnchor } = stubDownloadApis();
+      const onClose = vi.fn();
+      renderMenu({ content: HTML_REPLY, fileName: 'reply.md', onClose });
+      openMenu();
+      fireEvent.click(screen.getByTestId('download-menu-detected-sales-chart.html'));
+
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      const blob = createObjectURL.mock.calls[0][0];
+      const text = await blobText(blob);
+      expect(blob.type).toBe('text/html');
+      expect(getAnchor()?.download).toBe('sales-chart.html');
+      expect(text).not.toContain('src="/static/lib/');
+      expect(text).toContain('<script>window.Chart = {};</script>');
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('still downloads when the library cannot be fetched, with an absolute src', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new Error('offline');
+        })
+      );
+      const { createObjectURL } = stubDownloadApis();
+      renderMenu({ content: HTML_REPLY, fileName: 'reply.md' });
+      openMenu();
+      fireEvent.click(screen.getByTestId('download-menu-detected-sales-chart.html'));
+
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      const text = await blobText(createObjectURL.mock.calls[0][0]);
+      expect(text).not.toContain('src="/static/lib/');
+      expect(text).toContain(`src="${window.location.origin}/static/lib/chart.js@4.x.js"`);
+    });
   });
 });

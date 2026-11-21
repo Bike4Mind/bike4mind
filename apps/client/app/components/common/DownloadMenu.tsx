@@ -8,6 +8,7 @@ import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import { buildReplyDownloads, type ReplyDownload } from '@client/app/utils/replyDownloads';
+import { inlineBlessedScripts } from '@client/app/utils/inlineBlessedScripts';
 import { stripSearchResultCardFences } from '@bike4mind/common';
 
 // Utility: Download a file
@@ -237,8 +238,12 @@ export const ReplyDownloadMenuItems: React.FC<{ content: string; fileName: strin
           className="download-menu-item-detected"
           data-testid={`download-menu-detected-${item.key}`}
           onClick={() => {
-            downloadFile(item.content, item.fileName, item.mimeType);
-            done();
+            const save = (content: string) => {
+              downloadFile(content, item.fileName, item.mimeType);
+              done();
+            };
+            if (item.mimeType === 'text/html') void inlineBlessedScripts(item.content).then(save);
+            else save(item.content);
           }}
         >
           {item.label}
