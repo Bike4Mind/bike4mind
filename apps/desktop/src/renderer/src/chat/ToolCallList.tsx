@@ -266,7 +266,8 @@ function ApprovalPrompt({
   const irreversible = call.approvalIrreversible === true;
   const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
-  const approvalText = call.approvalDetail ?? summarizeInput(call);
+  const argument = summarizeInput(call);
+  const approvalText = call.approvalDetail ?? argument;
 
   return (
     <Sheet
@@ -316,7 +317,9 @@ function ApprovalPrompt({
             </ClippedBlock>
           </Box>
           <CopyMessageButton
-            text={approvalText}
+            // The card shows display text (`$ cmd`, its folder, why it asks); the clipboard gets the
+            // bare argument, as the detail view's input button does.
+            text={argument || approvalText}
             label={inputCopyLabel(call)}
             className={BLOCK_COPY_BUTTON_CLASS}
             testId="chat-tool-approval-copy-btn"

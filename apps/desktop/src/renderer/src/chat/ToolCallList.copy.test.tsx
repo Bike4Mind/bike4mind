@@ -96,15 +96,21 @@ describe('tool call copy buttons', () => {
     expect(find('chat-tool-detail-output-copy-btn')).toBeNull();
   });
 
-  it('copies the command an approval asks about', async () => {
+  it("copies an approval's bare command, not the display text the card shows", async () => {
+    // The shape main builds for a shell approval: the prompt, its folder, then any gate reasons.
+    const approvalDetail = '$ rm -rf dist\n\nin /repo\n\nOutside the project folder.';
     act(() =>
       root.render(
         <ToolCallList
-          calls={[bash({ status: 'awaiting-approval', approvalId: 'a1', approvalDetail: 'rm -rf dist' })]}
+          calls={[
+            bash({ input: { command: 'rm -rf dist' }, status: 'awaiting-approval', approvalId: 'a1', approvalDetail }),
+          ]}
           onRespond={() => undefined}
         />
       )
     );
+    expect(find('chat-tool-approval-detail')?.textContent).toBe(approvalDetail);
+    expect(find('chat-tool-approval-copy-btn')?.getAttribute('aria-label')).toBe('Copy command');
 
     await press('chat-tool-approval-copy-btn');
 

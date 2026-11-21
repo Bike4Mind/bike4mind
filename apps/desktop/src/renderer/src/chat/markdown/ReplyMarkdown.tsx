@@ -8,7 +8,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
-import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton, revealBlockCopyButtonSx } from '../CopyMessageButton';
+import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton } from '../CopyMessageButton';
 import { ExternalLink } from '../ExternalLink';
 import { FilePathLink } from '../FilePathLink';
 import { useImageMenu } from '../ImageContextMenu';
@@ -42,11 +42,16 @@ type CodeProps = ComponentProps<'code'> & ExtraProps;
 /** What a fence with no language hint is highlighted as; it earns no label. */
 const UNKNOWN_LANGUAGE = 'text';
 
-/** The language label shows and hides with the block's copy button. */
-const LANGUAGE_LABEL_CLASS = 'b4m-block-language';
-const revealLanguageSx = {
-  [`& .${LANGUAGE_LABEL_CLASS}`]: { opacity: 0, transition: 'opacity 120ms' },
-  [`&:hover .${LANGUAGE_LABEL_CLASS}, &:focus-within .${LANGUAGE_LABEL_CLASS}`]: { opacity: 1 },
+/**
+ * The toolbar as a whole is what hides, background included: hidden, it would still paint over
+ * the end of the first line and catch clicks there. It stays up while the copy button is
+ * reporting an outcome, as revealCopyButtonSx keeps a message's button up.
+ */
+const TOOLBAR_CLASS = 'b4m-codeblock-toolbar';
+const revealToolbarSx = {
+  [`& .${TOOLBAR_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
+  [`&:hover .${TOOLBAR_CLASS}, &:focus-within .${TOOLBAR_CLASS}, & .${TOOLBAR_CLASS}:has([data-state]:not([data-state="idle"]))`]:
+    { opacity: 1, pointerEvents: 'auto' },
 } as const;
 
 /**
@@ -68,7 +73,7 @@ const CodeBlock = memo(function CodeBlock({
 }) {
   return (
     // The toolbar sits outside the scroller so it stays put while a long line scrolls under it.
-    <Box sx={{ position: 'relative', my: 1.5, ...revealBlockCopyButtonSx, ...revealLanguageSx }}>
+    <Box sx={{ position: 'relative', my: 1.5, ...revealToolbarSx }}>
       <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
         {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
         <SyntaxHighlighter
@@ -93,12 +98,13 @@ const CodeBlock = memo(function CodeBlock({
           // Over the code it covers, so the label never reads as part of the code.
           bgcolor: 'background.level1',
         }}
+        className={TOOLBAR_CLASS}
+        data-testid="reply-codeblock-toolbar"
       >
         {language !== UNKNOWN_LANGUAGE && (
           <Typography
             level="body-xs"
             textColor="text.tertiary"
-            className={LANGUAGE_LABEL_CLASS}
             sx={{ pl: 0.75 }}
             data-testid="reply-codeblock-language"
           >
