@@ -104,6 +104,8 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.RetrievalRate]: 'retrieval-rate',
   [AdminTab.ApiKeyScopePreflight]: 'api-key-scope-preflight',
   [AdminTab.LegacyApiKeys]: 'legacy-api-keys',
+  // The spend monitor cron links to this slug, so it must not change.
+  [AdminTab.SpendMonitor]: 'spend-monitor',
   [AdminTab.ReleaseNotes]: 'release-notes',
   [AdminTab.OAuthClients]: 'oauth-clients',
   [AdminTab.GrowthPricing]: 'growth-pricing',

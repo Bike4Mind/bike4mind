@@ -22,6 +22,7 @@ import {
   Database,
   FileText,
   Fingerprint,
+  ChartCandlestick,
   Gauge,
   GraduationCap,
   Gavel,
@@ -153,6 +154,7 @@ export enum AdminTab {
   Roles = 80,
   AccessReview = 81,
   SpendExplorer = 82,
+  SpendMonitor = 83,
 }
 
 /**
@@ -293,6 +295,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Spend explorer',
         testid: 'admin-spend-explorer-btn',
       },
+      { Icon: ChartCandlestick, tab: AdminTab.SpendMonitor, label: 'Spend monitor', testid: 'admin-spend-monitor-btn' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],

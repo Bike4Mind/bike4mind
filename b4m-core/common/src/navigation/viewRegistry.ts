@@ -759,6 +759,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.spend_monitor',
+    section: 'admin',
+    label: 'Spend monitor',
+    description:
+      'Watch live credit spend and open spend incidents, freeze or lift spending for a user, organization or API key, and see what the automatic pause would do',
+    navigationType: 'tab',
+    target: '83', // AdminTab.SpendMonitor
+    keywords: ['spend', 'credits', 'spike', 'freeze', 'pause', 'incident'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.held_signup_grants',
     section: 'admin',
     label: 'Held signup grants',
