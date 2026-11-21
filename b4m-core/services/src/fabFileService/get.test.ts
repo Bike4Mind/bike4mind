@@ -90,9 +90,11 @@ describe('generateSignedUrl - sign on read, never persisted', () => {
     const adapter = signingAdapter();
     const result = await generateSignedUrl(original, adapter);
     expect(result.fileUrl).toBe(freshUrl);
-    expect(adapter.storage.generateSignedUrl).toHaveBeenCalledWith('owned/file.txt', 3600, {
-      signingDate: expect.any(Date),
-    });
+    expect(adapter.storage.generateSignedUrl).toHaveBeenCalledWith(
+      'owned/file.txt',
+      3600,
+      expect.objectContaining({ signingDate: expect.any(Date) })
+    );
     expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
     expect(original).toEqual(before);
   });
@@ -124,6 +126,18 @@ describe('generateSignedUrl - sign on read, never persisted', () => {
     const held = await generateSignedUrl(legacyFile({ moderationStatus: 'pending' }), adapter);
     expect(held.fileUrl).toBeUndefined();
     expect(adapter.storage.generateSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['text/html', { ResponseContentDisposition: 'attachment; filename="page.html"' }],
+    ['image/svg+xml', { ResponseContentDisposition: 'attachment; filename="page.html"' }],
+    [undefined, { ResponseContentDisposition: 'attachment; filename="page.html"' }],
+    ['image/png', { ResponseContentType: 'image/png' }],
+  ])('passes the %s storage overrides to the raw signer', async (mimeType, overrides) => {
+    const adapter = signingAdapter();
+    await generateSignedUrl(legacyFile({ mimeType, fileName: 'page.html' }), adapter);
+    const options = vi.mocked(adapter.storage.generateSignedUrl).mock.calls[0][2];
+    expect(options).toEqual({ signingDate: expect.any(Date), ...overrides });
   });
 
   describe('windowed signing', () => {

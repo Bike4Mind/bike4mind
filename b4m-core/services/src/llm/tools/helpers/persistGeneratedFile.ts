@@ -120,8 +120,12 @@ function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'd
     },
     storage: {
       upload: (path, content, options) => storage.upload(content, path, options),
-      generateSignedUrl: (path, expireInSeconds, type) =>
-        storage.getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
+      generateSignedUrl: (path, expireInSeconds, type, options) =>
+        storage.getSignedUrl(path, type ?? 'get', {
+          expiresIn: expireInSeconds,
+          ResponseContentDisposition: options?.ResponseContentDisposition,
+          ResponseContentType: options?.ResponseContentType,
+        }),
     },
   };
 }

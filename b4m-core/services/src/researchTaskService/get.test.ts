@@ -77,6 +77,7 @@ describe('researchTaskService - get', () => {
     expect(result.researchData[0].fabFile.fileUrlExpireAt).toBeInstanceOf(Date);
     expect(adapters.storage.generateSignedUrl).toHaveBeenCalledWith('files/a.pdf', expect.any(Number), {
       signingDate: expect.any(Date),
+      ResponseContentType: 'application/pdf',
     });
     expect(result).toMatchObject({ ...expectedTask, researchData: [{ id: 'research-data-1' }] });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
