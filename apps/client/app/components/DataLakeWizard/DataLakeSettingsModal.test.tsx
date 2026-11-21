@@ -1441,6 +1441,16 @@ describe('DataLakeSettingsModal - Research tab', () => {
     expect(screen.getByTestId('datalake-settings-tab-research')).toBeInTheDocument();
   });
 
+  it('keeps the tab list on one scrollable line so five tabs fit a phone', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tablist')).toHaveStyle({ overflowX: 'auto', flexWrap: 'nowrap' });
+  });
+
   it('never offers it to a caller who cannot manage the lake, and never reads on their behalf', () => {
     render(
       <Wrapper>
@@ -1530,7 +1540,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
     );
 
     await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
-    await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
+    await userEvent.click(await screen.findByTestId('datalake-research-run-btn-config-1'));
 
     expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
   });
