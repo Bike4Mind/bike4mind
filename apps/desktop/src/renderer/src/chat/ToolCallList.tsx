@@ -21,12 +21,13 @@ import { own } from '@shared/ownKeys';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
+import { ClippedBlock } from './ClippedBlock';
+import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton, revealBlockCopyButtonSx } from './CopyMessageButton';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { McpServerRequestCard } from './McpServerRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
-import { thinScrollbarSx } from './layout';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
 import { VideoJobsForCall } from './VideoJobCard';
 import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
@@ -265,6 +266,8 @@ function ApprovalPrompt({
   const irreversible = call.approvalIrreversible === true;
   const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
+  const argument = summarizeInput(call);
+  const approvalText = call.approvalDetail ?? argument;
 
   return (
     <Sheet
@@ -295,26 +298,33 @@ function ApprovalPrompt({
           ))}
         </Stack>
       ) : (
-        <Box
-          sx={{
-            mt: 0.75,
-            p: 1,
-            borderRadius: 'sm',
-            bgcolor: 'background.surface',
-            maxHeight: 200,
-            overflowY: 'auto',
-            ...thinScrollbarSx,
-          }}
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="flex-start"
+          sx={{ mt: 0.75, p: 1, borderRadius: 'sm', bgcolor: 'background.surface', ...revealBlockCopyButtonSx }}
         >
-          <Typography
-            level="body-sm"
-            fontFamily="monospace"
-            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'normal', overflowWrap: 'anywhere' }}
-            data-testid="chat-tool-approval-detail"
-          >
-            {call.approvalDetail ?? summarizeInput(call)}
-          </Typography>
-        </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <ClippedBlock maxHeight={200} measureKey={approvalText} testId="chat-tool-approval-detail-clip">
+              <Typography
+                level="body-sm"
+                fontFamily="monospace"
+                sx={{ whiteSpace: 'pre-wrap', wordBreak: 'normal', overflowWrap: 'anywhere' }}
+                data-testid="chat-tool-approval-detail"
+              >
+                {approvalText}
+              </Typography>
+            </ClippedBlock>
+          </Box>
+          <CopyMessageButton
+            // The card shows display text (`$ cmd`, its folder, why it asks); the clipboard gets the
+            // bare argument, as the detail view's input button does.
+            text={argument || approvalText}
+            label={inputCopyLabel(call)}
+            className={BLOCK_COPY_BUTTON_CLASS}
+            testId="chat-tool-approval-copy-btn"
+          />
+        </Stack>
       )}
       {!diff && call.approvalParts && call.approvalParts.length > 0 && <ApprovalParts parts={call.approvalParts} />}
 
@@ -402,6 +412,11 @@ function ApprovalPrompt({
   );
 }
 
+/** The copy button's name for what a call was given: a shell call's input is its command. */
+function inputCopyLabel(call: ChatToolCall): string {
+  return call.name === 'bash_execute' || call.name === 'bash_background' ? 'Copy command' : 'Copy input';
+}
+
 /** One call's full detail, behind the disclosure: what it was given, and what it returned. */
 function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // The diff names the file in its own header, so repeating the path above it is the same
@@ -410,6 +425,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
   // The list stands in for the raw text it was parsed from; the model still got that text.
   const listsHits = useWebSearchHits(call).length > 0;
+  const output = call.error ?? call.preview ?? call.progress;
 
   const asked = call.name === ASK_USER_TOOL_NAME ? parseQuestions(call.input.questions) : null;
   if (asked && 'questions' in asked && call.status === 'done') {
@@ -434,15 +450,23 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   return (
     <Box data-testid="chat-tool-detail">
       {argument && (
-        <Typography
-          level="body-sm"
-          fontFamily="monospace"
-          textColor="text.tertiary"
-          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-          data-testid="chat-tool-detail-input"
-        >
-          {argument}
-        </Typography>
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={revealBlockCopyButtonSx}>
+          <Typography
+            level="body-sm"
+            fontFamily="monospace"
+            textColor="text.tertiary"
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1, minWidth: 0 }}
+            data-testid="chat-tool-detail-input"
+          >
+            {argument}
+          </Typography>
+          <CopyMessageButton
+            text={argument}
+            label={inputCopyLabel(call)}
+            className={BLOCK_COPY_BUTTON_CLASS}
+            testId="chat-tool-detail-input-copy-btn"
+          />
+        </Stack>
       )}
 
       {INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
@@ -462,22 +486,29 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
       <WebToolDetail call={call} />
 
       {!listsHits && (
-        <Typography
-          level="body-xs"
-          fontFamily="monospace"
-          sx={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            maxHeight: 260,
-            overflowY: 'auto',
-            mt: 0.5,
-            ...thinScrollbarSx,
-          }}
-          textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
-          data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
-        >
-          {call.error ?? call.preview ?? call.progress ?? 'Running...'}
-        </Typography>
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ mt: 0.5, ...revealBlockCopyButtonSx }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <ClippedBlock maxHeight={260} measureKey={output ?? ''} testId="chat-tool-detail-output-clip">
+              <Typography
+                level="body-xs"
+                fontFamily="monospace"
+                sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
+                data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
+              >
+                {output ?? 'Running...'}
+              </Typography>
+            </ClippedBlock>
+          </Box>
+          {output && (
+            <CopyMessageButton
+              text={output}
+              label={call.error ? 'Copy error' : 'Copy output'}
+              className={BLOCK_COPY_BUTTON_CLASS}
+              testId="chat-tool-detail-output-copy-btn"
+            />
+          )}
+        </Stack>
       )}
     </Box>
   );

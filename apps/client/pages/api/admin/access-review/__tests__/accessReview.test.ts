@@ -243,7 +243,12 @@ describe('GET status', () => {
   it('reports this quarter completion from the review records only', async () => {
     mocks.findLatestCompleted.mockResolvedValue(record({ completedAt: NOW }));
     const res = await call(status, 'GET');
-    expect(res._getJSONData()).toEqual({ quarter: QUARTER, overdue: false, completedAt: NOW.toISOString() });
+    expect(res._getJSONData()).toEqual({
+      quarter: QUARTER,
+      overdue: false,
+      overdueSince: null,
+      completedAt: NOW.toISOString(),
+    });
     expect(mocks.collect).not.toHaveBeenCalled();
   });
 });

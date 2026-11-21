@@ -1,4 +1,4 @@
-import type { SkinSummary } from './mods';
+import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -71,6 +71,7 @@ import type {
   RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
@@ -266,6 +267,8 @@ export const IPC_CHANNELS = {
   chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatEditMessage: 'chat:edit-message',
+  chatRegenerateReply: 'chat:regenerate-reply',
   /**
    * The two context commands. Renderer -> main only, and deliberately NOT reachable from a
    * tool: see the renderer's commands.ts for why a slash command is not a model capability.
@@ -621,6 +624,10 @@ export const IPC_CHANNELS = {
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
   skinsChanged: 'skins:changed',
+  /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
+  soundPacksList: 'soundpacks:list',
+  /** Pushed with the fresh list when the mods folder changes. */
+  soundPacksChanged: 'soundpacks:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -785,6 +792,11 @@ export interface DesktopApi {
   skins: {
     list(): Promise<SkinSummary[]>;
     onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
+  /** Data-only sound packs for the Orchestrate events; validated in main, like skins. */
+  soundPacks: {
+    list(): Promise<SoundPackSummary[]>;
+    onChanged(listener: (packs: SoundPackSummary[]) => void): () => void;
   };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
@@ -1018,6 +1030,10 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /** Replace a sent prompt and drop every turn after it, then send the edit; ChatService.editMessage. */
+    editMessage(request: EditMessageRequest): Promise<SendMessageResult>;
+    /** Drop the last reply and run its prompt again; ChatService.regenerateReply. */
+    regenerateReply(sessionId: string): Promise<SendMessageResult>;
     /**
      * `/clear`: insert a context boundary, carrying nothing across. Instant - no model involved.
      * Nothing is deleted; the transcript keeps every message and folds the earlier ones away.

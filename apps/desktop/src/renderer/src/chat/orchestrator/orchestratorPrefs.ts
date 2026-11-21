@@ -27,6 +27,7 @@ const AMBIENT_KEY = 'b4m.orchestrator.ambient';
 const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
 const FOCUS_KEY = 'b4m.orchestrator.focus';
 const SKIN_KEY = 'b4m.orchestrator.skin';
+const SOUND_PACK_KEY = 'b4m.orchestrator.soundPack';
 const PRESENTER_KEY = 'b4m.orchestrator.presenter';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
@@ -193,6 +194,23 @@ export function writeSkin(id: string | null): void {
     window.localStorage.removeItem(SKIN_KEY);
   } catch {
     // Unwritable storage: Default for this run only.
+  }
+}
+
+/** The picked sound pack's id (main/mods), or null for the built-in sounds. */
+export function readSoundPack(): string | null {
+  return readItem(SOUND_PACK_KEY);
+}
+
+export function writeSoundPack(id: string | null): void {
+  if (id !== null) {
+    writeItem(SOUND_PACK_KEY, id);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SOUND_PACK_KEY);
+  } catch {
+    // Unwritable storage: the built-in sounds for this run only.
   }
 }
 

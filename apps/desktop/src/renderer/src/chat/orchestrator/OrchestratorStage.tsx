@@ -5,7 +5,9 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
-import { playChime } from './chime';
+import { playSoundEvent } from './chime';
+import { useAgentSoundEvents } from './soundEvents';
+import { activeSoundPack, resolveEventSound } from './soundPacks';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
@@ -255,12 +257,17 @@ export function OrchestratorStage({
   const spend = useRunSpend(rootId, finale.shown);
   const skin = useSkinTheme();
   useApplySkin(skin);
-  // Read when the finale shows, so switching skins mid-finale does not replay it.
-  const finaleSound = useRef(skin.sounds.finale);
-  finaleSound.current = skin.sounds.finale;
+  // Read when the finale shows, so switching skins mid-finale does not replay it. The pack wins over the skin.
+  const skinFinale = useRef(skin.sounds.finale);
+  skinFinale.current = skin.sounds.finale;
   useEffect(() => {
-    if (finale.shown) playChime(finaleSound.current);
+    if (!finale.shown) return;
+    playSoundEvent(
+      'finale',
+      resolveEventSound('finale', { packSounds: activeSoundPack()?.sounds, skinFinale: skinFinale.current })
+    );
   }, [finale.shown]);
+  useAgentSoundEvents(agents, parentNeedsYou);
 
   const parentScene = view === 'tavern' || view === 'office';
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;

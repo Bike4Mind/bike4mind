@@ -50,6 +50,7 @@ import { useMenuBarSetting } from './menuBarSetting';
 import type { NotifyScope } from '@shared/attention';
 import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
+import { SoundMixControl } from './orchestrator/SoundMixControl';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
 import { REPLY_STAT_TEXT, REPLY_STATS } from './replyStats';
@@ -220,8 +221,9 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
     id: 'orchestrator-sound',
     icon: <SoundIcon />,
     label: 'Orchestrator sounds',
-    summary: enabled ? 'A chime when an agent needs you or a run finishes.' : 'Off.',
-    description: 'Play a chime when an agent needs your attention or a run finishes.',
+    summary: enabled ? 'Sounds are on.' : 'Muted.',
+    description:
+      'Play a chime when an agent needs your attention, and the sounds picked below. Turn off to mute everything.',
     control: (
       <Switch
         size="sm"
@@ -232,6 +234,18 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
         }}
       />
     ),
+  };
+}
+
+function orchestratorSoundMixEntry(): ConfigEntry {
+  return {
+    id: 'orchestrator-sound-mix',
+    icon: <SoundIcon />,
+    label: 'Sound volume and events',
+    summary: 'Volume and which moments make a sound.',
+    description:
+      'The needs-you chime always plays while sounds are on. A sound pack (picked from the view menu) replaces the other sounds.',
+    control: <SoundMixControl />,
   };
 }
 
@@ -636,6 +650,7 @@ function useSettingsEntries(
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      orchestratorSoundMixEntry(),
       notifyScopeEntry(notifyScope, setNotifyScope),
       menuBarEntry(menuBar, toggleMenuBar),
       {
@@ -700,7 +715,14 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
+    entries: [
+      'appearance',
+      'orchestrator-sound',
+      'orchestrator-sound-mix',
+      'notify-scope',
+      'menu-bar',
+      'nested-sessions',
+    ],
   },
   {
     id: 'conversations',
@@ -712,7 +734,13 @@ const GENERAL_GROUPS = [
   { id: 'connection', label: 'Connection & updates', entries: ['server', 'updates', 'dollar-costs'] },
 ];
 
-const EXPANDED_SETTINGS = new Set(['orchestration-policy', 'local-context', 'server', 'updates']);
+const EXPANDED_SETTINGS = new Set([
+  'orchestrator-sound-mix',
+  'orchestration-policy',
+  'local-context',
+  'server',
+  'updates',
+]);
 
 /** Entries missing from GENERAL_GROUPS land in a trailing "Other" group instead of vanishing. */
 function groupEntries(entries: ConfigEntry[]) {
