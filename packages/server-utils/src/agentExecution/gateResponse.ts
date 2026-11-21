@@ -3,6 +3,7 @@ import type { AgentCheckpoint } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import { endAgentRunLiveActivity } from '../utils/liveActivityPush';
 import { persistRunAsQuest } from '../utils/persistRunAsQuest';
+import { startEventBriefForCompletedRun } from '../briefs/eventBriefTrigger';
 import { reopenLowConfidenceAnswer } from '../utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '../utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '../utils/publishMementoCompletion';
@@ -113,6 +114,7 @@ export async function handleGateResponse(
     // natural completion path fires. Resolve gates through the shared authority
     // and hand them over; the helper guards on the gates and `parentExecutionId`.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
+    await startEventBriefForCompletedRun(cmd.executionId, execution, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }
@@ -220,5 +222,6 @@ async function acceptHeldCompletion(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  await startEventBriefForCompletedRun(execution.id, execution, logger);
   logger.info('[Gate] Accepted low-confidence completion', { executionId: execution.id });
 }

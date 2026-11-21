@@ -5,7 +5,7 @@ import {
   userRepository,
   type IAssistantBrief,
 } from '@bike4mind/database';
-import { briefWindow } from './briefSchedule';
+import { BRIEF_MAX_WINDOW_MS, BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS, briefWindow } from './briefSchedule';
 import { BriefComposeRejectedError, publishBriefCompose } from './publishBriefCompose';
 import { Logger } from '@bike4mind/observability';
 
@@ -27,30 +27,44 @@ type Deps = {
     typeof assistantBriefRepository,
     'findActiveComposing' | 'findLatestReady' | 'createComposing' | 'discardComposing'
   >;
+  runs: Pick<typeof agentExecutionRepository, 'findEarliestStraddlingRunCreatedAt'>;
   publishCompose: (event: { briefId: string; userId: string; scheduled?: boolean }) => Promise<unknown>;
   now: () => Date;
 };
 
 const defaultDeps: Deps = {
   briefs: assistantBriefRepository,
+  runs: agentExecutionRepository,
   publishCompose: publishBriefCompose,
   now: () => new Date(),
 };
 
 /**
- * Reuses a recent composing brief on retry. The window runs from the end of the last ready brief,
- * capped at a week; stale composing rows retain the existing five-minute recovery window.
+ * briefWindow, moved back to the creation of the earliest run that was still going at the window's start,
+ * so a run that finishes after the last brief is reported. The composer lists runs by createdAt only
+ * (loadActivity in apps/workers/src/events/briefCompose.ts), so runs finished inside the widened part
+ * are listed again.
  */
-export async function startBriefComposition(
-  userId: string,
-  deps: Deps = defaultDeps,
-  options: { scheduled?: boolean } = {}
-): Promise<IAssistantBrief> {
-  const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
-  if (inFlight) return inFlight;
-
+async function activityWindow(userId: string, deps: Deps, now: Date): Promise<{ periodStart: Date; periodEnd: Date }> {
   const latest = await deps.briefs.findLatestReady(userId);
-  const { periodStart, periodEnd } = briefWindow(latest?.periodEnd, deps.now());
+  const window = briefWindow(latest?.periodEnd, now);
+  const straddling = await deps.runs.findEarliestStraddlingRunCreatedAt(
+    userId,
+    window.periodStart,
+    new Date(now.getTime() - BRIEF_MAX_WINDOW_MS)
+  );
+  return straddling ? { ...window, periodStart: straddling } : window;
+}
+
+async function beginComposition(
+  userId: string,
+  deps: Deps,
+  options: { scheduled?: boolean }
+): Promise<{ brief: IAssistantBrief; created: boolean }> {
+  const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
+  if (inFlight) return { brief: inFlight, created: false };
+
+  const { periodStart, periodEnd } = await activityWindow(userId, deps, deps.now());
 
   const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
   const briefId = brief._id.toString();
@@ -68,14 +82,26 @@ export async function startBriefComposition(
     }
     throw new BriefComposeStartError(briefId, retrySafe, err);
   }
-  return brief;
+  return { brief, created: true };
+}
+
+/**
+ * Reuses a recent composing brief on retry. The window runs from the end of the last ready brief,
+ * capped at a week; stale composing rows retain the existing five-minute recovery window.
+ */
+export async function startBriefComposition(
+  userId: string,
+  deps: Deps = defaultDeps,
+  options: { scheduled?: boolean } = {}
+): Promise<IAssistantBrief> {
+  return (await beginComposition(userId, deps, options)).brief;
 }
 
 export type ScheduledBriefOutcome =
-  'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'schedule_off' | 'user_missing';
+  'debounced' | 'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'schedule_off' | 'user_missing';
 
 export type ScheduledBriefDeps = Deps & {
-  users: Pick<typeof userRepository, 'findById'>;
+  users: Pick<typeof userRepository, 'findById' | 'claimBriefStart' | 'releaseBriefStart'>;
   /** Whether the user started any agent run at or after `since`. */
   hasRunsSince(userId: string, since: Date): Promise<boolean>;
 };
@@ -90,25 +116,61 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
 };
 
 /**
- * The scheduled path into the composer: skips users whose schedule is now off, users who turned brief
- * pushes off, and windows with no agent runs (the worker derives approvals from those runs' sessions, so
- * no runs means nothing to report), so none of them costs a model call or leaves a row behind.
+ * The automatic path into the composer, shared by the schedule and agent-run completion: skips users whose
+ * schedule is off, users who turned brief pushes off, and windows with no agent runs (the worker derives
+ * approvals from those runs' sessions, so no runs means nothing to report), so none of them costs a model
+ * call or leaves a row behind. Then claims the per-user debounce, needing `claimGapMs` since the last claim
+ * of either path, so concurrent starts collapse into one brief.
  */
-export async function startScheduledBrief(
+async function startGatedBrief(
   userId: string,
-  deps: ScheduledBriefDeps = defaultScheduledDeps
+  deps: ScheduledBriefDeps,
+  claimGapMs: number
 ): Promise<ScheduledBriefOutcome> {
   const user = await deps.users.findById(userId);
   if (!user) return 'user_missing';
   // The reconciler claims the slot before this re-read, so a PUT that just disabled the schedule wins here.
   if (!user.preferences?.briefSchedule?.enabled) return 'schedule_off';
   if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
-  if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
+  const now = deps.now();
+  if (await deps.briefs.findActiveComposing(userId, now)) return 'in_flight';
 
-  const latest = await deps.briefs.findLatestReady(userId);
-  const { periodStart } = briefWindow(latest?.periodEnd, deps.now());
+  const { periodStart } = await activityWindow(userId, deps, now);
   if (!(await deps.hasRunsSince(userId, periodStart))) return 'no_activity';
 
-  await startBriefComposition(userId, deps, { scheduled: true });
+  const claim = await deps.users.claimBriefStart(userId, now, claimGapMs);
+  if (!claim) return 'debounced';
+  const release = () =>
+    deps.users.releaseBriefStart(userId, now, claim.previous).catch((releaseError: unknown) => {
+      logger.error('Failed to release a brief start claim', { userId, releaseError });
+    });
+  let created: boolean;
+  try {
+    ({ created } = await beginComposition(userId, deps, { scheduled: true }));
+  } catch (err) {
+    // Keep the claim only when the compose event may have been delivered.
+    if (!(err instanceof BriefComposeStartError && !err.retrySafe)) await release();
+    throw err;
+  }
+  // A composition started elsewhere (an on-demand POST) between the in-flight check and here.
+  if (!created) {
+    await release();
+    return 'in_flight';
+  }
   return 'enqueued';
+}
+
+export function startScheduledBrief(
+  userId: string,
+  deps: ScheduledBriefDeps = defaultScheduledDeps
+): Promise<ScheduledBriefOutcome> {
+  return startGatedBrief(userId, deps, SCHEDULED_BRIEF_MIN_GAP_MS);
+}
+
+/** Starts a brief when an agent run completes, under the schedule's gates, at most once per BRIEF_MIN_GAP_MS. */
+export function startEventBrief(
+  userId: string,
+  deps: ScheduledBriefDeps = defaultScheduledDeps
+): Promise<ScheduledBriefOutcome> {
+  return startGatedBrief(userId, deps, BRIEF_MIN_GAP_MS);
 }

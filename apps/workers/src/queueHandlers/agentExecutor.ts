@@ -286,6 +286,7 @@ import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { createSpendFreezeDenialReader, type SpendFreezeDenialDeps } from './agentExecutor.spendFreeze';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
+import { createAgentBriefTriggerDeps, withAgentBriefTrigger } from './agentExecutor.briefTrigger';
 import {
   createAgentPushDeps,
   withAgentTerminalPush,
@@ -1031,8 +1032,12 @@ async function processExecution(
 ): Promise<void> {
   logger.updateMetadata({ executionId });
   // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
-  // activity (agentExecutor.push.ts).
-  const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
+  // activity (agentExecutor.push.ts). A completed top-level run also starts an event brief.
+  const sendWs = withAgentBriefTrigger(
+    withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger),
+    createAgentBriefTriggerDeps(),
+    logger
+  );
   try {
     await runExecution(
       sendWs,

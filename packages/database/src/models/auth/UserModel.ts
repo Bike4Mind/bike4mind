@@ -1723,6 +1723,43 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
+   * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
+   */
+  async claimBriefStart(userId: string, now: Date, minGapMs: number): Promise<{ previous: Date | null } | null> {
+    const before = await this.model
+      .findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { lastBriefStartedAt: { $exists: false } },
+            { lastBriefStartedAt: null },
+            { lastBriefStartedAt: { $lte: new Date(now.getTime() - minGapMs) } },
+          ],
+        },
+        { $set: { lastBriefStartedAt: now } },
+        { new: false, projection: { lastBriefStartedAt: 1 }, runValidators: true }
+      )
+      .lean<{ lastBriefStartedAt?: Date | null }>()
+      .exec();
+    return before ? { previous: before.lastBriefStartedAt ?? null } : null;
+  }
+
+  /**
+   * Gives back a claim by restoring the value it replaced, only while `lastBriefStartedAt` still holds this
+   * caller's `claimedAt`. Restoring rather than unsetting matters because the scheduled and event paths
+   * claim with different gaps: an unset would let an event start ignore an earlier event brief.
+   */
+  async releaseBriefStart(userId: string, claimedAt: Date, previous: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastBriefStartedAt: claimedAt },
+      previous ? { $set: { lastBriefStartedAt: previous } } : { $unset: { lastBriefStartedAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
    */
@@ -1924,6 +1961,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     nextBriefAt: { type: Date },
+    lastBriefStartedAt: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
