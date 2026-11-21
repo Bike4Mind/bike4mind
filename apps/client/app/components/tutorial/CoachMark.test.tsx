@@ -460,6 +460,23 @@ describe('CoachMark', () => {
     focus.mockRestore();
   });
 
+  it('reopens a hidden card from its pill at its top, not scrolled to its button', async () => {
+    render(
+      <CoachMark stepKey="s" body="b" progress={{ index: 1, count: 3 }} onLeave={() => undefined}>
+        <button data-tutorial-primary="">Next</button>
+      </CoachMark>
+    );
+    const next = screen.getByRole('button', { name: 'Next' });
+    await waitFor(() => expect(next).toHaveFocus());
+    fireEvent.click(screen.getByTestId('tutorial-coach-hide'));
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    fireEvent.click(screen.getByTestId('tutorial-coach-pill'));
+    await waitFor(() => expect(focus.mock.contexts).toContain(next));
+    for (const [i, el] of focus.mock.contexts.entries())
+      if (el === next) expect(focus.mock.calls[i][0]).toEqual({ preventScroll: true });
+    focus.mockRestore();
+  });
+
   it('hides under an open nav drawer, and stays up when its anchor is in the drawer', async () => {
     boxes.set('verb', rect(650, 457, 772, 485));
     boxes.set('nav-item', rect(20, 200, 300, 236));

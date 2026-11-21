@@ -632,7 +632,7 @@ export function CoachMark({
       (
         shown?.querySelector<HTMLElement>('[data-tutorial-primary]') ??
         shown?.querySelector<HTMLElement>('[data-testid="tutorial-coach-hide"]')
-      )?.focus();
+      )?.focus({ preventScroll: true });
     });
   };
 
