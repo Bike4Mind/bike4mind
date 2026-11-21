@@ -166,7 +166,7 @@
     {
       "blueprint": "in-product-tutorials",
       "entry": "base",
-      "blueprintHash": "6aaab84cd405",
+      "blueprintHash": "671bed185ad7",
       "appliedAt": "2026-11-21T16:52:23Z",
       "generatedFiles": [
         "apps/client/__tests__/premiumTutorialOwners.test.ts",
