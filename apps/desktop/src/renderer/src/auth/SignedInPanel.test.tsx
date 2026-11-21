@@ -199,13 +199,13 @@ describe('the account strip with an update waiting', () => {
     act(() => byTestId('account-menu-btn')?.click());
 
     const row = byTestId('account-web-conversations-btn');
-    const description = byTestId('account-web-conversations-description');
     expect(byTestId('account-menu')?.contains(row)).toBe(true);
     expect(row?.textContent).toBe('Open web conversations');
-    expect(description?.textContent).toBe(
+    expect(byTestId('account-web-conversations-description')).toBeNull();
+    expect(byTestId('account-menu')?.textContent).not.toContain(
       'Opens web conversations in a separate window. Local desktop chats stay on this device.'
     );
-    expect(row?.getAttribute('aria-describedby')).toBe(description?.id);
+    expect(row?.hasAttribute('aria-describedby')).toBe(false);
     expect(openServerSessions).not.toHaveBeenCalled();
     act(() => row?.click());
     expect(openServerSessions).toHaveBeenCalledExactlyOnceWith();
