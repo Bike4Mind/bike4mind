@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   COMPOSER_DRAFT_MAX_AGE_MS,
   COMPOSER_DRAFT_MAX_LENGTH,
@@ -29,12 +29,42 @@ describe('ComposerDraftStore', () => {
     await store.load();
     await store.set('s1', 'half a prompt');
     await store.set('s2', 'another');
+    await store.flush();
 
     expect(await new ComposerDraftStore(path, () => 2000).load()).toEqual({ s1: 'half a prompt', s2: 'another' });
     expect(await stored(path)).toEqual({
       drafts: { s1: { text: 'half a prompt', updatedAt: 1000 }, s2: { text: 'another', updatedAt: 1000 } },
     });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps each keystroke in memory at once but writes the file only after a pause in typing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const path = await fileIn();
+      const store = new ComposerDraftStore(path, Date.now, 500);
+      await store.load();
+      void store.set('s1', 'h');
+      vi.advanceTimersByTime(400);
+      void store.set('s1', 'he');
+      vi.advanceTimersByTime(499);
+      expect(store.all()).toEqual({ s1: 'he' });
+      expect(await new ComposerDraftStore(path).load()).toEqual({});
+      vi.advanceTimersByTime(1);
+      await store.flush();
+      expect(await new ComposerDraftStore(path).load()).toEqual({ s1: 'he' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes a draft typed just before a quit, while its save is still waiting on the pause', async () => {
+    const path = await fileIn();
+    const store = new ComposerDraftStore(path, Date.now, 60_000);
+    await store.load();
+    void store.set('s1', 'typed, then quit at once');
+    store.flushSync();
+    expect(await new ComposerDraftStore(path).load()).toEqual({ s1: 'typed, then quit at once' });
   });
 
   it('clears a draft when it is emptied, made blank or forgotten', async () => {

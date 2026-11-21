@@ -9,14 +9,17 @@ import { registerComposerDraftsIpc } from './composerDraftsIpc';
 
 type Handler = Parameters<IpcMain['handle']>[1];
 
-async function setup(known: string[] = ['s1']) {
+async function setup(
+  known: string[] = ['s1'],
+  isKnownSession = async (sessionId: string) => known.includes(sessionId)
+) {
   const handlers = new Map<string, Handler>();
   const store = new ComposerDraftStore(join(await mkdtemp(join(tmpdir(), 'composer-drafts-ipc-')), 'drafts.json'));
   registerComposerDraftsIpc(
     { handle: (channel: string, handler: Handler) => void handlers.set(channel, handler) },
     store,
     store.load(),
-    async sessionId => known.includes(sessionId)
+    isKnownSession
   );
   const call = (channel: string, ...args: unknown[]) => handlers.get(channel)?.({} as Parameters<Handler>[0], ...args);
   return { store, call };
@@ -38,5 +41,23 @@ describe('registerComposerDraftsIpc', () => {
     await call(IPC_CHANNELS.composerDraftsSave, { id: 's1' }, 'text');
     await call(IPC_CHANNELS.composerDraftsSave, 'x'.repeat(500), 'text');
     expect(store.all()).toEqual({});
+  });
+
+  it('applies saves in the order they arrive, even when a session lookup is slow', async () => {
+    let lookups = 0;
+    const { store, call } = await setup([], async () => {
+      lookups += 1;
+      // The first keystroke's lookup finishes last.
+      await new Promise(resolve => setTimeout(resolve, lookups === 1 ? 20 : 0));
+      return true;
+    });
+    await Promise.all([
+      call(IPC_CHANNELS.composerDraftsSave, 's1', 'h'),
+      call(IPC_CHANNELS.composerDraftsSave, 's1', 'he'),
+      call(IPC_CHANNELS.composerDraftsSave, 's1', 'hey'),
+    ]);
+    expect(store.all()).toEqual({ s1: 'hey' });
+    // Once a draft is stored, later keystrokes skip the lookup.
+    expect(lookups).toBe(1);
   });
 });

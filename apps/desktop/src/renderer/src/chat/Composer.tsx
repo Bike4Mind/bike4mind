@@ -273,7 +273,6 @@ export function Composer({
     return () => {
       if (!sessionId) return;
       composerDrafts.update(sessionId, latest.current);
-      composerDrafts.flush(sessionId);
     };
   }, [sessionId]);
 
@@ -774,9 +773,6 @@ export function Composer({
             setCaret(event.target.selectionStart);
           }}
           onKeyDown={onKeyDown}
-          onBlur={() => {
-            if (sessionId) composerDrafts.flush(sessionId);
-          }}
           placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder, disabledPlaceholder })}
           disabled={disabled}
           minRows={1}
