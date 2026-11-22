@@ -204,7 +204,8 @@ async function runChild(
     options.nodePath ?? process.execPath,
     callableFunctionChildArgs(childPath, pyodideDir, limits.memoryMb),
     {
-      env: {},
+      // Empty on purpose; the assertion only satisfies Next's ProcessEnv, which makes NODE_ENV required.
+      env: {} as NodeJS.ProcessEnv,
       cwd: pyodideDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       // Its own process group, so the kill reaches anything it started.
