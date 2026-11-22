@@ -162,6 +162,15 @@ function enumMessage(values: readonly (string | number)[]): string {
   return listed.length > 200 ? `must be one of the ${values.length} allowed values` : `must be one of: ${listed}`;
 }
 
+interface NumberBound {
+  value: number;
+  exclusive: boolean;
+}
+
+// An integer field's bounds are rounded inward to the whole numbers they allow.
+const lowestWhole = ({ value, exclusive }: NumberBound) => (exclusive ? Math.floor(value) + 1 : Math.ceil(value));
+const highestWhole = ({ value, exclusive }: NumberBound) => (exclusive ? Math.ceil(value) - 1 : Math.floor(value));
+
 function refuseUnknownKeys(
   record: Record<string, unknown>,
   allowed: readonly string[],
@@ -558,4 +567,354 @@ export function validateFunctionValue(schema: FunctionObjectField, value: unknow
   const problems: FunctionContractProblem[] = [];
   checkObjectValue(schema, value, '', problems);
   return capFunctionProblems(problems);
+}
+
+export type FunctionContractChangeKind =
+  | 'name_changed'
+  | 'description_changed'
+  | 'removed'
+  | 'added'
+  | 'added_required'
+  | 'type_changed'
+  | 'unit_changed'
+  | 'enum_value_removed'
+  | 'enum_value_added'
+  | 'enum_added'
+  | 'enum_removed'
+  | 'newly_required'
+  | 'no_longer_required'
+  | 'bounds_narrowed'
+  | 'bounds_widened'
+  | 'default_changed';
+
+export interface FunctionContractChange {
+  /** Readable path such as `inputs.load.unit`; list items read `points[]`. */
+  path: string;
+  /** Null for the contract's own name and description. */
+  side: 'inputs' | 'outputs' | null;
+  /** The field changed, such as `load` or `points[].x`; empty for the contract or a side as a whole. */
+  field: string;
+  kind: FunctionContractChangeKind;
+  before?: string;
+  after?: string;
+}
+
+export interface FunctionContractDiff {
+  breaking: FunctionContractChange[];
+  compatible: FunctionContractChange[];
+}
+
+interface DiffContext {
+  side: 'inputs' | 'outputs';
+  diff: FunctionContractDiff;
+}
+
+function addChange(
+  ctx: DiffContext,
+  field: string,
+  keyword: string,
+  kind: FunctionContractChangeKind,
+  breaking: boolean,
+  before?: string,
+  after?: string
+): void {
+  const path = [ctx.side, field, keyword].filter(Boolean).join('.');
+  const change: FunctionContractChange = { path, side: ctx.side, field, kind };
+  if (before !== undefined) change.before = before;
+  if (after !== undefined) change.after = after;
+  (breaking ? ctx.diff.breaking : ctx.diff.compatible).push(change);
+}
+
+/**
+ * A caller of an input may now be refused when the accepted values narrow; a caller of an output may now receive a
+ * value it was told it would not when the returned values widen.
+ */
+function breaksCallers(ctx: DiffContext, narrows: boolean): boolean {
+  return ctx.side === 'inputs' ? narrows : !narrows;
+}
+
+function addRangeChange(
+  ctx: DiffContext,
+  field: string,
+  keyword: string,
+  narrows: boolean,
+  before: string,
+  after: string
+): void {
+  addChange(
+    ctx,
+    field,
+    keyword,
+    narrows ? 'bounds_narrowed' : 'bounds_widened',
+    breaksCallers(ctx, narrows),
+    before,
+    after
+  );
+}
+
+function tighterBound(a: NumberBound | null, b: NumberBound | null, direction: 1 | -1): boolean {
+  if (a === null) return false;
+  if (b === null) return true;
+  if (a.value !== b.value) return direction * (a.value - b.value) > 0;
+  return a.exclusive && !b.exclusive;
+}
+
+/** The binding lower (`direction` 1) or upper (-1) bound of a number field; null when it has none. */
+function numberBound(field: FunctionNumberField, direction: 1 | -1): NumberBound | null {
+  const [inclusive, exclusive] =
+    direction === 1 ? [field.minimum, field.exclusiveMinimum] : [field.maximum, field.exclusiveMaximum];
+  const candidates: NumberBound[] = [
+    ...(inclusive === undefined ? [] : [{ value: inclusive, exclusive: false }]),
+    ...(exclusive === undefined ? [] : [{ value: exclusive, exclusive: true }]),
+  ];
+  let bound = candidates.reduce<NumberBound | null>(
+    (best, next) => (tighterBound(next, best, direction) ? next : best),
+    null
+  );
+  if (bound && field.type === 'integer') {
+    bound = { value: direction === 1 ? lowestWhole(bound) : highestWhole(bound), exclusive: false };
+  }
+  return bound;
+}
+
+function boundText(bound: NumberBound | null, direction: 1 | -1): string {
+  if (bound === null) return direction === 1 ? 'no lower bound' : 'no upper bound';
+  if (direction === 1) return `${bound.exclusive ? 'more than' : 'at least'} ${bound.value}`;
+  return `${bound.exclusive ? 'less than' : 'at most'} ${bound.value}`;
+}
+
+function diffNumberField(ctx: DiffContext, prev: FunctionNumberField, next: FunctionNumberField, field: string) {
+  if (prev.unit !== next.unit) addChange(ctx, field, 'unit', 'unit_changed', true, prev.unit, next.unit);
+  for (const [direction, keyword] of [
+    [1, 'minimum'],
+    [-1, 'maximum'],
+  ] as const) {
+    const before = numberBound(prev, direction);
+    const after = numberBound(next, direction);
+    if (!tighterBound(after, before, direction) && !tighterBound(before, after, direction)) continue;
+    addRangeChange(
+      ctx,
+      field,
+      keyword,
+      tighterBound(after, before, direction),
+      boundText(before, direction),
+      boundText(after, direction)
+    );
+  }
+}
+
+function diffEnum(
+  ctx: DiffContext,
+  prev: readonly (string | number)[] | undefined,
+  next: readonly (string | number)[] | undefined,
+  field: string
+): void {
+  if (!prev && !next) return;
+  if (!prev || !next) {
+    if (next) addChange(ctx, field, 'enum', 'enum_added', breaksCallers(ctx, true), undefined, next.join(', '));
+    else addChange(ctx, field, 'enum', 'enum_removed', breaksCallers(ctx, false), prev?.join(', '));
+    return;
+  }
+  // A removed value is breaking on either side by decision: callers written against a listed value are not
+  // expected to check whether it can still occur.
+  for (const value of prev) {
+    if (!next.includes(value)) addChange(ctx, field, 'enum', 'enum_value_removed', true, String(value));
+  }
+  for (const value of next) {
+    if (!prev.includes(value)) {
+      addChange(ctx, field, 'enum', 'enum_value_added', breaksCallers(ctx, false), undefined, String(value));
+    }
+  }
+}
+
+function diffCount(
+  ctx: DiffContext,
+  field: string,
+  keyword: string,
+  before: number | undefined,
+  after: number | undefined,
+  direction: 1 | -1,
+  text: (count: number | undefined) => string
+): void {
+  const unbounded = direction === 1 ? 0 : Infinity;
+  const was = before ?? unbounded;
+  const now = after ?? unbounded;
+  if (was === now) return;
+  addRangeChange(ctx, field, keyword, direction * (now - was) > 0, text(before), text(after));
+}
+
+const defaultOf = (field: FunctionField): unknown =>
+  field.type === 'array' || field.type === 'object' ? undefined : field.default;
+
+function diffField(ctx: DiffContext, prev: FunctionField, next: FunctionField, field: string): void {
+  if (prev.type !== next.type) {
+    addChange(ctx, field, 'type', 'type_changed', true, prev.type, next.type);
+    return;
+  }
+  if ((prev.description ?? '') !== (next.description ?? '')) {
+    addChange(ctx, field, 'description', 'description_changed', false);
+  }
+  const before = defaultOf(prev);
+  const after = defaultOf(next);
+  if (before !== after) {
+    const text = (value: unknown) => (value === undefined ? undefined : JSON.stringify(value));
+    // A default only fills an omitted optional input, so no caller is refused and no output leaves its contract.
+    addChange(ctx, field, 'default', 'default_changed', false, text(before), text(after));
+  }
+
+  switch (prev.type) {
+    case 'number':
+    case 'integer': {
+      const nextNumber = next as FunctionNumberField;
+      diffNumberField(ctx, prev, nextNumber, field);
+      diffEnum(ctx, prev.enum, nextNumber.enum, field);
+      return;
+    }
+    case 'string': {
+      const nextString = next as FunctionStringField;
+      diffEnum(ctx, prev.enum, nextString.enum, field);
+      const max = FUNCTION_CONTRACT_LIMITS.maxStringLength;
+      diffCount(
+        ctx,
+        field,
+        'maxLength',
+        prev.maxLength ?? max,
+        nextString.maxLength ?? max,
+        -1,
+        count => `at most ${count} characters`
+      );
+      return;
+    }
+    case 'array': {
+      const nextArray = next as FunctionArrayField;
+      diffCount(ctx, field, 'minItems', prev.minItems, nextArray.minItems, 1, count => `at least ${count ?? 0} items`);
+      diffCount(ctx, field, 'maxItems', prev.maxItems, nextArray.maxItems, -1, count =>
+        count === undefined ? 'any number of items' : `at most ${count} items`
+      );
+      diffField(ctx, prev.items, nextArray.items, `${field}[]`);
+      return;
+    }
+    case 'object':
+      diffObjectField(ctx, prev, next as FunctionObjectField, field);
+      return;
+    case 'boolean':
+      return;
+  }
+}
+
+function diffObjectField(ctx: DiffContext, prev: FunctionObjectField, next: FunctionObjectField, prefix: string) {
+  const wasRequired = new Set(prev.required ?? []);
+  const isRequired = new Set(next.required ?? []);
+  const inputs = ctx.side === 'inputs';
+  for (const name of Object.keys(prev.properties)) {
+    const field = prefix ? `${prefix}.${name}` : name;
+    const nextField = own(next.properties, name) as FunctionField | undefined;
+    if (!nextField) {
+      addChange(ctx, field, '', 'removed', true);
+      continue;
+    }
+    if (wasRequired.has(name) !== isRequired.has(name)) {
+      const nowRequired = isRequired.has(name);
+      // Required narrows what an input accepts and widens what an output may leave out.
+      addChange(
+        ctx,
+        field,
+        '',
+        nowRequired ? 'newly_required' : 'no_longer_required',
+        inputs ? nowRequired : !nowRequired
+      );
+    }
+    diffField(ctx, prev.properties[name], nextField, field);
+  }
+  for (const name of Object.keys(next.properties)) {
+    if (own(prev.properties, name) !== undefined) continue;
+    const field = prefix ? `${prefix}.${name}` : name;
+    const required = inputs && isRequired.has(name);
+    addChange(ctx, field, '', required ? 'added_required' : 'added', required);
+  }
+}
+
+/**
+ * The changes from `previous` to `next`, split by whether a caller written against `previous` could now be refused
+ * or receive a value it was told it would not. A renamed field reads as a removal and an addition.
+ */
+export function diffFunctionContracts(previous: FunctionContract, next: FunctionContract): FunctionContractDiff {
+  const diff: FunctionContractDiff = { breaking: [], compatible: [] };
+  if (previous.name !== next.name) {
+    diff.breaking.push({
+      path: 'name',
+      side: null,
+      field: '',
+      kind: 'name_changed',
+      before: previous.name,
+      after: next.name,
+    });
+  }
+  if (previous.description !== next.description) {
+    diff.compatible.push({ path: 'description', side: null, field: '', kind: 'description_changed' });
+  }
+  for (const side of ['inputs', 'outputs'] as const) {
+    diffField({ side, diff }, previous[side], next[side], '');
+  }
+  return diff;
+}
+
+function changeWords(change: FunctionContractChange): string {
+  const { before, after } = change;
+  const inputs = change.side === 'inputs';
+  switch (change.kind) {
+    case 'name_changed':
+      return `changed name from ${before} to ${after}`;
+    case 'description_changed':
+      return 'changed its description';
+    case 'removed':
+      return 'was removed';
+    case 'added':
+      return 'was added';
+    case 'added_required':
+      return 'was added as a required input';
+    case 'type_changed':
+      return `changed type from ${before} to ${after}`;
+    case 'unit_changed':
+      return `changed unit from ${before} to ${after}`;
+    case 'enum_value_removed':
+      return inputs ? `no longer accepts ${before}` : `no longer returns ${before}`;
+    case 'enum_value_added':
+      return inputs ? `now accepts ${after}` : `can now return ${after}`;
+    case 'enum_added':
+      return inputs ? `now accepts only ${after}` : `now returns only ${after}`;
+    case 'enum_removed':
+      return inputs ? `now accepts any value, not only ${before}` : `can now return any value, not only ${before}`;
+    case 'newly_required':
+      return inputs ? 'is now required' : 'is now always returned';
+    case 'no_longer_required':
+      return inputs ? 'is no longer required' : 'is no longer always returned';
+    case 'bounds_narrowed':
+      return `narrowed from ${before} to ${after}`;
+    case 'bounds_widened':
+      return `widened from ${before} to ${after}`;
+    case 'default_changed':
+      if (before === undefined) return `now defaults to ${after}`;
+      if (after === undefined) return 'no longer has a default';
+      return `changed its default from ${before} to ${after}`;
+  }
+}
+
+/**
+ * A change in plain words, split so a view can set the field apart: `subject` reads `output`, `input`, `the
+ * outputs`, or `the function`, and the sentence is `${subject} ${field} ${words}` without the empty field.
+ */
+export function describeFunctionContractChange(change: FunctionContractChange): {
+  subject: string;
+  field: string;
+  words: string;
+} {
+  const subject =
+    change.side === null ? 'the function' : change.field ? change.side.slice(0, -1) : `the ${change.side}`;
+  return { subject, field: change.field, words: changeWords(change) };
+}
+
+export function functionContractChangeSentence(change: FunctionContractChange): string {
+  const { subject, field, words } = describeFunctionContractChange(change);
+  return [subject, field, words].filter(Boolean).join(' ');
 }
