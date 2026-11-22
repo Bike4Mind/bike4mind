@@ -49,6 +49,10 @@ function runMode(request, spec) {
       process.stdout.write('x'.repeat(spec.bytes));
       stayAlive();
       break;
+    case 'line':
+      process.stdout.write(`${spec.text}\n`);
+      stayAlive();
+      break;
     case 'exit':
       process.exit(0);
       break;

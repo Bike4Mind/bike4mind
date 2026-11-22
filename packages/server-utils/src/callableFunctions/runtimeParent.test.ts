@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { FUNCTION_RESULT_TOO_LARGE_MESSAGE, PYODIDE_VERSION } from '@bike4mind/common';
+import {
+  FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_RESULT_TOO_LARGE_MESSAGE,
+  PYODIDE_VERSION,
+  functionJsonBytes,
+} from '@bike4mind/common';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
   CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS,
@@ -342,6 +347,14 @@ describe('runCallableFunctionInChild', () => {
     expect(await run(call({ mode: 'exit' }))).toMatchObject({ outcome: 'error', reason: 'no_reply' });
   });
 
+  it('returns error with no_reply for a reply line that is not JSON', async () => {
+    expect(await run(call({ mode: 'line', text: '{"ok": true, "printed": ' }))).toMatchObject({
+      outcome: 'error',
+      reason: 'no_reply',
+    });
+    expect(processGone(lastChild().pid)).toBe(true);
+  });
+
   it('takes a start failure only before the run starts, and a reply only after', async () => {
     const versionFailure = { ok: false, failure: 'version' };
     expect(await run(call({ mode: 'reply', skipStart: true, reply: { ok: true, printed: '' } }))).toMatchObject({
@@ -414,6 +427,82 @@ describe('runCallableFunctionInChild', () => {
       expect(await run(series(100, {}, limits))).toMatchObject({ outcome: 'refused', reason: 'payload_invalid' });
     }
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// A synchronous Lambda invocation carries at most 6 MB each way; decimal megabytes, the stricter reading.
+const LAMBDA_PAYLOAD_BYTES = 6_000_000;
+const jsonBytes = (value: unknown) => functionJsonBytes(JSON.stringify(value));
+// As long as a JS number serializes.
+const LONGEST_NUMBER = -1.2345678901234567e-308;
+
+describe('Lambda payload limits', () => {
+  it('fits the largest request the parent accepts under 6 MB', () => {
+    const { timeoutMs, inputBytes, outputBytes, sourceBytes } = CALLABLE_FUNCTION_LIMITS;
+    // Each cap measures its whole field as serialized; the envelope is what an empty request leaves.
+    const empty = { op: 'call', code: '', contract: {}, params: {}, limits: { timeoutMs, inputBytes, outputBytes } };
+    const envelope = jsonBytes(empty) - jsonBytes('') - 2 * jsonBytes({});
+    const largest = envelope + sourceBytes + FUNCTION_CONTRACT_LIMITS.maxContractBytes + inputBytes;
+    expect(largest).toBe(5_800_052);
+    expect(largest).toBeLessThan(LAMBDA_PAYLOAD_BYTES);
+  });
+
+  it('fits the largest result the handler returns under 6 MB, with the outputs embedded as JSON', () => {
+    const { outputBytes, printedChars } = CALLABLE_FUNCTION_LIMITS;
+    const empty = {
+      outcome: 'ok',
+      outputs: {},
+      printed: '',
+      initMs: LONGEST_NUMBER,
+      durationMs: LONGEST_NUMBER,
+      startMs: LONGEST_NUMBER,
+    };
+    const envelope = jsonBytes(empty) - jsonBytes({}) - jsonBytes('');
+    // A printed code unit serializes to at most six bytes, as \u0001 does.
+    expect(jsonBytes('\u0001')).toBe(8);
+    const largest = envelope + outputBytes + 2 + 6 * printedChars;
+    expect(largest).toBe(5_843_027);
+    expect(largest).toBeLessThan(LAMBDA_PAYLOAD_BYTES);
+    expect(CALLABLE_FUNCTION_MAX_REPLY_BYTES).toBe(12_416_832);
+  });
+
+  it('counts the source with its escapes, as the request carries it', async () => {
+    expect(await run({ op: 'read_contract', code: '\n'.repeat(60) }, { sourceBytes: 100 })).toMatchObject({
+      outcome: 'refused',
+      reason: 'source_too_large',
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a payload key outside the request shape', async () => {
+    expect(await run({ ...call(reply({})), extra: 'x' })).toMatchObject({ reason: 'payload_invalid' });
+    expect(await run({ op: 'read_contract', code: '', params: { pad: 'x' } })).toMatchObject({
+      reason: 'payload_invalid',
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('measures the outputs again as JSON.stringify writes them', async () => {
+    const outputsJson = `{"values": [${new Array(100).fill('1e+20').join(', ')}]}`;
+    expect(outputsJson.length).toBeLessThan(1000);
+    const result = await run({
+      op: 'call',
+      code: JSON.stringify({
+        mode: 'reply',
+        reply: { ok: true, initMs: 1, printed: '', contractJson: JSON.stringify(SERIES_CONTRACT), outputsJson },
+      }),
+      contract: SERIES_CONTRACT,
+      params: {},
+      limits: { outputBytes: 1000 },
+    });
+    expect(result).toMatchObject({ outcome: 'output_too_large', reason: 'result_too_large' });
+  });
+
+  it('keeps at most the problem cap of the Python type refusals', async () => {
+    const outputProblemsJson = JSON.stringify(new Array(500).fill({ path: 'deflection', message: 'must be a number' }));
+    const result = await run(call(reply({ outputsJson: '{"deflection": 1}', outputProblemsJson })));
+    expect(result.outcome).toBe('output_invalid');
+    expect(result.problems).toHaveLength(FUNCTION_CONTRACT_LIMITS.maxProblems);
   });
 });
 

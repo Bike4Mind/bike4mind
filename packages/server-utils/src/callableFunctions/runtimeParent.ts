@@ -174,6 +174,7 @@ export interface CallableFunctionChildOptions {
 // The outputs and the contract travel as JSON strings inside the reply, so escaping can double them; a
 // printed or error character can take six bytes as a \u escape (stdout, stderr, and the error, each capped).
 const REPLY_ENVELOPE_BYTES = 64 * 1024;
+/** Bounds the child's stdout pipe, not the Lambda's reply, which the result's own caps keep under 6 MB. */
 export const CALLABLE_FUNCTION_MAX_REPLY_BYTES =
   2 * (CALLABLE_FUNCTION_LIMITS.outputBytes + FUNCTION_CONTRACT_LIMITS.maxContractBytes) +
   6 * 3 * CALLABLE_FUNCTION_LIMITS.printedChars +
@@ -436,6 +437,7 @@ function pythonTypeProblems(json: string | undefined): FunctionContractProblem[]
         typeof item.message === 'string' &&
         PYTHON_TYPE_MESSAGES.has(item.message)
     )
+    .slice(0, FUNCTION_CONTRACT_LIMITS.maxProblems)
     .map(({ path, message }) => ({ path, message }));
 }
 
@@ -443,10 +445,18 @@ function pythonTypeProblems(json: string | undefined): FunctionContractProblem[]
 const safePaths = (problems: FunctionContractProblem[]): FunctionContractProblem[] =>
   problems.map(problem => (PROBLEM_PATH.test(problem.path) ? problem : { ...problem, path: '(unlisted key)' }));
 
+const PAYLOAD_KEYS = {
+  read_contract: ['op', 'code', 'limits'],
+  call: ['op', 'code', 'contract', 'params', 'limits'],
+} as const;
+
+// Only the known keys, so the caps on each one bound the whole request (Lambda takes at most 6 MB).
 function validPayload(payload: unknown): payload is CallableFunctionRunPayload {
   if (!isObject(payload) || typeof payload.code !== 'string') return false;
-  if (payload.op === 'read_contract') return true;
-  return payload.op === 'call' && isObject(payload.params) && payload.contract !== undefined;
+  if (payload.op !== 'read_contract' && payload.op !== 'call') return false;
+  const keys: readonly string[] = PAYLOAD_KEYS[payload.op];
+  if (!Object.keys(payload).every(key => keys.includes(key))) return false;
+  return payload.op === 'read_contract' || (isObject(payload.params) && payload.contract !== undefined);
 }
 
 const isCallLimitKey = (key: string): key is CallLimitKey => (CALL_LIMIT_KEYS as readonly string[]).includes(key);
@@ -486,7 +496,8 @@ export async function runCallableFunctionInChild(
   if (!validPayload(payload)) return refused('payload_invalid');
   const limits = callLimits(payload.limits, { ...CALLABLE_FUNCTION_LIMITS, ...options.limits });
   if (typeof limits === 'string') return refused(limits);
-  if (functionJsonBytes(payload.code) > limits.sourceBytes) return refused('source_too_large');
+  // Counted as it travels in the request, escapes included.
+  if (functionJsonBytes(JSON.stringify(payload.code)) > limits.sourceBytes) return refused('source_too_large');
 
   let pinned: FunctionContract | undefined;
   let paramsJson: string | null = null;
@@ -557,6 +568,10 @@ export async function runCallableFunctionInChild(
     outputs = JSON.parse(outputsJson);
   } catch {
     return finish({ ...after, outcome: 'output_invalid', reason: 'result_not_json' });
+  }
+  // Measured again as the result carries it: Python writes 1e+20 where JSON.stringify writes 21 digits.
+  if (functionJsonBytes(JSON.stringify(outputs)) > limits.outputBytes) {
+    return finish({ ...after, outcome: 'output_too_large', reason: 'result_too_large' });
   }
   const problems = [...pythonTypeProblems(reply.outputProblemsJson), ...validateFunctionValue(pinned.outputs, outputs)];
   if (problems.length > 0 || !isObject(outputs)) {
