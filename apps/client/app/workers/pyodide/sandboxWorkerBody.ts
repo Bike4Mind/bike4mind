@@ -290,9 +290,8 @@ _result
   }
 
   /**
-   * Load the code as a module named `b4m_function`, so an `if __name__ == '__main__':` block does
-   * not run, read its FUNCTION dict and, when params are given, call `run(**params)`. The code and
-   * params reach Python through globals, never by interpolation, and only strings come back.
+   * Load the code as module `b4m_function` (so a `__main__` block does not run), read FUNCTION and, given
+   * params, call `run(**params)`. Code and params enter through globals, never interpolation; only strings return.
    */
   async function callFunction(code: string, packages: string[], paramsJson: string | null): Promise<void> {
     const startTime = performance.now();

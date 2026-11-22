@@ -4,10 +4,8 @@ import { scopedSettingsService } from '@bike4mind/services';
 import { isFeatureEnabled } from '../middlewares/featureFlag';
 
 /**
- * Whether callable functions are on for one person: `EnableArtifacts`, then `EnableCallableFunctions`
- * resolved for each organization the person belongs to (on if any resolves on), or at their own scope
- * when they belong to none. Organizations come from membership, never the selected-organization
- * pointer, as in `resolveCustomMcpContext`. A read failure propagates so callers fail closed.
+ * On when `EnableArtifacts` is on and `EnableCallableFunctions` resolves on for any organization the person is a
+ * member of (membership, not the selected organization), or at their own scope when in none. Read failures throw.
  */
 export async function resolveCallableFunctionsEnabled(user: { id: string }): Promise<boolean> {
   if (!(await isFeatureEnabled('EnableArtifacts'))) return false;

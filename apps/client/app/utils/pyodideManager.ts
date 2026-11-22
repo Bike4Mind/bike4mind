@@ -461,9 +461,8 @@ class PyodideManager {
   }
 
   /**
-   * Load the code as a module, read its FUNCTION contract and, when `params` is given, call
-   * `run(**params)`. `params` null only describes the function. Shares execute()'s single-run guard
-   * and is stopped the same way, by interrupt().
+   * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`. Shares execute()'s
+   * single-run guard and is stopped the same way, by interrupt().
    */
   async callFunction(
     code: string,

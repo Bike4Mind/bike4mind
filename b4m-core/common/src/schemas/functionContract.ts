@@ -1,8 +1,6 @@
 /**
- * The contract a Python artifact declares to be callable as a function: a module-level `FUNCTION`
- * dict beside a `run` function. The language is a closed subset of JSON Schema with one extension,
- * a required `unit` on every numeric field. The sandbox serializes `FUNCTION` with `json.dumps`, so
- * everything here treats the contract as untrusted JSON.
+ * The contract a Python artifact declares to be callable: a module-level `FUNCTION` dict beside `run`. A closed
+ * subset of JSON Schema plus a required `unit` on every number, read from the sandbox as untrusted JSON.
  */
 
 export const FUNCTION_CONTRACT_GLOBAL = 'FUNCTION';
@@ -394,9 +392,8 @@ function checkTests(raw: unknown, inputs: FunctionObjectField | null, problems: 
 }
 
 /**
- * Validate a contract read from guest code. Every problem is collected; a contract is returned only
- * when there are none. Refuses any keyword outside the subset by name, so `$ref` or `pattern` reads
- * as unsupported rather than silently ignored.
+ * Validate a contract read from guest code, collecting every problem; a contract is returned only when there are
+ * none. A keyword outside the subset, such as `$ref` or `pattern`, is refused by name rather than ignored.
  */
 export function parseFunctionContract(raw: unknown): FunctionContractParse {
   if (!isPlainObject(raw)) {

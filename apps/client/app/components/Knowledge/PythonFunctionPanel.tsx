@@ -357,9 +357,8 @@ const ResultTable = ({ outputs, value }: { outputs: FunctionObjectField; value: 
 );
 
 /**
- * The Function tab of the Python viewer: reads the artifact's FUNCTION contract in the sandbox, shows
- * a typed form for its inputs, and calls `run` with them. The contract and every value `run` returns
- * are checked here against the contract; nothing is saved.
+ * The Python viewer's Function tab: reads the FUNCTION contract in the sandbox, offers a typed form, and calls
+ * `run`. The contract and every returned value are checked here against the contract; nothing is saved.
  */
 const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, packages, disabled }) => {
   const { callFunction } = usePyodide();
