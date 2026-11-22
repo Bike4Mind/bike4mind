@@ -1101,6 +1101,20 @@ describe('the attach step', () => {
     await waitFor(() =>
       expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(/^Press Add Files to add sheet\.csv\.$/)
     );
+    const label = document.createElement('span');
+    label.textContent = ' 1 File';
+    add.appendChild(label);
+    await waitFor(() =>
+      expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(
+        /^Press Add Files 1 File to add sheet\.csv\.$/
+      )
+    );
+    label.style.display = 'none';
+    fireEvent(window, new Event('resize'));
+    await waitFor(() =>
+      expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(/^Press Add Files to add sheet\.csv\.$/)
+    );
+    label.remove();
     add.firstChild!.nodeValue = 'Add 1 File to Notebook';
     await waitFor(() =>
       expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(
@@ -1169,6 +1183,23 @@ describe('readAttachCue', () => {
     });
     other.remove();
     expect(readAttachCue('f1', 'a.csv')).toEqual({ anchor: 'file-browser-list-item', hint: 'Select a.csv.' });
+  });
+
+  it('names the + button where a narrow screen hides the Add label', () => {
+    const { add } = browser();
+    add.textContent = '';
+    const label = document.createElement('span');
+    label.style.display = 'none';
+    label.textContent = 'Add 1 File to Notebook';
+    add.appendChild(label);
+    expect(readAttachCue('f1', 'a.csv').hint).toBe('Select a.csv, then press the + button.');
+    add.disabled = false;
+    expect(readAttachCue('f1', 'a.csv')).toEqual({
+      anchor: 'file-browser-add-files-btn',
+      hint: 'Press the + button to add a.csv.',
+    });
+    label.style.display = '';
+    expect(readAttachCue('f1', 'a.csv').hint).toBe('Press Add 1 File to Notebook to add a.csv.');
   });
 
   it('does not take a longer name for the sheet', () => {
