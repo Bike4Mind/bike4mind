@@ -243,6 +243,43 @@ describe('runCallableFunctionInChild', () => {
     expect(sweepCallableFunctionChildren()).toBe(0);
   });
 
+  it('waits for a killed child to be reaped, so one dead but not yet reaped is never reported as surviving', async () => {
+    // Past the two 5 s exit waits the kill used to allow before it called the child a survivor.
+    const REAP_LAG_MS = 11_000;
+    const { spawn: actualSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    let childPid: number | undefined;
+    let reaped = false;
+    const realKill = process.kill.bind(process);
+    // A zombie still answers a signal-0 probe of its group until Node reaps it and emits 'exit'.
+    const kill = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((pid: number, signal?: string | number) =>
+        childPid !== undefined && pid === -childPid && signal === 0 && !reaped ? true : realKill(pid, signal)
+      );
+    vi.mocked(spawn).mockImplementationOnce(((...args: Parameters<typeof actualSpawn>) => {
+      const child = actualSpawn(...args);
+      childPid = child.pid;
+      const emit = child.emit.bind(child);
+      child.emit = ((event: string | symbol, ...rest: unknown[]) => {
+        if (event !== 'exit') return emit(event, ...rest);
+        setTimeout(() => {
+          reaped = true;
+          emit(event, ...rest);
+        }, REAP_LAG_MS);
+        return true;
+      }) as typeof child.emit;
+      return child;
+    }) as typeof spawn);
+    try {
+      const result = await run(call(reply({ outputsJson: '{"deflection": 1}' })));
+      expect(result).toMatchObject({ outcome: 'ok', outputs: { deflection: 1 } });
+      expect(reaped).toBe(true);
+      expect(liveCallableFunctionChildren()).toEqual([]);
+    } finally {
+      kill.mockRestore();
+    }
+  }, 30_000);
+
   it('times a guest that never returns from its run start, so a slow start does not consume the limit', async () => {
     const result = await run(timed({ mode: 'hang', startDelayMs: 1500 }, 800));
     expect(result.outcome).toBe('timeout');

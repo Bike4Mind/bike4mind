@@ -54,12 +54,10 @@ export const CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS = 30_000;
  */
 export const CALLABLE_FUNCTION_START_BUDGET_MS = 60_000;
 
-const EXIT_WAIT_MS = 5_000;
+/** The parent's own time around a run: the input checks and the wait for the killed child's reap. */
+export const CALLABLE_FUNCTION_PARENT_MARGIN_MS = 15_000;
 
-/** The parent's own time around a run: the input checks and up to two kill waits. */
-export const CALLABLE_FUNCTION_PARENT_MARGIN_MS = 2 * EXIT_WAIT_MS + 5_000;
-
-/** The runtime Lambda's configured timeout, in seconds. */
+/** The runtime Lambda's configured timeout, in seconds; Lambda allows at most 900. */
 export const CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS = Math.ceil(
   (CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS) / 1000
 );
@@ -354,13 +352,11 @@ async function runChild(
   clearInterval(memoryTimer);
 
   killGroup(pid);
-  await Promise.race([exited, new Promise(resolve => setTimeout(resolve, EXIT_WAIT_MS))]);
-  if (groupAlive(pid)) {
-    killGroup(pid);
-    await Promise.race([exited, new Promise(resolve => setTimeout(resolve, EXIT_WAIT_MS))]);
-  }
-  if (groupAlive(pid)) throw new Error('A callable function child survived its kill');
-  live.delete(pid);
+  // 'exit' fires only once Node has reaped the child; until then a group probe still finds it as a zombie.
+  await exited;
+  // Only another member of its group can answer now: kill it and leave the pid to the sweep.
+  if (groupAlive(pid)) killGroup(pid);
+  else live.delete(pid);
   return run;
 }
 

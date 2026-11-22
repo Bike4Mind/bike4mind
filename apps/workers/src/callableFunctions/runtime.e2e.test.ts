@@ -566,7 +566,7 @@ def attempt(arg):
     );
   });
 
-  // A sweep, not the live set: a run that threw keeps its pid in the set after the group is gone.
+  // A sweep, not the live set: a run keeps its pid in the set when its group outlived the reap.
   it('leaves no child once the hostile attempts end', () => {
     expect(sweepCallableFunctionChildren()).toBe(0);
   });
