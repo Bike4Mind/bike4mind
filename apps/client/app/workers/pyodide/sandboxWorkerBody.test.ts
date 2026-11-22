@@ -77,6 +77,18 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     expect(source).toContain("_FunctionCallError('The function contract is larger than 32 KB.')");
   });
 
+  it('checks output number types in Python, where 3.0 and True are still distinct from 3 and 1', () => {
+    expect(source).toContain(
+      "if isinstance(value, bool) or not isinstance(value, (int, float)):\n            problems.append({'path': path, 'message': 'must be a number'})"
+    );
+    expect(source).toContain(
+      "elif kind == 'integer' and not isinstance(value, int):\n            problems.append({'path': path, 'message': 'must be a whole number'})"
+    );
+    expect(source).toContain("_output_type_problems(contract.get('outputs'), value, '', output_problems)");
+    expect(source).toContain("'output_problems_json': json.dumps(output_problems) if output_problems else None");
+    expect(source).toContain(`_MAX_PROBLEMS = ${FUNCTION_CONTRACT_LIMITS.maxProblems}`);
+  });
+
   it('refuses an oversized result before posting it', () => {
     expect(source).toContain(`_MAX_RESULT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxResultBytes}`);
     expect(source).toContain('if len(value_text) > _MAX_RESULT_BYTES:');
@@ -269,6 +281,29 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect(posted.at(-1)).toMatchObject({
       type: 'call-result',
       result: { success: false, contractJson: '{}', error: 'run must return a dict' },
+    });
+  });
+
+  it('posts the output problems Python found as JSON text', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    const problemsJson = '[{"path": "count", "message": "must be a whole number"}]';
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{}',
+        value_json: '{"count": 3.0}',
+        output_problems_json: problemsJson,
+        stdout: '',
+        stderr: '',
+        error: undefined,
+      }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: true, valueJson: '{"count": 3.0}', outputProblemsJson: problemsJson },
     });
   });
 

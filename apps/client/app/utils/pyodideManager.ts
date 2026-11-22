@@ -20,7 +20,12 @@
  */
 
 import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
-import { FUNCTION_CONTRACT_LIMITS, functionJsonBytes } from '@bike4mind/common';
+import {
+  FUNCTION_CONTRACT_LIMITS,
+  capFunctionProblems,
+  functionJsonBytes,
+  type FunctionContractProblem,
+} from '@bike4mind/common';
 import {
   SUPPORTED_PYTHON_PACKAGES,
   describePythonImportError,
@@ -74,6 +79,8 @@ export interface PythonFunctionCall {
   success: boolean;
   contract?: unknown;
   value?: unknown;
+  /** Output problems only Python could see, such as 3.0 for an integer; in the shape the contract validator uses. */
+  outputProblems?: FunctionContractProblem[];
   output: string;
   error?: string;
   executionTime: number;
@@ -98,7 +105,7 @@ function readFunctionCallResult(raw: unknown): PythonFunctionCall {
     typeof result.executionTime === 'number' && Number.isFinite(result.executionTime) ? result.executionTime : 0;
   const refuse = (error: string): PythonFunctionCall => ({ success: false, output, error, executionTime });
 
-  const parsed: { contract?: unknown; value?: unknown } = {};
+  const parsed: { contract?: unknown; value?: unknown; outputProblems?: unknown } = {};
   const fields = [
     {
       key: 'contract',
@@ -109,6 +116,12 @@ function readFunctionCallResult(raw: unknown): PythonFunctionCall {
     {
       key: 'value',
       field: 'valueJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+      tooLarge: FUNCTION_RESULT_TOO_LARGE,
+    },
+    {
+      key: 'outputProblems',
+      field: 'outputProblemsJson',
       limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
       tooLarge: FUNCTION_RESULT_TOO_LARGE,
     },
@@ -125,12 +138,34 @@ function readFunctionCallResult(raw: unknown): PythonFunctionCall {
       return refuse(FUNCTION_RESULT_UNREADABLE);
     }
   }
+  const { outputProblems, ...values } = parsed;
+  if (outputProblems !== undefined && !isProblemList(outputProblems)) return refuse(FUNCTION_RESULT_UNREADABLE);
 
   const error =
     typeof result.error === 'string'
       ? describePythonImportError(result.error.slice(0, MAX_FUNCTION_OUTPUT_CHARS))
       : undefined;
-  return { success: result.success === true && error === undefined, ...parsed, output, error, executionTime };
+  return {
+    success: result.success === true && error === undefined,
+    ...values,
+    ...(outputProblems ? { outputProblems: capFunctionProblems(outputProblems) } : {}),
+    output,
+    error,
+    executionTime,
+  };
+}
+
+function isProblemList(value: unknown): value is FunctionContractProblem[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      entry =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof (entry as Record<string, unknown>).path === 'string' &&
+        typeof (entry as Record<string, unknown>).message === 'string'
+    )
+  );
 }
 
 export interface PyodideManagerState {

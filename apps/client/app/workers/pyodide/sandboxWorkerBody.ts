@@ -336,9 +336,28 @@ from io import StringIO
 _MAX_OUTPUT_CHARS = 100000
 _MAX_CONTRACT_BYTES = 32768
 _MAX_RESULT_BYTES = 262144
+_MAX_PROBLEMS = 50
 
 class _FunctionCallError(Exception):
     pass
+
+# JSON turns 3.0 into 3 and True into true, so number types are checked while Python still knows them.
+def _output_type_problems(field, value, path, problems):
+    if len(problems) > _MAX_PROBLEMS or not isinstance(field, dict):
+        return
+    kind = field.get('type')
+    if kind in ('number', 'integer'):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            problems.append({'path': path, 'message': 'must be a number'})
+        elif kind == 'integer' and not isinstance(value, int):
+            problems.append({'path': path, 'message': 'must be a whole number'})
+    elif kind == 'array' and isinstance(value, list):
+        for index, item in enumerate(value):
+            _output_type_problems(field.get('items'), item, path + '.' + str(index) if path else str(index), problems)
+    elif kind == 'object' and isinstance(value, dict) and isinstance(field.get('properties'), dict):
+        for name, item in value.items():
+            if isinstance(name, str) and name in field['properties']:
+                _output_type_problems(field['properties'][name], item, path + '.' + name if path else name, problems)
 
 def _b4m_call_function(code, params_json):
     stdout = StringIO()
@@ -349,6 +368,7 @@ def _b4m_call_function(code, params_json):
     sys.stderr = stderr
     contract_json = None
     value_json = None
+    output_problems = []
     error = None
     try:
         namespace = {'__name__': 'b4m_function'}
@@ -379,6 +399,7 @@ def _b4m_call_function(code, params_json):
             if len(value_text) > _MAX_RESULT_BYTES:
                 raise _FunctionCallError('The function returned a result larger than 256 KB.')
             value_json = value_text
+            _output_type_problems(contract.get('outputs'), value, '', output_problems)
     except _FunctionCallError as e:
         error = str(e)
     except Exception:
@@ -389,6 +410,7 @@ def _b4m_call_function(code, params_json):
     return {
         'contract_json': contract_json,
         'value_json': value_json,
+        'output_problems_json': json.dumps(output_problems) if output_problems else None,
         'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS],
         'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS],
         'error': None if error is None else error[:_MAX_OUTPUT_CHARS],
@@ -407,6 +429,7 @@ _b4m_call_function(_fn_code, _fn_params_json)
           success: !error,
           contractJson: text(resultObj.contract_json),
           valueJson: text(resultObj.value_json),
+          outputProblemsJson: text(resultObj.output_problems_json),
           output: (text(resultObj.stdout) || '') + (text(resultObj.stderr) || ''),
           error,
           executionTime: performance.now() - startTime,

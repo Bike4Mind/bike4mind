@@ -594,6 +594,36 @@ describe('function calls', () => {
     await expect(call).resolves.toMatchObject({ success: true, value: { deflection: 0.002 } });
   });
 
+  it('passes on the output problems the sandbox found', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+
+    fromSandbox(
+      callResult({
+        valueJson: '{"count": 3.0}',
+        outputProblemsJson: '[{"path": "count", "message": "must be a whole number"}]',
+      })
+    );
+    await expect(call).resolves.toMatchObject({
+      success: true,
+      value: { count: 3 },
+      outputProblems: [{ path: 'count', message: 'must be a whole number' }],
+    });
+  });
+
+  it.each(['{"path": "count"}', '[{"path": 1, "message": "x"}]', '[null]', 'not json'])(
+    'refuses output problems that are not a problem list: %s',
+    async outputProblemsJson => {
+      const { pyodideManager, fromSandbox, FUNCTION_RESULT_UNREADABLE } = await readySandbox();
+      const call = pyodideManager.callFunction('code', [], {});
+      await Promise.resolve();
+
+      fromSandbox(callResult({ valueJson: '{"count": 3}', outputProblemsJson }));
+      await expect(call).resolves.toMatchObject({ success: false, error: FUNCTION_RESULT_UNREADABLE });
+    }
+  );
+
   it('refuses an oversized result before parsing it', async () => {
     const { pyodideManager, fromSandbox, FUNCTION_RESULT_TOO_LARGE } = await readySandbox();
     const call = pyodideManager.callFunction('code', [], {});

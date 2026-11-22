@@ -177,6 +177,20 @@ function buildParams(inputs: FunctionObjectField, values: FormValues) {
   return { params, problems };
 }
 
+/** The sandbox's type problems (seen before JSON turned 3.0 into 3) first, then the contract check's, one per path. */
+function outputProblems(
+  outputs: FunctionObjectField,
+  value: unknown,
+  fromSandbox: FunctionContractProblem[]
+): FunctionContractProblem[] {
+  const problems = [...fromSandbox];
+  const reported = new Set(problems.map(problem => problem.path));
+  for (const problem of validateFunctionValue(outputs, value)) {
+    if (!reported.has(problem.path)) problems.push(problem);
+  }
+  return capFunctionProblems(problems);
+}
+
 // Matches the Output tab's error Alert in PythonArtifactViewer.
 const dangerAlertSx = {
   bgcolor: 'danger.700',
@@ -472,7 +486,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
       setOutcome({
         status: 'returned',
         value: isRecord(result.value) ? result.value : {},
-        problems: validateFunctionValue(contract.outputs, result.value),
+        problems: outputProblems(contract.outputs, result.value, result.outputProblems ?? []),
         output: result.output,
         executionTime: result.executionTime,
       });

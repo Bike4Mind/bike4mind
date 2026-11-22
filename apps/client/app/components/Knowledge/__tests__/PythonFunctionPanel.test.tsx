@@ -192,6 +192,53 @@ describe('PythonFunctionPanel', () => {
     expect(screen.queryByTestId('python-function-result')).toBeNull();
   });
 
+  it('lists an output problem the sandbox found before JSON hid the Python type', async () => {
+    const contract = sampleContract();
+    contract.outputs.properties = { count: { type: 'integer', unit: '1' } } as never;
+    contract.outputs.required = ['count'];
+    callFunction.mockResolvedValueOnce(described(contract)).mockResolvedValueOnce({
+      success: true,
+      value: { count: 3 },
+      outputProblems: [{ path: 'count', message: 'must be a whole number' }],
+      output: '',
+      executionTime: 3,
+    });
+    renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+
+    fillSampleInputs();
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+
+    const problems = await screen.findByTestId('python-function-problems');
+    expect(problems.textContent).toContain('The function returned values that do not match the contract:');
+    expect(problems.textContent).toContain('count: must be a whole number');
+    expect(screen.queryByTestId('python-function-result')).toBeNull();
+  });
+
+  it('passes 3.0 typed into a whole-number input to run as 3', async () => {
+    const contract = sampleContract();
+    contract.inputs.properties.span = { type: 'integer', unit: 'm', exclusiveMinimum: 0 };
+    callFunction.mockResolvedValueOnce(described(contract)).mockResolvedValueOnce({
+      success: true,
+      value: { deflection: 1 },
+      output: '',
+      executionTime: 1,
+    });
+    renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+
+    fillSampleInputs();
+    fireEvent.change(screen.getByTestId('python-function-input-span'), { target: { value: '3.0' } });
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+
+    await screen.findByTestId('python-function-result');
+    expect(callFunction).toHaveBeenLastCalledWith(
+      CODE,
+      { load: 1000, span: 3, elastic_modulus: 200000000000, second_moment: 0.000008 },
+      []
+    );
+  });
+
   it('shows the error when run raises', async () => {
     const traceback = 'Traceback (most recent call last):\nZeroDivisionError: division by zero';
     callFunction.mockResolvedValueOnce(described()).mockResolvedValueOnce({

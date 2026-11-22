@@ -18,6 +18,8 @@ export interface FunctionCallResult {
   contractJson?: string;
   /** JSON text of what run returned; absent for a describe call or a failed run. */
   valueJson?: string;
+  /** JSON list of `{ path, message }` for output numbers whose Python type JSON cannot carry, such as 3.0. */
+  outputProblemsJson?: string;
   output: string;
   error?: string;
   executionTime: number;
