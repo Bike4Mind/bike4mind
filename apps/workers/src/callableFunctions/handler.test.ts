@@ -32,10 +32,15 @@ describe('callable function runtime handler', () => {
     expect(sweepCallableFunctionChildren).toHaveBeenCalledTimes(2);
   });
 
-  it('sweeps even when the run throws', async () => {
-    vi.mocked(runCallableFunctionInChild).mockRejectedValue(new Error('A callable function child survived its kill'));
-    await expect(createHandler(env)(event)).rejects.toThrow('survived');
+  it('returns a closed runtime_unavailable error after the sweep when the run throws, logging the cause only', async () => {
+    const cause = new Error('spawn failed');
+    vi.mocked(runCallableFunctionInChild).mockRejectedValue(cause);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = await createHandler(env, logger)(event);
+    expect(result).toEqual({ outcome: 'error', reason: 'runtime_unavailable', durationMs: expect.any(Number) });
     expect(sweepCallableFunctionChildren).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(expect.any(String), cause);
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(event.code);
   });
 
   it('refuses as unavailable when the image paths are not configured', async () => {
