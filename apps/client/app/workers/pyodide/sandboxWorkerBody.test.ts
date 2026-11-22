@@ -44,6 +44,13 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     expect(source).toContain(DEFAULT_PYODIDE_BASE_URL);
   });
 
+  it('loads function code as a module other than __main__ and refuses NaN in JSON', () => {
+    // A script-style demo block must not run during a call, and NaN is not JSON.
+    expect(source).toContain("namespace = {'__name__': 'b4m_function'}");
+    expect(source).toContain("exec(compile(code, 'function.py', 'exec'), namespace)");
+    expect(source.match(/allow_nan=False/g)).toHaveLength(2);
+  });
+
   it('never contains a closing script tag', () => {
     // The route inlines this into a <script> element. See buildWorkerSource() for why the
     // escape exists; this asserts the input is clean in the first place.
@@ -173,5 +180,91 @@ describe('pyodideSandboxWorkerBody package loading', () => {
 
     expect(posted.at(-1)).toMatchObject({ type: 'result', result: { success: true } });
     warn.mockRestore();
+  });
+
+  it('describes a function through globals, never by putting the code into the Python source', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{"name": "f"}',
+        value_json: undefined,
+        stdout: 'hi\n',
+        stderr: '',
+        error: undefined,
+      }),
+    } as never);
+    const code = 'FUNCTION = {"name": "f"}\ndef run():\n    return {}';
+
+    await send({ type: 'call', code, packages: [], paramsJson: null, timeoutMs: 1000 });
+
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_code', code);
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', null);
+    const wrapper = String(pyodide.runPythonAsync.mock.calls.at(-1)?.[0]);
+    expect(wrapper).not.toContain(code);
+    expect(wrapper).toContain('_b4m_call_function(_fn_code, _fn_params_json)');
+    expect(pyodide.globals.delete).toHaveBeenCalledWith('_fn_code');
+    expect(pyodide.globals.delete).toHaveBeenCalledWith('_fn_params_json');
+    expect(posted.at(-1)).toEqual({
+      type: 'call-result',
+      result: {
+        success: true,
+        contractJson: '{"name": "f"}',
+        valueJson: undefined,
+        output: 'hi\n',
+        error: undefined,
+        executionTime: expect.any(Number),
+      },
+    });
+  });
+
+  it('passes params as JSON text and reports an error from the call', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{}',
+        value_json: undefined,
+        stdout: '',
+        stderr: '',
+        error: 'run must return a dict',
+      }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{"span": 4}', timeoutMs: 1000 });
+
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', '{"span": 4}');
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: false, contractJson: '{}', error: 'run must return a dict' },
+    });
+  });
+
+  it('passes only strings on from what Python returned', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({ contract_json: { name: 'f' }, value_json: 5, stdout: ['x'], stderr: '', error: undefined }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: true, contractJson: undefined, valueJson: undefined, output: '' },
+    });
+  });
+
+  it('reports a runtime failure during a call as a failed call-result', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockRejectedValueOnce(new Error('PythonError: boom'));
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: null, timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: false, error: 'PythonError: boom' },
+    });
   });
 });
