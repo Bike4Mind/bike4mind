@@ -1101,6 +1101,20 @@ describe('the attach step', () => {
     await waitFor(() =>
       expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(/^Press Add Files to add sheet\.csv\.$/)
     );
+    const label = document.createElement('span');
+    label.textContent = ' 1 File';
+    add.appendChild(label);
+    await waitFor(() =>
+      expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(
+        /^Press Add Files 1 File to add sheet\.csv\.$/
+      )
+    );
+    label.style.display = 'none';
+    fireEvent(window, new Event('resize'));
+    await waitFor(() =>
+      expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(/^Press Add Files to add sheet\.csv\.$/)
+    );
+    label.remove();
     add.firstChild!.nodeValue = 'Add 1 File to Notebook';
     await waitFor(() =>
       expect(screen.getByTestId('tutorial-attach-hint')).toHaveTextContent(

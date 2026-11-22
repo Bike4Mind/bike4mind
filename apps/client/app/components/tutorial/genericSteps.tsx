@@ -182,7 +182,12 @@ function useAttachCue(fileId: string | null, fileName: string): AttachCue {
       attributes: true,
       attributeFilter: ['disabled'],
     });
-    return () => observer.disconnect();
+    // Crossing the breakpoint that hides Add's label changes no DOM, so a resize must re-read too.
+    window.addEventListener('resize', sync);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', sync);
+    };
   }, [fileId, fileName]);
   return cue;
 }
