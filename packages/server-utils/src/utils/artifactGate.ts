@@ -21,7 +21,7 @@
  * the same reason: the browser-initiated `POST /api/artifacts` write is a third surface that must
  * not answer differently.
  */
-import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
+import { ARTIFACT_EMISSION_PROMPT, withCallableFunctions } from '@bike4mind/common';
 import { resolveArtifactsEnabled, withArtifactDataOrigins } from '@bike4mind/services/llm/artifactGating';
 
 export interface ResolveAgentArtifactGateInput {
@@ -68,11 +68,14 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
   readPromptSetting: () => Promise<string | undefined>;
   /** The `pythonArtifactDataOrigins` setting; when it lists origins the prompt names them, as on chat. */
   readDataOriginsSetting?: () => Promise<unknown>;
+  /** Whether callable functions are on for the requester; when true the prompt says how to write one, as on chat. */
+  readCallableFunctionsEnabled?: () => Promise<boolean>;
 }): Promise<string | undefined> {
   const { artifactsEnabled, isNewExecution = true, readPromptSetting, readDataOriginsSetting } = args;
   if (!isNewExecution || !artifactsEnabled) return undefined;
   const prompt = (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
-  return readDataOriginsSetting ? withArtifactDataOrigins(prompt, await readDataOriginsSetting()) : prompt;
+  const withOrigins = readDataOriginsSetting ? withArtifactDataOrigins(prompt, await readDataOriginsSetting()) : prompt;
+  return withCallableFunctions(withOrigins, (await args.readCallableFunctionsEnabled?.()) === true);
 }
 
 /**
