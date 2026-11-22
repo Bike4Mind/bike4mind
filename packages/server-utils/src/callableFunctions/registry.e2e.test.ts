@@ -288,13 +288,12 @@ describe('createCallableFunction', () => {
     expect(await save('copy')).toMatchObject({ slug: 'beam_midspan_deflection', pin: { artifactId: 'copy' } });
   });
 
-  it('refuses a second function from the same artifact (artifact_has_function)', async () => {
-    await save();
-    await expect(save('artifact-1', { contract: contract({ name: 'other_name' }) })).rejects.toMatchObject({
-      statusCode: 409,
-      message: 'This artifact is already saved as a tool.',
-      additionalInfo: { code: 'artifact_has_function' },
-    });
+  it('saves a second function from the same artifact under another name and leaves the first as it was', async () => {
+    const first = await save();
+    const before = await stored(first.id);
+    const second = await save('artifact-1', { contract: contract({ name: 'other_name' }) });
+    expect(second).toMatchObject({ slug: 'other_name', pin: { artifactId: 'artifact-1' } });
+    expect(await stored(first.id)).toEqual(before);
   });
 
   it('refuses a create past the per-owner limit (function_limit)', async () => {
@@ -398,6 +397,44 @@ describe('repinCallableFunction', () => {
       repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: contract({ name: 'new_name' }) })
     ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'name_changed' } });
     expect((await stored(view.id))?.pin.version).toBe(1);
+  });
+
+  it('refuses a contract that removes an output or changes a unit (breaking_change) and changes nothing', async () => {
+    const view = await save();
+    const before = await stored(view.id);
+    const version = await addVersion('artifact-1', code('# reworked\n'));
+    const next = contract();
+    const outputs: Record<string, unknown> = next.outputs.properties;
+    delete outputs.deflection;
+    outputs.peak = { type: 'number', unit: 'm' };
+    next.outputs.required = [];
+    next.inputs.properties.load = { type: 'number', unit: 'kN/m', exclusiveMinimum: 0 };
+
+    await expect(
+      repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      additionalInfo: {
+        code: 'breaking_change',
+        changes: [
+          { path: 'inputs.load.unit', kind: 'unit_changed', before: 'N/m', after: 'kN/m' },
+          { path: 'outputs.deflection', kind: 'removed' },
+        ],
+      },
+    });
+    expect(await stored(view.id)).toEqual(before);
+  });
+
+  it('repins a contract that only adds an optional input and an output', async () => {
+    const view = await save();
+    const version = await addVersion('artifact-1', code('# extended\n'));
+    const next = contract();
+    Object.assign(next.inputs.properties, { depth: { type: 'number', unit: 'm' } });
+    Object.assign(next.outputs.properties, { peak: { type: 'number', unit: 'm' } });
+
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next });
+    expect(repinned.pin).toMatchObject({ version: 2, contentHash: sha256(code('# extended\n')) });
+    expect(Object.keys((await stored(view.id))!.contract.inputs.properties)).toEqual(['load', 'span', 'depth']);
   });
 
   it('answers 404 once the artifact is deleted or belongs to someone else, and keeps the pin', async () => {

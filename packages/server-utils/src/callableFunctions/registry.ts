@@ -2,11 +2,13 @@ import {
   BadRequestError,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CallableFunctionBreakingChangeError,
   CallableFunctionSlugConflictError,
   ConflictError,
   NotFoundError,
   calculateContentHash,
   calculateContentSize,
+  diffFunctionContracts,
   effectiveCallableFunctionStatus,
   hasFunctionEntryPoint,
   parseFunctionContract,
@@ -191,7 +193,10 @@ export async function getCallableFunction(actor: CallableFunctionActor, id: stri
   return toCallableFunctionDetail(fn, await readHead(actor, fn.pin.artifactId));
 }
 
-/** Moves the pin to the artifact's current version. The name is fixed at create, so a renamed contract is refused. */
+/**
+ * Moves the pin to the artifact's current version. The name is fixed at create, so a renamed contract is refused, as
+ * is one that could break callers of the pinned contract (`diffFunctionContracts`).
+ */
 export async function repinCallableFunction(
   actor: CallableFunctionActor,
   id: string,
@@ -212,6 +217,8 @@ export async function repinCallableFunction(
       { code: 'name_changed' }
     );
   }
+  const { breaking } = diffFunctionContracts(current.contract, contract);
+  if (breaking.length > 0) throw new CallableFunctionBreakingChangeError(breaking);
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,
     contract,

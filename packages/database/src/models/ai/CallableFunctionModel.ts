@@ -4,7 +4,6 @@ import {
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
   CALLABLE_FUNCTION_STATES,
-  CallableFunctionArtifactConflictError,
   CallableFunctionCapError,
   CallableFunctionProtectedFieldError,
   CallableFunctionSlugConflictError,
@@ -80,12 +79,8 @@ CallableFunctionSchema.pre('validate', function () {
   if (this.ownerKey !== this.userId) throw new CallableFunctionOwnerError(OWNER_MISMATCH);
 });
 
+// Also serves the owner's list. One artifact may hold several tools, each under its own name.
 CallableFunctionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'callablefn_owner_slug' });
-// One function per artifact per owner; also serves the owner's list.
-CallableFunctionSchema.index(
-  { ownerType: 1, ownerKey: 1, 'pin.artifactId': 1 },
-  { unique: true, name: 'callablefn_owner_artifact' }
-);
 
 export interface ICallableFunctionModel extends Model<ICallableFunctionDocument & IMongoDocument> {}
 export const CallableFunction: ICallableFunctionModel =
@@ -111,9 +106,6 @@ function duplicateKeyError(error: unknown, data: CallableFunctionCreateInput): E
   if (mongoError?.code !== 11000) return null;
   if (mongoError.keyPattern?.slug || /callablefn_owner_slug/.test(mongoError.message ?? '')) {
     return new CallableFunctionSlugConflictError(data.slug);
-  }
-  if (mongoError.keyPattern?.['pin.artifactId'] || /callablefn_owner_artifact/.test(mongoError.message ?? '')) {
-    return new CallableFunctionArtifactConflictError(data.pin.artifactId);
   }
   return null;
 }
