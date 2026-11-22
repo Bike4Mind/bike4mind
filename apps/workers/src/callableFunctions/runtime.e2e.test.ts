@@ -218,11 +218,52 @@ def attempt(arg):
         return "unsafe-no-isolation" in f.read(), "host mounted through pyodide_js"`,
   },
   {
-    name: 'ctypes',
+    name: 'ctypes: read interpreter memory',
     attempt: `
 def attempt(arg):
     import ctypes
-    return len(ctypes.string_at(id(arg), 16)) == 16, "read interpreter memory"`,
+    return len(ctypes.string_at(id(arg), 16)) == 16, "16 bytes at id(arg)"`,
+  },
+  {
+    name: 'ctypes: generate JavaScript',
+    attempt: `
+def attempt(arg):
+    import ctypes
+    run = ctypes.CDLL(None).emscripten_run_script_string
+    run.restype = ctypes.c_char_p
+    return True, "eval returned " + run(b"String(6 * 7)").decode()`,
+  },
+  {
+    name: 'ctypes: reach the host process',
+    attempt: `
+def attempt(arg):
+    import ctypes
+    run = ctypes.CDLL(None).emscripten_run_script_string
+    run.restype = ctypes.c_char_p
+    script = b"String(process.getBuiltinModule('node:child_process').execFileSync(process.execPath, ['--version']))"
+    return True, "node " + run(script).decode().strip()`,
+  },
+  {
+    name: 'ctypes: open a socket',
+    network: true,
+    attempt: `
+def attempt(arg):
+    import ctypes
+    run = ctypes.CDLL(None).emscripten_run_script
+    run(("process.getBuiltinModule('node:net').connect(" + str(int(arg)) + ", '127.0.0.1')").encode())
+    return True, "node net through eval"`,
+  },
+  {
+    name: 'ctypes: read the host file system',
+    arg: () => CHILD,
+    attempt: `
+def attempt(arg):
+    import ctypes
+    import json
+    run = ctypes.CDLL(None).emscripten_run_script_string
+    run.restype = ctypes.c_char_p
+    script = "String(process.getBuiltinModule('node:fs').readFileSync(" + json.dumps(arg) + ", 'utf8').includes('unsafe-no-isolation'))"
+    return run(script.encode()) == b"true", "host file through eval"`,
   },
   {
     name: 'subprocess',
@@ -505,16 +546,24 @@ def attempt(arg):
     });
   }, 120_000);
 
-  for (const hostile of CASES) {
-    it(`a guest that tries ${hostile.name} reaches nothing`, async () => {
-      const off = unisolated.get(hostile.name);
-      const on = await attemptWith(isolatedCall, hostile);
-      const verdict = (attempt?: Attempt) => `${attempt?.reached ? 'succeeds' : 'fails'}: ${attempt?.detail}`;
-      table.push(`| ${hostile.name} | ${verdict(off)} | ${verdict(on)} |`);
-      expect(off?.reached, 'the attempt must succeed with isolation off, or this test cannot fail').toBe(true);
-      expect(on.ran, 'the guest must run with isolation on').toBe(true);
-      expect(on.reached).toBe(false);
-      expect(liveCallableFunctionChildren()).toEqual([]);
-    }, 120_000);
-  }
+  // Concurrent: each attempt runs in children of its own, and the start of each child is most of the file's time.
+  CASES.forEach((hostile, index) => {
+    it.concurrent(
+      `a guest that tries ${hostile.name} reaches nothing`,
+      async () => {
+        const off = unisolated.get(hostile.name);
+        const on = await attemptWith(isolatedCall, hostile);
+        const verdict = (attempt?: Attempt) => `${attempt?.reached ? 'succeeds' : 'fails'}: ${attempt?.detail}`;
+        table[index] = `| ${hostile.name} | ${verdict(off)} | ${verdict(on)} |`;
+        expect(off?.reached, 'the attempt must succeed with isolation off, or this test cannot fail').toBe(true);
+        expect(on.ran, 'the guest must run with isolation on').toBe(true);
+        expect(on.reached).toBe(false);
+      },
+      120_000
+    );
+  });
+
+  it('leaves no child once the hostile attempts end', () => {
+    expect(liveCallableFunctionChildren()).toEqual([]);
+  });
 });
