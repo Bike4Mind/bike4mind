@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1261 routes: 129 contracted, 11 aliases of another route, 348 with no static caller in `apps/client/app`.
+1267 routes: 129 contracted, 11 aliases of another route, 349 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 372 | 0 | 201 | 164 | 0 | 7 | 69 |
+| admin | 373 | 0 | 201 | 165 | 0 | 7 | 69 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| callable-functions | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -127,7 +127,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | quest-plans | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | quests | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | react-artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| referrals | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| referrals | 3 | 0 | 0 | 2 | 0 | 1 | 1 |
 | reg-invites | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | research | 8 | 0 | 8 | 0 | 0 | 0 | 1 |
 | roll | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -750,6 +750,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/status` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 
 ### cc-bridge
@@ -1494,7 +1497,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/referrals/link` | GET | jwt | - | - | no | - | 1: `hooks/data/referralLink.ts` |
 | `/api/referrals/summary` | GET | jwt | - | - | no | - | 1: `hooks/data/referralSummary.ts` |
+| `/api/referrals/visit/[code]` | GET | handler | - | - | no | - | 0 |
 
 ### reg-invites
 

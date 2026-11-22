@@ -18,6 +18,10 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'versions.createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  CallableFunction: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   CodeAgentEvent: {
     kind: 'holder',
     references: [

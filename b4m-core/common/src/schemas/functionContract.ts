@@ -16,6 +16,17 @@ export const PYTHON_HARD_KEYWORDS: readonly string[] = (
   'global if import in is lambda nonlocal not or pass raise return try while with yield'
 ).split(' ');
 
+const FUNCTION_CONTRACT_LINE = new RegExp(`^${FUNCTION_CONTRACT_GLOBAL}\\s*=`, 'm');
+const RUN_DEFINITION_LINE = new RegExp(`^(async\\s+)?def\\s+${FUNCTION_ENTRY_POINT}\\s*\\(`, 'm');
+
+/**
+ * Whether Python code looks like a callable function: a column-0 `FUNCTION =` assignment and a
+ * column-0 `def run(`. A text check only; the sandbox is the authority.
+ */
+export function hasFunctionEntryPoint(code: string): boolean {
+  return FUNCTION_CONTRACT_LINE.test(code) && RUN_DEFINITION_LINE.test(code);
+}
+
 export const FUNCTION_CONTRACT_LIMITS = {
   maxProperties: 40,
   maxDepth: 4,
