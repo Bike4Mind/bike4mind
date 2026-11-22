@@ -84,11 +84,36 @@ describe('resolveCallableFunctionsEnabled', () => {
     expect(state.options).toEqual([{ readFailureMode: 'throw' }]);
   });
 
-  it('is on when any one of two organizations resolves on', async () => {
+  it('is off everywhere when the platform value is off and no organization overrides it', async () => {
     state.orgIds = ['org-a', 'org-b'];
-    state.orgOverrides = { 'org-b': true };
+    await expect(resolveCallableFunctionsEnabled(user)).resolves.toBe(false);
+  });
+
+  it('is on by the platform value for a member of organizations without overrides', async () => {
+    state.orgIds = ['org-a', 'org-b'];
+    state.platformValue = true;
     await expect(resolveCallableFunctionsEnabled(user)).resolves.toBe(true);
+  });
+
+  it('is off for a member of an organization with an override on and a second one that follows the platform value off', async () => {
+    state.orgIds = ['org-a', 'org-b'];
+    state.orgOverrides = { 'org-a': true };
+    await expect(resolveCallableFunctionsEnabled(user)).resolves.toBe(false);
     expect(state.scopes.map(scope => scope.organizationId)).toEqual(['org-a', 'org-b']);
+  });
+
+  it('is off when one organization overrides off while the platform value and the other organization are on', async () => {
+    state.orgIds = ['org-a', 'org-b'];
+    state.platformValue = true;
+    state.orgOverrides = { 'org-b': false };
+    await expect(resolveCallableFunctionsEnabled(user)).resolves.toBe(false);
+  });
+
+  it('is off for a member of only an organization that overrides off while the platform value is on', async () => {
+    state.orgIds = ['org-a'];
+    state.platformValue = true;
+    state.orgOverrides = { 'org-a': false };
+    await expect(resolveCallableFunctionsEnabled(user)).resolves.toBe(false);
   });
 
   it('is off when every organization resolves off', async () => {

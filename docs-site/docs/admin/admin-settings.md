@@ -139,7 +139,7 @@ Located in the Experimental category, under Enable Artifacts, and used only whil
 - Calls run in your browser, in the same isolated frame as a script run, and nothing is saved
 - With the setting off, Python artifacts show only Output and Code, as before
 
-A platform admin can turn it on for a single organization from the setting's scoped overrides while the platform value stays off. A user sees the Function tab when any organization they belong to resolves the setting to on; a user in no organization follows the platform value.
+A platform admin can turn it on for a single organization from the setting's scoped overrides while the platform value stays off. A user sees the Function tab only when every organization they belong to resolves the setting to on, so one organization that turns it off is not overridden by another; a user in no organization follows the platform value.
 
 ### Logo Upload
 

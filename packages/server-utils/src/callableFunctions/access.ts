@@ -4,8 +4,9 @@ import { scopedSettingsService } from '@bike4mind/services';
 import { isFeatureEnabled } from '../middlewares/featureFlag';
 
 /**
- * On when `EnableArtifacts` is on and `EnableCallableFunctions` resolves on for any organization the person is a
- * member of (membership, not the selected organization), or at their own scope when in none. Read failures throw.
+ * On when `EnableArtifacts` is on and `EnableCallableFunctions` resolves on for every organization the person is a
+ * member of (membership, not the selected organization), or at their own scope when in none, so one organization
+ * that resolves off is not overridden by another. Read failures throw.
  */
 export async function resolveCallableFunctionsEnabled(user: { id: string }): Promise<boolean> {
   if (!(await isFeatureEnabled('EnableArtifacts'))) return false;
@@ -22,7 +23,7 @@ export async function resolveCallableFunctionsEnabled(user: { id: string }): Pro
       scopedSettingsService.resolveScopedSetting('EnableCallableFunctions', scope, db, { readFailureMode: 'throw' })
     )
   );
-  return resolved.some(setting => setting.value === true);
+  return resolved.every(setting => setting.value === true);
 }
 
 /** Throws 403 unless callable functions are on for this person (the `assertCustomMcpEnabled` convention). */
