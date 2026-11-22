@@ -338,6 +338,7 @@ export const SettingKeySchema = z.enum([
   'EnableArtifacts',
   'EnableArtifactsDefault',
   'pythonArtifactDataOrigins',
+  'EnableCallableFunctions',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2787,6 +2788,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'pythonArtifactDataOrigins', order: 22 },
+      { key: 'EnableCallableFunctions', order: 23 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3785,6 +3787,19 @@ export const settingsMap = {
     // Plain strings so the update route can name each bad entry; every reader applies
     // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
     schema: z.array(z.string()),
+  }),
+  EnableCallableFunctions: makeBooleanSetting({
+    key: 'EnableCallableFunctions',
+    name: 'Enable Callable Functions',
+    defaultValue: false,
+    description:
+      'Lets a person call the run function of a Python artifact with typed inputs. Off (default): Python artifacts behave as before. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 23,
+    dependsOn: 'EnableArtifacts',
+    // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',
