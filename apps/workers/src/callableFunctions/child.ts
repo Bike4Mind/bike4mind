@@ -1,4 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,10 +28,218 @@ const NETWORK_GLOBALS = ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest'];
 const HOST_GLOBALS = ['process', 'global', 'require', '_createPyodideModule'];
 const PROCESS_ESCAPES = ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen', 'mainModule'];
 
+// Stands in for ctypes, whose real module is denied with _ctypes: scipy, scikit-learn (through threadpoolctl),
+// pandas, and numpy import it. Pure Python value types; every entry point that loads, calls, or touches memory raises.
+const CTYPES_STUB_PY = `
+import types as _types
+
+_REFUSED = 'ctypes cannot load a library, call a function pointer, or access memory in this runtime'
+
+
+def _refuse(*args, **kwargs):
+    raise OSError(_REFUSED)
+
+
+class ArgumentError(Exception):
+    pass
+
+
+DEFAULT_MODE = 0
+RTLD_LOCAL = 0
+RTLD_GLOBAL = 256
+
+
+class _CData:
+    _size_ = None
+    from_address = classmethod(_refuse)
+    from_buffer = classmethod(_refuse)
+    from_buffer_copy = classmethod(_refuse)
+    in_dll = classmethod(_refuse)
+
+    @classmethod
+    def from_param(cls, obj):
+        return obj
+
+
+class _SimpleCData(_CData):
+    _default = 0
+
+    def __init__(self, value=None):
+        self.value = self._default if value is None else value
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = self._check(value)
+
+    def _check(self, value):
+        return value
+
+    def __repr__(self):
+        return '%s(%r)' % (type(self).__name__, self._value)
+
+
+def _integer(name, size, signed):
+    bits = size * 8
+
+    def _check(self, value):
+        value = value.__index__() & ((1 << bits) - 1)
+        return value - (1 << bits) if signed and value >= 1 << (bits - 1) else value
+
+    return type(name, (_SimpleCData,), {'_size_': size, '_check': _check})
+
+
+def _value(name, size, check, default):
+    return type(name, (_SimpleCData,), {'_size_': size, '_check': lambda self, value: check(value), '_default': default})
+
+
+def _optional(kind):
+    def check(value):
+        if value is not None and not isinstance(value, kind):
+            raise TypeError('expected %s or None' % kind.__name__)
+        return value
+    return check
+
+
+# Sizes are wasm32's.
+c_byte = _integer('c_byte', 1, True)
+c_ubyte = _integer('c_ubyte', 1, False)
+c_short = _integer('c_short', 2, True)
+c_ushort = _integer('c_ushort', 2, False)
+c_int = _integer('c_int', 4, True)
+c_uint = _integer('c_uint', 4, False)
+c_long = _integer('c_long', 4, True)
+c_ulong = _integer('c_ulong', 4, False)
+c_longlong = _integer('c_longlong', 8, True)
+c_ulonglong = _integer('c_ulonglong', 8, False)
+c_int8, c_uint8, c_int16, c_uint16 = c_byte, c_ubyte, c_short, c_ushort
+c_int32, c_uint32, c_int64, c_uint64 = c_int, c_uint, c_longlong, c_ulonglong
+c_size_t, c_ssize_t = c_uint, c_int
+c_float = _value('c_float', 4, float, 0.0)
+c_double = _value('c_double', 8, float, 0.0)
+c_longdouble = _value('c_longdouble', 16, float, 0.0)
+c_bool = _value('c_bool', 1, bool, False)
+c_char = _value('c_char', 1, _optional(bytes), b'\\x00')
+c_wchar = _value('c_wchar', 4, _optional(str), '\\x00')
+c_char_p = _value('c_char_p', 4, _optional(bytes), None)
+c_wchar_p = _value('c_wchar_p', 4, _optional(str), None)
+c_void_p = _integer('c_void_p', 4, False)
+
+
+class Structure(_CData):
+    def __init__(self, *args, **kwargs):
+        for (name, *_), value in zip(getattr(type(self), '_fields_', ()), args):
+            setattr(self, name, value)
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+
+
+class Union(Structure):
+    pass
+
+
+BigEndianStructure = LittleEndianStructure = Structure
+
+
+class Array(_CData):
+    pass
+
+
+class _Pointer(_CData):
+    _size_ = 4
+    __init__ = _refuse
+
+
+_pointer_types = {}
+
+
+def POINTER(cls):
+    if cls not in _pointer_types:
+        _pointer_types[cls] = type('LP_%s' % getattr(cls, '__name__', 'object'), (_Pointer,), {'_type_': cls})
+    return _pointer_types[cls]
+
+
+class _CFuncPtr(_CData):
+    _size_ = 4
+    restype = None
+    argtypes = ()
+
+    def __init__(self, *args):
+        self._value = args[0] if args and isinstance(args[0], int) else None
+
+    __call__ = _refuse
+
+
+def CFUNCTYPE(restype, *argtypes, **kwargs):
+    return type('CFunctionType', (_CFuncPtr,), {'_restype_': restype, '_argtypes_': argtypes})
+
+
+PYFUNCTYPE = CFUNCTYPE
+
+
+class CDLL:
+    __init__ = _refuse
+
+
+PyDLL = CDLL
+
+
+class LibraryLoader:
+    def __init__(self, dlltype):
+        pass
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        _refuse()
+
+    __getitem__ = LoadLibrary = _refuse
+
+
+cdll = LibraryLoader(CDLL)
+pydll = LibraryLoader(PyDLL)
+addressof = byref = create_string_buffer = create_unicode_buffer = _refuse
+memmove = memset = pointer = resize = string_at = wstring_at = _refuse
+
+
+# scipy casts addresses to function pointer types when it imports. The result holds the number, is never called, and
+# never casts back to an address, so it cannot reach memory or code.
+def cast(obj, cls):
+    if not (isinstance(cls, type) and issubclass(cls, _CFuncPtr) and isinstance(obj, int)):
+        _refuse()
+    return cls(obj)
+
+
+def sizeof(obj):
+    size = getattr(obj, '_size_', None)
+    if size is None:
+        raise TypeError('this type has no size')
+    return size
+
+
+alignment = sizeof
+
+
+def get_errno():
+    return 0
+
+
+def set_errno(value):
+    return 0
+
+
+util = _types.ModuleType('ctypes.util')
+util.find_library = lambda name: None
+`;
+
 // Import refusals, not a boundary: a guest that walks gc or a function's defaults can still find these.
 const LOCKDOWN_PY = `
 import os
 import sys
+import types
 import _imp
 
 os.environ.pop('_', None)
@@ -41,6 +251,12 @@ def _b4m_refuse(name, denied=_B4M_DENIED):
 
 for _b4m_name in [name for name in sys.modules if name.partition('.')[0] in _B4M_DENIED]:
     del sys.modules[_b4m_name]
+
+# The stub is served from sys.modules; any other ctypes module, and _ctypes, stays refused.
+_b4m_ctypes = types.ModuleType('ctypes')
+exec(compile(${JSON.stringify(CTYPES_STUB_PY)}, '<ctypes>', 'exec'), _b4m_ctypes.__dict__)
+sys.modules['ctypes'] = _b4m_ctypes
+sys.modules['ctypes.util'] = _b4m_ctypes.util
 
 class _B4mDeniedFinder:
     @staticmethod
@@ -54,7 +270,7 @@ def _b4m_create_builtin(spec, create=_imp.create_builtin, refuse=_b4m_refuse):
 
 sys.meta_path.insert(0, _B4mDeniedFinder)
 _imp.create_builtin = _b4m_create_builtin
-del _b4m_name, _B4mDeniedFinder, _b4m_create_builtin, _b4m_refuse, _B4M_DENIED
+del _b4m_name, _b4m_ctypes, _B4mDeniedFinder, _b4m_create_builtin, _b4m_refuse, _B4M_DENIED
 `;
 
 interface PythonResult {
@@ -116,7 +332,8 @@ async function load(): Promise<PyodideInterface> {
   );
   const pyodide = await loadPyodide({
     indexURL: pyodideDir.endsWith('/') ? pyodideDir : `${pyodideDir}/`,
-    env: isolated ? { HOME: '/home/pyodide' } : hostEnv,
+    // Agg: matplotlib's Pyodide backend draws through the js module, which the lockdown refuses.
+    env: isolated ? { HOME: '/home/pyodide', MPLBACKEND: 'Agg' } : hostEnv,
     // Pyodide's bootstrap imports only these two from `js`.
     jsglobals: isolated
       ? Object.assign(Object.create(null) as object, {
@@ -182,6 +399,14 @@ async function main(): Promise<void> {
           throw new Error('process.binding is not available');
         },
       });
+      // Pyodide's package loader calls mkdir on its cache directory, here the read-only Pyodide directory, and
+      // the permission model refuses every mkdir. An existing directory is reported as made; no write is allowed.
+      const { mkdir, stat } = fsPromises;
+      Object.assign(fsPromises, {
+        mkdir: async (path: string, options?: { recursive?: boolean }) =>
+          (await stat(path).catch(() => null))?.isDirectory() ? undefined : mkdir(path, options),
+      });
+      syncBuiltinESMExports();
     }
   }
   const lines = requestLines();
