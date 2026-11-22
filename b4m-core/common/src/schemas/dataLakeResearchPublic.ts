@@ -17,7 +17,13 @@ import {
   RESEARCH_UNLISTED_SOURCES,
 } from '../types/entities/DataLakeResearchTypes';
 import { LAKE_ACCESS_PRINCIPAL_KINDS } from '../types/entities/LakeAccessEventTypes';
-import { LAKE_CONFIG_CHANGE_ACTIONS, LAKE_MANAGE_RUNGS } from '../types/entities/LakeConfigChangeEventTypes';
+import {
+  LAKE_CONFIG_CHANGE_ACTIONS,
+  LAKE_CONFIG_EVENT_TARGET_KINDS,
+  LAKE_MANAGE_RUNGS,
+} from '../types/entities/LakeConfigChangeEventTypes';
+import { LAKE_CONFIG_HISTORY_FILE_ACTIONS } from '../types/entities/LakeConfigHistoryTypes';
+import { LAKE_MEMBERSHIP_CHANGE_ORIGINS } from '../types/entities/LakeMembershipChangeEventTypes';
 import { paginatedResponseSchema } from './pagination';
 
 /**
@@ -379,15 +385,48 @@ const ConfigHistoryChangeSchema = z.object({
   text_unchanged: z.boolean().optional().describe('A fingerprint change only. The two sides are the same text.'),
 });
 
-export const ConfigHistoryEntrySchema = z.object({
+const ConfigHistoryTargetSchema = z.object({
+  kind: z.enum(LAKE_CONFIG_EVENT_TARGET_KINDS),
+  id: z.string(),
+});
+
+const ConfigHistoryLeverChangeSchema = z.object({
+  lever: z.string(),
+  before: z.unknown().describe('Absent or null means unset. A feed address is origin and path only.'),
+  after: z.unknown().describe('Null on a delete, which records the setting as it stood.'),
+});
+
+const ConfigHistoryEntryBaseShape = {
   event_id: z.string(),
   changed_at: z.string(),
   principal_kind: z.enum(LAKE_ACCESS_PRINCIPAL_KINDS),
   principal_name: z.string().nullable(),
+  target: ConfigHistoryTargetSchema.optional().describe('The thing the row is about. Absent on older rows.'),
+};
+
+const ConfigHistoryConfigEntrySchema = z.object({
+  kind: z.literal('config'),
+  ...ConfigHistoryEntryBaseShape,
   manage_rung: z.enum(LAKE_MANAGE_RUNGS),
   action: z.enum(LAKE_CONFIG_CHANGE_ACTIONS),
   changes: z.array(ConfigHistoryChangeSchema),
+  lever_changes: z.array(ConfigHistoryLeverChangeSchema).optional().describe('Absent on older rows.'),
+  admitted_fab_file_id: z.string().optional().describe('The file an approval admitted.'),
 });
+
+const ConfigHistoryFileEntrySchema = z.object({
+  kind: z.literal('file'),
+  ...ConfigHistoryEntryBaseShape,
+  action: z.enum(LAKE_CONFIG_HISTORY_FILE_ACTIONS),
+  origin: z.enum(LAKE_MEMBERSHIP_CHANGE_ORIGINS),
+  undoes_event_id: z.string().optional(),
+  caused_by_event_id: z.string().optional(),
+});
+
+export const ConfigHistoryEntrySchema = z.discriminatedUnion('kind', [
+  ConfigHistoryConfigEntrySchema,
+  ConfigHistoryFileEntrySchema,
+]);
 
 export const ConfigHistoryQuerySchema = z.object({
   limit: z.coerce
