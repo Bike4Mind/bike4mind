@@ -94,6 +94,11 @@ const ALLOWED_KEYS: Record<(typeof FIELD_TYPES)[number], readonly string[]> = {
 const COMMON_KEYS = ['type', 'description'];
 const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs'];
 
+/** Every keyword a contract field may use, across all field types. */
+export const FUNCTION_FIELD_KEYWORDS: readonly string[] = [
+  ...new Set([...COMMON_KEYS, ...Object.values(ALLOWED_KEYS).flat()]),
+];
+
 /** UTF-8 size of a JSON text, the unit every size limit in this file is stated in. */
 export function functionJsonBytes(text: string): number {
   return new TextEncoder().encode(text).length;
