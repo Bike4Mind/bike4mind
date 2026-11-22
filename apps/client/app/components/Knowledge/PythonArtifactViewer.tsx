@@ -48,6 +48,10 @@ import {
   describePythonNetworkAccess,
   usePythonArtifactDataOrigins,
 } from '@client/app/hooks/usePythonArtifactDataOrigins';
+import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
+import { hasFunctionEntryPoint } from '@client/app/utils/pythonFunctionEntry';
+import FunctionIcon from '@mui/icons-material/Functions';
+import PythonFunctionPanel from './PythonFunctionPanel';
 
 interface PythonArtifactViewerProps {
   artifact: PythonArtifact;
@@ -75,8 +79,9 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
     isReady,
   } = usePyodide();
   const dataOrigins = usePythonArtifactDataOrigins();
+  const callableFunctionsEnabled = useCallableFunctionsEnabled();
 
-  // Tab state: 0 = Output, 1 = Code
+  // Tab state: 0 = Output, 1 = Code, 2 = Function
   const [activeTab, setActiveTab] = useState<number>(0);
 
   // Execution state
@@ -141,6 +146,10 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
   const detectedPackages = useMemo(() => {
     return detectPackages(editableCode);
   }, [editableCode, detectPackages]);
+
+  const showFunctionTab = callableFunctionsEnabled && hasFunctionEntryPoint(editableCode);
+  // Adjusted during render, so the viewer never paints an empty tab panel.
+  if (!showFunctionTab && activeTab === 2) setActiveTab(0);
 
   const handleRun = useCallback(async () => {
     setExecutionError(null);
@@ -440,6 +449,14 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
                   <Typography level="body-sm">Code</Typography>
                 </Stack>
               </Tab>
+              {showFunctionTab && (
+                <Tab value={2} sx={{ py: 0.5, minHeight: 'auto' }} data-testid="python-artifact-function-tab">
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <FunctionIcon sx={{ fontSize: 18 }} />
+                    <Typography level="body-sm">Function</Typography>
+                  </Stack>
+                </Tab>
+              )}
             </TabList>
 
             <Stack direction="row" spacing={1} alignItems="center">
@@ -612,6 +629,16 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
               )}
             </Box>
           </TabPanel>
+
+          {showFunctionTab && (
+            <TabPanel value={2} sx={{ p: 0, position: 'relative' }}>
+              <PythonFunctionPanel
+                code={editableCode}
+                packages={detectedPackages}
+                disabled={isPyodideLoading || isExecuting || !isReady()}
+              />
+            </TabPanel>
+          )}
         </Tabs>
       </Box>
 

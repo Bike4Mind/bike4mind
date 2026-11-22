@@ -289,6 +289,128 @@ _result
     }
   }
 
+  /**
+   * Load the code as a module named `b4m_function`, so an `if __name__ == '__main__':` block does
+   * not run, read its FUNCTION dict and, when params are given, call `run(**params)`. The code and
+   * params reach Python through globals, never by interpolation, and only strings come back.
+   */
+  async function callFunction(code: string, packages: string[], paramsJson: string | null): Promise<void> {
+    const startTime = performance.now();
+    const fail = (error: string): void =>
+      post({
+        type: 'call-result',
+        result: { success: false, output: '', error, executionTime: performance.now() - startTime },
+      });
+    if (!pyodide) {
+      fail('Pyodide not initialized');
+      return;
+    }
+
+    cancelled = false;
+    let globalsSet = false;
+    try {
+      post({
+        type: 'executing',
+        message: packages.length > 0 ? `Loading packages: ${packages.join(', ')}` : 'Preparing...',
+      });
+      await loadPackages(code, packages);
+      if (cancelled) {
+        fail('Execution cancelled');
+        return;
+      }
+      post({ type: 'executing', message: 'Running...' });
+
+      pyodide.globals.set('_fn_code', code);
+      pyodide.globals.set('_fn_params_json', paramsJson);
+      globalsSet = true;
+
+      // Plain compile() refuses top-level await, so `async def run` is refused by name instead.
+      const wrapper = `
+import sys
+import json
+import inspect
+import traceback
+from io import StringIO
+
+class _FunctionCallError(Exception):
+    pass
+
+def _b4m_call_function(code, params_json):
+    stdout = StringIO()
+    stderr = StringIO()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = stdout
+    sys.stderr = stderr
+    contract_json = None
+    value_json = None
+    error = None
+    try:
+        namespace = {'__name__': 'b4m_function'}
+        exec(compile(code, 'function.py', 'exec'), namespace)
+        contract = namespace.get('FUNCTION')
+        if contract is None:
+            raise _FunctionCallError('FUNCTION is not defined')
+        try:
+            contract_json = json.dumps(contract, allow_nan=False)
+        except (TypeError, ValueError) as e:
+            raise _FunctionCallError('FUNCTION is not valid JSON: ' + str(e))
+        if params_json is not None:
+            run = namespace.get('run')
+            if not callable(run):
+                raise _FunctionCallError('run is not defined as a function')
+            if inspect.iscoroutinefunction(run):
+                raise _FunctionCallError('run must be defined with def, not async def')
+            value = run(**json.loads(params_json))
+            if not isinstance(value, dict):
+                raise _FunctionCallError('run must return a dict')
+            try:
+                value_json = json.dumps(value, allow_nan=False)
+            except (TypeError, ValueError) as e:
+                raise _FunctionCallError('run returned a value that is not valid JSON: ' + str(e))
+    except _FunctionCallError as e:
+        error = str(e)
+    except Exception:
+        error = traceback.format_exc()
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+    return {
+        'contract_json': contract_json,
+        'value_json': value_json,
+        'stdout': stdout.getvalue(),
+        'stderr': stderr.getvalue(),
+        'error': error,
+    }
+
+_b4m_call_function(_fn_code, _fn_params_json)
+`;
+
+      const result = await pyodide.runPythonAsync(wrapper);
+      const resultObj = result.toJs({ dict_converter: Object.fromEntries });
+      const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+      const error = text(resultObj.error);
+      post({
+        type: 'call-result',
+        result: {
+          success: !error,
+          contractJson: text(resultObj.contract_json),
+          valueJson: text(resultObj.value_json),
+          output: (text(resultObj.stdout) || '') + (text(resultObj.stderr) || ''),
+          error,
+          executionTime: performance.now() - startTime,
+        },
+      });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (pyodide && globalsSet) {
+        pyodide.globals.delete('_fn_code');
+        pyodide.globals.delete('_fn_params_json');
+      }
+    }
+  }
+
   self.onmessage = async (event: MessageEvent<PyodideWorkerMessage>): Promise<void> => {
     const msg = event.data;
 
@@ -304,6 +426,10 @@ _result
 
       case 'execute':
         await executePython(msg.code, msg.packages);
+        break;
+
+      case 'call':
+        await callFunction(msg.code, msg.packages, msg.paramsJson);
         break;
 
       case 'cancel':
