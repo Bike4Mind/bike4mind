@@ -197,17 +197,25 @@ function checkNumberField(record: Record<string, unknown>, path: string, problem
     const bound = own(record, key);
     if (bound !== undefined && !isFiniteNumber(bound)) report(problems, join(path, key), 'must be a finite number');
   }
+  const whole = record.type === 'integer';
   const finite = (value: unknown, exclusive: boolean) => (isFiniteNumber(value) ? [{ value, exclusive }] : []);
   const lowers = [...finite(own(record, 'minimum'), false), ...finite(own(record, 'exclusiveMinimum'), true)];
   const uppers = [...finite(own(record, 'maximum'), false), ...finite(own(record, 'exclusiveMaximum'), true)];
+  // An integer field's bounds are rounded inward to the whole numbers they allow.
+  const lowestWhole = ({ value, exclusive }: { value: number; exclusive: boolean }) =>
+    exclusive ? Math.floor(value) + 1 : Math.ceil(value);
+  const highestWhole = ({ value, exclusive }: { value: number; exclusive: boolean }) =>
+    exclusive ? Math.ceil(value) - 1 : Math.floor(value);
   const empty = lowers.some(lower =>
-    uppers.some(upper => (lower.exclusive || upper.exclusive ? lower.value >= upper.value : lower.value > upper.value))
+    uppers.some(upper => {
+      if (whole) return lowestWhole(lower) > highestWhole(upper);
+      return lower.exclusive || upper.exclusive ? lower.value >= upper.value : lower.value > upper.value;
+    })
   );
   if (empty) report(problems, join(path, 'minimum'), 'the bounds leave no allowed value');
 
   const values = own(record, 'enum');
   if (values !== undefined) {
-    const whole = record.type === 'integer';
     if (
       !Array.isArray(values) ||
       values.length === 0 ||

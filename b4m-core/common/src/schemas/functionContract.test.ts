@@ -231,6 +231,28 @@ describe('parseFunctionContract', () => {
     ]);
   });
 
+  it.each([[{ exclusiveMinimum: 1, exclusiveMaximum: 2 }], [{ minimum: 1.2, maximum: 1.8 }]])(
+    'refuses integer bounds that leave no whole number: %j',
+    bounds => {
+      const contract = sampleContract();
+      inputProperties(contract).span = { type: 'integer', unit: 'm', ...bounds };
+      expect(problemsOf(contract)).toEqual([
+        { path: 'inputs.properties.span.minimum', message: 'the bounds leave no allowed value' },
+      ]);
+    }
+  );
+
+  it.each([
+    [{ exclusiveMinimum: 0.5, exclusiveMaximum: 1.5 }, 1],
+    [{ minimum: 1, exclusiveMaximum: 1.5 }, 1],
+    [{ minimum: 4, exclusiveMaximum: 4.5 }, 4],
+  ])('accepts integer bounds that allow a whole number: %j', (bounds, span) => {
+    const contract = sampleContract();
+    inputProperties(contract).span = { type: 'integer', unit: 'm', ...bounds };
+    (contract.tests[0] as { input: Record<string, unknown> }).input.span = span;
+    expect(problemsOf(contract)).toEqual([]);
+  });
+
   it('accepts inclusive bounds that allow a single value', () => {
     const contract = sampleContract();
     inputProperties(contract).span = { type: 'number', unit: 'm', minimum: 4, maximum: 4 };
@@ -410,6 +432,19 @@ describe('problem cap', () => {
     expect(problems.length).toBeLessThanOrEqual(51);
     expect(problems.at(-1)).toEqual(CLOSING);
     for (const problem of problems) expect(problem.message.length).toBeLessThan(300);
+  });
+
+  it('stops reading a long list once the problems are full', () => {
+    let reads = 0;
+    const xs = new Proxy(new Array<number>(10_000).fill(-1), {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const problems = validateFunctionValue(listOf({ type: 'number', unit: 'm', minimum: 0 }), { xs });
+    expect(problems.at(-1)).toEqual(CLOSING);
+    expect(reads).toBeLessThan(60);
   });
 
   it('still lists a short enum in full', () => {
