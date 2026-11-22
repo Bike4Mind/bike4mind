@@ -106,6 +106,7 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 ```
 e2e/
 ├── core.setup.ts              # Creates core test users (admin/manager) and seeds auth state
+├── admin-session.setup.ts     # Signs the admin in again right before the admin specs (fresh 30m access token)
 ├── global-setup.ts            # Pre-run cleanup of stale test data
 ├── global-teardown.ts         # Post-run cleanup
 ├── fixtures.ts                # Custom fixtures (page objects, helpers)

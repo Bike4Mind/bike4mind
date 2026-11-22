@@ -250,6 +250,13 @@ export default defineConfig({
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Re-authenticates the admin right before the admin specs, which start late enough on a full
+    // run to outlive the access token from setup-core (see e2e/admin-session.setup.ts).
+    {
+      name: 'setup-admin-session',
+      testMatch: /(?:^|\/)admin-session\.setup\.ts$/,
+      dependencies: ['setup-core', 'unauthenticated'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -257,7 +264,7 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         storageState: adminAuthFile,
       },
-      dependencies: ['setup-core', 'unauthenticated'],
+      dependencies: ['setup-core', 'unauthenticated', 'setup-admin-session'],
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)signup-grants\.spec\.ts$/,
