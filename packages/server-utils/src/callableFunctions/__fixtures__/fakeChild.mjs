@@ -1,14 +1,15 @@
-// A stand-in for apps/workers/src/callableFunctions/child.ts. The request's `code` is JSON naming what to do.
+// A stand-in for apps/workers/src/callableFunctions/child.ts. The request's `code` is JSON naming what to do:
+// `startDelayMs` delays the run-start line, `skipStart` leaves it out, then `mode` runs.
 import { createInterface } from 'node:readline';
 
 const stayAlive = () => setInterval(() => {}, 1000);
+const write = message => process.stdout.write(`${JSON.stringify(message)}\n`);
+const runStarted = () => write({ started: true });
 
-createInterface({ input: process.stdin }).once('line', line => {
-  const request = JSON.parse(line);
-  const spec = JSON.parse(request.code);
+function runMode(request, spec) {
   switch (spec.mode) {
     case 'reply':
-      process.stdout.write(`${JSON.stringify(spec.reply)}\n`);
+      write(spec.reply);
       stayAlive();
       break;
     case 'report': {
@@ -21,18 +22,24 @@ createInterface({ input: process.stdin }).once('line', line => {
         glueResultCap: Number(/^_MAX_RESULT_BYTES = (\d+)$/m.exec(request.glue)?.[1]),
         pyodideVersion: request.pyodideVersion,
       };
-      process.stdout.write(`${JSON.stringify({ ok: true, initMs: 1, printed: JSON.stringify(report) })}\n`);
+      write({ ok: true, initMs: 1, printed: JSON.stringify(report) });
       stayAlive();
       break;
     }
     case 'series': {
       const valueJson = `{"values": [${new Array(spec.count).fill('0.5').join(', ')}]}`;
-      process.stdout.write(
-        `${JSON.stringify({ ok: true, initMs: 1, printed: '', contractJson: spec.contractJson, valueJson })}\n`
-      );
+      write({ ok: true, initMs: 1, printed: '', contractJson: spec.contractJson, valueJson });
       stayAlive();
       break;
     }
+    case 'sleep':
+      setTimeout(() => write(spec.reply), spec.ms);
+      stayAlive();
+      break;
+    case 'restart':
+      setTimeout(runStarted, spec.afterMs);
+      stayAlive();
+      break;
     case 'memory': {
       const held = [];
       setInterval(() => held.push(Buffer.alloc(32 * 1024 * 1024, 1)), 20);
@@ -48,4 +55,13 @@ createInterface({ input: process.stdin }).once('line', line => {
     default:
       stayAlive();
   }
+}
+
+createInterface({ input: process.stdin }).once('line', line => {
+  const request = JSON.parse(line);
+  const spec = JSON.parse(request.code);
+  setTimeout(() => {
+    if (!spec.skipStart) runStarted();
+    runMode(request, spec);
+  }, spec.startDelayMs ?? 0);
 });

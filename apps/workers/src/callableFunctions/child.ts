@@ -6,6 +6,7 @@ import type { PyodideInterface } from 'pyodide';
 import type {
   CallableFunctionChildReply,
   CallableFunctionChildRequest,
+  CallableFunctionChildRunStarted,
 } from '@bike4mind/server-utils/callableFunctions/runtimeParent';
 
 // One Python function run, spawned by runtimeParent.ts in @bike4mind/server-utils. Node runs this file
@@ -61,8 +62,8 @@ interface PythonResult {
   destroy: () => void;
 }
 
-const send = (reply: CallableFunctionChildReply): Promise<void> =>
-  new Promise(resolve => proc.stdout.write(`${JSON.stringify(reply)}\n`, () => resolve()));
+const send = (line: CallableFunctionChildReply | CallableFunctionChildRunStarted): Promise<void> =>
+  new Promise(resolve => proc.stdout.write(`${JSON.stringify(line)}\n`, () => resolve()));
 
 function removeAll(target: object, names: string[]): void {
   for (const name of names) Reflect.deleteProperty(target, name);
@@ -225,6 +226,8 @@ async function main(): Promise<void> {
       lockDown(pyodide);
       locked = true;
     }
+    // The parent's time limit starts here; no guest code has run yet.
+    await send({ started: true });
     await send(await runRequest(pyodide, request, initMs));
     if (!reuse) break;
   }

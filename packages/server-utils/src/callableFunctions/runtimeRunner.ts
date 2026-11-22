@@ -40,6 +40,7 @@ export function parseCallableFunctionRunResult(raw: unknown): CallableFunctionRu
   if (typeof raw.errorClass === 'string') result.errorClass = raw.errorClass;
   if (typeof raw.printed === 'string') result.printed = raw.printed;
   if (typeof raw.initMs === 'number') result.initMs = raw.initMs;
+  if (typeof raw.startMs === 'number') result.startMs = raw.startMs;
   if (isObject(raw.value)) result.value = raw.value;
   if (raw.contract !== undefined) {
     const parsed = parseFunctionContract(raw.contract);

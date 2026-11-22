@@ -3,8 +3,12 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { FUNCTION_RESULT_TOO_LARGE_MESSAGE, PYODIDE_VERSION } from '@bike4mind/common';
 import {
+  CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
+  CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_MAX_REPLY_BYTES,
+  CALLABLE_FUNCTION_PARENT_MARGIN_MS,
+  CALLABLE_FUNCTION_START_BUDGET_MS,
   classifyGuestError,
   liveCallableFunctionChildren,
   runCallableFunctionInChild,
@@ -51,8 +55,13 @@ const reply = (fields: Record<string, unknown>) => ({
   reply: { ok: true, initMs: 5, printed: '', contractJson: CONTRACT_JSON, ...fields },
 });
 
-const run = (payload: unknown, limits: Partial<CallableFunctionLimits> = {}) =>
-  runCallableFunctionInChild(payload, { childPath: CHILD, pyodideDir: FIXTURES, limits });
+const run = (payload: unknown, limits: Partial<CallableFunctionLimits> = {}, startBudgetMs?: number) =>
+  runCallableFunctionInChild(payload, { childPath: CHILD, pyodideDir: FIXTURES, limits, startBudgetMs });
+
+const timed = (spec: object, timeoutMs: number) => ({ ...call(spec), limits: { timeoutMs } });
+
+/** Time from the run-start line to the end of the run. */
+const runMs = (result: { durationMs: number; startMs?: number }) => result.durationMs - (result.startMs ?? NaN);
 
 const MIB = 1024 * 1024;
 const SERIES_CONTRACT = {
@@ -226,12 +235,59 @@ describe('runCallableFunctionInChild', () => {
   });
 
   it('kills the child at the timeout and leaves no process behind', async () => {
-    const result = await run(call({ mode: 'hang' }), { timeoutMs: 800 });
+    const result = await run(timed({ mode: 'hang' }, 800));
     expect(result.outcome).toBe('timeout');
-    expect(result.durationMs).toBeGreaterThanOrEqual(800);
+    expect(runMs(result)).toBeGreaterThanOrEqual(800);
     expect(processGone(lastChild().pid)).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
     expect(sweepCallableFunctionChildren()).toBe(0);
+  });
+
+  it('times a guest that never returns from its run start, so a slow start does not consume the limit', async () => {
+    const result = await run(timed({ mode: 'hang', startDelayMs: 1500 }, 800));
+    expect(result.outcome).toBe('timeout');
+    expect(result.startMs).toBeGreaterThanOrEqual(1500);
+    expect(runMs(result)).toBeGreaterThanOrEqual(800);
+    expect(runMs(result)).toBeLessThan(1400);
+    const slowStart = await run(timed({ ...reply({ valueJson: '{"deflection": 1}' }), startDelayMs: 1200 }, 1000));
+    expect(slowStart).toMatchObject({ outcome: 'ok', value: { deflection: 1 } });
+    expect(slowStart.startMs).toBeGreaterThanOrEqual(1200);
+  });
+
+  it('ends a 5 s run at a 2 s per-call limit', async () => {
+    const result = await run(timed({ mode: 'sleep', ms: 5000, reply: reply({}).reply }, 2000));
+    expect(result.outcome).toBe('timeout');
+    expect(runMs(result)).toBeGreaterThanOrEqual(2000);
+    expect(runMs(result)).toBeLessThan(2600);
+  });
+
+  it('never restarts the time limit for a repeated run-start line', async () => {
+    const result = await run(timed({ mode: 'restart', afterMs: 600 }, 1000));
+    expect(result.outcome).toBe('timeout');
+    expect(runMs(result)).toBeLessThan(1500);
+  });
+
+  it('ends a start past the start budget with its own reason, never timeout', async () => {
+    for (const spec of [
+      { mode: 'hang', skipStart: true },
+      { mode: 'hang', startDelayMs: 1500 },
+    ]) {
+      const result = await run(timed(spec, 60_000), {}, 500);
+      expect(result).toMatchObject({ outcome: 'error', reason: 'start_timeout' });
+      expect(result.startMs).toBeUndefined();
+      expect(result.durationMs).toBeLessThan(1400);
+      expect(processGone(lastChild().pid)).toBe(true);
+    }
+  });
+
+  it('defaults the time limit to 30 s, refuses one above the 900 s ceiling, and sizes the Lambda from both budgets', async () => {
+    expect(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS).toBe(30_000);
+    expect(CALLABLE_FUNCTION_LIMITS.timeoutMs).toBe(900_000);
+    expect(await run(timed(reply({}), 900_001))).toMatchObject({ outcome: 'refused', reason: 'limit_above_ceiling' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS * 1000).toBeGreaterThanOrEqual(
+      CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS
+    );
   });
 
   it('kills a child over the memory cap', async () => {
@@ -244,11 +300,21 @@ describe('runCallableFunctionInChild', () => {
     expect(await run(call({ mode: 'exit' }))).toMatchObject({ outcome: 'error', reason: 'no_reply' });
   });
 
-  it('refuses when the child reports a different Pyodide version or cannot start', async () => {
-    expect(await run(call({ mode: 'reply', reply: { ok: false, failure: 'version' } }))).toMatchObject({
-      outcome: 'refused',
-      reason: 'pyodide_version',
+  it('takes a start failure only before the run starts, and a reply only after', async () => {
+    const versionFailure = { ok: false, failure: 'version' };
+    expect(await run(call({ mode: 'reply', skipStart: true, reply: { ok: true, printed: '' } }))).toMatchObject({
+      outcome: 'error',
+      reason: 'no_reply',
     });
+    expect(await run(call({ mode: 'reply', reply: versionFailure }))).toMatchObject({
+      outcome: 'error',
+      reason: 'no_reply',
+    });
+  });
+
+  it('refuses when the child reports a different Pyodide version or cannot start', async () => {
+    const versionFailure = { mode: 'reply', skipStart: true, reply: { ok: false, failure: 'version' } };
+    expect(await run(call(versionFailure))).toMatchObject({ outcome: 'refused', reason: 'pyodide_version' });
     const missing = await runCallableFunctionInChild(call(reply({})), {
       childPath: path.join(FIXTURES, 'absent.mjs'),
       pyodideDir: FIXTURES,

@@ -60,7 +60,7 @@ const request = (op: 'read_contract' | 'call') =>
     pyodideVersion: PYODIDE_VERSION,
   })}\n`;
 
-/** Spawn to the first reply, for a fresh child with the production flags. */
+/** Spawn to the run-start line, for a fresh child with the production flags. */
 async function coldStart(): Promise<number> {
   const started = performance.now();
   const args = callableFunctionChildArgs(CHILD, PYODIDE_DIR, CALLABLE_FUNCTION_LIMITS.memoryMb);
@@ -80,7 +80,9 @@ async function reusedInterpreter(): Promise<number[]> {
   const args = callableFunctionChildArgs(CHILD, PYODIDE_DIR, CALLABLE_FUNCTION_LIMITS.memoryMb);
   const child = spawn(process.execPath, [...args, '--reuse'], { env: {}, stdio: ['pipe', 'pipe', 'ignore'] });
   const waiting: Array<() => void> = [];
-  createInterface({ input: child.stdout }).on('line', () => waiting.shift()?.());
+  createInterface({ input: child.stdout }).on('line', line => {
+    if ((JSON.parse(line) as { started?: boolean }).started !== true) waiting.shift()?.();
+  });
   const call = async (): Promise<number> => {
     const started = performance.now();
     await new Promise<void>(resolve => {

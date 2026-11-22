@@ -18,10 +18,17 @@ const encode = (body: unknown) => new TextEncoder().encode(JSON.stringify(body))
 describe('createLambdaCallableFunctionRunner', () => {
   it('invokes the configured function RequestResponse with the payload and returns the parsed result', async () => {
     const send = vi.fn(async (_command: InvokeCommand) => ({
-      Payload: encode({ outcome: 'error', errorClass: 'ValueError', printed: 'x', durationMs: 12, extra: 'dropped' }),
+      Payload: encode({
+        outcome: 'error',
+        errorClass: 'ValueError',
+        printed: 'x',
+        durationMs: 12,
+        startMs: 7,
+        extra: 'dropped',
+      }),
     }));
     const result = await createLambdaCallableFunctionRunner('runtime-fn', send)(payload);
-    expect(result).toEqual({ outcome: 'error', errorClass: 'ValueError', printed: 'x', durationMs: 12 });
+    expect(result).toEqual({ outcome: 'error', errorClass: 'ValueError', printed: 'x', durationMs: 12, startMs: 7 });
     const input = send.mock.calls[0][0].input;
     expect(input.FunctionName).toBe('runtime-fn');
     expect(input.InvocationType).toBe('RequestResponse');

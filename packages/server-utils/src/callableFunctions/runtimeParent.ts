@@ -20,6 +20,7 @@ import {
  */
 
 export interface CallableFunctionLimits {
+  /** The guest's own run (the contract read and `run`), timed from the child's run-start line. */
   timeoutMs: number;
   inputBytes: number;
   outputBytes: number;
@@ -32,11 +33,11 @@ export interface CallableFunctionLimits {
 const MIB = 1024 * 1024;
 
 /**
- * The runtime's ceilings. A call may ask for lower `inputBytes` and `outputBytes` in its `limits`, never
- * higher; each surface's default (chat's 256 KB output, for one) is the dispatcher's to apply.
+ * The runtime's ceilings. A call may ask for a lower `timeoutMs`, `inputBytes`, or `outputBytes` in its
+ * `limits`, never a higher one; each surface's default (chat's 256 KB output, for one) is the dispatcher's.
  */
 export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
-  timeoutMs: 30_000,
+  timeoutMs: 900_000,
   inputBytes: 5 * MIB,
   outputBytes: 5 * MIB,
   memoryMb: 1536,
@@ -44,7 +45,23 @@ export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
   printedChars: 100_000,
 };
 
-const CALL_LIMIT_KEYS = ['inputBytes', 'outputBytes'] as const;
+/** A call's time limit when it names none. */
+export const CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Spawn to run start: Pyodide's load and the package wheels, outside the call's time limit. */
+export const CALLABLE_FUNCTION_START_BUDGET_MS = 30_000;
+
+const EXIT_WAIT_MS = 5_000;
+
+/** The parent's own time around a run: the input checks and up to two kill waits. */
+export const CALLABLE_FUNCTION_PARENT_MARGIN_MS = 2 * EXIT_WAIT_MS + 5_000;
+
+/** The runtime Lambda's configured timeout, in seconds. */
+export const CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS = Math.ceil(
+  (CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS) / 1000
+);
+
+const CALL_LIMIT_KEYS = ['timeoutMs', 'inputBytes', 'outputBytes'] as const;
 type CallLimitKey = (typeof CALL_LIMIT_KEYS)[number];
 
 /** Limits one call asks for; each must be a positive whole number no higher than the runtime's ceiling. */
@@ -82,6 +99,7 @@ export const CALLABLE_FUNCTION_REASONS = [
   'result_not_json',
   'result_too_large',
   'limit_above_ceiling',
+  'start_timeout',
 ] as const;
 export type CallableFunctionReason = (typeof CALLABLE_FUNCTION_REASONS)[number];
 
@@ -106,6 +124,8 @@ export interface CallableFunctionRunResult {
   printed?: string;
   durationMs: number;
   initMs?: number;
+  /** Spawn to run start, outside the time limit. */
+  startMs?: number;
 }
 
 /** One request line on the child's stdin. */
@@ -130,11 +150,20 @@ export type CallableFunctionChildReply =
     }
   | { ok: false; failure: 'request' | 'load' | 'version' };
 
+/**
+ * The child's line just before guest code first runs, written by the child itself: the guest's stdout
+ * never reaches the pipe. The time limit starts when the first one arrives; a repeat never restarts it.
+ */
+export interface CallableFunctionChildRunStarted {
+  started: true;
+}
+
 export interface CallableFunctionChildOptions {
   childPath: string;
   pyodideDir: string;
   /** Lowers this host's ceilings (tests); a call's own `limits` are checked against the result. */
   limits?: Partial<CallableFunctionLimits>;
+  startBudgetMs?: number;
   nodePath?: string;
 }
 
@@ -146,7 +175,6 @@ export const CALLABLE_FUNCTION_MAX_REPLY_BYTES =
   6 * 3 * CALLABLE_FUNCTION_LIMITS.printedChars +
   REPLY_ENVELOPE_BYTES;
 const MEMORY_POLL_MS = 100;
-const EXIT_WAIT_MS = 5_000;
 
 /** The node flags every child runs under; the test-only child switches are never among them. */
 export function callableFunctionChildArgs(childPath: string, pyodideDir: string, memoryMb: number): string[] {
@@ -199,8 +227,9 @@ export function liveCallableFunctionChildren(): number[] {
 }
 
 interface ChildRun {
-  kind: 'reply' | 'timeout' | 'memory' | 'reply_too_large' | 'no_reply' | 'spawn_failed';
+  kind: 'reply' | 'timeout' | 'start_timeout' | 'memory' | 'reply_too_large' | 'no_reply' | 'spawn_failed';
   reply?: unknown;
+  startMs?: number;
 }
 
 async function residentMb(pid: number): Promise<number | null> {
@@ -249,26 +278,56 @@ async function runChild(
     if (child.exitCode !== null || child.signalCode !== null) resolve();
     else child.once('exit', () => resolve());
   });
-  let settle: (run: ChildRun) => void = () => {};
+  const spawnedAt = Date.now();
+  let startMs: number | undefined;
+  let done = false;
+  let resolveRun: (run: ChildRun) => void = () => {};
   const settled = new Promise<ChildRun>(resolve => {
-    settle = resolve;
+    resolveRun = resolve;
   });
+  const settle = (run: Omit<ChildRun, 'startMs'>) => {
+    done = true;
+    resolveRun({ ...run, startMs });
+  };
 
-  const chunks: Buffer[] = [];
+  const startBudgetMs = options.startBudgetMs ?? CALLABLE_FUNCTION_START_BUDGET_MS;
+  let timer = setTimeout(() => settle({ kind: 'start_timeout' }), startBudgetMs);
+  const onLine = (line: string) => {
+    let message: unknown;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return settle({ kind: 'no_reply' });
+    }
+    const runStarted = isObject(message) && message.started === true;
+    if (startMs === undefined) {
+      if (runStarted) {
+        startMs = Date.now() - spawnedAt;
+        clearTimeout(timer);
+        timer = setTimeout(() => settle({ kind: 'timeout' }), limits.timeoutMs);
+        return;
+      }
+      // Before the run starts, only a start failure can come back.
+      const failed = isObject(message) && message.ok === false;
+      return settle(failed ? { kind: 'reply', reply: message } : { kind: 'no_reply' });
+    }
+    if (runStarted) return;
+    settle(isObject(message) && message.ok === true ? { kind: 'reply', reply: message } : { kind: 'no_reply' });
+  };
+
+  let pending: Buffer[] = [];
   let replyBytes = 0;
   child.stdout.on('data', (chunk: Buffer) => {
+    if (done) return;
     replyBytes += chunk.length;
     if (replyBytes > CALLABLE_FUNCTION_MAX_REPLY_BYTES) return settle({ kind: 'reply_too_large' });
-    chunks.push(chunk);
-    if (chunk.includes(0x0a)) {
-      const text = Buffer.concat(chunks).toString('utf8');
-      const line = text.slice(0, text.indexOf('\n'));
-      try {
-        settle({ kind: 'reply', reply: JSON.parse(line) });
-      } catch {
-        settle({ kind: 'no_reply' });
-      }
+    let rest = chunk;
+    for (let newline = rest.indexOf(0x0a); newline >= 0 && !done; newline = rest.indexOf(0x0a)) {
+      onLine(Buffer.concat([...pending, rest.subarray(0, newline)]).toString('utf8'));
+      pending = [];
+      rest = rest.subarray(newline + 1);
     }
+    if (rest.length > 0) pending.push(rest);
   });
   // Drained and dropped: nothing the child writes to stderr leaves this function.
   child.stderr.resume();
@@ -277,7 +336,6 @@ async function runChild(
   // 'close' rather than 'exit': stdout can still hold the reply when the process has exited.
   child.once('close', () => settle({ kind: 'no_reply' }));
 
-  const timer = setTimeout(() => settle({ kind: 'timeout' }), limits.timeoutMs);
   const memoryTimer = setInterval(() => {
     void residentMb(pid).then(mb => {
       if (mb !== null && mb > limits.memoryMb) settle({ kind: 'memory' });
@@ -396,7 +454,7 @@ function callLimits(
   requested: unknown,
   ceilings: CallableFunctionLimits
 ): CallableFunctionLimits | CallableFunctionReason {
-  const limits = { ...ceilings };
+  const limits = { ...ceilings, timeoutMs: Math.min(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, ceilings.timeoutMs) };
   if (requested === undefined) return limits;
   if (!isObject(requested)) return 'payload_invalid';
   for (const [key, value] of Object.entries(requested)) {
@@ -415,8 +473,10 @@ export async function runCallableFunctionInChild(
   options: CallableFunctionChildOptions
 ): Promise<CallableFunctionRunResult> {
   const started = Date.now();
+  const child: { startMs?: number } = {};
   const finish = (result: Omit<CallableFunctionRunResult, 'durationMs'>): CallableFunctionRunResult => ({
     ...result,
+    ...(child.startMs === undefined ? {} : { startMs: child.startMs }),
     durationMs: Date.now() - started,
   });
   const refused = (reason: CallableFunctionReason) => finish({ outcome: 'refused', reason });
@@ -451,6 +511,9 @@ export async function runCallableFunctionInChild(
     options,
     limits
   );
+  child.startMs = run.startMs;
+  // Never `timeout`: a slow start is the runtime's, not the function's.
+  if (run.kind === 'start_timeout') return finish({ outcome: 'error', reason: 'start_timeout' });
   if (run.kind === 'timeout') return finish({ outcome: 'timeout' });
   if (run.kind === 'memory') return finish({ outcome: 'memory' });
   if (run.kind === 'reply_too_large') return finish({ outcome: 'output_too_large', reason: 'reply_too_large' });

@@ -330,7 +330,9 @@ function startUnisolatedChild() {
     stdio: ['pipe', 'pipe', 'ignore'],
   });
   const waiting: Array<(line: string) => void> = [];
-  createInterface({ input: child.stdout }).on('line', line => waiting.shift()?.(line));
+  createInterface({ input: child.stdout }).on('line', line => {
+    if ((JSON.parse(line) as { started?: boolean }).started !== true) waiting.shift()?.(line);
+  });
   const call = (code: string, arg: string) =>
     new Promise<Attempt>(resolve => {
       waiting.push(line => {
@@ -389,6 +391,9 @@ const pidGone = (pid: number | undefined): boolean => {
   }
 };
 
+/** Time from the run-start line to the end of the run. */
+const runMs = (result: { durationMs: number; startMs?: number }) => result.durationMs - (result.startMs ?? NaN);
+
 const spawnedPids = (): Array<number | undefined> =>
   vi.mocked(spawn).mock.results.map(result => (result.value as ChildProcess).pid);
 
@@ -426,13 +431,62 @@ describe('callable function runtime with real Pyodide', () => {
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
 
-  it('ends a guest that never returns as timeout and leaves no child', async () => {
+  it('ends a guest that never returns at its own limit, timed from its run start, and leaves no child', async () => {
     const code = probe('def attempt(arg):\n    while True:\n        pass');
-    const result = await runner({ op: 'call', code, contract: PROBE_CONTRACT, params: {} });
+    const result = await runner({
+      op: 'call',
+      code,
+      contract: PROBE_CONTRACT,
+      params: {},
+      limits: { timeoutMs: 2000 },
+    });
     expect(result.outcome).toBe('timeout');
-    expect(result.durationMs).toBeGreaterThanOrEqual(30_000);
+    expect(result.startMs).toBeGreaterThan(0);
+    expect(runMs(result)).toBeGreaterThanOrEqual(2000);
+    expect(runMs(result)).toBeLessThan(3000);
     expect(pidGone(spawnedPids().at(-1))).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
+  }, 120_000);
+
+  it('ends a 5 s sleep at a 2 s limit', async () => {
+    const code = probe('def attempt(arg):\n    import time\n    time.sleep(5)\n    return True, "slept"');
+    const result = await runner({
+      op: 'call',
+      code,
+      contract: PROBE_CONTRACT,
+      params: {},
+      limits: { timeoutMs: 2000 },
+    });
+    expect(result.outcome).toBe('timeout');
+    expect(runMs(result)).toBeGreaterThanOrEqual(2000);
+    expect(runMs(result)).toBeLessThan(3000);
+  }, 120_000);
+
+  it('keeps guest stdout off the pipe, so a forged run-start line or reply changes nothing', async () => {
+    const forged = `
+def attempt(arg):
+    import os
+    import sys
+    started = '{"started": true}\\n'
+    reply = '{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "valueJson": "{}"}\\n'
+    for line in (started, reply):
+        print(line, end="")
+        sys.__stdout__.write(line)
+        sys.__stdout__.flush()
+        os.write(1, line.encode())
+    while arg == "loop":
+        pass
+    return False, "returned"`;
+    const call = (arg: string, timeoutMs: number) =>
+      runner({ op: 'call', code: probe(forged), contract: PROBE_CONTRACT, params: { arg }, limits: { timeoutMs } });
+    const returned = await call('return', 30_000);
+    expect(returned).toMatchObject({ outcome: 'ok', value: { reached: false, detail: 'returned' } });
+    expect(returned.printed).toBe(
+      '{"started": true}\n{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "valueJson": "{}"}\n'
+    );
+    const looped = await call('loop', 2000);
+    expect(looped.outcome).toBe('timeout');
+    expect(runMs(looped)).toBeLessThan(3000);
   }, 120_000);
 
   it('takes a 4.9 MB input, returns a 4.9 MB output, and refuses a 5.1 MB output', async () => {
