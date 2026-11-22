@@ -7,7 +7,10 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { FUNCTION_CALL_GLUE_PY, PYODIDE_VERSION, type FunctionContract } from '@bike4mind/common';
 import { createInProcessCallableFunctionRunner } from '@bike4mind/server-utils/callableFunctions/runtimeRunner';
-import { liveCallableFunctionChildren } from '@bike4mind/server-utils/callableFunctions/runtimeParent';
+import {
+  liveCallableFunctionChildren,
+  sweepCallableFunctionChildren,
+} from '@bike4mind/server-utils/callableFunctions/runtimeParent';
 
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -563,7 +566,8 @@ def attempt(arg):
     );
   });
 
+  // A sweep, not the live set: a run that threw keeps its pid in the set after the group is gone.
   it('leaves no child once the hostile attempts end', () => {
-    expect(liveCallableFunctionChildren()).toEqual([]);
+    expect(sweepCallableFunctionChildren()).toBe(0);
   });
 });
