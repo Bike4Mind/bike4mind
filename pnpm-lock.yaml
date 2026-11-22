@@ -1188,6 +1188,9 @@ importers:
       playwright-core:
         specifier: 1.64.0
         version: 1.64.0
+      pyodide:
+        specifier: 0.25.1
+        version: 0.25.1
       sharp:
         specifier: ^0.35.5
         version: 0.35.5(@types/node@24.12.3)
@@ -7834,6 +7837,9 @@ packages:
   bare-url@2.4.3:
     resolution: {integrity: sha512-Kccpc7ACfXaxfeInfqKcZtW4pT5YBn1mesc4sCsun6sRwtbJ4h+sNOaksUpYEJUKfN65YWC6Bw2OJEFiKxq8nQ==}
 
+  base-64@1.0.0:
+    resolution: {integrity: sha512-kwDPIFCGx0NZHog36dj+tHiwP4QMzsZ3AgMViUBKI0+V5n4U0ufTCUMhnQ04diaRI8EX/QcPfql7zlhZ7j4zgg==}
+
   base32.js@0.0.1:
     resolution: {integrity: sha512-EGHIRiegFa62/SsA1J+Xs2tIzludPdzM064N9wjbiEgHnGnJ1V0WEpA4pEwCYT5nDvZk3ubf0shqaCS7k6xeUQ==}
 
@@ -12210,6 +12216,9 @@ packages:
     resolution: {integrity: sha512-BbubeCEyTuQjVMakvJQ/Sxbc93F2pwmbsxONT/ZRrwU7Ua38d8unYTwXpTVLAKJ4BDuH9IGztCjQcd/N/39Dvg==}
     engines: {node: '>=16.0.0'}
 
+  pyodide@0.25.1:
+    resolution: {integrity: sha512-y0nJ/fLA3bxD2iZRzvVTbP2O+wp4Ewm2wThfV4HF0BytQ6hsoqTJFLNY4usLOcCVBrK8TTWqFqrmsVPzHe4rsw==}
+
   qrcode@1.5.4:
     resolution: {integrity: sha512-1ca71Zgiu6ORjHqFBDpnSMTR2ReToX4l1Au1VFLyVeBTFavzQnv5JxMFr3ukHVKpSrSA2MCk0lNJSykjUfz7Zg==}
     engines: {node: '>=10.13.0'}
@@ -12386,7 +12395,7 @@ packages:
       react-dom: '>=16.6.0'
 
   react-use-websocket@https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684:
-    resolution: {gitHosted: true, integrity: sha512-coe6cEGS+ufx7gKtme40KQnbbue1ZM0S+AeL7tlIe4T7NqAXBBeY8EB+qatMSTn0Emsrt2N15xMzIKsiwy9pnw==, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
     version: 4.8.2
     peerDependencies:
       react: '>= 18.0.0'
@@ -20431,6 +20440,8 @@ snapshots:
     dependencies:
       bare-path: 3.0.0
 
+  base-64@1.0.0: {}
+
   base32.js@0.0.1: {}
 
   base64-arraybuffer@1.0.2:
@@ -25748,6 +25759,14 @@ snapshots:
       tslib: 2.8.1
 
   pvutils@1.2.0: {}
+
+  pyodide@0.25.1:
+    dependencies:
+      base-64: 1.0.0
+      ws: 8.21.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   qrcode@1.5.4:
     dependencies:
