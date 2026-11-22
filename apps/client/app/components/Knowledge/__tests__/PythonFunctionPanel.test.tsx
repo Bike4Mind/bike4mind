@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 
 const callFunction = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/usePyodide', () => ({ usePyodide: () => ({ callFunction }) }));
@@ -206,6 +207,101 @@ describe('PythonFunctionPanel', () => {
     const error = await screen.findByTestId('python-function-error');
     expect(error.textContent).toContain('The function raised an error:');
     expect(error.textContent).toContain('ZeroDivisionError: division by zero');
+  });
+
+  it('renders at most 50 problems and a closing line for a flooded contract', async () => {
+    const contract = sampleContract() as Record<string, unknown>;
+    contract.inputs = {
+      type: 'object',
+      additionalProperties: false,
+      properties: { xs: { type: 'array', items: { type: 'string', enum: ['steel', 'timber'] } } },
+    };
+    contract.tests = [{ name: 'flood', input: { xs: new Array(500).fill('') }, expected: {} }];
+    callFunction.mockResolvedValueOnce(described(contract));
+    renderPanel();
+
+    const problems = await screen.findByTestId('python-function-problems', {}, { timeout: 2000 });
+    const rows = problems.querySelectorAll('li');
+    expect(rows.length).toBeLessThanOrEqual(51);
+    expect(rows[rows.length - 1].textContent).toBe('more problems were found; the first 50 are listed');
+  });
+
+  it('prefills defaults for fields named after inherited object keys and passes them to run', async () => {
+    const contract = JSON.parse(
+      JSON.stringify({
+        ...sampleContract(),
+        inputs: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['constructor'],
+          properties: {
+            constructor: { type: 'number', unit: 'm', default: 6 },
+            toString: { type: 'boolean', default: true },
+            proto: { type: 'number', unit: 'm', default: 5 },
+          },
+        },
+        tests: [],
+      }).replace('"proto"', '"__proto__"')
+    );
+    callFunction.mockResolvedValueOnce(described(contract)).mockResolvedValueOnce({
+      success: true,
+      value: { deflection: 1 },
+      output: '',
+      executionTime: 1,
+    });
+    renderPanel();
+
+    const field = (await screen.findByTestId(
+      'python-function-input-constructor',
+      {},
+      { timeout: 2000 }
+    )) as HTMLInputElement;
+    expect(field.value).toBe('6');
+    expect((screen.getByTestId('python-function-input-toString') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('python-function-input-__proto__') as HTMLInputElement).value).toBe('5');
+
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+    await screen.findByTestId('python-function-result');
+    const params = callFunction.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(Object.getOwnPropertyDescriptor(params, 'constructor')?.value).toBe(6);
+    expect(Object.getOwnPropertyDescriptor(params, 'toString')?.value).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(params, '__proto__')?.value).toBe(5);
+  });
+
+  it('keeps reading, with no error shown, when a run holds the sandbox during the read', async () => {
+    callFunction.mockRejectedValueOnce(new Error(PYTHON_SCRIPT_BUSY)).mockResolvedValueOnce(described());
+    const { rerender } = renderPanel();
+
+    await waitFor(() => expect(callFunction).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await act(async () => {});
+    expect(screen.getByTestId('python-function-status').textContent).toBe('Reading the function contract');
+    expect(screen.queryByTestId('python-function-error')).toBeNull();
+
+    rerender(true);
+    rerender(false);
+    await screen.findByTestId('python-function-contract-inputs', {}, { timeout: 2000 });
+    expect(callFunction).toHaveBeenCalledTimes(2);
+  });
+
+  it('checks returned values against the contract it displayed, not one the call returns', async () => {
+    const loose = sampleContract();
+    (loose.outputs.properties as Record<string, unknown>).deflection = { type: 'string' };
+    callFunction.mockResolvedValueOnce(described()).mockResolvedValueOnce({
+      success: true,
+      contract: loose,
+      value: { deflection: 'big' },
+      output: '',
+      executionTime: 3,
+    });
+    renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+
+    fillSampleInputs();
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+
+    const problems = await screen.findByTestId('python-function-problems');
+    expect(problems.textContent).toContain('deflection: must be a number');
+    expect(screen.queryByTestId('python-function-result')).toBeNull();
   });
 
   it('disables every control while disabled', async () => {

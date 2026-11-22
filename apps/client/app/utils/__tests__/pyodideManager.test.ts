@@ -623,12 +623,48 @@ describe('function calls', () => {
     await expect(notText).resolves.toMatchObject({ success: false, error: FUNCTION_RESULT_UNREADABLE });
   });
 
+  it('refuses an oversized contract before parsing it', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code');
+    await Promise.resolve();
+    const parse = vi.spyOn(JSON, 'parse');
+
+    const oversized = `{"description": "${'x'.repeat(32 * 1024)}"}`;
+    fromSandbox(callResult({ contractJson: oversized }));
+
+    const result = await call;
+    expect(result).toMatchObject({ success: false, error: 'The function contract is larger than 32 KB.' });
+    expect(result.contract).toBeUndefined();
+    expect(parse).not.toHaveBeenCalledWith(oversized);
+    parse.mockRestore();
+  });
+
   it('caps printed output', async () => {
     const { pyodideManager, fromSandbox } = await readySandbox();
     const call = pyodideManager.callFunction('code');
     await Promise.resolve();
     fromSandbox(callResult({ output: 'y'.repeat(150_000) }));
     expect((await call).output).toHaveLength(100_000);
+  });
+
+  it('caps the error text', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code');
+    await Promise.resolve();
+    fromSandbox(callResult({ success: false, error: 'e'.repeat(150_000) }));
+    expect((await call).error).toHaveLength(100_000);
+  });
+
+  it('leaves an execute running when a call-result arrives with no call pending', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const run = pyodideManager.execute('print(1)');
+    void run.catch(() => {});
+    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true));
+
+    fromSandbox(callResult({ valueJson: '{"forged": 1}' }));
+
+    expect(pyodideManager.getState().isExecuting).toBe(true);
+    pyodideManager.interrupt();
   });
 
   it('ignores a call-result from a window other than the sandbox frame', async () => {

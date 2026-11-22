@@ -32,7 +32,11 @@ vi.mock('@bike4mind/services', () => ({
       expect(key).toBe('EnableCallableFunctions');
       state.scopes.push(scope);
       state.options.push(options);
-      if (state.readError) throw state.readError;
+      // Like the real resolver: a read failure throws only when asked to, and otherwise falls back.
+      if (state.readError) {
+        if ((options as { readFailureMode?: string } | undefined)?.readFailureMode === 'throw') throw state.readError;
+        return { value: state.platformValue, source: 'platform' };
+      }
       const override = scope.organizationId ? state.orgOverrides[scope.organizationId] : undefined;
       return { value: override ?? state.platformValue, source: override === undefined ? 'platform' : 'organization' };
     }),
@@ -96,6 +100,8 @@ describe('resolveCallableFunctionsEnabled', () => {
 
   it('rejects when the setting cannot be read', async () => {
     state.orgIds = ['org-a'];
+    // The fallback would answer with this value, turning a failed read into "on".
+    state.platformValue = true;
     state.readError = new Error('overlay unavailable');
     await expect(resolveCallableFunctionsEnabled(user)).rejects.toThrow('overlay unavailable');
   });

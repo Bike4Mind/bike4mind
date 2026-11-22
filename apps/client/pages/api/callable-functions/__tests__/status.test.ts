@@ -8,9 +8,10 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-const { mockResolve, perUserBuckets } = vi.hoisted(() => ({
+const { mockResolve, perUserBuckets, limiter } = vi.hoisted(() => ({
   mockResolve: vi.fn(),
   perUserBuckets: [] as string[],
+  limiter: { limited: false },
 }));
 
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
@@ -19,7 +20,8 @@ vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
 vi.mock('@server/middlewares/perUserRateLimit', () => ({
   perUserRateLimit: (bucket: string) => {
     perUserBuckets.push(bucket);
-    return (_req: unknown, _res: unknown, next: () => void) => next();
+    return (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void) =>
+      limiter.limited ? res.status(429).json({ error: 'Too many requests' }) : next();
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
@@ -70,6 +72,7 @@ describe('GET /api/callable-functions/status', () => {
   beforeEach(() => {
     mockResolve.mockReset();
     mockResolve.mockResolvedValue(false);
+    limiter.limited = false;
   });
 
   it('answers 401 without a session and never reads the setting', async () => {
@@ -97,6 +100,15 @@ describe('GET /api/callable-functions/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ enabled: true });
+  });
+
+  it('runs the per-user limiter before reading the setting', async () => {
+    limiter.limited = true;
+    const { res, call } = fire('live-jwt');
+    await call();
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(mockResolve).not.toHaveBeenCalled();
   });
 
   it('answers 500 when the setting cannot be read', async () => {

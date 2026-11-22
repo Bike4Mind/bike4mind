@@ -4,6 +4,7 @@ import path from 'path';
 import { pyodideSandboxWorkerBody } from './sandboxWorkerBody';
 import type { PyodideWorkerMessage, PyodideWorkerResponse } from './types';
 import { DEFAULT_PYODIDE_BASE_URL } from '@client/app/utils/pyodideDistribution';
+import { FUNCTION_CONTRACT_GLOBAL, FUNCTION_CONTRACT_LIMITS, FUNCTION_ENTRY_POINT } from '@bike4mind/common';
 
 /**
  * The worker body is shipped by serializing it, so its correctness depends on properties the
@@ -49,6 +50,37 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     expect(source).toContain("namespace = {'__name__': 'b4m_function'}");
     expect(source).toContain("exec(compile(code, 'function.py', 'exec'), namespace)");
     expect(source.match(/allow_nan=False/g)).toHaveLength(2);
+  });
+
+  // The wrapper is Python text inside a serialized function, so it cannot import the shared names or limits.
+  it('reads the contract and entry point under the shared names', () => {
+    expect(source).toContain(`namespace.get('${FUNCTION_CONTRACT_GLOBAL}')`);
+    expect(source).toContain(`_FunctionCallError('${FUNCTION_CONTRACT_GLOBAL} is not defined')`);
+    expect(source).toContain(`namespace.get('${FUNCTION_ENTRY_POINT}')`);
+  });
+
+  it('refuses an async run by name', () => {
+    expect(source).toContain('if inspect.iscoroutinefunction(run):');
+    expect(source).toContain("_FunctionCallError('run must be defined with def, not async def')");
+  });
+
+  it('caps printed output and the error text before posting them', () => {
+    expect(source).toContain('_MAX_OUTPUT_CHARS = 100000');
+    expect(source).toContain("'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS]");
+    expect(source).toContain("'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS]");
+    expect(source).toContain("'error': None if error is None else error[:_MAX_OUTPUT_CHARS]");
+  });
+
+  it('refuses an oversized contract before posting it', () => {
+    expect(source).toContain(`_MAX_CONTRACT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxContractBytes}`);
+    expect(source).toContain('if len(contract_text) > _MAX_CONTRACT_BYTES:');
+    expect(source).toContain("_FunctionCallError('The function contract is larger than 32 KB.')");
+  });
+
+  it('refuses an oversized result before posting it', () => {
+    expect(source).toContain(`_MAX_RESULT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxResultBytes}`);
+    expect(source).toContain('if len(value_text) > _MAX_RESULT_BYTES:');
+    expect(source).toContain("_FunctionCallError('The function returned a result larger than 256 KB.')");
   });
 
   it('never contains a closing script tag', () => {
