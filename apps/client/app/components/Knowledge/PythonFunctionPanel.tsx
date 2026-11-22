@@ -29,6 +29,7 @@ import {
   parseFunctionContract,
   validateFunctionValue,
   type FunctionContract,
+  type FunctionContractChange,
   type FunctionContractProblem,
   type FunctionField,
   type FunctionObjectField,
@@ -36,6 +37,7 @@ import {
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
+  callableFunctionBreakingChanges,
   callableFunctionErrorMessage,
   useArtifactCallableFunction,
   useDeleteCallableFunction,
@@ -45,6 +47,7 @@ import {
 import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
+import BreakingChangeDialog from './BreakingChangeDialog';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
 /** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
@@ -426,12 +429,13 @@ const failureToast = (title: string) => (error: unknown) => {
 
 /** Make this a tool, or the saved tool's status with Update, Turn off or Turn on, and Delete. */
 function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; contract: FunctionContract }) {
-  const { data: saved, isLoading } = useArtifactCallableFunction(save.artifactId, save.version);
+  const { data: saved, isLoading } = useArtifactCallableFunction(save.artifactId, save.version, contract.name);
   const repin = useRepinCallableFunction();
   const setEnabled = useSetCallableFunctionEnabled();
   const remove = useDeleteCallableFunction();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [refused, setRefused] = useState<{ version: number; changes: FunctionContractChange[] } | null>(null);
   const target = save.blocked === null ? save : null;
   // A save, delete, or update replaces the button that started it, so focus would fall back to the page body.
   const stateRef = useRef<HTMLDivElement>(null);
@@ -490,7 +494,14 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
               onClick={() =>
                 repin.mutate(
                   { id: saved.id, expectedVersion: target.version, contract },
-                  { onSuccess: () => setFocusWhen('repinned'), onError: failureToast('Could not update the tool.') }
+                  {
+                    onSuccess: () => setFocusWhen('repinned'),
+                    onError: error => {
+                      const changes = callableFunctionBreakingChanges(error);
+                      if (changes.length > 0) setRefused({ version: target.version, changes });
+                      else failureToast('Could not update the tool.')(error);
+                    },
+                  }
                 )
               }
             >
@@ -590,6 +601,15 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
             </Stack>
           </ModalDialog>
         </Modal>
+      )}
+      {saved && refused && (
+        <BreakingChangeDialog
+          onClose={() => setRefused(null)}
+          slug={saved.slug}
+          pinnedVersion={saved.pin.version}
+          version={refused.version}
+          changes={refused.changes}
+        />
       )}
     </>
   );

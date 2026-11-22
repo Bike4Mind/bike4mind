@@ -363,7 +363,6 @@ describe('SaveFunctionDialog', () => {
   it.each([
     ['version_changed', 409, 'The artifact changed since you opened it. Reload it and try again.'],
     ['invalid_name', 400, 'A function name cannot contain two underscores in a row or end with an underscore.'],
-    ['artifact_has_function', 409, 'This artifact is already saved as a tool.'],
     ['function_limit', 409, 'You can have at most 100 saved tools.'],
     ['source_too_large', 400, 'The code is larger than 256 KB.'],
     ['no_entry_point', 400, 'The saved code has no FUNCTION contract and run function.'],
@@ -394,6 +393,32 @@ describe('SaveFunctionDialog', () => {
     submit();
 
     expect((await screen.findByTestId('save-function-dialog-error')).textContent).toBe(message);
+  });
+
+  it('saves a renamed version as a new tool beside the old one and deletes nothing', async () => {
+    const renamed = { ...CONTRACT, name: 'beam_midspan_deflection_v2' };
+    h.post.mockResolvedValue({
+      data: { ...savedView, id: 'fn-2', slug: renamed.name, pin: { ...savedView.pin, version: 4 } },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <CssVarsProvider theme={appTheme}>
+          <SaveFunctionDialog open onClose={vi.fn()} artifactId="artifact-1" version={4} contract={renamed} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+    submit();
+
+    await screen.findByTestId('save-function-dialog-saved');
+    expect(h.post).toHaveBeenCalledTimes(1);
+    expect(h.post).toHaveBeenCalledWith('/api/callable-functions', {
+      artifactId: 'artifact-1',
+      expectedVersion: 4,
+      contract: renamed,
+    });
+    expect(h.delete).not.toHaveBeenCalled();
   });
 
   it('an error without an answer falls back to Could not save the tool.', async () => {

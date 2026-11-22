@@ -20,8 +20,8 @@ const fns = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
 vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/data/callableFunctions')>()),
-  useArtifactCallableFunction: (artifactId: string | null, version: number) => {
-    fns.query(artifactId, version);
+  useArtifactCallableFunction: (artifactId: string | null, version: number, name: string) => {
+    fns.query(artifactId, version, name);
     return fns.saved;
   },
   useRepinCallableFunction: () => fns.repin,
@@ -458,7 +458,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.saved = { data: undefined, isLoading: true };
     await renderReady(TARGET);
 
-    expect(fns.query).toHaveBeenCalledWith('artifact-1', 3);
+    expect(fns.query).toHaveBeenCalledWith('artifact-1', 3, 'beam_midspan_deflection');
     expect(screen.queryByTestId('python-function-save-btn')).toBeNull();
     expect(screen.queryByTestId('python-function-saved-status')).toBeNull();
   });
@@ -716,5 +716,92 @@ describe('PythonFunctionPanel save controls', () => {
 
     expect(fns.toastError).toHaveBeenCalledWith('Could not delete the tool.', undefined);
     await waitFor(() => expect(screen.queryByTestId('python-function-delete-dialog')).toBeNull());
+  });
+
+  describe('an update refused as breaking', () => {
+    const refusal = () =>
+      Object.assign(new Error('Request failed with status code 409'), {
+        isAxiosError: true,
+        response: {
+          status: 409,
+          data: {
+            error: 'This version changes the contract in a way that could break callers of the tool.',
+            code: 'breaking_change',
+            changes: [
+              {
+                path: 'inputs.load.unit',
+                side: 'inputs',
+                field: 'load',
+                kind: 'unit_changed',
+                before: 'N',
+                after: 'kN',
+              },
+              { path: 'outputs.deflection', side: 'outputs', field: 'deflection', kind: 'removed' },
+            ],
+          },
+        },
+      });
+
+    const refuseUpdate = async (error: unknown) => {
+      fns.saved = { data: newerVersion(), isLoading: false };
+      await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
+      fireEvent.click(screen.getByTestId('python-function-repin-btn'));
+      const [, callbacks] = fns.repin.mutate.mock.calls[0] as [unknown, { onError: (error: unknown) => void }];
+      act(() => callbacks.onError(error));
+    };
+
+    it('lists each change in plain words and offers saving as a new tool, with no override', async () => {
+      await refuseUpdate(refusal());
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(
+        within(dialog)
+          .getAllByTestId('breaking-change-dialog-change')
+          .map(item => item.textContent)
+      ).toEqual(['input load changed unit from N to kN', 'output deflection was removed']);
+      expect(dialog.textContent).toContain(
+        'changes the contract of beam_midspan_deflection in ways that could break its callers, so the tool stays pinned to version 3.'
+      );
+      expect(within(dialog).getByTestId('breaking-change-dialog-offer').textContent).toBe(
+        'To save version 4 as a new tool and keep beam_midspan_deflection as it is, give it a new name in FUNCTION, save the artifact, and select Make this a tool.'
+      );
+      expect(
+        within(dialog)
+          .getAllByRole('button')
+          .map(button => button.textContent)
+      ).toEqual(['', 'Close']);
+      expect(fns.toastError).not.toHaveBeenCalled();
+      expect(fns.remove.mutate).not.toHaveBeenCalled();
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-close-btn'));
+      await waitFor(() => expect(screen.queryByTestId('breaking-change-dialog')).toBeNull());
+      expect(statusText()).toBe(
+        'A newer version is available. This tool is pinned to version 3, and the artifact is at version 4.'
+      );
+    });
+
+    it('any other refusal stays a toast', async () => {
+      await refuseUpdate(axiosError(409, 'The artifact changed since you opened it. Reload it and try again.'));
+
+      expect(fns.toastError).toHaveBeenCalledWith('Could not update the tool.', {
+        description: 'The artifact changed since you opened it. Reload it and try again.',
+      });
+      expect(screen.queryByTestId('breaking-change-dialog')).toBeNull();
+    });
+
+    it('once FUNCTION has a new name, offers Make this a tool for it and leaves the old tool alone', async () => {
+      const renamed = { ...sampleContract(), name: 'beam_midspan_deflection_v2' };
+      callFunction.mockResolvedValueOnce(described(renamed));
+      renderPanel(false, { artifactId: 'artifact-1', version: 4, blocked: null });
+      await screen.findByTestId('python-function-contract-inputs', {}, { timeout: 2000 });
+
+      expect(fns.query).toHaveBeenLastCalledWith('artifact-1', 4, 'beam_midspan_deflection_v2');
+      fireEvent.click(screen.getByTestId('python-function-save-btn'));
+      expect(fns.dialog).toHaveBeenCalledWith(
+        expect.objectContaining({ artifactId: 'artifact-1', version: 4, contract: renamed })
+      );
+      expect(fns.remove.mutate).not.toHaveBeenCalled();
+    });
   });
 });

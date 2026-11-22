@@ -4,6 +4,7 @@ import { isAxiosError } from 'axios';
 import type {
   CallableFunctionSlugHolder,
   FunctionContract,
+  FunctionContractChange,
   FunctionContractProblem,
   ICallableFunctionPublic,
 } from '@bike4mind/common';
@@ -54,16 +55,33 @@ export function callableFunctionSlugHolder(error: unknown): CallableFunctionSlug
   return { functionId: data.functionId, sourceDeleted: data.sourceDeleted };
 }
 
+const CHANGE_SIDES: readonly unknown[] = ['inputs', 'outputs', null];
+
+/** The changes a 409 `breaking_change` lists; empty for any other error. */
+export function callableFunctionBreakingChanges(error: unknown): FunctionContractChange[] {
+  if (!isAxiosError(error)) return [];
+  const data = error.response?.data as { code?: unknown; changes?: unknown } | undefined;
+  if (data?.code !== 'breaking_change' || !Array.isArray(data.changes)) return [];
+  return data.changes.filter(
+    (change): change is FunctionContractChange =>
+      typeof change?.path === 'string' &&
+      typeof change?.field === 'string' &&
+      typeof change?.kind === 'string' &&
+      CHANGE_SIDES.includes(change?.side)
+  );
+}
+
 /**
- * The function saved from this artifact, or null when there is none. `version` is the artifact version the viewer
- * shows; it is part of the key so that saving the artifact re-reads whether a newer version is available.
+ * The function saved from this artifact under `name`, or null when there is none; an artifact holds one tool per
+ * name. `version` is the artifact version the viewer shows; it is part of the key so that saving the artifact
+ * re-reads whether a newer version is available.
  */
-export function useArtifactCallableFunction(artifactId: string | null, version: number) {
+export function useArtifactCallableFunction(artifactId: string | null, version: number, name: string) {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   return useQuery({
     queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, artifactId, version],
-    queryFn: async () =>
-      (await api.get<ICallableFunctionPublic[]>(COLLECTION, { params: { artifactId } })).data[0] ?? null,
+    queryFn: async () => (await api.get<ICallableFunctionPublic[]>(COLLECTION, { params: { artifactId } })).data,
+    select: (functions: ICallableFunctionPublic[]) => functions.find(fn => fn.slug === name) ?? null,
     enabled: hasAccessToken && !!artifactId,
   });
 }
