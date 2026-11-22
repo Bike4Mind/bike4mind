@@ -110,6 +110,23 @@ describe('PythonArtifactViewer Function tab', () => {
     expect(screen.getByTestId('python-function-panel')).toBeTruthy();
   });
 
+  it('wraps the header and compacts the version control when the pane is narrow', () => {
+    flags.callableFunctionsEnabled = true;
+    renderViewer(FUNCTION_CODE);
+    const header = screen.getByTestId('python-artifact-viewer-header');
+    const headerStyle = getComputedStyle(header);
+    expect(headerStyle.flexWrap).toBe('wrap');
+    expect(headerStyle.getPropertyValue('container-type')).toBe('inline-size');
+    expect(getComputedStyle(screen.getByRole('tablist')).flexWrap).toBe('wrap');
+
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(style => style.textContent ?? '')
+      .join('\n');
+    const compactRule = css.match(/@container \(max-width: ?720px\)\{[^@]*\}\}/)?.[0] ?? '';
+    expect(compactRule).toMatch(/\.artifact-version-dropdown-label[^{]*\{display:none;\}/);
+    expect(compactRule).toMatch(/\.artifact-version-dropdown-button\{min-width:auto;\}/);
+  });
+
   it('returns to the Output tab when the entry point is edited away', () => {
     flags.callableFunctionsEnabled = true;
     renderViewer(SCRIPT_CODE);

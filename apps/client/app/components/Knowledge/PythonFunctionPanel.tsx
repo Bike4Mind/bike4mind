@@ -259,30 +259,37 @@ const FailureBlock = ({ error, output }: { error: string; output: string }) => (
 const ContractTable = ({ schema, testId }: { schema: FunctionObjectField; testId: string }) => {
   const required = new Set(schema.required ?? []);
   return (
-    <Table size="sm" borderAxis="xBetween" data-testid={testId} sx={{ '& th': { whiteSpace: 'nowrap' } }}>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Unit</th>
-          <th>Range</th>
-          <th>Required</th>
-        </tr>
-      </thead>
-      <tbody>
-        {Object.entries(schema.properties).map(([name, field]) => (
-          <tr key={name}>
-            <td>
-              <code>{name}</code>
-            </td>
-            <td>{typeLabel(field)}</td>
-            <td>{unitLabel(field)}</td>
-            <td>{rangeLabel(field)}</td>
-            <td>{required.has(name) ? 'Yes' : 'No'}</td>
+    <Box sx={{ overflowX: 'auto' }}>
+      <Table
+        size="sm"
+        borderAxis="xBetween"
+        data-testid={testId}
+        sx={{ tableLayout: 'auto', '& th': { whiteSpace: 'nowrap' } }}
+      >
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Unit</th>
+            <th>Range</th>
+            <th>Required</th>
           </tr>
-        ))}
-      </tbody>
-    </Table>
+        </thead>
+        <tbody>
+          {Object.entries(schema.properties).map(([name, field]) => (
+            <tr key={name}>
+              <td>
+                <code>{name}</code>
+              </td>
+              <td>{typeLabel(field)}</td>
+              <td>{unitLabel(field)}</td>
+              <td>{rangeLabel(field)}</td>
+              <td>{required.has(name) ? 'Yes' : 'No'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Box>
   );
 };
 
@@ -364,28 +371,30 @@ function FieldControl({
 }
 
 const ResultTable = ({ outputs, value }: { outputs: FunctionObjectField; value: Record<string, unknown> }) => (
-  <Table size="sm" borderAxis="xBetween" data-testid="python-function-result">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Value</th>
-        <th>Unit</th>
-      </tr>
-    </thead>
-    <tbody>
-      {Object.entries(outputs.properties)
-        .filter(([name]) => Object.prototype.hasOwnProperty.call(value, name))
-        .map(([name, field]) => (
-          <tr key={name}>
-            <td>
-              <code>{name}</code>
-            </td>
-            <td style={{ fontFamily: 'monospace' }}>{formatValue(value[name])}</td>
-            <td>{unitLabel(field)}</td>
-          </tr>
-        ))}
-    </tbody>
-  </Table>
+  <Box sx={{ overflowX: 'auto' }}>
+    <Table size="sm" borderAxis="xBetween" data-testid="python-function-result" sx={{ tableLayout: 'auto' }}>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Value</th>
+          <th>Unit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Object.entries(outputs.properties)
+          .filter(([name]) => Object.prototype.hasOwnProperty.call(value, name))
+          .map(([name, field]) => (
+            <tr key={name}>
+              <td>
+                <code>{name}</code>
+              </td>
+              <td style={{ fontFamily: 'monospace' }}>{formatValue(value[name])}</td>
+              <td>{unitLabel(field)}</td>
+            </tr>
+          ))}
+      </tbody>
+    </Table>
+  </Box>
 );
 
 /**
@@ -522,7 +531,13 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               <ContractTable schema={contract.outputs} testId="python-function-contract-outputs" />
             </Box>
 
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 1.5 }}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
+                gap: 1.5,
+              }}
+            >
               {Object.entries(contract.inputs.properties).map(([name, field]) => (
                 <FormControl key={name} size="sm">
                   {field.type !== 'boolean' && <FormLabel sx={{ fontFamily: 'monospace' }}>{name}</FormLabel>}

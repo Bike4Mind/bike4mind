@@ -425,18 +425,32 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
         >
           {/* Tab header with controls */}
           <Box
+            data-testid="python-artifact-viewer-header"
             sx={{
               borderBottom: '1px solid',
               borderColor: 'divider',
               px: 2,
               py: 1,
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: 1,
               flexShrink: 0,
+              containerType: 'inline-size',
+              // Same narrow-pane handling as ReactArtifactViewer's header: globals.css sets `min-width: 0`
+              // on everything, so without this the tabs and buttons squeeze into each other instead of wrapping.
+              '& > .python-artifact-viewer-tab-list, & .python-artifact-viewer-toolbar > *': {
+                flexShrink: 0,
+                maxWidth: '100%',
+              },
+              '@container (max-width: 720px)': {
+                '& .artifact-version-dropdown-history-text, & .artifact-version-dropdown-label': { display: 'none' },
+                '& .artifact-version-dropdown-button': { minWidth: 'auto' },
+              },
             }}
           >
-            <TabList sx={{ minHeight: 'auto' }}>
+            <TabList className="python-artifact-viewer-tab-list" sx={{ minHeight: 'auto', flexWrap: 'wrap' }}>
               <Tab value={0} sx={{ py: 0.5, minHeight: 'auto' }}>
                 <Stack direction="row" spacing={0.5} alignItems="center">
                   <OutputIcon sx={{ fontSize: 18 }} />
@@ -459,7 +473,16 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
               )}
             </TabList>
 
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack
+              className="python-artifact-viewer-toolbar"
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              alignItems="center"
+              justifyContent="flex-end"
+              sx={{ ml: 'auto' }}
+            >
               {/* Run/Stop button */}
               {isExecuting ? (
                 <Button size="sm" variant="solid" color="danger" startDecorator={<StopIcon />} onClick={interrupt}>

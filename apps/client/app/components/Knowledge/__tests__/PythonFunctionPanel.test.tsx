@@ -169,6 +169,16 @@ describe('PythonFunctionPanel', () => {
     expect(within(row).getByText('m')).toBeTruthy();
     expect(screen.getByText('Ran in 12 ms.')).toBeTruthy();
     expect(screen.getByTestId('python-function-printed-output').textContent).toContain('computing');
+
+    for (const id of [
+      'python-function-contract-inputs',
+      'python-function-contract-outputs',
+      'python-function-result',
+    ]) {
+      const table = screen.getByTestId(id);
+      expect(getComputedStyle(table).tableLayout).toBe('auto');
+      expect(getComputedStyle(table.parentElement as HTMLElement).overflowX).toBe('auto');
+    }
   });
 
   it('lists output problems when run returns values that do not match the contract', async () => {
