@@ -15,6 +15,10 @@ import {
   type ImageProviderId,
   type MusicProviderId,
   type VideoProviderId,
+  DEFAULT_STUDIO_RENDER_PRICING,
+  StudioRenderStatusSchema,
+  studioRenderStatusKey,
+  type StudioRenderStatus,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -26,6 +30,8 @@ import {
   organizationRepository,
   questRepository,
   sessionRepository,
+  spendFreezeRepository,
+  studioCompositionRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -50,6 +56,7 @@ import {
   type CreateSceneCompositionJobDeps,
   type SceneJobDeps,
 } from '@bike4mind/services/sceneJobs';
+import { createRenderJobHandler, type CreateRenderJobsDeps, type RenderJobDeps } from '@bike4mind/services/renderJobs';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import {
   callerOwnsGeneratedImage,
@@ -617,6 +624,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -647,6 +655,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -678,6 +687,7 @@ export const getSceneJobDeps = (): SceneJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -714,6 +724,7 @@ export const getImageJobDeps = (): ImageJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -732,6 +743,86 @@ export const getCreateImageJobsDeps = (): CreateImageJobsDeps => ({
   checkStorageFor,
 });
 
+// Linked on the generation-job worker and the web function; self-host maps it from RENDER_JOB_QUEUE.
+const resolveRenderJobQueueUrl = (): string => {
+  const url = (Resource as unknown as { renderJobQueue?: { url?: string } }).renderJobQueue?.url;
+  if (!url) throw new Error('renderJobQueue is not linked here, so render jobs cannot be dispatched');
+  return url;
+};
+
+const isMissingObjectError = (error: unknown): boolean =>
+  error instanceof Error && (error.name === 'NoSuchKey' || error.name === 'NotFound');
+
+const readRenderStatus: RenderJobDeps['readRenderStatus'] = async jobId => {
+  let raw: string;
+  try {
+    raw = await getGeneratedImageStorage().getContentAsString(studioRenderStatusKey(jobId));
+  } catch (error) {
+    if (isMissingObjectError(error)) return null;
+    throw error;
+  }
+  const parsed = StudioRenderStatusSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) {
+    // A worker that writes a shape this engine cannot read is a deploy skew; fail the render rather than spin.
+    logger.error('render_status_unreadable', { jobId, issues: parsed.error.issues });
+    return { state: 'failed', message: 'The render worker reported an unreadable status', updatedAt: '' };
+  }
+  return parsed.data satisfies StudioRenderStatus;
+};
+
+const getRenderSettings: CreateRenderJobsDeps['getSettings'] = async () => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'StudioRenderPricing'], skipCache: true }
+  );
+  return {
+    enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
+    pricing: getSettingsValue('StudioRenderPricing', settings) ?? DEFAULT_STUDIO_RENDER_PRICING,
+  };
+};
+
+let renderJobDeps: RenderJobDeps | undefined;
+export const getRenderJobDeps = (): RenderJobDeps => {
+  renderJobDeps ??= {
+    repository: generationJobRepository,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
+      onInsufficientCredits: recordInsufficientCredits,
+    },
+    dispatchRender: async jobId => {
+      await sendToQueue(resolveRenderJobQueueUrl(), { jobId });
+    },
+    readRenderStatus,
+    fetchRenderedOutput: async s3Key => getGeneratedImageStorage().download(s3Key),
+    saveToFiles,
+    saveToGeneratedBucket,
+    now: () => new Date(),
+    logger,
+  };
+  return renderJobDeps;
+};
+
+export const getCreateRenderJobsDeps = (): CreateRenderJobsDeps => ({
+  ...getRenderJobDeps(),
+  enqueue: enqueueGenerationJob,
+  engine: getGenerationJobEngine(),
+  getSettings: getRenderSettings,
+  // Self-host has no paid plans, so exports are not paid-plan gated there.
+  planlessDeployment: process.env.B4M_SELF_HOST === 'true',
+  findComposition: (id, userId) =>
+    isValidObjectId(id) ? studioCompositionRepository.findOwned(id, userId) : Promise.resolve(null),
+  findReadableFiles: async (fileIds, userId) => {
+    if (fileIds.length === 0) return new Map();
+    const files = await fabFileRepository.findAccessibleInIds(fileIds, { userId });
+    return new Map(files.map(file => [file.id, file.mimeType]));
+  },
+  checkStorageFor,
+});
+
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {
   generationJobEngine ??= new GenerationJobEngine({
@@ -743,6 +834,7 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
       createSpeechJobHandler(getSpeechJobDeps()),
       createSoundEffectJobHandler(getSoundEffectJobDeps()),
       createSceneJobHandler(getSceneJobDeps()),
+      createRenderJobHandler(getRenderJobDeps()),
     ],
     enqueue: enqueueGenerationJob,
     notify,

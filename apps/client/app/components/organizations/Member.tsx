@@ -24,7 +24,7 @@ import debounce from 'lodash/debounce';
 import AddIcon from '@mui/icons-material/Add';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import { FC, useCallback, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { OrganizationRosterRow } from './UserCard';
 import BulkInviteModal from './BulkInviteModal';
@@ -148,6 +148,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   // also depends on the target; this coarse flag only decides whether the seats card and the
   // roster's selection column show.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
+  // Mirrors organizationRosterScope on the members route: everyone else gets names only, with no emails.
+  const canSeeMemberEmails = canRevokeMembers;
 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
@@ -292,7 +294,11 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 onSelectIds={ids => {
                   // Only allow selecting up to available seats
                   if (maxSeats > 0 && ids.length > availableSeats) {
-                    toast.error(`You can only add up to ${availableSeats} more members with your current plan`);
+                    toast.error(
+                      canAddSeats
+                        ? t('organization.access_notice.add_limit_upgrade', { available: availableSeats })
+                        : t('organization.access_notice.add_limit_ask_owner', { available: availableSeats })
+                    );
                     return;
                   }
                   setSelectedUserIds(ids);
@@ -335,24 +341,28 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                   level="body-sm"
                   color="neutral"
                 >
-                  All seats are in use.{' '}
                   {canAddSeats ? (
-                    <Link
-                      component="button"
-                      data-testid="organization-members-add-seats-link"
-                      onClick={() =>
-                        navigate({
-                          to: '/organizations/$id',
-                          params: { id: organization.id },
-                          search: { tab: OrganizationTabs.Billing },
-                          replace: true,
-                        })
-                      }
-                    >
-                      Add seats
-                    </Link>
+                    <Trans
+                      i18nKey="organization.access_notice.seat_limit_add_seats"
+                      components={{
+                        addSeats: (
+                          <Link
+                            component="button"
+                            data-testid="organization-members-add-seats-link"
+                            onClick={() =>
+                              navigate({
+                                to: '/organizations/$id',
+                                params: { id: organization.id },
+                                search: { tab: OrganizationTabs.Billing },
+                                replace: true,
+                              })
+                            }
+                          />
+                        ),
+                      }}
+                    />
                   ) : (
-                    'Ask the team owner to add seats.'
+                    t('organization.access_notice.seat_limit_ask_owner')
                   )}
                 </Typography>
               </Stack>
@@ -400,6 +410,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         canRevokeMember={userId => !!currentUser && canRevokeOrgMember(currentUser, organization, userId)}
         canManageCreditBudgets={canManageCreditBudgets}
         canManageManagers={canManageManagers}
+        showEmails={canSeeMemberEmails}
       />
 
       {showPolicies && (

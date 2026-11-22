@@ -145,7 +145,7 @@ describe('the Customize screen', () => {
 
   it('orders Skills, MCP and Plugins and selects Skills by default', () => {
     renderScreen();
-    const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const tabs = [...container.querySelectorAll<HTMLElement>('[data-testid="customize-tab-row"] [role="tab"]')];
     expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP', 'Plugins']);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
     expect(container.querySelector('h1')?.textContent).toBe('Customize');
@@ -176,7 +176,7 @@ describe('the Customize screen', () => {
     expect(isVisible(byTestId('mcp-settings'))).toBe(false);
 
     const cards = allByTestId('customize-plugin-card');
-    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster', 'Studio']);
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster']);
     act(() => pluginsTab.focus());
     for (const card of cards) {
       expect(card.tagName).toBe('ARTICLE');
@@ -307,12 +307,15 @@ describe('the Customize screen', () => {
 
     act(() => theirs?.querySelector<HTMLElement>('[data-testid="customize-skill-update-btn"]')?.click());
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
+    act(() => byTestId('skills-discover-tab')?.click());
     act(() => byTestId('customize-skill-market-btn')?.click());
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
-    const webBtn = mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]');
+    act(() => byTestId('skills-your-tab')?.click());
+    const remounted = allByTestId('customize-skill-row').find(row => text(row)?.includes('/web-summary'));
+    const webBtn = remounted?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]');
     expect(webBtn?.hasAttribute('title')).toBe(false);
     expect(webBtn?.getAttribute('aria-label')).toBe('Open /web-summary on the web');
-    expect(mine?.querySelector('[title]')).toBeNull();
+    expect(remounted?.querySelector('[title]')).toBeNull();
     act(() => webBtn?.click());
     expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
   });
@@ -354,8 +357,18 @@ describe('the Customize screen', () => {
     expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
   });
 
+  it('shows a failed row upload on the Installed tab', async () => {
+    market.readLocalSkill.mockResolvedValueOnce({ ok: false, error: 'Could not read that skill.' } as never);
+    renderScreen();
+    const local = allByTestId('customize-skill-row').find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(isVisible(byTestId('skill-upload-pick-error'))).toBe(true);
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('Could not read that skill.');
+  });
+
   it('shows a failed pick inline', async () => {
     renderScreen();
+    act(() => byTestId('skills-discover-tab')?.click());
     await act(async () => byTestId('skill-upload-pick-btn')?.click());
     expect(text(byTestId('skill-upload-pick-error'))).toContain('No SKILL.md in that folder.');
   });

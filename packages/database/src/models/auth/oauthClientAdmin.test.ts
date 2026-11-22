@@ -85,6 +85,43 @@ describe('createOAuthClient', () => {
     expect(removed.after.federatedIdp).toBeUndefined();
   });
 
+  it('round-trips unpaidAccountLimits through create, update, list and unset', async () => {
+    const limits = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    const { client } = await createOAuthClient({ ...federated, unpaidAccountLimits: limits });
+    expect(client.unpaidAccountLimits).toEqual(limits);
+    expect((await listOAuthClients())[0].unpaidAccountLimits).toEqual(limits);
+
+    const kept = await updateOAuthClient(client.id, { isActive: false });
+    expect(kept.after.unpaidAccountLimits).toEqual(limits);
+
+    const changed = await updateOAuthClient(client.id, { unpaidAccountLimits: { ...limits, maxConcurrent: 0 } });
+    expect(changed.before.unpaidAccountLimits).toEqual(limits);
+    expect(changed.after.unpaidAccountLimits?.maxConcurrent).toBe(0);
+
+    const removed = await updateOAuthClient(client.id, { unpaidAccountLimits: null });
+    expect(removed.after.unpaidAccountLimits).toBeUndefined();
+    expect((await listOAuthClients())[0].unpaidAccountLimits).toBeUndefined();
+  });
+
+  it('rejects unpaidAccountLimits outside the global setting bounds', async () => {
+    const ok = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    for (const bad of [
+      { ...ok, requestsPerMinute: 0 },
+      { ...ok, requestsPerMinute: 10_001 },
+      { ...ok, requestsPerDay: -1 },
+      { ...ok, requestsPerDay: 1_000_001 },
+      { ...ok, tokensPerMinute: 100_000_001 },
+      { ...ok, maxConcurrent: 1001 },
+      { ...ok, maxConcurrent: 1.5 },
+    ]) {
+      await expect(createOAuthClient({ ...federated, unpaidAccountLimits: bad })).rejects.toThrow();
+    }
+    const { client } = await createOAuthClient(federated);
+    await expect(
+      updateOAuthClient(client.id, { unpaidAccountLimits: { ...ok, tokensPerMinute: -5 } })
+    ).rejects.toThrow();
+  });
+
   it('stores unpaidAccountsAllowed on any client and leaves it unset by default', async () => {
     const { client } = await createOAuthClient(base);
     expect(client).not.toHaveProperty('unpaidAccountsAllowed');
@@ -105,6 +142,28 @@ describe('createOAuthClient', () => {
         rateLimit: { requestsPerMinute: 300, requestsPerDay: 20_000 },
       })
     ).rejects.toThrow(/requires a federated/);
+  });
+
+  it('refuses unpaidAccountLimits on a non-federated client at create and update', async () => {
+    const limits = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    await expect(createOAuthClient({ ...base, unpaidAccountLimits: limits })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+    const { client } = await createOAuthClient(base);
+    await expect(updateOAuthClient(client.id, { unpaidAccountLimits: limits })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+  });
+
+  it('refuses removing federation while unpaidAccountLimits are stored unless they are cleared too', async () => {
+    const limits = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    const { client } = await createOAuthClient({ ...federated, unpaidAccountLimits: limits });
+    await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+    const removed = await updateOAuthClient(client.id, { federatedIdp: null, unpaidAccountLimits: null });
+    expect(removed.after.federatedIdp).toBeUndefined();
+    expect(removed.after.unpaidAccountLimits).toBeUndefined();
   });
 
   it('stores only a bcrypt hash that verifies against the returned secret', async () => {
@@ -242,6 +301,51 @@ describe('toOAuthClientView', () => {
     } as never);
     expect(view.createdAt).toBeNull();
     expect(view.updatedAt).toBeNull();
+    expect(view.postLogoutRedirectUris).toEqual([]);
+  });
+});
+
+describe('postLogoutRedirectUris', () => {
+  const signedOut = 'https://app.example.test/signed-out';
+
+  it('defaults to an empty list, persists one given at create, and replaces it on update', async () => {
+    const { client: plain } = await createOAuthClient(base);
+    expect(plain.postLogoutRedirectUris).toEqual([]);
+
+    const { client } = await createOAuthClient({ ...base, name: 'Other App', postLogoutRedirectUris: [signedOut] });
+    expect(client.postLogoutRedirectUris).toEqual([signedOut]);
+    expect((await oauthClientRepository.findByClientId(client.clientId))?.postLogoutRedirectUris).toEqual([signedOut]);
+
+    const { before, after } = await updateOAuthClient(client.id, {
+      postLogoutRedirectUris: ['http://localhost:3000/out'],
+    });
+    expect(before.postLogoutRedirectUris).toEqual([signedOut]);
+    expect(after.postLogoutRedirectUris).toEqual(['http://localhost:3000/out']);
+    expect(after.redirectUris).toEqual(base.redirectUris);
+
+    const cleared = await updateOAuthClient(client.id, { postLogoutRedirectUris: [] });
+    expect(cleared.after.postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('reads a client stored before the field existed as an empty list', async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(client.id) },
+      { $unset: { postLogoutRedirectUris: '' } }
+    );
+    expect((await listOAuthClients())[0].postLogoutRedirectUris).toEqual([]);
+    const { after } = await updateOAuthClient(client.id, { postLogoutRedirectUris: [signedOut] });
+    expect(after.postLogoutRedirectUris).toEqual([signedOut]);
+  });
+
+  it('applies the redirect URI rules on create and update', async () => {
+    await expect(
+      createOAuthClient({ ...base, postLogoutRedirectUris: ['http://app.example.test/out'] })
+    ).rejects.toThrow();
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, { postLogoutRedirectUris: ['https://app.example.test/out#frag'] })
+    ).rejects.toThrow();
   });
 });
 
@@ -404,6 +508,49 @@ const conflictOnRead = (clientId: string, write: Record<string, unknown>) => {
       }) as never
   );
 };
+
+describe('updateOAuthClient unpaid limits concurrency', () => {
+  const limits = { requestsPerMinute: 3, requestsPerDay: 20, tokensPerMinute: 1000, maxConcurrent: 1 };
+
+  it('refuses limits when federation is removed after validation', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $unset: { federatedIdp: '' } });
+    try {
+      await expect(updateOAuthClient(client.id, { unpaidAccountLimits: limits })).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'OAuth client changed while saving; reload and try again',
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeUndefined();
+    expect(stored?.unpaidAccountLimits).toBeUndefined();
+  });
+
+  it('refuses federation removal when limits are added after validation', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $set: { unpaidAccountLimits: limits } });
+    try {
+      await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeDefined();
+    expect(stored?.unpaidAccountLimits).toMatchObject(limits);
+  });
+
+  it('allows clearing federation and limits together without a concurrent edit', async () => {
+    const { client } = await createOAuthClient({ ...federated, unpaidAccountLimits: limits });
+    const { after } = await updateOAuthClient(client.id, { federatedIdp: null, unpaidAccountLimits: null });
+    expect(after.federatedIdp).toBeUndefined();
+    expect(after.unpaidAccountLimits).toBeUndefined();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeUndefined();
+    expect(stored?.unpaidAccountLimits).toBeUndefined();
+  });
+});
 
 describe('updateOAuthClient scopes', () => {
   it('sets allowedScopes', async () => {

@@ -248,6 +248,33 @@ export function researchAutoAdmitChange(configName: string, enabled: boolean): I
   return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
 }
 
+/** A research config's schedule being paused or resumed by a manager. */
+export function researchSchedulePausedChange(configName: string, paused: boolean): ILakeConfigLiteralChange {
+  return literalChange(
+    'researchConfig',
+    undefined,
+    `research schedule ${paused ? 'paused' : 'resumed'}: ${configName}`
+  );
+}
+
+/** A research config's cadence changing, naming both values (for example weekly to off). */
+export function researchScheduleCadenceChange(
+  configName: string,
+  before: string,
+  after: string
+): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `research schedule ${before} -> ${after}: ${configName}`);
+}
+
+/** A research config's review backlog limit changing, naming both values. */
+export function researchReviewBacklogLimitChange(
+  configName: string,
+  before: number,
+  after: number
+): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `review backlog limit ${before} -> ${after}: ${configName}`);
+}
+
 /** The trusted-site list of a research config changing, naming the entries added and removed. */
 export function researchTrustedSitesChange(
   configName: string,

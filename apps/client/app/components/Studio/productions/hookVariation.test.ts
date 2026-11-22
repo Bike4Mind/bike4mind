@@ -94,7 +94,14 @@ describe('hookVariationBody', () => {
         ...source.timeline,
         tracks: source.timeline.tracks.map(track =>
           track.kind === 'video'
-            ? { ...track, clips: track.clips.map(clip => ({ ...clip, trimStartMs: 1500 })) }
+            ? {
+                ...track,
+                clips: track.clips.map(clip => ({
+                  ...clip,
+                  trimStartMs: 1500,
+                  crop: { '9:16': { x: 0.1, y: 0, width: 0.316406, height: 1 } },
+                })),
+              }
             : track
         ),
       },
@@ -105,6 +112,8 @@ describe('hookVariationBody', () => {
       [FILE_B, 0],
       [FILE_C, 1500],
     ]);
+    // The new take may have another shape, so only the swapped clip loses its framing.
+    expect(clips.map(clip => clip.crop !== undefined)).toEqual([false, true]);
   });
 
   it('copies the production with a new opening line, prompt and take, swapping the take on the timeline', () => {

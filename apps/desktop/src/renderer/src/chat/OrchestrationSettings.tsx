@@ -165,6 +165,7 @@ export function OrchestrationSettings() {
           </Select>
           <Button
             variant="outlined"
+            color="neutral"
             data-testid="orchestration-overrides-families-btn"
             disabled={familyOverrides(models).every(id => policy.allowedOverrides.includes(id))}
             onClick={() =>
@@ -215,6 +216,7 @@ export function OrchestrationSettings() {
           </Typography>
           <Button
             variant="outlined"
+            color="neutral"
             data-testid="orchestration-preset-btn"
             disabled={!economicalWorkerPreset(models)}
             onClick={() => {

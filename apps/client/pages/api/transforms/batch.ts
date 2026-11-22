@@ -1,5 +1,5 @@
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';

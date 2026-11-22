@@ -3902,6 +3902,890 @@ public enum Operations {
             }
         }
     }
+    /// Get a session
+    ///
+    /// Reads a session you own or that was shared with you, including its name, attached knowledge files, tags, and retrieval settings. A missing, deleted, malformed, or inaccessible session is 404. An API key needs notebooks:read or notebooks:write.
+    ///
+    /// - Remark: HTTP `GET /api/v1/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)`.
+    public enum GetSessionById {
+        public static let id: Swift.String = "getSessionById"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/path/id`.
+                public var id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id:
+                public init(id: Swift.String) {
+                    self.id = id
+                }
+            }
+            public var path: Operations.GetSessionById.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetSessionById.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetSessionById.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.GetSessionById.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.GetSessionById.Input.Path,
+                headers: Operations.GetSessionById.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.Ok.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.GetSessionByIdResponse200)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.GetSessionByIdResponse200 {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.Ok.Headers = .init(),
+                    body: Operations.GetSessionById.Output.Ok.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The session.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetSessionById.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.GetSessionById.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Unauthorized: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/401/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/401/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    public init(xRequestID: Swift.String? = nil) {
+                        self.xRequestID = xRequestID
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.Unauthorized.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/401/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/401/content/application\/json`.
+                    case json(Components.Schemas.ErrorResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ErrorResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.Unauthorized.Body
+                /// Creates a new `Unauthorized`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.Unauthorized.Headers = .init(),
+                    body: Operations.GetSessionById.Output.Unauthorized.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// Missing or invalid credentials.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Operations.GetSessionById.Output.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Operations.GetSessionById.Output.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Forbidden: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/403/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/403/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    public init(xRequestID: Swift.String? = nil) {
+                        self.xRequestID = xRequestID
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.Forbidden.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/403/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/403/content/application\/json`.
+                    case json(Components.Schemas.ScopeForbiddenResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ScopeForbiddenResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.Forbidden.Body
+                /// Creates a new `Forbidden`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.Forbidden.Headers = .init(),
+                    body: Operations.GetSessionById.Output.Forbidden.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Operations.GetSessionById.Output.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Operations.GetSessionById.Output.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct NotFound: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.NotFound.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/404/content/application\/json`.
+                    case json(Components.Schemas.ErrorResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ErrorResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.NotFound.Body
+                /// Creates a new `NotFound`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.NotFound.Headers = .init(),
+                    body: Operations.GetSessionById.Output.NotFound.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// No session with that id is visible to the caller.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Operations.GetSessionById.Output.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Operations.GetSessionById.Output.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct MethodNotAllowed: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/405/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/405/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// The methods this path serves. GET implies HEAD.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/405/headers/Allow`.
+                    public var allow: Swift.String?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - allow: The methods this path serves. GET implies HEAD.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        allow: Swift.String? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.allow = allow
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.MethodNotAllowed.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/405/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/405/content/application\/json`.
+                    case json(Components.Schemas.ErrorResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ErrorResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.MethodNotAllowed.Body
+                /// Creates a new `MethodNotAllowed`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.MethodNotAllowed.Headers = .init(),
+                    body: Operations.GetSessionById.Output.MethodNotAllowed.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The path does not serve this HTTP method.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/405`.
+            ///
+            /// HTTP response code: `405 methodNotAllowed`.
+            case methodNotAllowed(Operations.GetSessionById.Output.MethodNotAllowed)
+            /// The associated value of the enum case if `self` is `.methodNotAllowed`.
+            ///
+            /// - Throws: An error if `self` is not `.methodNotAllowed`.
+            /// - SeeAlso: `.methodNotAllowed`.
+            public var methodNotAllowed: Operations.GetSessionById.Output.MethodNotAllowed {
+                get throws {
+                    switch self {
+                    case let .methodNotAllowed(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "methodNotAllowed",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.UnprocessableContent.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.ErrorResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ErrorResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.UnprocessableContent.Headers = .init(),
+                    body: Operations.GetSessionById.Output.UnprocessableContent.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// Request failed validation.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.GetSessionById.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.GetSessionById.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.GetSessionById.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.GetSessionById.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.GetSessionById.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct TooManyRequests: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSessionById.Output.TooManyRequests.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/GET/responses/429/content/application\/json`.
+                    case json(Components.Schemas.ErrorResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ErrorResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSessionById.Output.TooManyRequests.Body
+                /// Creates a new `TooManyRequests`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSessionById.Output.TooManyRequests.Headers = .init(),
+                    body: Operations.GetSessionById.Output.TooManyRequests.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// Per-user rate limit exceeded.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Operations.GetSessionById.Output.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Operations.GetSessionById.Output.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// List a session's quests
     ///
     /// Lists the turns (quests) of a session's conversation, oldest first: what was sent, the visible reply, its status and the credits it cost. Works for a session you own or one shared with you. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Re-read a non-terminal turn with `GET /api/v1/quests/{id}`. While a tool awaits approval the turn carries `pendingAction` (owner only). Deleted turns are not listed. A session that does not exist, was deleted, or is not visible to you is `404`. An API key needs `notebooks:read` or `notebooks:write`.

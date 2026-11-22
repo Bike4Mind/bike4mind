@@ -7,7 +7,7 @@ import {
   denySelfDataExport,
   findDataExportTarget,
   readAdminDataExportBuiltAt,
-} from '@server/dataSubject/adminDataExports';
+} from '@bike4mind/server-utils/dataSubject/adminDataExports';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 

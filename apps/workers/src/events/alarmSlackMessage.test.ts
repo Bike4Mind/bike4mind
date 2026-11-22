@@ -828,6 +828,15 @@ describe('lookupCatalog', () => {
     );
   });
 
+  it('covers the model price snapshot alarms by name, as warn-level jobs', () => {
+    for (const key of ['model-price-snapshot-age', 'model-price-snapshot-missing']) {
+      expect(lookupCatalog(key)).toBe(ALARM_CATALOG[key]);
+      expect(ALARM_CATALOG[key]).toMatchObject({ level: 'warn', category: 'jobs' });
+      expect(ALARM_CATALOG[key].action).toContain('model discovery');
+    }
+    expect(ALARM_CATALOG['model-price-snapshot-missing'].action).toContain('read the snapshot');
+  });
+
   it('renders a dead-letter queue alarm with the queue name and the replay button', () => {
     const message = formatAlarmSlackMessage(
       { ...burst, AlarmName: 'bike4mind-production-dlq-release-notes-messages' },

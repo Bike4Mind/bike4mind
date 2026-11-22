@@ -18,7 +18,19 @@ export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
 export { getClientConfigContract, getPublicClientConfigContract } from './contracts/clientConfig.contract';
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
+export {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  replyToBriefDecisionContract,
+} from './contracts/briefs.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
+export {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './contracts/assistantInstructions.contract';
 export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
@@ -52,10 +64,14 @@ export {
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
+export { getSessionByIdContract } from './contracts/sessionGetById.contract';
 export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
 export { listSessionFilesContract } from './contracts/sessionFiles.contract';
 export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
@@ -74,6 +90,19 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
+export {
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+} from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
   cancelVideoGenerationContract,

@@ -26,6 +26,7 @@ const memberOrganizationLimits = {
   'userDetails.maxCredits': false,
   'userDetails.lastCreditUsedAt': false,
   'userDetails.periodStart': false,
+  'userDetails.email': false,
 };
 
 describe('resolveFieldLimits', () => {
@@ -41,6 +42,7 @@ describe('resolveFieldLimits', () => {
       signupActivity: false,
       apiKeyId: false,
       oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
@@ -184,6 +186,7 @@ describe('resolveFieldLimits', () => {
       signupActivity: false,
       apiKeyId: false,
       oauthClientId: false,
+      pendingActionResolution: false,
     });
   });
 
@@ -216,11 +219,19 @@ describe('resolveFieldLimits', () => {
     expect(findWithheldFilterPaths({ 'userDetails.maxCredits': { $gt: 0 } }, limits)).toEqual([
       'userDetails.maxCredits',
     ]);
-    expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.name': 'Ada' }, limits)).toEqual([]);
     expect(findWithheldFilterPaths({ 'userDetails.0.usedCredits': { $gt: 0 } }, limits)).toEqual([
       'userDetails.0.usedCredits',
     ]);
-    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.name': 'Ada' }, limits)).toEqual([]);
+  });
+
+  it('withholds member emails from a member subscriber, as a field and as a filter path', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(limits).toMatchObject({ 'userDetails.email': false });
+    expect(limits).not.toHaveProperty(['userDetails.name']);
+    expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual(['userDetails.email']);
+    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual(['userDetails.0.email']);
   });
 
   it('still excludes stripeCustomerId for a platform admin, who keeps billingContact', () => {

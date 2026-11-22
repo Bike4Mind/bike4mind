@@ -36,11 +36,16 @@ const McpConnectionItem = ({
   const rotate = useRotateMcpConnectionApiKey();
   const remove = useDeleteMcpConnection();
   const startOAuth = useStartMcpConnectionOAuth();
-  const [panel, setPanel] = useState<Panel>(
+  const [panel, setPanelState] = useState<Panel>(
     reviewOnMount && connection.status === 'connected' && connection.tools.length > 0 ? 'review' : 'none'
   );
   const [reviewConnection, setReviewConnection] = useState<IMcpConnectionPublic | null>(null);
   const [apiKey, setApiKey] = useState('');
+  // A typed key does not outlive its panel.
+  const setPanel = (next: Panel) => {
+    if (next !== 'api-key') setApiKey('');
+    setPanelState(next);
+  };
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
 

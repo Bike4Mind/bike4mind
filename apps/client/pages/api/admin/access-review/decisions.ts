@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
   AccessReviewDecisionSchema,
+  AdminRoleIdSchema,
   BadRequestError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  adminPermissionSources,
   sortAdminPermissions,
   type AccessReviewDecision,
   type AccessReviewReviewer,
@@ -18,6 +20,7 @@ import {
 } from '@bike4mind/database';
 import {
   ACCESS_REVIEW_DEFAULT_DORMANT_DAYS,
+  normalizeAccessReviewRoleIds,
   quarterStart,
   reviewQuarter,
 } from '@bike4mind/server-utils/security/accessReview/accessReview';
@@ -31,6 +34,8 @@ import {
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { assertAccessReviewer } from '@server/admin/accessReview';
+
+const validRoleIds = (ids: readonly string[]) => ids.filter(id => AdminRoleIdSchema.safeParse(id).success);
 
 type TargetDoc = {
   email?: string | null;
@@ -49,7 +54,11 @@ type AccessChangeEntry = {
 };
 
 const RemovedRolePermissionsSchema = z.object({
-  removedRolePermissions: z.array(z.object({ roleId: z.string().min(1), permissions: z.array(z.string()) })),
+  removedRolePermissions: z.array(
+    z.object({ roleId: z.string().min(1), permissions: z.array(z.string()), roleName: z.string().optional() })
+  ),
+  // Names only: a malformed list must not fail the permission snapshot it sits beside.
+  rolesRemoved: z.array(z.string()).optional().catch(undefined),
 });
 
 type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };
@@ -124,15 +133,15 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         if (!holdsAdminAccess(target)) {
           throw new ConflictError('This account no longer holds admin access. Reload the review.');
         }
-        const roles = await adminRoleRepository.findByIds((target.adminRoleIds ?? []).map(String));
+        const heldIds = normalizeAccessReviewRoleIds(target.adminRoleIds ?? []);
+        const roles = await adminRoleRepository.findByIds(validRoleIds(heldIds));
+        const roleNames = new Map(roles.map(role => [role.id, role.name]));
         entry = {
           userId,
           email: target.email ?? null,
           fullAdmin: target.isAdmin === true,
-          permissions: sortAdminPermissions([
-            ...(target.adminPermissions ?? []),
-            ...roles.flatMap(role => role.permissions),
-          ]),
+          permissions: adminPermissionSources(target.adminPermissions ?? [], roles).map(source => source.permission),
+          roles: heldIds.map(id => ({ id, name: roleNames.get(id) ?? null })),
           decision,
           reviewer,
           decidedAt: now,
@@ -163,7 +172,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         if (removals.length === 0) {
           throw new ConflictError('No admin access removal for this account is on the audit log this quarter.');
         }
-        const removedRolePermissions = removals.flatMap(removal => {
+        const removedRoles = removals.flatMap(removal => {
           if (removal.roleIds.length === 0) return [];
           const snapshot = RemovedRolePermissionsSchema.safeParse(removal.entry.details);
           if (
@@ -174,18 +183,42 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
               'The removal audit has no verified role-permission snapshot. Historical role access cannot be confirmed.'
             );
           }
-          return snapshot.data.removedRolePermissions
-            .filter(role => removal.roleIds.includes(role.roleId))
-            .flatMap(role => role.permissions);
+          const { removedRolePermissions, rolesRemoved } = snapshot.data;
+          // Audits written before the snapshot carried names: permissions.ts builds rolesRemoved from the same
+          // filtered id list, so it is index-aligned, and holds the bare id for a role already gone at removal.
+          const aligned = rolesRemoved?.length === removedRolePermissions.length ? rolesRemoved : undefined;
+          return removedRolePermissions
+            .map((role, index) => {
+              const legacyName = aligned?.[index];
+              const name = role.roleName ?? (legacyName && legacyName !== role.roleId ? legacyName : null);
+              return { ...role, name, nameKnown: role.roleName !== undefined || aligned !== undefined };
+            })
+            .filter(role => removal.roleIds.includes(role.roleId));
         });
+        const unnamed = validRoleIds(
+          normalizeAccessReviewRoleIds(removedRoles.filter(role => !role.nameKnown).map(role => role.roleId))
+        );
+        const currentNames = new Map(
+          unnamed.length > 0 ? (await adminRoleRepository.findByIds(unnamed)).map(role => [role.id, role.name]) : []
+        );
+        const roleRefs = new Map(
+          removedRoles.map(role => [
+            role.roleId,
+            {
+              id: role.roleId,
+              name: role.nameKnown ? role.name : (currentNames.get(role.roleId.toLowerCase()) ?? null),
+            },
+          ])
+        );
         entry = {
           userId,
           email: target.email ?? null,
           fullAdmin: removals.some(removal => removal.fullAdmin),
           permissions: sortAdminPermissions([
             ...removals.flatMap(removal => removal.permissions),
-            ...removedRolePermissions,
+            ...removedRoles.flatMap(role => role.permissions),
           ]),
+          roles: [...roleRefs.values()],
           decision,
           reviewer,
           decidedAt: now,

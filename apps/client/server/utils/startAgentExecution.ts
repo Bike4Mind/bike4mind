@@ -36,11 +36,11 @@ import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
-} from '@server/utils/dispatchAgentExecution';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
-import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitApiKeyCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
@@ -123,7 +123,9 @@ export type StartAgentExecutionInput = {
    * without the others.
    */
   apiKeyInfo:
-    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
+    | (ApiKeyCredential &
+        Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted' | 'unpaidAccountLimits'>)
+    | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -181,8 +183,10 @@ export type StartAgentExecutionResult =
       reason: StartAgentExecutionFailureReason;
       /** Caller-safe message; already phrased for an end user. */
       message: string;
-      /** Set only for `dispatch_failed` - the doc exists but dispatch acceptance was not confirmed. */
+      /** Set only for `dispatch_failed` after the execution doc was created. */
       executionId?: string;
+      /** Set only when the executor may still have accepted the dispatch, so the run can still start. */
+      dispatchUnconfirmed?: true;
     };
 
 export async function startAgentExecution(
@@ -233,6 +237,7 @@ export async function startAgentExecution(
       owner: userId,
       ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
       billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      unpaidAccountLimits: input.apiKeyInfo.unpaidAccountLimits,
       holdSlot: false,
     });
   }
@@ -495,6 +500,7 @@ export async function startAgentExecution(
         reason: 'dispatch_failed',
         message: `Execution ${executionId} dispatch could not be confirmed. Check it before starting another run.`,
         executionId,
+        dispatchUnconfirmed: true,
       };
     }
     logger.error('[Start] Executor rejected dispatch - cleaning up dispatch-time Quest', {

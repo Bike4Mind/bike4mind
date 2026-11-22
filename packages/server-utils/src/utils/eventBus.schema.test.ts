@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
-import { SessionEvents } from './eventBus';
+import { EmailEvents, SessionEvents } from './eventBus';
 
 describe('SessionEvents.Summarize.schema', () => {
   it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('accepts the %s trigger', trigger => {
@@ -41,5 +41,30 @@ describe('SessionEvents.Summarize.schema', () => {
   it('rejects a payload that omits the trigger', () => {
     const result = SessionEvents.Summarize.schema.safeParse({ sessionId: 's1' });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('EmailEvents.Send.schema ref', () => {
+  const mail = { to: 'reviewer@example.com', subject: 'Subject', body: 'Body' };
+
+  it.each([
+    { kind: 'emailAttempt', attemptId: 'attempt-1' },
+    { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'review' },
+    { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'escalation' },
+  ])('round-trips the $kind ref', ref => {
+    expect(EmailEvents.Send.schema.parse({ ...mail, ref }).ref).toEqual(ref);
+  });
+
+  it('accepts mail without a ref, as every event published before it existed', () => {
+    expect(EmailEvents.Send.schema.parse(mail).ref).toBeUndefined();
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'digest', attemptId: 'attempt-1' }],
+    ['an empty attempt id', { kind: 'emailAttempt', attemptId: '' }],
+    ['an empty incident id', { kind: 'incidentAlert', incidentId: '', alert: 'review' }],
+    ['an unknown alert', { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'reminder' }],
+  ])('rejects %s', (_label, ref) => {
+    expect(EmailEvents.Send.schema.safeParse({ ...mail, ref }).success).toBe(false);
   });
 });

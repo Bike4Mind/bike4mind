@@ -46,7 +46,8 @@ interface Tier1StatusResponse {
 }
 
 /**
- * Config carries the four boot secrets; the rest are read straight off Resource.
+ * MONGODB_URI comes from Config; the rest are read raw off Resource, since Config refuses or
+ * blanks a placeholder that this page must report as one.
  * Accessing an unlinked Resource property throws in the getter itself, so `?.`
  * cannot guard it - a stage that stops linking one of these would otherwise 500
  * the whole page instead of reporting that one secret as unset.
@@ -61,9 +62,9 @@ function readLinkedSecret(read: () => string | undefined): string | undefined {
 
 const SECRET_READERS: Record<string, () => string | undefined> = {
   MONGODB_URI: () => Config.MONGODB_URI,
-  SESSION_SECRET: () => Config.SESSION_SECRET,
-  JWT_SECRET: () => Config.JWT_SECRET,
-  SECRET_ENCRYPTION_KEY: () => Config.SECRET_ENCRYPTION_KEY,
+  SESSION_SECRET: () => readLinkedSecret(() => Resource.SESSION_SECRET.value),
+  JWT_SECRET: () => readLinkedSecret(() => Resource.JWT_SECRET.value),
+  SECRET_ENCRYPTION_KEY: () => readLinkedSecret(() => Resource.SECRET_ENCRYPTION_KEY.value),
   CHAT_COMPLETION_INTERNAL_SECRET: () => readLinkedSecret(() => Resource.CHAT_COMPLETION_INTERNAL_SECRET.value),
   SECOPS_ZAP_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_ZAP_INGEST_TOKEN.value),
   SECOPS_PROWLER_INGEST_TOKEN: () => readLinkedSecret(() => Resource.SECOPS_PROWLER_INGEST_TOKEN.value),

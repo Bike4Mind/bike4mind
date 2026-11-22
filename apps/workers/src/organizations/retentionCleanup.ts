@@ -40,7 +40,10 @@ import {
   retentionChatFilter,
   retentionFileFilter,
 } from '@bike4mind/server-utils/organizations/retentionPolicy';
-import { findLiveRetainedKeys, isGeneratedContentKey } from '@server/sessions/purgeDeletedNotebookMedia';
+import {
+  findLiveRetainedKeys,
+  isGeneratedContentKey,
+} from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
 const actorUserId = 'system:organization-retention';
 

@@ -14,6 +14,7 @@ import { join } from 'path';
 const read = (rel: string) => readFileSync(join(__dirname, '..', '..', rel), 'utf8');
 const mailTransport = read('infra/mailTransport.ts');
 const eventBus = read('infra/eventBus.ts');
+const web = read('infra/web.ts');
 const contract = JSON.parse(read('infra/deploy-contract.json')) as { deployEnv: string[] };
 
 const emailSendBlock = eventBus.slice(
@@ -56,6 +57,36 @@ describe('email-send worker mail transport wiring', () => {
     expect(emailSendBlock).toContain('permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions]');
     expect(eventBus.split('...sesSendPermissions').length - 1).toBe(1);
     expect(eventBus.split('...mailTransportEnvironment').length - 1).toBe(1);
+  });
+
+  it('gives the web function the status-only transport name, never the flag or the grant', () => {
+    expect(mailTransport).toContain('MAIL_STATUS_TRANSPORT: mailTransport,');
+    expect(web.split('...mailStatusEnvironment,').length - 1).toBe(1);
+    expect(web).not.toContain('...mailTransportEnvironment');
+    expect(web).not.toContain('sesSendPermissions');
+    expect(web).not.toContain('MAIL_TRANSPORT:');
+    expect(eventBus).not.toContain('mailStatusEnvironment');
+  });
+
+  it('fills personal-stage SES defaults before infra/ loads, so mailTransport.ts reads the filled env', () => {
+    const sstConfig = read('sst.config.ts');
+    const call = sstConfig.indexOf('await applyPersonalMailDefaults(');
+    expect(call).toBeGreaterThan(-1);
+    expect(call).toBeLessThan(sstConfig.indexOf("await import('./infra')"));
+    // Scoped to the call: sst.config.ts passes the same stage/appName literals to another helper.
+    const callArgs = sstConfig.slice(call, sstConfig.indexOf('});', call));
+    expect(callArgs).toContain('appName: $app.name,');
+    // A copy of process.env would leave the module-top reads in mailTransport.ts on the unfilled env.
+    expect(callArgs).toContain('env: process.env,');
+    expect(callArgs).toContain('stage: $app.stage,');
+  });
+
+  it('builds the personal-stage parameter paths from the app name, never a literal account id or ARN', () => {
+    const personalDefaults = read('infra/personalMailDefaults.ts');
+    expect(personalDefaults).toContain('`/${appName}/shared/mail/ses-configuration-set`');
+    expect(personalDefaults).toContain('`/${appName}/shared/mail/ses-identity`');
+    expect(personalDefaults).not.toMatch(/:\d{12}:/);
+    expect(personalDefaults).not.toContain('arn:');
   });
 
   it('sinks test.com mail on every stage but production, derived from the stage rather than a deploy var', () => {

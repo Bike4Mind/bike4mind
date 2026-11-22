@@ -61,8 +61,8 @@ export function hasTavernUserTag(tags: readonly string[] | null | undefined): bo
 }
 
 /**
- * True if the user may access the Tavern HUD surface: admins, or holders of the
- * 'tavern' tag. The single source of truth for "can this user reach the Tavern",
+ * True if the user may access the Tavern HUD surface: admins, developers, or
+ * holders of the 'tavern' tag. The single source of truth for "can this user reach the Tavern",
  * consumed by BOTH the client route/tab guard AND the server-side API guards
  * (`ensureTavernAccess`), so the UI grant and the API grant can never drift -
  * the same fail-open class that motivated `hasDeveloperUserTag`.
@@ -71,7 +71,7 @@ export function canAccessTavern(
   user: { isAdmin?: boolean | null; tags?: readonly string[] | null } | null | undefined
 ): boolean {
   if (!user) return false;
-  return !!user.isAdmin || hasTavernUserTag(user.tags);
+  return !!user.isAdmin || hasDeveloperUserTag(user.tags) || hasTavernUserTag(user.tags);
 }
 
 export enum AuthStrategy {
@@ -232,6 +232,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   acquisition: true,
   isSynthetic: true,
   isInternal: true,
+  accountSegment: true,
   isPersona: true,
   personaExpiresAt: true,
   mfaEnforcement: true,

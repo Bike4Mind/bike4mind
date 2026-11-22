@@ -251,7 +251,7 @@ function PullRow({ pull }: { pull: ModelPull }) {
         {failed || paused ? (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => void window.b4m.models.dismissPull(pull.key)}
             data-testid="models-pull-dismiss-btn"
@@ -499,7 +499,7 @@ export function ModelsScreen({
                 onDismissChatError && (
                   <Button
                     size="sm"
-                    variant="plain"
+                    variant="outlined"
                     color="danger"
                     onClick={onDismissChatError}
                     data-testid="models-chat-error-dismiss-btn"

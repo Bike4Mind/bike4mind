@@ -126,12 +126,13 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
   \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
+- Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
-  \`/api/v1/artifacts/types\`
+  \`/api/v1/artifacts/types\`, \`/api/v1/artifacts/{id}/publish\` (publish, unpublish),
+  \`/api/v1/artifacts/{id}/republish\`
 - Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
   \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
   and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,

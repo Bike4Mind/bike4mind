@@ -11,6 +11,7 @@ import { passthroughShape } from './responseShape';
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
  * - `signupActivity`: retired turn provenance a quest may still hold until its drop migration runs.
+ * - `pendingActionResolution`: how the last pending action ended, read only by brief serialization.
  */
 export const CHAT_MESSAGE_WITHHELD_FIELDS = [
   'callback',
@@ -19,6 +20,7 @@ export const CHAT_MESSAGE_WITHHELD_FIELDS = [
   'embedding',
   'slackNotification',
   'signupActivity',
+  'pendingActionResolution',
 ] as const;
 
 type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, (typeof CHAT_MESSAGE_WITHHELD_FIELDS)[number]>;

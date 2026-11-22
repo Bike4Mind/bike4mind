@@ -15,6 +15,7 @@ import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
+import { MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -117,6 +118,49 @@ describe('a worker decision that only the user can make', () => {
     decisionPushes = [];
     service = createService();
   }
+
+  it('acknowledges only viewed update-only tasks, never a decision or unaccepted result', async () => {
+    const child = await store.create('worker', {
+      workerTask: {
+        version: 1,
+        contract: contractFor('Viewed update'),
+        automaticUpgrades: 0,
+        resolvedDecisions: [],
+        attempts: [{ id: 'attempt', model: 'worker', startedAt: '2026-11-19', trigger: 'initial' }],
+        state: { status: 'blocked', reason: MISSING_TASK_RESULT_REASON, evidence: ['No report'] },
+      },
+    });
+    expect((await service.getSession(child.id))?.workerTask?.attentionViewed).toBeUndefined();
+    expect((await service.getSession(child.id, true))?.workerTask?.attentionViewed).toBe(true);
+    await store.updateWorkerTask(child.id, task => ({
+      ...task,
+      state: {
+        status: 'blocked',
+        reason: MISSING_TASK_RESULT_REASON,
+        evidence: ['No report'],
+        decision: {
+          id: 'decision',
+          askedAt: '2026-11-19',
+          question: { ...decisionReport.decision, header: 'Branch' },
+        },
+      },
+    }));
+    expect((await service.getSession(child.id, true))?.workerTask?.attentionViewed).toBeUndefined();
+    for (const accepted of [false, true]) {
+      await store.updateWorkerTask(child.id, task => ({
+        ...task,
+        state: {
+          status: 'completed',
+          accepted,
+          changedPaths: [],
+          verification: [],
+          unmetCriteria: [],
+          handoff: 'Ready',
+        },
+      }));
+      expect((await service.getSession(child.id, true))?.workerTask?.attentionViewed).toBe(accepted ? true : undefined);
+    }
+  });
 
   function holdNextList() {
     const captured = barrier();

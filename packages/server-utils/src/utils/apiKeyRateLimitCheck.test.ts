@@ -7,6 +7,7 @@ import {
   evaluateCounterLockout,
   extractApiKeyFromHeaders,
   getApiKeyRateLimitUsage,
+  rateLimitRefusalInfo,
   resetApiKeyRateLimit,
   resolveCounterLimit,
 } from './apiKeyRateLimitCheck';
@@ -136,6 +137,11 @@ describe('apiKeyRateLimitCheck', () => {
 
       expect(result.allowed).toBe(false);
       expect(result.limitType).toBe('minute');
+      expect(rateLimitRefusalInfo(result)).toEqual({
+        errorCode: 'api_key_rate_limit_exceeded',
+        limit: 5,
+        windowSeconds: 60,
+      });
       expect(result.error).toContain('5 requests per minute');
       expect(result.retryAfter).toBeGreaterThan(0);
       expect(result.retryAfter).toBeLessThanOrEqual(60);
@@ -171,6 +177,11 @@ describe('apiKeyRateLimitCheck', () => {
 
       expect(result.allowed).toBe(false);
       expect(result.limitType).toBe('day');
+      expect(rateLimitRefusalInfo(result)).toEqual({
+        errorCode: 'api_key_daily_limit_exceeded',
+        limit: 100,
+        windowSeconds: 86_400,
+      });
       expect(result.error).toContain('100 requests per day');
       expect(result.retryAfter).toBeGreaterThan(0);
 

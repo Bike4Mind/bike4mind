@@ -200,6 +200,7 @@ const RESEARCH_CONFIG_RESPONSE_FIELDS = {
   trigger: true,
   cadence: true,
   reviewBacklogLimit: true,
+  schedulePaused: true,
   nextRunAt: true,
   scheduleAnchorAt: true,
   lastScheduledOutcome: true,

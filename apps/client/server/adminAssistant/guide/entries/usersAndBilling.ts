@@ -64,7 +64,8 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'The tabs are Overview, Activity, Credits, API keys, Sign-ins and Admin log (the audit trail of admin changes).',
       'The Credits tab shows the credit ledger for the account.',
       'Header buttons: "Adjust credits" and "Suspend". The "More actions" menu has Edit profile, Log in as user, Send message, Grant subscription, Change role, Manage product access and Compliance record.',
-      'More actions also has Restrict, Move to limited tier, Schedule deletion, Cancel scheduled deletion and Delete user. Delete user is a permanent hard delete; Schedule deletion purges the account after a grace period.',
+      'More actions also has Restrict, Move to limited tier, Schedule deletion, Cancel scheduled deletion and Delete user. Schedule deletion starts a grace period before erasure and can be cancelled.',
+      'After any required approval, Delete user locks the account and requests asynchronous permanent erasure; records covered by retention rules remain.',
       'Deleting or scheduling deletion of an account needs the users:delete permission; only full administrators can act on accounts that have admin access.',
     ],
     keywords: [
@@ -552,5 +553,21 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'import pairs',
       'promotional credits',
     ],
+  },
+  {
+    id: 'spend-explorer',
+    title: 'Spend explorer',
+    summary:
+      'Recorded AI provider cost per request over any date range, split by provider, account type, model, feature, source or funding, with spikes marked against a rolling median and a drill-down to the accounts behind any day or hour.',
+    views: ['admin.spend_explorer'],
+    settings: [],
+    howTo: [
+      'Pick a range (7d, 14d, 30d, 90d or Custom); ranges of 3 days or less are shown per hour. All times are UTC.',
+      'Use "Split by" to restack the bars, and tick "Previous period" to compare with the window before.',
+      'Click a bar to list the accounts that drove it; each row is the user who ran the calls, with who paid (the user or their org) under "Billed to".',
+      'Click an account row for its spend by model; "Copy summary for Slack" copies a one-line summary of the range.',
+      'Tag an organization as internal, partner or customer in its Account segment card, or mark a user as partner from their profile, to split spend by account type.',
+    ],
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs', 'account type', 'partner'],
   },
 ];

@@ -12,6 +12,7 @@ import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { promptHistory } from '@shared/threadRewind';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillsScope } from '@shared/skills';
 import {
@@ -27,6 +28,7 @@ import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
+import { alertableSessions } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
@@ -49,9 +51,17 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon } from './icons';
+import { ConversationIcon, PanelRightIcon, StatsIcon } from './icons';
+import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
+import { SessionArtifactsButton } from './SessionArtifactsButton';
+import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
+import { StudioPane } from './studio/StudioPane';
+import type { StudioController } from './studio/controller';
+import { useStudioController } from './studio/useStudioController';
+import { studioPaneLayout } from './studio/layout';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
+import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
   chatShellRootSx,
@@ -92,7 +102,7 @@ import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
-import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
@@ -126,6 +136,7 @@ import { useCreationTools } from './useCreationTools';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
+import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
@@ -250,6 +261,7 @@ export function ChatShell({
   onOpenModelServers,
   onOpenImportSettings,
   updateNotice,
+  studio: suppliedStudio,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
@@ -257,6 +269,7 @@ export function ChatShell({
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
+  studio?: StudioController;
 }) {
   const {
     sessions,
@@ -375,6 +388,19 @@ export function ChatShell({
   const modelEngine = useModelEngine(darkMode, persistedId);
   useModelBackgroundBuilds(persistedId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioRegion, studioWidth] = useElementWidth();
+  const studioContainer = useRef<HTMLDivElement | null>(null);
+  const setStudioRegion = useCallback(
+    (node: HTMLDivElement | null) => {
+      studioContainer.current = node;
+      studioRegion(node);
+    },
+    [studioRegion]
+  );
+  const studioAccountKey = `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`;
+  const liveStudio = useStudioController(persistedId, studioOpen && !suppliedStudio, studioAccountKey);
+  const studio = suppliedStudio ?? liveStudio;
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
@@ -492,6 +518,7 @@ export function ChatShell({
       if (selected) setMode(selected.mode);
       setScreen('conversation');
       setActiveId(sessionId);
+      markSessionViewed(sessionId);
     },
     [sessions]
   );
@@ -542,8 +569,19 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const openArtifactInBrowserPane = useCallback(
-    (artifact: Pick<ChatArtifact, 'title' | 'content'>) =>
+    (artifact: Pick<ChatArtifact, 'title' | 'content' | 'identifier'>) =>
       openArtifactInSessionBrowser(artifact, activeId, showBrowserPane),
+    [activeId, showBrowserPane]
+  );
+  const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const openSessionArtifact = useCallback(
+    ({ key, artifact }: SessionArtifact) =>
+      openArtifactInSessionBrowser(
+        { title: artifact.title, content: paneDocument(artifact) },
+        activeId,
+        showBrowserPane,
+        request => window.b4m.browser.openArtifact({ ...request, artifactKey: key })
+      ),
     [activeId, showBrowserPane]
   );
 
@@ -710,6 +748,7 @@ export function ChatShell({
     },
     ...(simulatorView.available ? [{ id: 'simulator' as const, open: simulatorOpen, onToggle: toggleSimulator }] : []),
     ...(modelAvailable ? [{ id: 'model' as const, open: modelOpen, onToggle: toggleModel }] : []),
+    { id: 'studio', open: studioOpen, onToggle: () => setStudioOpen(open => !open) },
   ];
 
   // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
@@ -730,6 +769,7 @@ export function ChatShell({
   const turnOpen =
     conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+  const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
   const workspaceChanges = useWorkspaceChanges(
     screen === 'conversation' ? persistedId : null,
@@ -762,19 +802,26 @@ export function ChatShell({
     canSpawnDeeper(orchestrationSession) &&
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
-  // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
-  // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
   const hasAgents = spawnedStates.length > 0;
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && hasAgents;
+  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
+  // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
+  // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
+  // and messages, are replaced by a neutral count until it is off.
+  const presentingStage = orchestrating && orchestratorPrefs.presenter;
   const { setOrchestrate } = conversation;
-  // A stored 'orchestrate' with nothing to show (agents deleted, or left from an empty stage) is dropped,
-  // so the stage never pops up later on its own. Not while the list loads: it has no agents yet either.
-  const staleAgentsSurface = !settling && !hasAgents && orchestratorPrefs.surface === 'orchestrate';
+  const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
   useEffect(() => {
     if (staleAgentsSurface) setOrchestratorSurface('chat');
   }, [staleAgentsSurface, setOrchestratorSurface]);
   const showExampleQuests =
-    !opening && orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
+    !opening &&
+    !orchestrating &&
+    orchestrateCapable &&
+    delegating &&
+    !hasAgents &&
+    !turnOpen &&
+    conversation.messages.length === 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
@@ -798,6 +845,7 @@ export function ChatShell({
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
+  const [conversationRequest, setConversationRequest] = useState(0);
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -810,6 +858,7 @@ export function ChatShell({
   const readParentReport = useCallback(
     (reportId: string) => {
       setDockOpen(true);
+      setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
       window.requestAnimationFrame(() => {
         const reply = reportReply(threadHost.current, reportId);
@@ -823,15 +872,11 @@ export function ChatShell({
   );
   const focusParentChat = useCallback(() => {
     setDockOpen(true);
+    setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
-  const [slipRequest, setSlipRequest] = useState<{ seq: number; seed: string } | undefined>(undefined);
-  const openOrderSlip = useCallback(
-    (seed: string) => setSlipRequest(previous => ({ seq: (previous?.seq ?? 0) + 1, seed })),
-    []
-  );
   const ambient = useAmbientSettle({
     enabled:
       orchestratorPrefs.ambient &&
@@ -842,11 +887,10 @@ export function ChatShell({
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
-    // Typing into the quiet scene starts an order to the Innkeeper with that character.
     onSettledKey: event => {
       if (!isPrintableKey(event) || isEditable(event.target)) return;
       event.preventDefault();
-      openOrderSlip(event.key);
+      focusParentChat();
     },
   });
   const [ambientHint, setAmbientHint] = useState(false);
@@ -872,6 +916,10 @@ export function ChatShell({
   const stageFocus = useMemo(
     () => ({ on: orchestratorPrefs.focus, onToggle: orchestratorPrefs.setFocus }),
     [orchestratorPrefs.focus, orchestratorPrefs.setFocus]
+  );
+  const stagePresenter = useMemo(
+    () => ({ on: orchestratorPrefs.presenter, onToggle: orchestratorPrefs.setPresenter }),
+    [orchestratorPrefs.presenter, orchestratorPrefs.setPresenter]
   );
 
   const parentReply = useMemo(() => {
@@ -903,24 +951,22 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const toggleParentChat = () => {
+    const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
+    wakeAmbient();
+    if (!dockVisible || agentDetailsOpen) focusParentChat();
+    else closeDock();
+  };
   const innkeeperDesk = useMemo<InnkeeperDesk>(
     () => ({
-      // Straight to the conversation, not through onSend: that one also sends whatever is attached
-      // in the composer, which the user staged for a different message.
-      send: text => void sendToConversation(text),
       reply: parentReply,
       onReadReply: id => {
         wakeAmbient();
         readParentReport(id);
       },
-      onOpenConversation: () => {
-        wakeAmbient();
-        focusParentChat();
-      },
       conversationHidden: !dockVisible,
-      openRequest: slipRequest,
     }),
-    [sendToConversation, parentReply, wakeAmbient, readParentReport, focusParentChat, dockVisible, slipRequest]
+    [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
@@ -933,10 +979,12 @@ export function ChatShell({
       else writeSurface(rootId, 'orchestrate');
     }
     selectSession(rootId);
-    if (sessionId === rootId) setDockOpen(true);
-    else setNoticeFocus({ rootId, agentId: sessionId });
+    if (sessionId !== rootId) setNoticeFocus({ rootId, agentId: sessionId });
+    // The dock is a global preference, so a plain session's notice must not reopen one the user hid.
+    else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
+  // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
@@ -957,7 +1005,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => void window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => window.b4m.chat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
@@ -983,6 +1031,12 @@ export function ChatShell({
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
+  // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
+  // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
+  const statsRailFits =
+    !orchestratorShown && railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
+  const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1431,9 +1485,13 @@ export function ChatShell({
                   onRespond={conversation.respondToApproval}
                   onMove={background.moveToBackground}
                   onContinue={() => void conversation.continueReply()}
+                  onEditMessage={conversation.editMessage}
+                  onRegenerate={() => void conversation.regenerate()}
                   onReplyToSelection={onReplyToSelection}
                   onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                  statsRail={statsRailFits && statsRailOn}
+                  liveTurn={conversation.turn}
                   // At the foot of the thread rather than above the composer: a background command is
                   // something this conversation started, so it reads as the last thing that happened
                   // in it. It scrolls with the transcript, which is the trade - the panel is reached
@@ -1466,9 +1524,43 @@ export function ChatShell({
   );
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
+  const sceneConversation =
+    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+  const handledConversationClicks = useRef(new WeakSet<Event>());
+  useEffect(() => {
+    if (!sceneConversation || !dockVisible) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledConversationClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      closeDock();
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [sceneConversation, dockVisible, closeDock]);
 
   return (
-    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
+    <Box
+      sx={chatShellRootSx}
+      {...drop.handlers}
+      data-testid="chat-shell"
+      onFocusCapture={event => {
+        if (!sceneConversation || !(event.target instanceof Element)) return;
+        if (!event.target.matches('[data-testid="chat-composer-input"]')) return;
+        wakeAmbient();
+        setDockOpen(true);
+        setConversationRequest(request => request + 1);
+      }}
+      onClickCapture={event => {
+        handledConversationClicks.current.add(event.nativeEvent);
+        if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (threadHost.current?.contains(event.target)) return;
+        if (event.target.closest('[data-conversation-toggle]')) return;
+        if (event.target.closest('[data-testid="chat-composer-input"]')) return;
+        closeDock();
+      }}
+    >
       <SpawnFailureToast />
       {deleteSessionId && (
         <DeleteSessionDialog
@@ -1527,7 +1619,19 @@ export function ChatShell({
         sectionActions={sectionActions}
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
-        customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        customize={
+          <>
+            <CustomizeNavItem onOpen={() => setScreen('customize')} />
+            <Button
+              size="sm"
+              variant="plain"
+              data-testid="handoff-server-conversations-btn"
+              onClick={() => void window.b4m.attention.openServerSessions()}
+            >
+              Server conversations / handoff
+            </Button>
+          </>
+        }
         onOpenModels={() => setScreen('models')}
         syncHints={
           onOpenImportSettings
@@ -1567,571 +1671,667 @@ export function ChatShell({
           onOpenSkillMarket={openSkillMarket}
         />
       ) : (
-        <Stack
-          ref={conversationColumn}
-          data-testid="chat-conversation-column"
-          sx={{ flex: 1, minWidth: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
+        <Box
+          ref={setStudioRegion}
+          sx={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: studioOpen && studioPaneLayout(studioWidth) === 'stacked' ? 'column' : 'row',
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+          }}
         >
-          <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-            <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                {conversation.session ? (
-                  <>
-                    <SessionHeader
-                      title={activeSummary?.title ?? conversation.session.title}
-                      onRename={title =>
-                        void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                      }
-                    />
-                    {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                  </>
-                ) : opening ? null : (
-                  <Typography level="title-sm" textColor="text.tertiary">
-                    No conversation open
-                  </Typography>
-                )}
-              </Box>
-              <OrchestrateToggle
-                states={spawnedStates}
-                parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
-                // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
-                surface={orchestrating ? 'orchestrate' : 'chat'}
-                onSurfaceChange={orchestratorPrefs.setSurface}
-              />
-              <Box
-                data-testid="chat-header-tools"
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 0.5,
-                  // Only beside the Chat / Agents switch, which renders nothing when it has nothing to switch.
-                  '[data-testid="chat-surface-toggle"] + &': {
-                    ml: 0.5,
-                    pl: 1,
-                    borderLeft: '1px solid',
-                    borderColor: 'divider',
-                  },
-                }}
-              >
-                {loop && (!panelShown || panelPrefs.collapsed.has('background')) && (
-                  <Box
-                    role="status"
-                    data-testid="loop-header-status"
-                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
-                  >
-                    <Button
-                      size="sm"
-                      variant="soft"
-                      color={loop.phase === 'paused' ? 'warning' : 'neutral'}
-                      onClick={() => {
-                        if (!panelShown) togglePanel();
-                        if (panelPrefs.collapsed.has('background')) panelPrefs.toggleSection('background');
-                      }}
-                      data-testid="loop-header-open-btn"
-                    >
-                      Loop {loop.phase}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="plain"
-                      color="neutral"
-                      aria-label="Stop loop"
-                      data-testid="loop-header-stop-btn"
-                      onClick={() => void window.b4m.chat.loopCommand(loop.sessionId, 'stop')}
-                    >
-                      Stop
-                    </Button>
-                  </Box>
-                )}
-                {panelAvailable && (
-                  <Tooltip
-                    size="sm"
-                    variant="soft"
-                    placement="bottom-end"
-                    title={panelShown ? 'Hide the session panel' : 'Show the session panel'}
-                  >
-                    <IconButton
-                      ref={panelToggle}
-                      size="sm"
-                      variant={panelShown ? 'soft' : 'plain'}
-                      color="neutral"
-                      aria-expanded={panelShown}
-                      aria-controls={panelShown ? SESSION_PANEL_ID : undefined}
-                      aria-label={panelShown ? 'Hide the session panel' : 'Show the session panel'}
-                      onClick={togglePanel}
-                      data-testid="chat-toggle-session-panel-btn"
-                    >
-                      <PanelRightIcon />
-                    </IconButton>
-                  </Tooltip>
-                )}
-                {/* Inside the reading column, not out at the window edge: a popup opening from
-                  here cannot reach the pane, and one over the pane would be drawn behind the
-                  web page - see agentBrowser.ts. */}
-                <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
-                <PanesMenu
-                  buttonRef={panesMenuButtonRef}
-                  panes={paneControls}
-                  historyOn={!opening && conversation.session?.historyEnabled === true}
-                />
-              </Box>
-            </Box>
-          </Box>
-
-          {/* The region the session panel floats over: the thread and nothing below it, so the
-              card can never reach the composer, and everything it does not cover stays live. */}
-          <Box
-            ref={threadRegion}
-            data-testid="chat-update-notice-region"
-            sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+          <Stack
+            ref={conversationColumn}
+            data-testid="chat-conversation-column"
+            sx={{ flex: 1, minWidth: 0, minHeight: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
           >
-            {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
-                never remounts the thread and loses the reader's place in it. */}
-            <Box
-              data-testid="chat-thread-region"
-              sx={{
-                position: 'relative',
-                display: 'flex',
-                flex: 1,
-                minHeight: 0,
-                pr: `${panelSpace}px`,
-                // The row reserves the rail once, including for the orchestrator's narrower dock.
-                [SESSION_PANEL_SPACE_VAR]: '0px',
-                transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
-                '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
-              }}
-            >
-              {orchestratorShown && (
-                <OrchestratorSurface
-                  // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
-                  key={activeId}
-                  rootId={activeId}
-                  sessions={sessions}
-                  statuses={statuses}
-                  preparing={preparing}
-                  prSummaries={prSummaries}
-                  view={orchestratorView}
-                  onViewChange={changeOrchestratorView}
-                  actions={agentActions}
-                  introPlaying={introPhase === 'playing'}
-                  renderView={renderOrchestratorView}
-                  onParentFocus={focusParentChat}
-                  report={parentReport}
-                  onReadReport={readParentReport}
-                  focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
-                  onFocusAgentConsumed={clearNoticeFocus}
-                  onExampleQuest={pickExampleQuest}
-                  desk={innkeeperDesk}
-                  ambient={stageAmbient}
-                  focus={stageFocus}
-                  dockControl={
+            <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  {conversation.session ? (
+                    presentingStage ? (
+                      <Typography level="title-sm" noWrap data-testid="chat-session-title">
+                        Orchestrator
+                      </Typography>
+                    ) : (
+                      <>
+                        <SessionHeader
+                          title={activeSummary?.title ?? conversation.session.title}
+                          onRename={title =>
+                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                          }
+                        />
+                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
+                      </>
+                    )
+                  ) : opening ? null : (
+                    <Typography level="title-sm" textColor="text.tertiary">
+                      No conversation open
+                    </Typography>
+                  )}
+                </Box>
+                <OrchestrateToggle
+                  states={spawnedStates}
+                  enabled={delegating && orchestrateCapable}
+                  parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
+                  surface={orchestrating ? 'orchestrate' : 'chat'}
+                  onSurfaceChange={orchestratorPrefs.setSurface}
+                />
+                <Box
+                  data-testid="chat-header-tools"
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    // Only beside the Chat / Agents switch, which renders nothing when it has nothing to switch.
+                    '[data-testid="chat-surface-toggle"] + &': {
+                      ml: 0.5,
+                      pl: 1,
+                      borderLeft: '1px solid',
+                      borderColor: 'divider',
+                    },
+                  }}
+                >
+                  {loop && (!panelShown || panelPrefs.collapsed.has('background')) && (
+                    <Box
+                      role="status"
+                      data-testid="loop-header-status"
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                    >
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        color={loop.phase === 'paused' ? 'warning' : 'neutral'}
+                        onClick={() => {
+                          if (!panelShown) togglePanel();
+                          if (panelPrefs.collapsed.has('background')) panelPrefs.toggleSection('background');
+                        }}
+                        data-testid="loop-header-open-btn"
+                      >
+                        Loop {loop.phase}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        aria-label="Stop loop"
+                        data-testid="loop-header-stop-btn"
+                        onClick={() => void window.b4m.chat.loopCommand(loop.sessionId, 'stop')}
+                      >
+                        Stop
+                      </Button>
+                    </Box>
+                  )}
+                  {panelAvailable && (
                     <Tooltip
                       size="sm"
                       variant="soft"
                       placement="bottom-end"
-                      title={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                      title={panelShown ? 'Hide the session panel' : 'Show the session panel'}
                     >
                       <IconButton
+                        ref={panelToggle}
                         size="sm"
-                        variant={orchestratorPrefs.dockOpen ? 'soft' : 'plain'}
+                        variant={panelShown ? 'soft' : 'plain'}
                         color="neutral"
-                        aria-pressed={orchestratorPrefs.dockOpen}
-                        aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
-                        ref={dockToggle}
-                        onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
-                        data-testid="orchestrator-dock-toggle-btn"
+                        aria-expanded={panelShown}
+                        aria-controls={panelShown ? SESSION_PANEL_ID : undefined}
+                        aria-label={panelShown ? 'Hide the session panel' : 'Show the session panel'}
+                        onClick={togglePanel}
+                        data-testid="chat-toggle-session-panel-btn"
                       >
                         <PanelRightIcon />
                       </IconButton>
                     </Tooltip>
-                  }
-                />
-              )}
-              <ThreadDock mode={threadDockMode} hostRef={threadHost} onClose={closeDock}>
-                {thread}
-              </ThreadDock>
-            </Box>
-
-            {panelShown && conversation.session && (
-              <SessionPanel
-                // Keyed so an action error or an unfolded list does not follow the user to the next
-                // conversation.
-                key={`panel-${activeId ?? 'none'}`}
-                variant={panelDocked ? 'docked' : 'overlay'}
-                collapsed={panelPrefs.collapsed}
-                onToggleSection={panelPrefs.toggleSection}
-                onDismiss={closePanelPopover}
-                anchor={panelToggle}
-                environment={{
-                  project: panelProject,
-                  ...(conversation.session.grantedDirectories
-                    ? { grantedDirectories: conversation.session.grantedDirectories }
-                    : {}),
-                  binding: conversation.project,
-                  settledTurns: conversation.settledTurns,
-                  inUse: conversation.messages.length > 0,
-                  preparing: conversation.preparing !== null,
-                }}
-                changes={{
-                  workspace: workspaceChanges,
-                  hasPullRequest,
-                  pullRequest,
-                  pullRequestActions: {
-                    onDismiss: () =>
-                      activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const }),
-                    onRefresh: () => activeId && void window.b4m.pullRequests.refresh(activeId),
-                    onSetOption: (option, enabled) =>
-                      activeId
-                        ? window.b4m.pullRequests.setOption(activeId, option, enabled)
-                        : Promise.resolve({ ok: false as const, error: 'No conversation is open.' }),
-                    onOpenLink: openInBrowserPane,
-                  },
-                  busy: turnOpen,
-                  // Straight to the conversation, not through onSend: that one also sends whatever
-                  // is attached in the composer, which the user staged for a different message.
-                  onCreatePullRequest: changes => void conversation.send(createPullRequestPrompt(changes)),
-                }}
-                context={composerUsage}
-                plan={{ todos: plan, turnOpen }}
-                background={{
-                  loop,
-                  processes: background.processes,
-                  spawned,
-                  onStopProcess: background.stop,
-                  onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
-                  onOpenSession: selectSession,
-                  onShowOutput: () => setTasksPanelOpen(true),
-                }}
-              />
-            )}
-            {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
-            {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
-          </Box>
-
-          {ambient.settled && (
-            <Box sx={contentColumnSx}>
-              <Box
-                data-testid="orchestrator-ambient-chip-row"
-                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, py: 1 }}
-              >
-                <Button
-                  size="sm"
-                  variant="soft"
-                  color="neutral"
-                  onClick={() => {
-                    wakeAmbient();
-                    openOrderSlip('');
-                  }}
-                  data-testid="orchestrator-ambient-talk-btn"
-                >
-                  Type to talk to the Innkeeper
-                </Button>
-                {ambientHint && (
-                  <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
-                    Move the mouse to bring the controls back
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-          )}
-          {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
-          <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
-            {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
-
-            {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
-              thread to show for it. Above the error slot, because a refusal replaces it. */}
-            {conversation.commandProgress && (
-              <Box sx={contentColumnSx}>
-                <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
-                  {conversation.commandProgress}
-                </Alert>
-              </Box>
-            )}
-
-            {conversation.sendError && (
-              <Box sx={contentColumnSx}>
-                <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
-                  {conversation.sendError}
-                </Alert>
-              </Box>
-            )}
-
-            {conversation.notice && (
-              <Box sx={contentColumnSx}>
-                <Alert
-                  size="sm"
-                  color="warning"
-                  variant="soft"
-                  sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
-                  onClick={conversation.dismissNotice}
-                  data-testid="chat-notice"
-                >
-                  {conversation.notice}
-                </Alert>
-              </Box>
-            )}
-
-            {addFolderAlert && (
-              <Box sx={contentColumnSx}>
-                <Alert
-                  size="sm"
-                  color={addFolderAlert.color}
-                  variant="soft"
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
-                  data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
-                >
-                  {addFolderAlert.text}
-                </Alert>
-              </Box>
-            )}
-
-            {defaultsReadError && defaultsSessionId && (
-              <Box sx={contentColumnSx}>
-                <Alert
-                  size="sm"
-                  color="warning"
-                  variant="soft"
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
-                  data-testid="chat-model-defaults-error"
-                >
-                  {defaultsReadError}
-                </Alert>
-              </Box>
-            )}
-
-            {codeError && (
-              <Box sx={contentColumnSx}>
-                <Alert
-                  size="sm"
-                  color="danger"
-                  variant="soft"
-                  sx={{ cursor: 'pointer' }}
-                  onClick={clearCodeError}
-                  data-testid="chat-code-create-error"
-                >
-                  {codeError}
-                </Alert>
-              </Box>
-            )}
-
-            {sideChatError?.sessionId === activeId && (
-              <Box sx={contentColumnSx}>
-                <Alert
-                  size="sm"
-                  color="danger"
-                  variant="soft"
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() => setSideChatError(null)}
-                  data-testid="chat-side-chat-error"
-                >
-                  {sideChatError.error}
-                </Alert>
-              </Box>
-            )}
-
-            <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
-
-            <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
-
-            <SpawnSuggestionTray
-              suggestions={spawnSuggestions.suggestions}
-              onStart={onStartSuggestion}
-              onDismiss={spawnSuggestions.dismiss}
-            />
-
-            {/* After first use, an unbound session or a hidden panel error still needs these controls
-            above the composer. Empty Code sessions render them in the transcript instead. */}
-            {conversation.session?.mode === 'code' &&
-              !initialCodeSetup &&
-              (!conversation.session.project || bindingErrorHidden) && (
-                <SessionChips
-                  project={conversation.session.project ?? null}
-                  {...(conversation.session.grantedDirectories
-                    ? { grantedDirectories: conversation.session.grantedDirectories }
-                    : {})}
-                  binding={conversation.project}
-                  settledTurns={conversation.settledTurns}
-                  inUse={conversation.messages.length > 0}
-                  preparing={conversation.preparing !== null}
-                />
-              )}
-            {conversation.session && conversation.session.mode !== 'code' && (
-              <GrantedFolderChips
-                directories={conversation.session.grantedDirectories ?? []}
-                onRemove={conversation.project.removeContextDirectory}
-              />
-            )}
-
-            <CacheExpiryNote
-              stamp={promptCache}
-              model={modelOption}
-              contextTokens={composerUsage.contextTokens ?? 0}
-              ttl={cacheTtlFor(modelOption)}
-              turnOpen={turnOpen}
-              sx={contentColumnSx}
-            />
-
-            {showExampleQuests && (
-              <Box sx={contentColumnSx}>
-                <ExampleQuestStrip onPick={pickExampleQuest} />
-              </Box>
-            )}
-
-            <Composer
-              sessionId={activeId}
-              disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
-              disabledPlaceholder={disabledPlaceholder}
-              streaming={turnOpen}
-              attachments={draft}
-              blockedReason={blockedReason}
-              blockedAction={blockedAction}
-              blockedNotice={blockedNotice}
-              // Blocked rather than refused: a refused send has already cleared the box.
-              notReady={
-                auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
-                  ? 'Sign in'
-                  : unbound
-                    ? 'No folder'
-                    : null
-              }
-              usage={composerUsage}
-              contextStatus={
-                <ContextRing
-                  tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
-                  limit={composerUsage.contextLimit}
-                  modelId={conversation.session?.model ?? null}
-                  promptCache={promptCache}
-                  streaming={turnOpen}
-                  hasReply={hasReply}
-                  usage={composerUsage}
-                />
-              }
-              placeholder={
-                conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
-              }
-              onSend={text => void onSend(text)}
-              onStop={conversation.stop}
-              onRunCommand={(name, args) => void conversation.runCommand(name, args)}
-              onBrowseSkillMarket={() => openSkillMarket()}
-              // A Code session shares folders from its workspace controls instead. Both must say
-              // Chat: for a frame after a mode switch, the open session is still the old mode's.
-              addFolder={
-                mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                  ? { onClick: () => void addFolder(), disabled: opening || openFailed }
-                  : null
-              }
-              sessionMode={conversation.session?.mode ?? 'chat'}
-              suggestion={nextPrompt.suggestion}
-              onSuggestionDismissed={nextPrompt.dismiss}
-              queued={conversation.queued}
-              onCancelQueued={conversation.cancelQueued}
-              onSendQueuedNow={conversation.sendQueuedNow}
-              returned={conversation.returned}
-              onReturnedConsumed={conversation.clearReturned}
-              fill={composerFill}
-              onFillConsumed={clearComposerFill}
-              focusRequest={composerFocus}
-              quote={activeId ? (quotes[activeId] ?? null) : null}
-              onRemoveQuote={() => activeId && setQuote(activeId, null)}
-              skills={skills}
-              mentionSessions={sessions}
-              leading={
-                <>
-                  <ApprovalModePill
-                    key={`approval:${activeId ?? ''}`}
-                    mode={conversation.session?.approvalMode ?? 'ask'}
-                    disabled={chatSettingsLocked}
-                    onSelect={mode => void conversation.setApprovalMode(mode)}
+                  )}
+                  {/* Inside the reading column, not out at the window edge: a popup opening from
+                  here cannot reach the pane, and one over the pane would be drawn behind the
+                  web page - see agentBrowser.ts. */}
+                  <SessionArtifactsButton artifacts={artifactsInSession} onOpen={openSessionArtifact} />
+                  <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
+                  <PanesMenu
+                    buttonRef={panesMenuButtonRef}
+                    panes={paneControls}
+                    historyOn={!opening && conversation.session?.historyEnabled === true}
                   />
-                  {orchestrateCapable && (
-                    <OrchestratePill
-                      on={delegating}
-                      disabled={!activeId}
-                      policy={conversation.session?.orchestrationPolicy}
-                      planner={conversation.session?.model}
-                      models={catalog.models}
-                      onChange={on => void setOrchestrate(on)}
-                    />
-                  )}
-                </>
-              }
-              footer={indicators => (
-                <TuneTray
-                  disabled={!activeId}
-                  trailing={
-                    <>
-                      <ModelPicker
-                        key={`model:${activeId ?? ''}`}
-                        catalog={catalog}
-                        modelId={conversation.session?.model ?? null}
-                        disabled={chatSettingsLocked}
-                        onSelect={model => void conversation.setModel(model)}
-                        noLocal={noLocal}
-                        local={localMode}
-                        onOpenModels={() => setScreen('models')}
-                        switchCredits={model =>
-                          modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
-                        }
-                        servers={savedServers}
-                        hasHistory={conversation.messages.length > 0}
-                        sessionId={activeId}
-                      />
-                      {indicators}
-                    </>
-                  }
-                >
-                  {compact => (
-                    <>
-                      <ReasoningEffortPicker
-                        key={`effort:${activeId ?? ''}`}
-                        models={catalog.models}
-                        modelId={conversation.session?.model ?? null}
-                        effort={conversation.session?.reasoningEffort ?? 'default'}
-                        defaultEffort={defaultEffort}
-                        disabled={chatSettingsLocked}
-                        compact={compact}
-                        onSelect={effort => void conversation.setReasoningEffort(effort)}
-                      />
-                      {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
-                      <GenerationSettingsPicker
-                        key={activeId ?? ''}
-                        model={modelOption}
-                        generation={conversation.session?.generation}
-                        modelDefaults={modelDefaults ?? undefined}
-                        effort={conversation.session?.reasoningEffort ?? 'default'}
-                        disabled={chatSettingsLocked}
-                        compact={compact}
-                        onChange={conversation.setGeneration}
-                      />
-                      <PromptCacheTtlPicker
-                        key={`cache:${activeId ?? ''}`}
-                        model={modelOption}
-                        ttl={sessionCacheTtl}
-                        contextTokens={composerUsage.contextTokens ?? 0}
-                        disabled={chatSettingsLocked}
-                        compact={compact}
-                        onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
-                      />
-                    </>
-                  )}
-                </TuneTray>
-              )}
-            />
-          </Box>
+                  {/* Drawn at every width, so the buttons beside it never shift and focus is never
+                  dropped as the window crosses the breakpoint; narrower, the tooltip says why
+                  nothing shows beside the conversation. */}
+                  <Tooltip
+                    size="sm"
+                    variant="soft"
+                    placement="bottom-end"
+                    title={replyStatsToggleTitle({
+                      persisted: !!persistedId,
+                      orchestratorShown,
+                      railFits: statsRailFits,
+                      railOn: statsRailOn,
+                    })}
+                  >
+                    <Box component="span" sx={{ display: 'inline-flex' }}>
+                      <IconButton
+                        size="sm"
+                        variant={statsRailOn && persistedId ? 'soft' : 'plain'}
+                        color="neutral"
+                        disabled={!persistedId}
+                        aria-pressed={statsRailOn}
+                        aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                        onClick={() => setReplyStatsRail(!statsRailOn)}
+                        data-testid="chat-toggle-reply-stats-btn"
+                      >
+                        <StatsIcon />
+                      </IconButton>
+                    </Box>
+                  </Tooltip>
+                </Box>
+              </Box>
+            </Box>
 
-          {terminalOpen && activeId && (
-            <TerminalPanel
-              key={activeId}
-              sessionId={activeId}
-              column={conversationColumn}
-              focusRequest={terminalFocus?.sessionId === activeId ? terminalFocus.seq : 0}
-              onHide={hideTerminal}
-              onOpenLink={openInBrowserPane}
+            {/* The region the session panel floats over: the thread and nothing below it, so the
+              card can never reach the composer, and everything it does not cover stays live. */}
+            <Box
+              ref={threadRegion}
+              data-testid="chat-update-notice-region"
+              sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+            >
+              {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
+                never remounts the thread and loses the reader's place in it. */}
+              <Box
+                data-testid="chat-thread-region"
+                sx={{
+                  position: 'relative',
+                  display: 'flex',
+                  flex: 1,
+                  minHeight: 0,
+                  pr: `${panelSpace}px`,
+                  // The row reserves the rail once, including for the orchestrator's narrower dock.
+                  [SESSION_PANEL_SPACE_VAR]: '0px',
+                  transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
+                  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+                  '&:has([data-agent-details-open="true"]) > [data-scene-conversation]': {
+                    visibility: 'hidden',
+                  },
+                }}
+              >
+                {orchestratorShown && (
+                  <OrchestratorSurface
+                    // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
+                    key={activeId}
+                    rootId={activeId}
+                    sessions={sessions}
+                    statuses={statuses}
+                    preparing={preparing}
+                    prSummaries={prSummaries}
+                    view={orchestratorView}
+                    onViewChange={changeOrchestratorView}
+                    actions={agentActions}
+                    introPlaying={introPhase === 'playing'}
+                    renderView={renderOrchestratorView}
+                    onParentFocus={focusParentChat}
+                    onParentToggle={toggleParentChat}
+                    report={parentReport}
+                    onReadReport={readParentReport}
+                    focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
+                    onFocusAgentConsumed={clearNoticeFocus}
+                    onExampleQuest={pickExampleQuest}
+                    desk={innkeeperDesk}
+                    ambient={stageAmbient}
+                    focus={stageFocus}
+                    conversationRequest={conversationRequest}
+                    presenter={stagePresenter}
+                    dockControl={
+                      <Tooltip
+                        size="sm"
+                        variant="soft"
+                        placement="bottom-end"
+                        title={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                      >
+                        <IconButton
+                          size="sm"
+                          variant={orchestratorPrefs.dockOpen ? 'soft' : 'plain'}
+                          color="neutral"
+                          aria-pressed={orchestratorPrefs.dockOpen}
+                          aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                          ref={dockToggle}
+                          data-conversation-toggle
+                          onClick={() => {
+                            if (
+                              sceneConversation &&
+                              threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]')
+                            ) {
+                              focusParentChat();
+                            } else {
+                              setDockOpen(!orchestratorPrefs.dockOpen);
+                              if (!orchestratorPrefs.dockOpen) setConversationRequest(request => request + 1);
+                            }
+                          }}
+                          data-testid="orchestrator-dock-toggle-btn"
+                        >
+                          <ConversationIcon />
+                        </IconButton>
+                      </Tooltip>
+                    }
+                  />
+                )}
+                <ThreadDock
+                  mode={threadDockMode}
+                  hostRef={threadHost}
+                  onClose={closeDock}
+                  scene={sceneConversation ? { skin: ORCHESTRATOR_VIEW_INFO[orchestratorView].detailsSkin } : undefined}
+                >
+                  {thread}
+                </ThreadDock>
+              </Box>
+
+              {panelShown && conversation.session && (
+                <SessionPanel
+                  // Keyed so an action error or an unfolded list does not follow the user to the next
+                  // conversation.
+                  key={`panel-${activeId ?? 'none'}`}
+                  variant={panelDocked ? 'docked' : 'overlay'}
+                  collapsed={panelPrefs.collapsed}
+                  onToggleSection={panelPrefs.toggleSection}
+                  onDismiss={closePanelPopover}
+                  anchor={panelToggle}
+                  environment={{
+                    project: panelProject,
+                    ...(conversation.session.grantedDirectories
+                      ? { grantedDirectories: conversation.session.grantedDirectories }
+                      : {}),
+                    binding: conversation.project,
+                    settledTurns: conversation.settledTurns,
+                    inUse: conversation.messages.length > 0,
+                    preparing: conversation.preparing !== null,
+                  }}
+                  changes={{
+                    workspace: workspaceChanges,
+                    hasPullRequest,
+                    pullRequest,
+                    pullRequestActions: {
+                      onDismiss: () =>
+                        activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const }),
+                      onRefresh: () => activeId && void window.b4m.pullRequests.refresh(activeId),
+                      onSetOption: (option, enabled) =>
+                        activeId
+                          ? window.b4m.pullRequests.setOption(activeId, option, enabled)
+                          : Promise.resolve({ ok: false as const, error: 'No conversation is open.' }),
+                      onOpenLink: openInBrowserPane,
+                    },
+                    busy: turnOpen,
+                    // Straight to the conversation, not through onSend: that one also sends whatever
+                    // is attached in the composer, which the user staged for a different message.
+                    onCreatePullRequest: changes => void conversation.send(createPullRequestPrompt(changes)),
+                  }}
+                  context={composerUsage}
+                  plan={{ todos: plan, turnOpen }}
+                  background={{
+                    loop,
+                    processes: background.processes,
+                    spawned,
+                    onStopProcess: background.stop,
+                    onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                    onOpenSession: selectSession,
+                    onShowOutput: () => setTasksPanelOpen(true),
+                  }}
+                />
+              )}
+              {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
+              {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
+            </Box>
+
+            {ambient.settled && (
+              <Box sx={contentColumnSx}>
+                <Box
+                  data-testid="orchestrator-ambient-chip-row"
+                  sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, py: 1 }}
+                >
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color="neutral"
+                    onClick={() => {
+                      wakeAmbient();
+                      focusParentChat();
+                    }}
+                    data-testid="orchestrator-ambient-talk-btn"
+                  >
+                    {orchestratorView === 'office' ? 'Type to talk to Manager' : 'Type to talk to the Innkeeper'}
+                  </Button>
+                  {ambientHint && (
+                    <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
+                      Move the mouse to bring the controls back
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            )}
+            {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
+            <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
+              {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
+
+              {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
+              thread to show for it. Above the error slot, because a refusal replaces it. */}
+              {conversation.commandProgress && (
+                <Box sx={contentColumnSx}>
+                  <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
+                    {conversation.commandProgress}
+                  </Alert>
+                </Box>
+              )}
+
+              {conversation.sendError && (
+                <Box sx={contentColumnSx}>
+                  <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
+                    {conversation.sendError}
+                  </Alert>
+                </Box>
+              )}
+
+              {conversation.notice && (
+                <Box sx={contentColumnSx}>
+                  <Alert
+                    size="sm"
+                    color="warning"
+                    variant="soft"
+                    sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
+                    onClick={conversation.dismissNotice}
+                    data-testid="chat-notice"
+                  >
+                    {conversation.notice}
+                  </Alert>
+                </Box>
+              )}
+
+              {addFolderAlert && (
+                <Box sx={contentColumnSx}>
+                  <Alert
+                    size="sm"
+                    color={addFolderAlert.color}
+                    variant="soft"
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
+                    data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
+                  >
+                    {addFolderAlert.text}
+                  </Alert>
+                </Box>
+              )}
+
+              {defaultsReadError && defaultsSessionId && (
+                <Box sx={contentColumnSx}>
+                  <Alert
+                    size="sm"
+                    color="warning"
+                    variant="soft"
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
+                    data-testid="chat-model-defaults-error"
+                  >
+                    {defaultsReadError}
+                  </Alert>
+                </Box>
+              )}
+
+              {codeError && (
+                <Box sx={contentColumnSx}>
+                  <Alert
+                    size="sm"
+                    color="danger"
+                    variant="soft"
+                    sx={{ cursor: 'pointer' }}
+                    onClick={clearCodeError}
+                    data-testid="chat-code-create-error"
+                  >
+                    {codeError}
+                  </Alert>
+                </Box>
+              )}
+
+              {sideChatError?.sessionId === activeId && (
+                <Box sx={contentColumnSx}>
+                  <Alert
+                    size="sm"
+                    color="danger"
+                    variant="soft"
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() => setSideChatError(null)}
+                    data-testid="chat-side-chat-error"
+                  >
+                    {sideChatError.error}
+                  </Alert>
+                </Box>
+              )}
+
+              {presentingStage && (
+                <PresenterPendingNotice
+                  count={heldRelays.held.length + decisionsFor(persistedId, taskDecisions).length}
+                  onTurnOff={() => orchestratorPrefs.setPresenter(false)}
+                />
+              )}
+
+              {!presentingStage && (
+                <>
+                  <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+
+                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+
+                  <SpawnSuggestionTray
+                    suggestions={spawnSuggestions.suggestions}
+                    onStart={onStartSuggestion}
+                    onDismiss={spawnSuggestions.dismiss}
+                  />
+                </>
+              )}
+
+              {/* After first use, an unbound session or a hidden panel error still needs these controls
+            above the composer. Empty Code sessions render them in the transcript instead. */}
+              {conversation.session?.mode === 'code' &&
+                !initialCodeSetup &&
+                (!conversation.session.project || bindingErrorHidden) && (
+                  <SessionChips
+                    project={conversation.session.project ?? null}
+                    {...(conversation.session.grantedDirectories
+                      ? { grantedDirectories: conversation.session.grantedDirectories }
+                      : {})}
+                    binding={conversation.project}
+                    settledTurns={conversation.settledTurns}
+                    inUse={conversation.messages.length > 0}
+                    preparing={conversation.preparing !== null}
+                  />
+                )}
+              {conversation.session && conversation.session.mode !== 'code' && (
+                <GrantedFolderChips
+                  directories={conversation.session.grantedDirectories ?? []}
+                  onRemove={conversation.project.removeContextDirectory}
+                />
+              )}
+
+              <CacheExpiryNote
+                stamp={promptCache}
+                model={modelOption}
+                contextTokens={composerUsage.contextTokens ?? 0}
+                ttl={cacheTtlFor(modelOption)}
+                turnOpen={turnOpen}
+                sx={contentColumnSx}
+              />
+
+              {showExampleQuests && (
+                <Box sx={contentColumnSx}>
+                  <ExampleQuestStrip onPick={pickExampleQuest} />
+                </Box>
+              )}
+
+              <Composer
+                sessionId={activeId}
+                promptHistory={sentPrompts}
+                disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
+                disabledPlaceholder={disabledPlaceholder}
+                streaming={turnOpen}
+                attachments={draft}
+                blockedReason={blockedReason}
+                blockedAction={blockedAction}
+                blockedNotice={blockedNotice}
+                // Blocked rather than refused: a refused send has already cleared the box.
+                notReady={
+                  auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
+                    ? 'Sign in'
+                    : unbound
+                      ? 'No folder'
+                      : null
+                }
+                usage={composerUsage}
+                contextStatus={
+                  <ContextRing
+                    tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
+                    limit={composerUsage.contextLimit}
+                    modelId={conversation.session?.model ?? null}
+                    promptCache={promptCache}
+                    streaming={turnOpen}
+                    hasReply={hasReply}
+                    usage={composerUsage}
+                  />
+                }
+                placeholder={
+                  conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+                }
+                onSend={text => void onSend(text)}
+                onStop={conversation.stop}
+                onRunCommand={(name, args) => void conversation.runCommand(name, args)}
+                onBrowseSkillMarket={() => openSkillMarket()}
+                // A Code session shares folders from its workspace controls instead. Both must say
+                // Chat: for a frame after a mode switch, the open session is still the old mode's.
+                addFolder={
+                  mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
+                    ? { onClick: () => void addFolder(), disabled: opening || openFailed }
+                    : null
+                }
+                sessionMode={conversation.session?.mode ?? 'chat'}
+                suggestion={nextPrompt.suggestion}
+                onSuggestionDismissed={nextPrompt.dismiss}
+                queued={conversation.queued}
+                onCancelQueued={conversation.cancelQueued}
+                onSendQueuedNow={conversation.sendQueuedNow}
+                returned={conversation.returned}
+                onReturnedConsumed={conversation.clearReturned}
+                fill={composerFill}
+                onFillConsumed={clearComposerFill}
+                focusRequest={composerFocus}
+                quote={activeId ? (quotes[activeId] ?? null) : null}
+                onRemoveQuote={() => activeId && setQuote(activeId, null)}
+                skills={skills}
+                mentionSessions={sessions}
+                leading={
+                  <>
+                    <ApprovalModePill
+                      key={`approval:${activeId ?? ''}`}
+                      mode={conversation.session?.approvalMode ?? 'ask'}
+                      disabled={chatSettingsLocked}
+                      onSelect={mode => void conversation.setApprovalMode(mode)}
+                    />
+                    {orchestrateCapable && (
+                      <OrchestratePill
+                        on={delegating}
+                        disabled={!activeId}
+                        policy={conversation.session?.orchestrationPolicy}
+                        planner={conversation.session?.model}
+                        models={catalog.models}
+                        onChange={on => void setOrchestrate(on)}
+                      />
+                    )}
+                  </>
+                }
+                footer={indicators => (
+                  <TuneTray
+                    disabled={!activeId}
+                    trailing={
+                      <>
+                        <ModelPicker
+                          key={`model:${activeId ?? ''}`}
+                          catalog={catalog}
+                          modelId={conversation.session?.model ?? null}
+                          disabled={chatSettingsLocked}
+                          onSelect={model => void conversation.setModel(model)}
+                          noLocal={noLocal}
+                          local={localMode}
+                          onOpenModels={() => setScreen('models')}
+                          switchCredits={model =>
+                            modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                          }
+                          servers={savedServers}
+                          hasHistory={conversation.messages.length > 0}
+                          sessionId={activeId}
+                        />
+                        {indicators}
+                      </>
+                    }
+                  >
+                    {compact => (
+                      <>
+                        <ReasoningEffortPicker
+                          key={`effort:${activeId ?? ''}`}
+                          models={catalog.models}
+                          modelId={conversation.session?.model ?? null}
+                          effort={conversation.session?.reasoningEffort ?? 'default'}
+                          defaultEffort={defaultEffort}
+                          disabled={chatSettingsLocked}
+                          compact={compact}
+                          onSelect={effort => void conversation.setReasoningEffort(effort)}
+                        />
+                        {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                        <GenerationSettingsPicker
+                          key={activeId ?? ''}
+                          model={modelOption}
+                          generation={conversation.session?.generation}
+                          modelDefaults={modelDefaults ?? undefined}
+                          effort={conversation.session?.reasoningEffort ?? 'default'}
+                          disabled={chatSettingsLocked}
+                          compact={compact}
+                          onChange={conversation.setGeneration}
+                        />
+                        <PromptCacheTtlPicker
+                          key={`cache:${activeId ?? ''}`}
+                          model={modelOption}
+                          ttl={sessionCacheTtl}
+                          contextTokens={composerUsage.contextTokens ?? 0}
+                          disabled={chatSettingsLocked}
+                          compact={compact}
+                          onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
+                        />
+                      </>
+                    )}
+                  </TuneTray>
+                )}
+              />
+            </Box>
+
+            {terminalOpen && activeId && (
+              <TerminalPanel
+                key={activeId}
+                sessionId={activeId}
+                column={conversationColumn}
+                focusRequest={terminalFocus?.sessionId === activeId ? terminalFocus.seq : 0}
+                onHide={hideTerminal}
+                onOpenLink={openInBrowserPane}
+              />
+            )}
+          </Stack>
+          {studioOpen && (
+            <StudioPane
+              key={`${studioAccountKey}:${activeId ?? ''}:${studio?.workspaceId ?? ''}`}
+              controller={studio?.sessionId === persistedId ? studio : undefined}
+              unavailableReason={
+                !persistedId ? 'Send a message to start a conversation, then open Studio to create media.' : undefined
+              }
+              variant={studioPaneLayout(studioWidth)}
+              onClose={() => {
+                setStudioOpen(false);
+                panesMenuButtonRef.current?.focus();
+              }}
             />
           )}
-        </Stack>
+        </Box>
       )}
 
       {/* The third column: a sibling of the conversation in the shell's flex row, not an
@@ -2193,10 +2393,11 @@ export function ChatShell({
       {browserOpen && browserAvailable && screen === 'conversation' && (
         <BrowserPane
           sessionId={activeId}
-          suspended={drop.over}
-          conversation={conversationColumn}
+          suspended={drop.over || (panelShown && !panelDocked)}
+          conversation={studioContainer}
           historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
           onHistory={onHistory}
+          agentTurn={turnOpen}
         />
       )}
     </Box>

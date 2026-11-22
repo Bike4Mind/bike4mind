@@ -23,17 +23,18 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  type ApiKeyBillingOwnerType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
   PersistedSessionSummaryTrigger,
   type PersistedCreditHold,
+  type ISpendFreezeRepository,
+  type BFLImageModel,
 } from '@bike4mind/common';
 import {
-  BFL_IMAGE_MODELS,
   XAI_IMAGE_MODELS,
-  GEMINI_IMAGE_MODELS,
   isBflImageModel,
   takesBflInputImageList,
   supportsBflOutputFormat,
@@ -94,6 +95,8 @@ import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalc
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
@@ -131,6 +134,11 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -158,6 +166,8 @@ interface IImageGenerationServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
@@ -300,9 +310,11 @@ export class ImageGenerationService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    apiKeyBillingOwnerType,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
   }) {
@@ -477,6 +489,7 @@ export class ImageGenerationService {
           generationId: uuidv4(),
           adminRoleWithheld,
           apiKeyId,
+          apiKeyBillingOwnerType,
         })
       );
 
@@ -839,6 +852,7 @@ export class ImageGenerationService {
       userId,
       adminRoleWithheld,
       apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
       model,
       n = 1,
@@ -962,7 +976,7 @@ export class ImageGenerationService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        const isBFLModelForModeration = Object.values(BFL_IMAGE_MODELS).includes(model as any);
+        const isBFLModelForModeration = isBflImageModel(model);
         const moderationOpenaiKey = resolveModerationOpenaiKey(
           apiKeyTable.openai,
           getSettingsValue('openaiDemoKey', settings)
@@ -1036,15 +1050,26 @@ export class ImageGenerationService {
           requiredCredits,
           featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
           logger,
+          apiKeyId,
+          apiKeyBillingOwnerType,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Choose the appropriate service based on the model
-      const isBFLModel = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-      const isXAIModel = Object.values(XAI_IMAGE_MODELS).includes(model as any);
-      const isGeminiModel = Object.values(GEMINI_IMAGE_MODELS).includes(model as any);
+      const isBFLModel = isBflImageModel(model);
+      const isXAIModel = (XAI_IMAGE_MODELS as readonly string[]).includes(model);
+      const isGeminiModel = isGeminiImageModel(model);
 
       let service: OpenAIImageService | BFLImageService | XAIImageService | GeminiImageService;
       if (isBFLModel) {
@@ -1058,7 +1083,7 @@ export class ImageGenerationService {
       }
 
       let images: string[] = [];
-      if (XAI_IMAGE_MODELS.includes(model as any)) {
+      if (isXAIModel) {
         Logger.globalInstance.debug(`[DEBUG] === XAI IMAGE PROCESSING ===`);
 
         // XAI specific options - simplified for basic text-to-image generation
@@ -1068,12 +1093,12 @@ export class ImageGenerationService {
           n,
         });
 
-        images = await service.generate(truncatedPrompt, {
-          model: model as any,
+        images = await (service as XAIImageService).generate(truncatedPrompt, {
+          model,
           n,
           user: userId,
         });
-      } else if (GEMINI_IMAGE_MODELS.includes(model as any)) {
+      } else if (isGeminiModel) {
         Logger.globalInstance.debug(`[DEBUG] === GEMINI IMAGE PROCESSING ===`);
 
         // Gemini specific options
@@ -1135,7 +1160,7 @@ export class ImageGenerationService {
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
-              model: model as any,
+              model,
               aspect_ratio,
               output_format: nonWebpOutputFormat,
               safety_tolerance,
@@ -1163,7 +1188,7 @@ export class ImageGenerationService {
 
             // Store clarification metadata for potential future retry
             quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId, userId });
-            (quest.promptMeta as any).imageClarification = {
+            (quest.promptMeta as PromptMeta & { imageClarification?: Record<string, unknown> }).imageClarification = {
               clarificationId: clarificationResponse.clarificationId,
               question: clarificationResponse.question,
               originalPrompt: clarificationResponse.originalPrompt,
@@ -1199,7 +1224,7 @@ export class ImageGenerationService {
         } else {
           Logger.globalInstance.debug(`[DEBUG] Gemini generation: proceeding without input image`);
           images = await geminiService.generate(truncatedPrompt, {
-            model: model as any,
+            model,
             n,
             aspect_ratio,
             output_format: nonWebpOutputFormat,
@@ -1211,7 +1236,7 @@ export class ImageGenerationService {
             seed,
           });
         }
-      } else if (BFL_IMAGE_MODELS.includes(model as any)) {
+      } else if (isBFLModel) {
         Logger.globalInstance.debug(`[DEBUG] === BFL IMAGE PROCESSING ===`);
         // BFL specific options. Use isKontextModel (not requiresImageInput) so Fill,
         // which also requires an input image, is never misrouted through the Kontext
@@ -1324,14 +1349,18 @@ export class ImageGenerationService {
             safety_tolerance,
             prompt_upsampling,
             seed,
-            output_format: nonWebpOutputFormat,
+            output_format: nonWebpOutputFormat ?? undefined,
             aspect_ratio,
           };
 
           Logger.globalInstance.debug(`[DEBUG] Transform parameters:`, transformParams);
           Logger.globalInstance.debug(`[DEBUG] Prompt preview:`, truncatedPrompt.substring(0, 100) + '...');
 
-          const transformedImage = await (service as any).transform(base64Image, truncatedPrompt, transformParams);
+          const transformedImage = await (service as BFLImageService).transform(
+            base64Image,
+            truncatedPrompt,
+            transformParams
+          );
           Logger.globalInstance.debug(`[DEBUG] Transform successful:`, {
             resultType: typeof transformedImage,
             resultLength: transformedImage?.length,
@@ -1358,7 +1387,7 @@ export class ImageGenerationService {
           images = await service.generate(truncatedPrompt, {
             ...resolveImageDimensions({ width, height, size: effectiveSize }, BFL_DIMENSION_BOUNDS),
             user: userId,
-            model: model as any,
+            model: model as BFLImageModel,
             safety_tolerance,
             ...(takesBflInputImageList(model)
               ? { reference_images: [...(base64Image ? [base64Image] : []), ...referenceImageData] }
@@ -1413,8 +1442,8 @@ export class ImageGenerationService {
         }
 
         // Prepare OpenAI parameters with proper filtering for GPT-Image-1
-        const openaiParams: any = {
-          model: model as any,
+        const openaiParams: Parameters<OpenAIImageService['generate']>[1] = {
+          model,
           n,
           size: openAiSize as (typeof OPENAI_IMAGE_SIZES)[number] | undefined,
           user: userId,
@@ -1466,7 +1495,7 @@ export class ImageGenerationService {
           n: openaiParams.n,
         });
 
-        images = await service.generate(truncatedPrompt, openaiParams);
+        images = await (service as OpenAIImageService).generate(truncatedPrompt, openaiParams);
       }
 
       const userAbility = this.abilityGetter(user);

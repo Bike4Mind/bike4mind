@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
+import type { IDataLakeDocument, IDataLakeResearchConfigDocument, ResearchKeysetPage } from '@bike4mind/common';
 import {
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_AUTO_ADMITS_LIMIT,
@@ -15,6 +15,7 @@ import {
   createResearchConfig,
   deleteResearchConfig,
   listResearchConfigs,
+  setResearchSchedulePaused,
   updateResearchConfig,
   RESEARCH_CONFIGS_PER_LAKE_MAX,
   type ResearchConfigAdapters,
@@ -232,7 +233,14 @@ describe('listResearchConfigs', () => {
   it('scopes the read to the lake', async () => {
     const { adapters, repo } = makeAdapters();
     await listResearchConfigs(LAKE_ID, adapters);
-    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, undefined);
+  });
+
+  it('forwards a keyset page to the read', async () => {
+    const { adapters, repo } = makeAdapters();
+    const page: ResearchKeysetPage = { limit: 5, after: { createdAt: new Date('2026-01-01'), id: 'cfg-1' } };
+    await listResearchConfigs(LAKE_ID, adapters, page);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, page);
   });
 });
 
@@ -985,5 +993,263 @@ describe('research config item rules', () => {
     const none = create([]);
     await none.run();
     expect(ruleChanges(none.record.mock.calls)).toEqual([]);
+  });
+});
+
+describe('research schedule pause', () => {
+  const ANCHOR = new Date('2026-03-08T12:00:00.000Z');
+  const weekly = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
+    storedConfig({
+      cadence: 'weekly',
+      trigger: 'periodic',
+      nextRunAt: ANCHOR,
+      scheduleAnchorAt: ANCHOR,
+      ...overrides,
+    });
+  const adaptersFor = (stored: IDataLakeResearchConfigDocument) =>
+    makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+  const setPaused = (stored: IDataLakeResearchConfigDocument, paused: boolean) => {
+    const made = adaptersFor(stored);
+    return {
+      ...made,
+      run: () => setResearchSchedulePaused('config-1', lake(), paused, actor(), NO_GRANTS, made.adapters),
+    };
+  };
+  const patchOf = (repo: ReturnType<typeof makeAdapters>['repo']) =>
+    repo.updateConfig.mock.calls[0][2] as Record<string, unknown>;
+  const historyEntries = (record: ReturnType<typeof makeAdapters>['record']) =>
+    (record.mock.calls as unknown as [{ changes: { after: string }[] }][]).flatMap(([event]) =>
+      event.changes.map(change => change.after)
+    );
+
+  describe('setResearchSchedulePaused', () => {
+    it('writes only the flag on pause, keeping cadence, next run and anchor, and records History', async () => {
+      const { run, repo, record } = setPaused(weekly(), true);
+      await run();
+      expect(patchOf(repo)).toEqual({ schedulePaused: true, lastUpdatedByUserId: ACTOR_ID });
+      expect(historyEntries(record)).toEqual(['research schedule paused: Weekly sweep']);
+    });
+
+    it('resumes before the first run on the anchor', async () => {
+      const { run, repo, record } = setPaused(weekly({ schedulePaused: true }), false);
+      await run();
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: false, nextRunAt: ANCHOR });
+      expect(historyEntries(record)).toEqual(['research schedule resumed: Weekly sweep']);
+    });
+
+    it('keeps a pending one-hour retry across a pause and resume', async () => {
+      const retryAt = new Date('2026-03-01T12:40:00.000Z');
+      const stored = weekly({ nextRunAt: retryAt, scheduleAnchorAt: new Date('2026-02-22T09:00:00.000Z') });
+      const paused = setPaused(stored, true);
+      await paused.run();
+      expect(patchOf(paused.repo)).not.toHaveProperty('nextRunAt');
+
+      const resumed = setPaused({ ...stored, schedulePaused: true }, false);
+      await resumed.run();
+      expect(patchOf(resumed.repo).nextRunAt).toEqual(retryAt);
+    });
+
+    it('keeps a future next run left by a tick that claimed before the pause', async () => {
+      const lease = new Date('2026-03-01T12:10:00.000Z');
+      const { run, repo } = setPaused(weekly({ schedulePaused: true, nextRunAt: lease }), false);
+      await run();
+      expect(patchOf(repo).nextRunAt).toEqual(lease);
+    });
+
+    it('lands the next regular slot after a long pause, not an immediate run', async () => {
+      const stored = weekly({
+        cadence: 'daily',
+        schedulePaused: true,
+        nextRunAt: new Date('2026-02-01T09:00:00.000Z'),
+        scheduleAnchorAt: new Date('2026-01-01T09:00:00.000Z'),
+      });
+      const { run, repo } = setPaused(stored, false);
+      await run();
+      expect(patchOf(repo).nextRunAt).toEqual(new Date('2026-03-02T09:00:00.000Z'));
+    });
+
+    it('clears a schedule_paused outcome on resume, and only that one', async () => {
+      const at = new Date('2026-03-01T09:00:00.000Z');
+      const cleared = setPaused(
+        weekly({
+          schedulePaused: true,
+          lastScheduledOutcome: { outcome: 'skipped', at, reason: 'schedule_paused' },
+        }),
+        false
+      );
+      await cleared.run();
+      expect(patchOf(cleared.repo)).toMatchObject({ lastScheduledOutcome: null });
+
+      const kept = setPaused(
+        weekly({ schedulePaused: true, lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' } }),
+        false
+      );
+      await kept.run();
+      expect(patchOf(kept.repo)).not.toHaveProperty('lastScheduledOutcome');
+    });
+
+    it('can still pause a config whose levers would now fail validation', async () => {
+      const stale = weekly({ autoAdmitTrusted: true, trustedDomains: ['com'] });
+      const { adapters } = adaptersFor(stale);
+      await expect(
+        updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { query: 'same' }, adapters)
+      ).rejects.toThrow(/covers every site/);
+
+      const { run, repo } = setPaused(stale, true);
+      await run();
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: true });
+    });
+
+    it('refuses to pause a config with no cadence', async () => {
+      const { run, repo } = setPaused(storedConfig(), true);
+      await expect(run()).rejects.toThrow(/needs a cadence/);
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing when the flag already has the requested value', async () => {
+      const { run, repo, record } = setPaused(weekly({ schedulePaused: true }), true);
+      await run();
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('404s on a config that is not in this lake', async () => {
+      const made = makeAdapters({ findByIdInLake: vi.fn(async () => null) });
+      await expect(
+        setResearchSchedulePaused('config-1', lake(), true, actor(), NO_GRANTS, made.adapters)
+      ).rejects.toThrow(/not found/);
+    });
+
+    it('lets a repository error other than not-found propagate, so a write conflict can retry', async () => {
+      const conflict = Object.assign(new Error('write conflict'), { code: 112 });
+      const made = makeAdapters({
+        findByIdInLake: vi.fn(async () => weekly()),
+        updateConfig: vi.fn(async () => {
+          throw conflict;
+        }),
+      });
+      await expect(setResearchSchedulePaused('config-1', lake(), true, actor(), NO_GRANTS, made.adapters)).rejects.toBe(
+        conflict
+      );
+    });
+  });
+
+  describe('updateResearchConfig', () => {
+    it('applies a lever change and the pause from one mixed body', async () => {
+      const { adapters, repo, record } = adaptersFor(weekly());
+      await updateResearchConfig(
+        'config-1',
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { schedulePaused: true, query: 'new question' },
+        adapters
+      );
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: true, query: 'new question' });
+      expect(historyEntries(record)).toEqual(
+        expect.arrayContaining(['updated: Weekly sweep', 'research schedule paused: Weekly sweep'])
+      );
+    });
+
+    it('records a pause-only change in History even though no lever moved', async () => {
+      const { adapters, record } = adaptersFor(weekly());
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters);
+      expect(historyEntries(record)).toEqual(['research schedule paused: Weekly sweep']);
+    });
+
+    it('does not record the pause entry when the flag is unchanged', async () => {
+      const { adapters, record } = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters);
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('records one History row naming the old and new cadence', async () => {
+      const toOff = adaptersFor(weekly());
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, toOff.adapters);
+      expect(historyEntries(toOff.record)).toEqual(['research schedule weekly -> off: Weekly sweep']);
+
+      const toDaily = adaptersFor(weekly({ cadence: 'off', trigger: 'manual' }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'daily' }, toDaily.adapters);
+      expect(historyEntries(toDaily.record)).toEqual(['research schedule off -> daily: Weekly sweep']);
+    });
+
+    it('records one History row naming the old and new review backlog limit', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 25 }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { reviewBacklogLimit: 40 }, adapters);
+      expect(historyEntries(record)).toEqual(['review backlog limit 25 -> 40: Weekly sweep']);
+    });
+
+    it('records nothing when cadence and backlog limit are resubmitted unchanged', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 40 }));
+      await updateResearchConfig(
+        'config-1',
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { cadence: 'weekly', reviewBacklogLimit: 40 },
+        adapters
+      );
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('resumes with the same next-run rule as the narrow write', async () => {
+      const retryAt = new Date('2026-03-01T12:40:00.000Z');
+      const { adapters, repo } = adaptersFor(weekly({ schedulePaused: true, nextRunAt: retryAt }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: false }, adapters);
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: false, nextRunAt: retryAt });
+    });
+
+    it('refuses schedulePaused true while the resulting cadence is off', async () => {
+      const { adapters, repo } = makeAdapters();
+      await expect(
+        updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters)
+      ).rejects.toThrow(/needs a cadence/);
+      await expect(
+        updateResearchConfig(
+          'config-1',
+          lake(),
+          actor(),
+          NO_GRANTS,
+          { schedulePaused: true, cadence: 'off' },
+          adaptersFor(weekly()).adapters
+        )
+      ).rejects.toThrow(/needs a cadence/);
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+    });
+
+    it('keeps the pause across a cadence change and clears it when the cadence goes off', async () => {
+      const changed = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'daily' }, changed.adapters);
+      expect(patchOf(changed.repo)).toMatchObject({ cadence: 'daily', nextRunAt: expect.any(Date) });
+      expect(patchOf(changed.repo)).not.toHaveProperty('schedulePaused');
+
+      const off = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, off.adapters);
+      expect(patchOf(off.repo)).toMatchObject({ cadence: 'off', schedulePaused: false });
+      expect(historyEntries(off.record).some(entry => entry.startsWith('research schedule resumed'))).toBe(false);
+    });
+  });
+
+  describe('createResearchConfig', () => {
+    it('persists a paused schedule', async () => {
+      const { adapters, repo } = makeAdapters();
+      await createResearchConfig(
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { name: 'n', query: 'q', cadence: 'weekly', schedulePaused: true },
+        adapters
+      );
+      expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ cadence: 'weekly', schedulePaused: true });
+    });
+
+    it('defaults to not paused, and refuses a paused config with no cadence', async () => {
+      const { adapters, repo } = makeAdapters();
+      await createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q' }, adapters);
+      expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ schedulePaused: false });
+      await expect(
+        createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', schedulePaused: true }, adapters)
+      ).rejects.toThrow(/needs a cadence/);
+    });
   });
 });

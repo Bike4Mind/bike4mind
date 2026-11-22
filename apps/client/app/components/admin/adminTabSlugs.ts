@@ -6,6 +6,7 @@ import {
   ADMIN_USERS_TAB_SLUG,
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
+import { ADMIN_SPEND_EXPLORER_TAB_SLUG } from './SpendExplorer/spendExplorerSearch';
 import {
   ADMIN_ANALYTICS_TAB_SLUG,
   ADMIN_EVENTS_TAB_SLUG,
@@ -30,7 +31,8 @@ import {
 import { MODELS_SECTION_PARAM, MODELS_TAB_SLUG } from './Models/modelsSearch';
 import { SECURITY_VIEW_PARAM } from './securityDashboardSearch';
 
-type RetiredTab = AdminTab.RegistrationInvites | AdminTab.PartnerSignupRules | AdminTab.SecOpsTriage;
+type RetiredTab =
+  AdminTab.RegistrationInvites | AdminTab.PartnerSignupRules | AdminTab.HeldSignupGrants | AdminTab.SecOpsTriage;
 
 /**
  * AdminTab -> URL slug, for the console's `?tab=` param.
@@ -96,7 +98,6 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.ShadowDetections]: ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
   [AdminTab.ModerationIncidents]: ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   [AdminTab.StripeDisputes]: ADMIN_STRIPE_DISPUTES_TAB_SLUG,
-  [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',
@@ -110,6 +111,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.IntegrationDemand]: ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
   [AdminTab.AccessReview]: 'access-review',
+  [AdminTab.SpendExplorer]: ADMIN_SPEND_EXPLORER_TAB_SLUG,
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',
@@ -120,6 +122,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
 const RETIRED_TAB_SLUGS: Readonly<Record<RetiredTab, string>> = {
   [AdminTab.RegistrationInvites]: 'registration-invites',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
+  [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.SecOpsTriage]: 'sec-ops-triage',
 };
 
@@ -132,7 +135,8 @@ export type AdminTabRedirect = { tab: AdminTab; search?: Partial<AdminSearch> };
 export const ADMIN_TAB_SLUG_REDIRECTS: ReadonlyMap<string, AdminTabRedirect> = new Map([
   ['subscribers', { tab: AdminTab.Waitlist }],
   [RETIRED_TAB_SLUGS[AdminTab.RegistrationInvites], { tab: AdminTab.Waitlist, search: { inviteSection: 'invites' } }],
-  [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'packages' } }],
+  [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'partners' } }],
+  [RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants], { tab: AdminTab.Waitlist, search: { inviteSection: 'pending', heldGrants: 'open' } }],
   [
     RETIRED_TAB_SLUGS[AdminTab.SecOpsTriage],
     { tab: AdminTab.SecurityDashboard, search: { [SECURITY_VIEW_PARAM]: 'scans' } },

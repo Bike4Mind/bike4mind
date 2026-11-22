@@ -1016,6 +1016,144 @@ extension Components {
                 case nextCursor = "next_cursor"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200`.
+        public struct GetSessionByIdResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/_id`.
+            public var _id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/userId`.
+            public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/organizationId`.
+            public var organizationId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/tags`.
+            public typealias TagsPayload = [Components.Schemas.GetSessionByIdResponse200.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/tags`.
+            public var tags: Components.Schemas.GetSessionByIdResponse200.TagsPayload?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/retrievalTags`.
+            public var retrievalTags: [Swift.String]?
+            /// True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lakeScopeExplicit`.
+            public var lakeScopeExplicit: Swift.Bool?
+            /// Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/firstCreated`.
+            public var firstCreated: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/getSessionByIdResponse200/lastUpdated`.
+            public var lastUpdated: Foundation.Date
+            /// Creates a new `GetSessionByIdResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _id:
+            ///   - name:
+            ///   - userId:
+            ///   - organizationId:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - forceKnowledgeRetrieval:
+            ///   - retrievalTags:
+            ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///   - lastUsedModel:
+            ///   - firstCreated:
+            ///   - lastUpdated:
+            public init(
+                id: Swift.String,
+                _id: Swift.String? = nil,
+                name: Swift.String,
+                userId: Swift.String,
+                organizationId: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.GetSessionByIdResponse200.TagsPayload? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                retrievalTags: [Swift.String]? = nil,
+                lakeScopeExplicit: Swift.Bool? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                lastUsedModel: Swift.String? = nil,
+                firstCreated: Foundation.Date,
+                lastUpdated: Foundation.Date
+            ) {
+                self.id = id
+                self._id = _id
+                self.name = name
+                self.userId = userId
+                self.organizationId = organizationId
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.retrievalTags = retrievalTags
+                self.lakeScopeExplicit = lakeScopeExplicit
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.lastUsedModel = lastUsedModel
+                self.firstCreated = firstCreated
+                self.lastUpdated = lastUpdated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _id
+                case name
+                case userId
+                case organizationId
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case forceKnowledgeRetrieval
+                case retrievalTags
+                case lakeScopeExplicit
+                case includeLibraryFiles
+                case promptCacheTtl
+                case lastUsedModel
+                case firstCreated
+                case lastUpdated
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200`.
         public struct ListSessionQuestsResponse200: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload`.

@@ -24,6 +24,8 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefAPI: any BriefAPI = FixtureBriefAPI()
+    static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -41,6 +43,103 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// One ready brief with pending, lapsed and replaced approvals and an open question; composing a new one "takes" a few seconds, then returns it.
+    private struct FixtureBriefAPI: BriefAPI {
+      private static let brief: Brief = {
+        let now = Date()
+        return Brief(
+          id: "fixture", status: .ready, createdAt: now, composedAt: now,
+          periodStart: now.addingTimeInterval(-86_400), periodEnd: now,
+          headline: "Two agents finished overnight and one is waiting on you.",
+          happened: [
+            BriefItem(id: "h1", text: "The weekly metrics notebook picked up 14 new rows from the shared drive."),
+            BriefItem(id: "h2", text: "A 3-minute product walkthrough video finished generating."),
+          ],
+          handled: [
+            BriefItem(id: "d1", text: "The research agent summarized 6 articles into the Reading notebook."),
+            BriefItem(id: "d2", text: "Two draft replies were saved for your review."),
+          ],
+          decisions: [
+            BriefDecision(
+              id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
+              approval: BriefApprovalRef(
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000,
+                state: .pending)),
+            BriefDecision(
+              id: "n2", text: "The cleanup agent wanted to archive three notebooks untouched for 90 days.",
+              approval: BriefApprovalRef(
+                questID: "fixture-1-q2", sessionID: "fixture-1", pendingActionTs: 1_699_990_000_000,
+                state: .lapsed)),
+            BriefDecision(
+              id: "n3", text: "The calendar agent asked to send a meeting invite.",
+              approval: BriefApprovalRef(
+                questID: "fixture-2-q3", sessionID: "fixture-2", pendingActionTs: 1_699_980_000_000,
+                state: .replaced)),
+            BriefDecision(
+              id: "n4", text: "The research agent asked which topic to dig into next.",
+              question: BriefQuestionRef(
+                questID: "fixture-3-q1", sessionID: "fixture-3", options: ["Pricing", "Competitors"], state: .open)),
+          ])
+      }()
+
+      func compose() async throws -> Brief {
+        try await Task.sleep(for: .seconds(2))
+        return Self.brief
+      }
+
+      /// `B4M_UI_FIXTURE_BRIEF`: `composing` never finishes (the poll times out), `offline` is composing and
+      /// then every poll fails; anything else is the ready brief.
+      private static let scenario = ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_BRIEF"] ?? ""
+
+      private static var stuck: Brief {
+        Brief(
+          id: "fixture-stuck", status: .composing, createdAt: Date(), periodStart: Date(), periodEnd: Date())
+      }
+
+      func list() async throws -> [Brief] {
+        Self.scenario == "composing" || Self.scenario == "offline" ? [Self.stuck] : [Self.brief]
+      }
+
+      func brief(id: String) async throws -> Brief {
+        switch Self.scenario {
+        case "composing": return Self.stuck
+        case "offline":
+          // The first open (by the link's id) finds it composing; the polls by its own id then fail.
+          if id == Self.stuck.id { throw APIError.offline }
+          return Self.stuck
+        default: return Self.brief
+        }
+      }
+
+      func reply(
+        briefID: String, decisionID: String, text: String, choiceIndex: Int?
+      ) async throws -> BriefReplyResult {
+        try await Task.sleep(for: .seconds(1))
+        return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
+      }
+    }
+
+    /// One saved instruction, kept in memory for the session.
+    private actor FixtureInstructionAPI: InstructionAPI {
+      private var instructions = [
+        AssistantInstruction(
+          id: "fixture-instruction-1", text: "Always lead with anything about invoices.", createdAt: Date())
+      ]
+
+      func list() async throws -> [AssistantInstruction] { instructions }
+
+      func add(text: String) async throws -> AssistantInstruction {
+        guard instructions.count < AssistantInstruction.maxCount else { throw InstructionError.limitReached }
+        let instruction = AssistantInstruction(id: UUID().uuidString, text: text, createdAt: Date())
+        instructions.append(instruction)
+        return instruction
+      }
+
+      func remove(id: String) async throws {
+        instructions.removeAll { $0.id == id }
+      }
     }
 
     /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
@@ -223,6 +322,12 @@
 
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()
+
+      func session(id: String) async throws -> SessionSummary {
+        let page = try await listSessions(cursor: nil, limit: 50)
+        guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return session
+      }
 
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]

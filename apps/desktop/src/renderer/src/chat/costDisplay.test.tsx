@@ -96,12 +96,17 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
-    // SettingsScreen's menu-bar switch reads its preference from main.
+    // SettingsScreen's menu-bar switch and notify scope read their preferences from main.
     vi.stubGlobal('b4m', {
       watch: {
         getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
         setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
         onPreferences: () => () => undefined,
+      },
+      attention: {
+        getNotifyScope: async () => 'agents',
+        setNotifyScope: async () => 'agents',
+        onNotifyScope: () => () => undefined,
       },
     });
     window.localStorage.clear();

@@ -336,6 +336,40 @@ export function AquariumIcon() {
   );
 }
 
+/** The Swimlanes view: stacked, indented lanes. */
+export function SwimlanesIcon() {
+  return (
+    <Glyph>
+      <path d="M2 3.5h12M4.5 8h9.5M7 12.5h7" />
+    </Glyph>
+  );
+}
+
+/** The Constellation view: a hub linked to satellites. */
+export function ConstellationIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="1.75" />
+      <circle cx="3" cy="3.5" r="1" />
+      <circle cx="13" cy="4.5" r="1" />
+      <circle cx="11.5" cy="13" r="1" />
+      <path d="M6.7 6.7 3.7 4.2M9.7 7 12.3 5M9.2 9.5l1.6 2.7" />
+    </Glyph>
+  );
+}
+
+/** The Transit view: a line with stops. */
+export function TransitIcon() {
+  return (
+    <Glyph>
+      <path d="M1.5 8h13" />
+      <circle cx="3.5" cy="8" r="1.5" />
+      <circle cx="8" cy="8" r="1.5" />
+      <circle cx="12.5" cy="8" r="1.5" />
+    </Glyph>
+  );
+}
+
 /**
  * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
  * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.
@@ -546,6 +580,15 @@ export function SlidersIcon() {
       <circle cx="5.75" cy="4.5" r="1.4" />
       <circle cx="10.25" cy="8" r="1.4" />
       <circle cx="6.75" cy="11.5" r="1.4" />
+    </Glyph>
+  );
+}
+
+/** Reply stats: a bar chart, for the rail of figures beside each reply. */
+export function StatsIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 13.5h11M4.75 11V8.5M8 11V4M11.25 11V6.5" />
     </Glyph>
   );
 }

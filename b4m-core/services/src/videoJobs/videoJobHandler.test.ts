@@ -46,7 +46,9 @@ vi.mock('../creditService/creditHold', () => ({
 import { holdCredits, releaseCreditHold, settleCreditHold } from '../creditService/creditHold';
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const setup = (overrides: Partial<VideoJobDeps> = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');

@@ -7,10 +7,24 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { AquariumIcon, BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon, TileWallIcon } from '../icons';
+import {
+  AquariumIcon,
+  BoardIcon,
+  CaretDownIcon,
+  CheckIcon,
+  ConstellationIcon,
+  SwimlanesIcon,
+  TableIcon,
+  TavernIcon,
+  TileWallIcon,
+  TransitIcon,
+} from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
+import type { AgentDetailsSkin } from './AgentPeekDrawer';
+import { SkinMenuSection } from './SkinMenuSection';
+import { SoundPackMenuSection } from './SoundPackMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -21,6 +35,7 @@ interface ViewInfo {
   icon: ReactNode;
   /** Settles into a quiet scene when idle (ambient.ts), so the menu offers "Quiet when idle". */
   ambient: boolean;
+  detailsSkin?: AgentDetailsSkin;
 }
 
 /** Every view's menu entry; typed by id so adding a view to ORCHESTRATOR_VIEWS fails until it has one. */
@@ -31,6 +46,10 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <TavernIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#f2ece1', border: '#c4b8a5' },
+      dark: { background: '#29251f', border: '#5d5345' },
+    },
   },
   aquarium: {
     label: 'Aquarium',
@@ -38,6 +57,22 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <AquariumIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#e7eff0', border: '#a9bec3' },
+      dark: { background: '#1d2c31', border: '#49616a' },
+    },
+  },
+  office: {
+    label: 'Office',
+    description: 'Manager and the team at Paper company',
+    group: 'scene',
+    icon: <BoardIcon />,
+    ambient: true,
+    detailsSkin: {
+      light: { background: '#eef0e6', border: '#aebbab' },
+      dark: { background: '#222d2a', border: '#4c5f58' },
+      radius: '2px',
+    },
   },
   board: {
     label: 'Board',
@@ -58,6 +93,27 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'A calm grid, one tile per agent',
     group: 'layout',
     icon: <TileWallIcon />,
+    ambient: false,
+  },
+  swimlanes: {
+    label: 'Swimlanes',
+    description: 'One lane per agent, nested under its parent',
+    group: 'layout',
+    icon: <SwimlanesIcon />,
+    ambient: false,
+  },
+  constellation: {
+    label: 'Constellation',
+    description: 'Agents as stars around the orchestrator',
+    group: 'layout',
+    icon: <ConstellationIcon />,
+    ambient: false,
+  },
+  transit: {
+    label: 'Transit',
+    description: 'A line of stops, agents placed by phase',
+    group: 'layout',
+    icon: <TransitIcon />,
     ambient: false,
   },
 };
@@ -109,6 +165,7 @@ export function ViewSwitcher({
   onViewChange,
   ambient,
   focus,
+  presenter,
 }: {
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
@@ -116,6 +173,8 @@ export function ViewSwitcher({
   ambient?: Toggle;
   /** Focus mode, on top of whichever view is chosen; also toggled with Mod+Shift+F. */
   focus?: Toggle;
+  /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
+  presenter?: Toggle;
 }) {
   const current = ORCHESTRATOR_VIEW_INFO[view];
 
@@ -230,6 +289,25 @@ export function ViewSwitcher({
             </MenuItem>
           </>
         )}
+        {presenter && (
+          <>
+            <ListDivider />
+            <MenuItem
+              role="menuitemcheckbox"
+              aria-checked={presenter.on}
+              onClick={() => presenter.onToggle(!presenter.on)}
+              data-testid="orchestrator-presenter-toggle"
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="body-sm">Presenter mode</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Hide titles, activity, questions, PRs and costs for screen sharing
+                </Typography>
+              </Box>
+              {presenter.on && <CheckIcon />}
+            </MenuItem>
+          </>
+        )}
         {ambient && current.ambient && (
           <>
             <ListDivider />
@@ -249,6 +327,8 @@ export function ViewSwitcher({
             </MenuItem>
           </>
         )}
+        <SkinMenuSection />
+        <SoundPackMenuSection />
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}

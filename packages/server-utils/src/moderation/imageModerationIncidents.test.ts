@@ -1,12 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   record: vi.fn(),
   markAlerted: vi.fn(),
+  markAlertQueued: vi.fn(),
   markEscalationAlerted: vi.fn(),
+  markEscalationAlertQueued: vi.fn(),
   getSettingsMap: vi.fn(),
   sendEmail: vi.fn(),
+  publish: vi.fn(),
+  smtpSendEmail: vi.fn(),
+  queueFailureLog: vi.fn(),
+  voidAlertRound: vi.fn(),
   logger: { warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -15,12 +21,23 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {
     record: mocks.record,
     markAlerted: mocks.markAlerted,
+    markAlertQueued: mocks.markAlertQueued,
     markEscalationAlerted: mocks.markEscalationAlerted,
+    markEscalationAlertQueued: mocks.markEscalationAlertQueued,
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: mocks.logger } }));
-vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.sendEmail } }));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: { globalInstance: mocks.logger, error: mocks.queueFailureLog },
+}));
+// The alert path imports the queued mailer once and keeps it, so a single case swaps in the real one
+// by forwarding this stub to it.
+vi.mock('../utils/mailer/queuedMailer', () => ({
+  queuedMailer: { sendEmail: (...args: unknown[]) => mocks.sendEmail(...args) },
+}));
+vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
+vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.smtpSendEmail } }));
+vi.mock('../utils/mailer/deliveryOutcome', () => ({ voidIncidentAlertRound: mocks.voidAlertRound }));
 
 import {
   createReviewerAlertDelivery,
@@ -58,6 +75,8 @@ const INPUT: ImageModerationIncident = {
 };
 const INCIDENT = { id: 'incident-1', createdAt: new Date('2026-10-19T12:00:00.000Z'), surface: 'generation' as const };
 const PRIVATE_OPTIONS = { mirror: false, logRecipient: false };
+const REVIEW_REF = { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'review' };
+const ESCALATION_REF = { kind: 'incidentAlert', incidentId: 'incident-1', alert: 'escalation' };
 
 describe('imageModerationIncidents', () => {
   beforeEach(() => {
@@ -81,7 +100,7 @@ describe('imageModerationIncidents', () => {
       expect(mocks.sendEmail).toHaveBeenCalledWith(
         'reviewer@example.com',
         expect.objectContaining({ subject: 'Moderation review pending' }),
-        PRIVATE_OPTIONS
+        { ...PRIVATE_OPTIONS, ref: REVIEW_REF }
       );
       expect(mocks.markAlerted).toHaveBeenCalledWith('incident-1');
     }
@@ -109,6 +128,53 @@ describe('imageModerationIncidents', () => {
     });
   });
 
+  describe('through the real queued mailer', () => {
+    beforeEach(async () => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      mocks.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
+      const { queuedMailer } =
+        await vi.importActual<typeof import('../utils/mailer/queuedMailer')>('../utils/mailer/queuedMailer');
+      mocks.sendEmail.mockImplementation((to, mail, options) => queuedMailer.sendEmail(to, mail, options));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('publishes the alert as an email.send event that skips the mirror and the recipient log', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.publish).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: 'reviewer@example.com',
+          subject: 'Moderation review pending',
+          body: expect.stringContaining('incident-1'),
+          mirror: false,
+          logRecipient: false,
+          ref: REVIEW_REF,
+        })
+      );
+      expect(mocks.smtpSendEmail).not.toHaveBeenCalled();
+      // Queued is not delivered: the email-send worker stamps alertedAt through the ref.
+      expect(mocks.markAlertQueued).toHaveBeenCalledWith('incident-1');
+      expect(mocks.markAlerted).not.toHaveBeenCalled();
+    });
+
+    it('leaves the incident unstamped when the event cannot be queued', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+      mocks.publish.mockRejectedValue(new Error('bus unreachable'));
+
+      await expect(imageModerationIncidents.record(INPUT)).resolves.toBe(INCIDENT);
+
+      expect(mocks.queueFailureLog).toHaveBeenCalledTimes(1);
+      expect(mocks.queueFailureLog.mock.calls[0][0]).not.toContain('reviewer@example.com');
+      expect(mocks.markAlerted).not.toHaveBeenCalled();
+      expect(mocks.markAlertQueued).not.toHaveBeenCalled();
+      expect(mocks.voidAlertRound).toHaveBeenCalledExactlyOnceWith(REVIEW_REF, expect.any(Date));
+    });
+  });
+
   it('reads the reviewer list past the settings cache only when the scheduled sweep asks', async () => {
     mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
 
@@ -133,14 +199,26 @@ describe('sendIncidentEscalationAlert', () => {
 
     const result = await sendIncidentEscalationAlert(INCIDENT);
 
-    expect(result).toEqual({ outcome: 'delivered', alertedAt: expect.any(Date) });
+    expect(result).toEqual({ outcome: 'delivered', alertedAt: expect.any(Date), queuedAt: null });
     expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
     expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
       'second@example.com',
       expect.objectContaining({ subject: 'Moderation review escalated' }),
-      PRIVATE_OPTIONS
+      { ...PRIVATE_OPTIONS, ref: ESCALATION_REF }
     );
     expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('incident-1', result.alertedAt);
+  });
+
+  it('stamps only escalationAlertQueuedAt when the email is queued for the email-send worker', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ ImageModerationEscalationEmails: ['second@example.com'] });
+    mocks.sendEmail.mockResolvedValue({ queued: true });
+    mocks.markEscalationAlertQueued.mockResolvedValue(undefined);
+
+    const result = await sendIncidentEscalationAlert(INCIDENT);
+
+    expect(result).toEqual({ outcome: 'queued', alertedAt: null, queuedAt: expect.any(Date) });
+    expect(mocks.markEscalationAlertQueued).toHaveBeenCalledWith('incident-1', result.queuedAt);
+    expect(mocks.markEscalationAlerted).not.toHaveBeenCalled();
   });
 
   it('reports no_recipients when no escalation reviewer is configured', async () => {
@@ -149,6 +227,7 @@ describe('sendIncidentEscalationAlert', () => {
     await expect(sendIncidentEscalationAlert(INCIDENT)).resolves.toEqual({
       outcome: 'no_recipients',
       alertedAt: null,
+      queuedAt: null,
     });
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.markEscalationAlerted).not.toHaveBeenCalled();

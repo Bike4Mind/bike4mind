@@ -1,5 +1,20 @@
 # @bike4mind/desktop
 
+## 0.2.0
+
+### Minor Changes
+
+- [#7832](https://github.com/Bike4Mind/bike4mind/pull/7832) [`43e1258`](https://github.com/Bike4Mind/bike4mind/commit/43e1258f44311d3b74e01e3195d9931147f69cf9) Thanks [@juicewaa](https://github.com/juicewaa)! - Open linked conversation files in a read-only pane, with safe reveal-only handling for runnable files and selection-scoped asynchronous reads.
+
+### Patch Changes
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - Add session-bound API clients with shared token refresh, and keep Studio availability, generation records and conversation deletion consistent with the active account.
+
+- Updated dependencies [[`0ee213a`](https://github.com/Bike4Mind/bike4mind/commit/0ee213aaeff2dfa6cc109ab69ea0f28749a1b41e), [`3d730bf`](https://github.com/Bike4Mind/bike4mind/commit/3d730bfb5c4183f4052e9208c0d49abb188a37d1), [`4034d51`](https://github.com/Bike4Mind/bike4mind/commit/4034d51bfdde057b443761eff0980b731a105c2b), [`6d0a17b`](https://github.com/Bike4Mind/bike4mind/commit/6d0a17b3c801ad35a09ed3262aa9edcd0695725a), [`1b65299`](https://github.com/Bike4Mind/bike4mind/commit/1b65299a311a4ce5d8ee3e6036046c53b54502fb), [`385206d`](https://github.com/Bike4Mind/bike4mind/commit/385206d6aa484dd9e7610c14bb94012b033b007e), [`2c1140f`](https://github.com/Bike4Mind/bike4mind/commit/2c1140f958b244aa35d730888a2ce7336b3dd544), [`8774f0a`](https://github.com/Bike4Mind/bike4mind/commit/8774f0a7478c0b20227aacb337386672cb12bd84), [`39ed23f`](https://github.com/Bike4Mind/bike4mind/commit/39ed23fcce2a7e2491aa72c2d211137ef4e54c91), [`0e3fff8`](https://github.com/Bike4Mind/bike4mind/commit/0e3fff8cc0554ef27b8ac4426171069d380f023d), [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54), [`4a72c59`](https://github.com/Bike4Mind/bike4mind/commit/4a72c591b750b6abe4149d66220b78a271f76ac2), [`1d1a93a`](https://github.com/Bike4Mind/bike4mind/commit/1d1a93ae4008777a2f6b53f1d116901ab837e8d5), [`53cb6e8`](https://github.com/Bike4Mind/bike4mind/commit/53cb6e847bbe51a4c793905c7921db37dfbf8ac9), [`a89d52c`](https://github.com/Bike4Mind/bike4mind/commit/a89d52cc27f250f3745bfc57ca490878da00caf3), [`7108fc4`](https://github.com/Bike4Mind/bike4mind/commit/7108fc40abb88d0076047d57e061bdb137e1306f), [`6016852`](https://github.com/Bike4Mind/bike4mind/commit/601685244547780bb7cadc0b4148781cc1b23789), [`71b3a6a`](https://github.com/Bike4Mind/bike4mind/commit/71b3a6a32824c852a1994a6d0edac1ce02c4a6c4), [`4a33f88`](https://github.com/Bike4Mind/bike4mind/commit/4a33f88d29b4b924d34eebfec6b4395d1689e3f2), [`8afe23b`](https://github.com/Bike4Mind/bike4mind/commit/8afe23bcd0d13c87b8dafc7b4a289c50ef66f605), [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54)]:
+  - @bike4mind/common@28.0.0
+  - @bike4mind/client-auth@0.5.0
+  - @bike4mind/mcp@2.2.6
+
 ## 0.1.18
 
 ### Patch Changes

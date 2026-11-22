@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   admit: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -45,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   // The balance pre-flight's holder reads (see StartResearchRunAdapters).
   userRepository: { name: 'users' },
   organizationRepository: { name: 'organizations' },
+  spendFreezeRepository: { name: 'spendFreezes' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
@@ -109,6 +110,16 @@ describe('GET /api/data-lakes/[id]/research/runs', () => {
     await call(req('GET', { id: 'my-lake' }), res);
 
     expect(json).toHaveBeenCalledWith({ data: [queuedRun] });
+  });
+
+  it('returns a run whose totals carry every drop bucket unchanged', async () => {
+    const totals = { searchHits: 12, filteredBySource: 3, unlistedDropped: 4, unresolvedRedirect: 5 };
+    h.listByLake.mockResolvedValue([{ ...queuedRun, totals }]);
+    const { res, json } = makeRes();
+
+    await call(req('GET', { id: 'my-lake' }), res);
+
+    expect(json).toHaveBeenCalledWith({ data: [{ ...queuedRun, totals }] });
   });
 
   it('honors an explicit limit', async () => {

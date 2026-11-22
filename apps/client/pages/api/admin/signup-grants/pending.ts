@@ -21,6 +21,7 @@ const querySchema = z.object({
   heldReason: z.enum(['budget_exhausted', 'risk_review']).optional(),
   source: z.enum(['default', 'package']).optional(),
   invite: z.enum(['invited', 'uninvited']).optional(),
+  activeDays: z.coerce.number().int().min(1).max(90).optional(),
   sort: z.enum(['oldest', 'remaining']).default('oldest'),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
@@ -61,7 +62,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
   asyncHandler(async (req, res) => {
     const query = querySchema.safeParse(req.query);
     if (!query.success) throw new BadRequestError('Invalid pending list query');
-    const { sort, limit, status, heldReason, source, invite } = query.data;
+    const { sort, limit, status, heldReason, source, invite, activeDays } = query.data;
     const cursor = query.data.cursor ? decodeCursor(query.data.cursor, sort) : undefined;
 
     const { dripCap } = await resolveSignupGrantSchedule(adminSettingsRepository);
@@ -71,6 +72,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
       heldReason,
       source,
       invite,
+      activeSince: activeDays === undefined ? undefined : new Date(Date.now() - activeDays * 24 * 60 * 60 * 1000),
       sort,
       cursor,
       limit,

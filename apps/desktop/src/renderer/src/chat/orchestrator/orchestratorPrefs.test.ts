@@ -14,9 +14,11 @@ import {
   readDockOpen,
   readFinaleSeen,
   readIntroSeen,
+  readPresenter,
   readSurface,
   readView,
   writeAmbient,
+  writePresenter,
   writeAmbientHintSeen,
   writeDockOpen,
   writeFinaleSeen,
@@ -30,7 +32,17 @@ describe('orchestratorPrefs', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('lists the scenes, then the layouts', () => {
-    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'aquarium', 'board', 'table', 'tile-wall']);
+    expect(ORCHESTRATOR_VIEWS).toEqual([
+      'tavern',
+      'aquarium',
+      'office',
+      'board',
+      'table',
+      'tile-wall',
+      'swimlanes',
+      'constellation',
+      'transit',
+    ]);
   });
 
   it('remembers each session its own view', () => {
@@ -38,6 +50,15 @@ describe('orchestratorPrefs', () => {
     writeView('s2', 'aquarium');
     expect(readView('s1')).toBe('tile-wall');
     expect(readView('s2')).toBe('aquarium');
+  });
+
+  it('remembers Office at the session, project and global levels', () => {
+    writeView('office-session', 'office', '/office-project');
+    writeView('other-session', 'board', '/other-project');
+    expect(readView('office-session', '/other-project')).toBe('office');
+    expect(readView('new-session', '/office-project')).toBe('office');
+    writeView('office-session', 'office', '/office-project');
+    expect(readView('new-session', '/new-project')).toBe('office');
   });
 
   describe('view fallback levels', () => {
@@ -234,6 +255,16 @@ describe('orchestratorPrefs', () => {
       });
       expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
       expect(() => writeDockWidth(500)).not.toThrow();
+    });
+  });
+
+  describe('presenter', () => {
+    it('is off until turned on, and remembers both ways', () => {
+      expect(readPresenter()).toBe(false);
+      writePresenter(true);
+      expect(readPresenter()).toBe(true);
+      writePresenter(false);
+      expect(readPresenter()).toBe(false);
     });
   });
 });

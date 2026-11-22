@@ -3,14 +3,17 @@ import {
   ACCESS_REVIEW_DORMANT_DAYS_MIN,
   BadRequestError,
   ForbiddenError,
+  formatAdminPermissionSource,
   isFullAdmin,
   type AccessReviewDecision,
   type AdminAccessReviewRecord,
+  type AdminPermissionSource,
 } from '@bike4mind/common';
 import {
   ACCESS_REVIEW_DEFAULT_DORMANT_DAYS,
   isDormant,
   type AccessReviewAdmin,
+  type AccessReviewRole,
 } from '@bike4mind/server-utils/security/accessReview/accessReview';
 import { z } from 'zod';
 
@@ -78,19 +81,36 @@ export const ACCESS_REVIEW_CSV_COLUMNS = [
   'reviewerUserId',
   'decidedAt',
   'reviewCompletedAt',
+  // Appended, never reordered: spreadsheets built on earlier exports read columns by position.
+  'directPermissions',
+  'roles',
+  'permissionSources',
 ] as const;
+
+export const ACCESS_REVIEW_ROLE_CSV_COLUMNS = ['roleId', 'role', 'permissions', 'members'] as const;
+
+const roleCell = (roles: readonly { id: string; name: string | null }[]) =>
+  roles.map(role => role.name ?? `deleted-role:${role.id}`).join(';');
+
+const permissionSourcesCell = (sources: AdminPermissionSource[]) =>
+  sources.map(source => `${source.permission}=${formatAdminPermissionSource(source)}`).join(';');
+
+const memberCell = (members: AccessReviewRole['members']) =>
+  members.map(member => member.email || member.username || member.userId).join(';');
 
 const iso = (value: Date | string | null | undefined) =>
   value === null || value === undefined ? '' : value instanceof Date ? value.toISOString() : value;
 
 /**
  * One row per current admin, then one per decision whose admin no longer holds access (a revoked
- * account drops out of the admin list, so its row comes from the decision snapshot).
+ * account drops out of the admin list, so its row comes from the decision snapshot). When `roles`
+ * is given, a blank row and a role section with each role's members follow.
  */
 export function toAccessReviewCsvRows(
   quarter: string,
   rows: AccessReviewRow[],
-  record: AdminAccessReviewRecord | null
+  record: AdminAccessReviewRecord | null,
+  roles: AccessReviewRole[] = []
 ): unknown[][] {
   const completedAt = iso(record?.completedAt);
   const decisionCells = (decision: AccessReviewDecision | null | undefined) => [
@@ -117,6 +137,9 @@ export function toAccessReviewCsvRows(
       row.mfaEnabled,
       row.dormant,
       ...decisionCells(row.decision),
+      row.directPermissions.join(';'),
+      roleCell(row.roles),
+      permissionSourcesCell(row.permissionSources),
     ]),
     ...(record?.decisions ?? [])
       .filter(decision => !listed.has(decision.userId))
@@ -134,6 +157,16 @@ export function toAccessReviewCsvRows(
         '',
         '',
         ...decisionCells(decision),
+        '',
+        roleCell(decision.roles ?? []),
+        '',
       ]),
+    ...(roles.length > 0
+      ? [
+          [],
+          [...ACCESS_REVIEW_ROLE_CSV_COLUMNS],
+          ...roles.map(role => [role.id, role.name, role.permissions.join(';'), memberCell(role.members)]),
+        ]
+      : []),
   ];
 }

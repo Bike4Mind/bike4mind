@@ -12,6 +12,10 @@ const h = vi.hoisted(() => ({
   adminOrgs: vi.fn(),
   memberOrgs: vi.fn(),
   orgFindById: vi.fn(),
+  spaceAdmin: vi.fn(),
+  spaceMember: vi.fn(),
+  spaceFindLive: vi.fn(),
+  spacesOn: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -24,9 +28,15 @@ vi.mock('@bike4mind/database', () => ({
     deleteOne: h.bundleDelete,
   },
   SkillListing: { find: h.listingFind, countDocuments: h.listingCount, exists: h.listingExists },
+  spaceRepository: {
+    findIdsAdministeredBy: h.spaceAdmin,
+    findIdsForUser: h.spaceMember,
+    findLiveById: h.spaceFindLive,
+  },
   adminSettingsRepository: {},
   inboxRepository: {},
 }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: h.spacesOn }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {
     findIdsAdministeredBy: h.adminOrgs,
@@ -38,6 +48,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 import { createBundle, deleteBundle, listBundles, updateBundle } from './bundles';
 
 const ORG = '65a0000000000000000000aa';
+const SPACE = '65d0000000000000000000aa';
 const OTHER_ORG = '65a0000000000000000000bb';
 const L1 = '65b000000000000000000001';
 const L2 = '65b000000000000000000002';
@@ -65,6 +76,12 @@ beforeEach(() => {
   h.memberOrgs.mockImplementation(async (userId: string) => (userId === 'member' ? [ORG] : []));
   h.listingCount.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) => _id.$in.length);
   h.listingExists.mockResolvedValue(null);
+  h.spacesOn.mockResolvedValue(true);
+  h.spaceAdmin.mockImplementation(async (userId: string) => (userId === 'space-admin' ? [SPACE] : []));
+  h.spaceMember.mockImplementation(async (userId: string) =>
+    ['space-admin', 'space-member'].includes(userId) ? [SPACE] : []
+  );
+  h.spaceFindLive.mockImplementation(async (id: string) => (id === SPACE ? { id } : null));
   h.orgFindById.mockImplementation(async (id: string) => (id === ORG ? { id } : null));
   h.bundleCreate.mockImplementation(async (fields: object) => doc({ id: BUNDLE, ...fields }));
   h.bundleFindById.mockImplementation(async (id: string) => (id === BUNDLE ? doc(stored) : null));
@@ -188,15 +205,54 @@ describe('listBundles', () => {
   });
 
   it('shows members the bundles and candidates, editable only by admins', async () => {
-    expect(await listBundles(member, ORG)).toEqual({
+    expect(await listBundles(member, { organizationId: ORG })).toEqual({
       bundles: [stored],
       listings: [{ id: L1, name: 'review-pr', pluginName: 'review-pr' }],
       canEdit: false,
     });
-    expect((await listBundles(admin, ORG)).canEdit).toBe(true);
+    expect((await listBundles(admin, { organizationId: ORG })).canEdit).toBe(true);
   });
 
   it('404s an org the caller is not in', async () => {
-    await expect(listBundles(member, OTHER_ORG)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(listBundles(member, { organizationId: OTHER_ORG })).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('Space bundles', () => {
+  const spaceBody = { spaceId: SPACE, name: 'Team Starter Pack', description: 'x', listingIds: [L1] };
+  const spaceAdmin = { id: 'space-admin' };
+  const spaceMember = { id: 'space-member' };
+
+  it('lets a Space admin create one, owned by the Space and filtered to its listings', async () => {
+    const bundle = await createBundle(spaceAdmin, spaceBody);
+    expect(bundle).toMatchObject({ spaceId: SPACE, pluginName: 'team-starter-pack' });
+    expect(bundle).not.toHaveProperty('organizationId');
+    expect(h.listingCount).toHaveBeenCalledWith(
+      expect.objectContaining({ visibility: 'space', spaceId: SPACE, status: 'approved' })
+    );
+  });
+
+  it('refuses a plain Space member, a non-member, and a body with both owners', async () => {
+    await expect(createBundle(spaceMember, spaceBody)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(createBundle(member, spaceBody)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(createBundle(admin, { ...spaceBody, organizationId: ORG })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+
+  it('answers 404 for every Space bundle operation while Spaces are off, for super-admins too', async () => {
+    h.spacesOn.mockResolvedValue(false);
+    await expect(createBundle({ id: 'root', isAdmin: true }, spaceBody)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(listBundles({ id: 'root', isAdmin: true }, { spaceId: SPACE })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('shows members the Space bundles read-only and 404s a Space the caller is not in', async () => {
+    h.bundleFind.mockReturnValue({ sort: async () => [] });
+    h.listingFind.mockReturnValue({ sort: async () => [] });
+    expect((await listBundles(spaceMember, { spaceId: SPACE })).canEdit).toBe(false);
+    expect((await listBundles(spaceAdmin, { spaceId: SPACE })).canEdit).toBe(true);
+    await expect(listBundles(member, { spaceId: SPACE })).rejects.toMatchObject({ statusCode: 404 });
   });
 });

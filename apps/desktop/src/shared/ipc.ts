@@ -1,10 +1,12 @@
+import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
+import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
-import type { AttentionNotice, AttentionOpenEvent } from './attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -69,6 +71,7 @@ import type {
   RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
@@ -138,13 +141,17 @@ import type {
   ModelRuntimeStatus,
   LoadedModelState,
 } from './models';
-import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
   ModelExportFormat,
   ModelStateUpdate,
+  ModelVersion,
+  ModelVersionEntry,
+  ModelVersionRecordRequest,
+  ModelVersionsUpdate,
   ModelViewState,
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
@@ -161,6 +168,15 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
+  studioPrepare: 'studio:prepare',
+  studioCreate: 'studio:create',
+  studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
+  studioAssetAction: 'studio:asset-action',
+  studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -179,6 +195,7 @@ export const IPC_CHANNELS = {
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
+  usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
   fleetSetConsent: 'fleet:set-consent',
@@ -250,6 +267,8 @@ export const IPC_CHANNELS = {
   chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatEditMessage: 'chat:edit-message',
+  chatRegenerateReply: 'chat:regenerate-reply',
   /**
    * The two context commands. Renderer -> main only, and deliberately NOT reachable from a
    * tool: see the renderer's commands.ts for why a slash command is not a model capability.
@@ -496,6 +515,13 @@ export const IPC_CHANNELS = {
   modelState: 'model:state',
   /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
   modelCaptureRequest: 'model:capture-request',
+  /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
+  modelListVersions: 'model:list-versions',
+  modelRecordVersion: 'model:record-version',
+  modelWantsVersion: 'model:wants-version',
+  modelRestoreVersion: 'model:restore-version',
+  /** main -> renderer push: a conversation kept a new version. */
+  modelVersions: 'model:versions',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -571,12 +597,17 @@ export const IPC_CHANNELS = {
   terminalsChanged: 'terminal:changed',
   /** A session needs the user while the app is in the background; see @shared/attention. */
   attentionNotify: 'attention:notify',
+  handoffOpenServerSessions: 'handoff:open-server-sessions',
   attentionClaim: 'attention:claim',
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
+  attentionGetNotifyScope: 'attention:get-notify-scope',
+  attentionSetNotifyScope: 'attention:set-notify-scope',
+  attentionNotifyScope: 'attention:notify-scope',
   /** The menu-bar toggle, for Settings; see @shared/watch. */
   watchGetPreferences: 'watch:get-preferences',
   watchSetPreferences: 'watch:set-preferences',
@@ -589,6 +620,14 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
+  skinsList: 'skins:list',
+  /** main -> renderer push after the mods folder changed on disk. */
+  skinsChanged: 'skins:changed',
+  /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
+  soundPacksList: 'soundpacks:list',
+  /** Pushed with the fresh list when the mods folder changes. */
+  soundPacksChanged: 'soundpacks:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -659,6 +698,8 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** When an agent tool last took this tab (ms since epoch); absent or 0 if it never has. */
+  agentUsedAt?: number;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
@@ -679,6 +720,8 @@ export interface BrowserOpenArtifactRequest {
   sessionId: string;
   title: string;
   content: string;
+  /** Names the artifact, so a tab still showing it is switched to rather than opened again. */
+  artifactKey?: string;
 }
 
 /** The history controls, which take no url. */
@@ -743,7 +786,18 @@ export interface MiniTavernApi {
 }
 
 export interface DesktopApi {
+  studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
+  skins: {
+    list(): Promise<SkinSummary[]>;
+    onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
+  /** Data-only sound packs for the Orchestrate events; validated in main, like skins. */
+  soundPacks: {
+    list(): Promise<SoundPackSummary[]>;
+    onChanged(listener: (packs: SoundPackSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -837,6 +891,11 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+    /**
+     * Self-hosted model usage in the current conversation scope, signed in or not. Computed in
+     * main from the sessions stored on this device; nothing is requested from any server.
+     */
+    getLocal(window: UsageWindowId, force?: boolean): Promise<LocalUsageResult>;
   };
   fleet: {
     getState(): Promise<FleetState>;
@@ -949,7 +1008,7 @@ export interface DesktopApi {
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string): Promise<ChatSession | null>;
+    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
@@ -971,6 +1030,10 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /** Replace a sent prompt and drop every turn after it, then send the edit; ChatService.editMessage. */
+    editMessage(request: EditMessageRequest): Promise<SendMessageResult>;
+    /** Drop the last reply and run its prompt again; ChatService.regenerateReply. */
+    regenerateReply(sessionId: string): Promise<SendMessageResult>;
     /**
      * `/clear`: insert a context boundary, carrying nothing across. Instant - no model involved.
      * Nothing is deleted; the transcript keeps every message and folds the earlier ones away.
@@ -1235,6 +1298,15 @@ export interface DesktopApi {
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (update: ModelStateUpdate) => void): () => void;
     onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
+    /** Oldest first, with thumbnails. */
+    listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
+    /** Keeps the good build of `generation`; null when nothing new was kept. */
+    /** Whether this window should render a thumbnail and keep `generation` (main may already have it). */
+    wantsVersion(sessionId: string, generation: number): Promise<boolean>;
+    recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
+    /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
+    restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;
+    onVersions(listener: (update: ModelVersionsUpdate) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {
@@ -1434,6 +1506,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
      * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
@@ -1450,6 +1523,11 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+    /** Whether plain sessions alert too, or only orchestrations and their agents. */
+    getNotifyScope(): Promise<NotifyScope>;
+    /** Resolves to the scope main now holds; an invalid value leaves it unchanged. */
+    setNotifyScope(scope: NotifyScope): Promise<NotifyScope>;
+    onNotifyScope(listener: (scope: NotifyScope) => void): () => void;
   };
   /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
   watch: {

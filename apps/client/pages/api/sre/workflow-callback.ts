@@ -22,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   postSreFixSuccessMessage,
   postSreFixFailureMessage,
@@ -102,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let expectedToken: string;
     try {
-      expectedToken = decryptSecret(encryptedToken, encryptionKey);
+      expectedToken = decryptStoredSecret(encryptedToken);
     } catch (decryptError) {
       logger.error('[SRE-CALLBACK] Failed to decrypt callback token', { error: serializeError(decryptError) });
       return res.status(500).json({ error: 'Server configuration error' });

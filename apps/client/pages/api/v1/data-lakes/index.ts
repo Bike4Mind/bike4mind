@@ -56,7 +56,8 @@ const handler = nextRouteForContract(listDataLakesContract, {
     const data = await Promise.all(
       page.items.map(async lake => {
         const liveStats = await loadRegistryLakeStats(lake, { fabFiles: fabFileRepository, logger: req.logger });
-        return toPublicDataLake(documentsById.get(lake.id) ?? lake, liveStats);
+        // `canManage` is the list's own grant-aware flag (canManageLake over one batched grant read).
+        return toPublicDataLake(documentsById.get(lake.id) ?? lake, liveStats, lake.canManage === true);
       })
     );
 

@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database/infra', async importOriginal => ({
   },
 }));
 
-import { Inbox, SkillListing, SkillListingVersion, User } from '@bike4mind/database';
+import { Inbox, Space, SkillListing, SkillListingVersion, User } from '@bike4mind/database';
 import type { ISkillListing } from '@bike4mind/common';
 import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 
@@ -41,7 +41,7 @@ afterAll(async () => {
 beforeEach(async () => {
   orgs.info.clear();
   await Promise.all(
-    ['skill_listings', 'skill_listing_versions', 'inboxes', 'users'].map(c =>
+    ['skill_listings', 'skill_listing_versions', 'inboxes', 'users', 'spaces'].map(c =>
       mongoose.connection.db!.collection(c).deleteMany({})
     )
   );
@@ -57,12 +57,13 @@ const OVERDUE = () => new Date(Date.now() + 73 * 60 * 60 * 1000);
  * import the client publish path; apps/client/server/skillMarket/skillMarket.e2e.test.ts pins that
  * publish really produces this state (pendingVersionId set, review pending).
  */
-async function held(name: string, visibility: ISkillListing['visibility'], organizationId?: string) {
+async function held(name: string, visibility: ISkillListing['visibility'], organizationId?: string, spaceId?: string) {
   const listing = await SkillListing.create({
     sourceSkillId: `skill-${name}`,
     authorUserId: AUTHOR,
     visibility,
     ...(organizationId ? { organizationId } : {}),
+    ...(spaceId ? { spaceId } : {}),
     tags: ['writing'],
     name,
     description: 'Formats text',
@@ -103,6 +104,35 @@ describe('Skill Market review SLA (real mongod)', () => {
     expect((await Inbox.findOne({ receiverId: AUTHOR }).sort({ _id: -1 }))!.userId).toBe('SYSTEM');
     expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
     expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBeNull();
+  });
+
+  it('SLA reminders: route a held Space version to the Space owner and admins, not plain members', async () => {
+    const joined = { joinedVia: 'invite' as const, joinedAt: new Date() };
+    const space = await Space.create({
+      name: 'Team',
+      ownerUserId: 'space-owner',
+      members: [
+        { userId: 'space-admin', role: 'admin', ...joined },
+        { userId: 'space-member', role: 'member', ...joined },
+      ],
+    });
+    const superAdmin = await User.create({ username: 'super-admin', name: 'Super Admin', isAdmin: true });
+    await held('fetcher', 'space', undefined, String(space._id));
+    expect(await runSkillMarketReviewSla(OVERDUE())).toEqual({ reminded: 1 });
+    expect(await Inbox.countDocuments({ receiverId: 'space-owner' })).toBe(1);
+    expect(await Inbox.countDocuments({ receiverId: 'space-admin' })).toBe(1);
+    expect(await Inbox.countDocuments({ receiverId: 'space-member' })).toBe(0);
+    expect(await Inbox.countDocuments({ receiverId: String(superAdmin._id) })).toBe(0);
+  });
+
+  it('SLA reminders: fall back to super-admins when the Space is gone', async () => {
+    const superAdmin = await User.create({ username: 'super-admin', name: 'Super Admin', isAdmin: true });
+    const space = await Space.create({ name: 'Team', ownerUserId: 'space-owner', members: [] });
+    await held('fetcher', 'space', undefined, String(space._id));
+    await Space.deleteOne({ _id: space._id }, { hardDelete: true });
+    expect(await runSkillMarketReviewSla(OVERDUE())).toEqual({ reminded: 1 });
+    expect(await Inbox.countDocuments({ receiverId: String(superAdmin._id) })).toBe(1);
+    expect(await Inbox.countDocuments({ receiverId: 'space-owner' })).toBe(0);
   });
 
   it('SLA reminders: nudge super-admins for a held Public version, never approve it', async () => {

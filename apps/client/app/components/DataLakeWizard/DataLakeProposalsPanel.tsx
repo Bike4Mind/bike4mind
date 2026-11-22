@@ -18,10 +18,12 @@ import type { DataLakeProposalReviewReason, IDataLakeProposalDocument } from '@b
 import { RESEARCH_RUN_PRODUCER, feedLabel } from '@bike4mind/common';
 
 const reviewReasonLabel = (reason: DataLakeProposalReviewReason): string => {
-  const conditions = (reason.conditions ?? []).join('; ');
-  if (reason.kind === 'rule_match') return `Sent to review: matched ${conditions}`;
-  if (reason.kind === 'rule_undetermined') return `Sent to review: could not check ${conditions}`;
-  return 'Sent to review: rule check failed';
+  const quoted = (reason.conditions ?? []).map(condition => `"${condition}"`);
+  if (reason.kind === 'rule_match') return `Sent to review: matched ${quoted.join(', ')}`;
+  if (reason.kind === 'rule_undetermined') {
+    return `Sent to review: could not tell whether ${quoted.join(' or ')} applies`;
+  }
+  return 'Sent to review: the rule check failed';
 };
 
 export type ProposalsView = 'pending' | 'declined';
@@ -415,7 +417,12 @@ export function DataLakeProposalsPanel({
                   </Stack>
                 )
               ) : decliningId === proposal.id ? (
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}
+                  data-testid="datalake-proposal-decline-row"
+                >
                   <Input
                     size="sm"
                     value={reason}
@@ -423,7 +430,7 @@ export function DataLakeProposalsPanel({
                     disabled={busy}
                     placeholder="Why are you declining? (optional)"
                     onChange={e => setReason(e.target.value)}
-                    sx={{ flex: 1 }}
+                    sx={{ flex: 1, minWidth: '12rem' }}
                     slotProps={{ input: { 'data-testid': 'datalake-proposal-decline-reason' } }}
                   />
                   <Button

@@ -213,16 +213,14 @@ describe('IncidentView', () => {
   });
 
   it.each([
-    ['risk-review', 'signup-risk-review'],
-    ['held-grants', 'held-signup-grants'],
-    ['domain-holds', 'signup-domain-holds'],
-  ])('opens the %s queue on its own admin tab', (queue, slug) => {
+    ['risk-review', { tab: 'signup-risk-review' }],
+    ['held-grants', { tab: 'waitlist', inviteSection: 'pending', heldGrants: 'open' }],
+    ['domain-holds', { tab: 'signup-domain-holds' }],
+  ])('opens the %s queue at its current home', (queue, search) => {
     renderView();
     fireEvent.click(screen.getByTestId(`security-incident-queue-${queue}-btn`));
-    expect(fakeAdminRouter.navigate).toHaveBeenCalledWith(
-      expect.objectContaining({ to: '/admin', search: { tab: slug } })
-    );
-    expect(fakeAdminRouter.search).toEqual({ tab: slug });
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin', search }));
+    expect(fakeAdminRouter.search).toEqual(search);
   });
 
   it('passes the selected range to the signals hook and maps 1h onto the daily signup chart', () => {

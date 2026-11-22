@@ -1,6 +1,17 @@
-export type OrchestratorViewId = 'tavern' | 'aquarium' | 'board' | 'table' | 'tile-wall';
+export type OrchestratorViewId =
+  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
 /** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'aquarium', 'board', 'table', 'tile-wall'];
+export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
+  'tavern',
+  'aquarium',
+  'office',
+  'board',
+  'table',
+  'tile-wall',
+  'swimlanes',
+  'constellation',
+  'transit',
+];
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
@@ -15,6 +26,9 @@ const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
 const AMBIENT_KEY = 'b4m.orchestrator.ambient';
 const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
 const FOCUS_KEY = 'b4m.orchestrator.focus';
+const SKIN_KEY = 'b4m.orchestrator.skin';
+const SOUND_PACK_KEY = 'b4m.orchestrator.soundPack';
+const PRESENTER_KEY = 'b4m.orchestrator.presenter';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -164,4 +178,47 @@ export function readFocus(): boolean {
 
 export function writeFocus(on: boolean): void {
   writeItem(FOCUS_KEY, on ? '1' : '0');
+}
+
+/** The picked skin's id (main/mods), or null for Default. Install-wide, like the other look-and-feel choices. */
+export function readSkin(): string | null {
+  return readItem(SKIN_KEY);
+}
+
+export function writeSkin(id: string | null): void {
+  if (id !== null) {
+    writeItem(SKIN_KEY, id);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SKIN_KEY);
+  } catch {
+    // Unwritable storage: Default for this run only.
+  }
+}
+
+/** The picked sound pack's id (main/mods), or null for the built-in sounds. */
+export function readSoundPack(): string | null {
+  return readItem(SOUND_PACK_KEY);
+}
+
+export function writeSoundPack(id: string | null): void {
+  if (id !== null) {
+    writeItem(SOUND_PACK_KEY, id);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SOUND_PACK_KEY);
+  } catch {
+    // Unwritable storage: the built-in sounds for this run only.
+  }
+}
+
+/** Presenter mode: the stage redacted for screen sharing (presenter.ts). Off unless turned on. */
+export function readPresenter(): boolean {
+  return readItem(PRESENTER_KEY) === '1';
+}
+
+export function writePresenter(on: boolean): void {
+  writeItem(PRESENTER_KEY, on ? '1' : '0');
 }

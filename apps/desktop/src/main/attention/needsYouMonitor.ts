@@ -1,4 +1,4 @@
-import type { AttentionNotice } from '@shared/attention';
+import type { AttentionNotice, NotifyScope } from '@shared/attention';
 import type { ChatMessage, ChatSessionStatus, ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
 import { alertableSessions, needsYouBody, needsYouCount, needsYouTitle, rootSessionOf } from '@shared/needsYou';
 
@@ -6,6 +6,8 @@ export type NeedsYouMonitorDeps = {
   /** The signed-in scope's sessions (device-local ones when signed out): only these alert or count. */
   listSessions(): Promise<ChatSessionSummary[]>;
   sessionMessages(sessionId: string): Promise<readonly ChatMessage[]>;
+  /** Whether plain sessions alert too; the same setting the renderer follows. */
+  notifyScope(): NotifyScope;
   /** An app window is open; its renderer then announces entries and owns the badge. */
   hasWindow(): boolean;
   /** The claim map the renderers use, so an entry a closing window already announced is not repeated. */
@@ -66,9 +68,10 @@ export class NeedsYouMonitor {
     const sessions = await this.deps.listSessions();
     // A window that opened while the list was read has a renderer that took over from here.
     if (this.deps.hasWindow()) return;
-    this.deps.setBadge(needsYouCount(this.statuses, sessions));
+    const scope = this.deps.notifyScope();
+    this.deps.setBadge(needsYouCount(this.statuses, sessions, scope));
     if (entered === null || this.statuses.get(entered) !== 'needs-action') return;
-    if (!alertableSessions(sessions).has(entered)) return;
+    if (!alertableSessions(sessions, scope).has(entered)) return;
     if (this.deps.claim([entered]).length === 0) return;
 
     const rootId = rootSessionOf(sessions, entered);

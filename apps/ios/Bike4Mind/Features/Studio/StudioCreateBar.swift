@@ -193,15 +193,9 @@ private struct InputChip: View {
 
   var body: some View {
     HStack(spacing: Tokens.Spacing.xs) {
-      AsyncImage(url: input.item.url) { phase in
-        if let image = phase.image {
-          image.resizable().scaledToFill()
-        } else {
-          Tokens.Palette.groupedBackground
-        }
-      }
-      .frame(width: 32, height: 32)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
+      CachedThumbnail(url: input.item.url)
+        .frame(width: 32, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
       Text(input.role.title)
         .font(Tokens.Typography.meta)
       Button(action: onRemove) {

@@ -144,14 +144,14 @@ describe('set_session_pull_request', () => {
   it('refuses without a PR monitor', async () => {
     await expect(
       setSessionPullRequest.run({ pull_request: REF.url }, { roots: [], signal: new AbortController().signal })
-    ).rejects.toThrow('The PR bar can only be changed in a conversation the user is in.');
+    ).rejects.toThrow('The PR bar can only be changed in a turn the user typed.');
   });
 
-  it('is offered only to a Code session with a user present', () => {
+  it('is offered to a Code session whether or not a user is present', () => {
     const names = (options: Partial<Parameters<typeof toolsForRequest>[0]>) =>
       toolsForRequest({ roots: [], media: false, host: false, ...options }).map(entry => entry.toolSchema.name);
     expect(names({ pullRequest: true, ask: true })).toContain('set_session_pull_request');
-    expect(names({ pullRequest: true, ask: false })).not.toContain('set_session_pull_request');
+    expect(names({ pullRequest: true, ask: false })).toContain('set_session_pull_request');
     expect(names({ pullRequest: false, ask: true })).not.toContain('set_session_pull_request');
     expect(findTool('set_session_pull_request')).toBe(setSessionPullRequest);
     expect(setSessionPullRequest.approval).toBeUndefined();

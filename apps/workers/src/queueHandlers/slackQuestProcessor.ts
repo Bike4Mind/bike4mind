@@ -1,5 +1,6 @@
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -20,6 +21,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   organizationRepository,
+  spendFreezeRepository,
   mcpServerRepository,
   creditTransactionRepository,
   agentRepository,
@@ -44,6 +46,7 @@ import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitE
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { Logger } from '@bike4mind/observability';
 
 // Register global error handlers for enhanced observability of network errors
@@ -131,6 +134,7 @@ export const getStaticOptions = () => {
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -413,6 +417,7 @@ export const handler = withEventContext(async (event, logger) => {
   logger.info(`[TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
 
   if (!user) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(user);
 
   logger.updateMetadata({
     userId: params.userId,

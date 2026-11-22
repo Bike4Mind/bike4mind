@@ -72,6 +72,14 @@ export class TeamsPage extends BasePage {
     return this.page.getByTestId('organization-tabs').getByRole('tab', { name, exact: true });
   }
 
+  /**
+   * A tab shown locked to the current viewer, by its route key (e.g. 'billing'). The lock icon adds
+   * "Owner only" to the accessible name, so `tab()`'s exact name match misses it.
+   */
+  lockedTab(key: string): Locator {
+    return this.page.getByTestId(`organization-tab-locked-${key}`);
+  }
+
   async openTab(name: TeamTab) {
     await this.tab(name).click();
     await expect(this.tab(name)).toHaveAttribute('aria-selected', 'true');

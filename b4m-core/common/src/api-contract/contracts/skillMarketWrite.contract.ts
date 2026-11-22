@@ -54,7 +54,7 @@ export const listSkillMarketListingsContract = defineEndpoint({
   operationId: 'listSkillMarketListings',
   summary: 'Browse Skill Market listings',
   description:
-    'Lists the approved Public listings and the Organization listings of your organizations, with search ' +
+    'Lists the approved Public listings, the Organization listings of your organizations and the Space listings of your Spaces, with search ' +
     'and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` ' +
     'until it is `null`, keeping the same filters.',
   tags: ['Skills'],
@@ -107,7 +107,8 @@ export const publishSkillMarketListingContract = defineEndpoint({
   summary: 'Publish a skill to the Skill Market',
   description:
     `Creates a listing from a skill you own and submits its first version. ${SCAN_NOTE} A skill has at ` +
-    'most one live listing: to publish a change, submit a new version instead. Unknown body fields are rejected.',
+    'most one live listing: to publish a change, submit a new version instead. `space` visibility needs `space_id` and ' +
+    'membership of that Space. Unknown body fields are rejected.',
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
   scopes: WRITE_SCOPES,
@@ -118,13 +119,13 @@ export const publishSkillMarketListingContract = defineEndpoint({
     201: { description: 'The listing and its scanned first version.', schema: SkillMarketSubmitResponseSchema },
     400: {
       description:
-        'The skill was imported from the market, no organization was chosen, a tag is invalid, or you ' +
+        'The skill was imported from the market, no organization or Space was chosen, a tag is invalid, or you ' +
         'have reached your active listing cap.',
       schema: ApiErrorSchema,
     },
     403: {
       description:
-        `${WRITE_FORBIDDEN} Also: you are not in the organization, your account is too new for a Public ` +
+        `${WRITE_FORBIDDEN} Also: you are not in the organization or Space (or Spaces are not enabled), your account is too new for a Public ` +
         'listing, or moderators removed this skill from the market.',
       schema: ScopeForbiddenErrorSchema,
     },

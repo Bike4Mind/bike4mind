@@ -74,6 +74,7 @@ function buildDb(balanceAfterHold = 100_000) {
       creditTransactions: {} as never,
       users: users as never,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     },
   };
 }

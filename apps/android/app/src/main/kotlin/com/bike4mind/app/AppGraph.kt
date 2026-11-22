@@ -11,11 +11,22 @@ import com.bike4mind.client.apis.AIApi
 import com.bike4mind.client.apis.AccountApi
 import com.bike4mind.client.apis.SessionsApi
 import com.bike4mind.client.models.GetClientConfigResponse200
+import com.bike4mind.kit.account.AccountDeletionController
+import com.bike4mind.kit.account.AccountDeletionSignal
+import com.bike4mind.kit.account.AccountProfile
+import com.bike4mind.kit.account.AccountRestoreController
+import com.bike4mind.kit.account.AccountWire
+import com.bike4mind.kit.account.SettingsController
+import com.bike4mind.kit.account.StepUpController
+import com.bike4mind.kit.account.StepUpWire
+import com.bike4mind.kit.approvals.PendingActionWire
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
 import com.bike4mind.kit.auth.AuthorizationResult
 import com.bike4mind.kit.auth.OAuthConfiguration
+import com.bike4mind.kit.briefs.BriefController
+import com.bike4mind.kit.briefs.BriefWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
@@ -32,6 +43,7 @@ import com.bike4mind.kit.sessions.SessionsRepository
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -43,6 +55,9 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val identity = ClientIdentity.android(BuildConfig.VERSION_NAME)
     val upgradeSignal = ClientUpgradeSignal()
 
+    /** Raised by any call while the account waits to be deleted; AppRoot shows the restore screen. */
+    val deletionSignal = AccountDeletionSignal()
+
     private val engine = OkHttp.create()
 
     // Sign-in calls carry the identity (so the version gate covers them) but never a bearer token: a refresh
@@ -52,7 +67,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val tokenStore = KeystoreTokenStore(context)
     val session = AuthSession(authApi, tokenStore)
 
-    private val transport = B4MTransport(identity, upgradeSignal, session)
+    private val transport = B4MTransport(identity, upgradeSignal, session, deletionSignal)
     private val http = HttpClient(engine) {
         install(WebSockets)
         transport.install(this)
@@ -63,7 +78,15 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         SessionsApi(environment.baseUrl, engine) { transport.install(it) },
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
-    private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
+    private val briefs = BriefWire(environment, http)
+    private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
+    private val stepUp = StepUpWire(environment, http)
+    private val chatBackend = LiveChatBackend(
+        sessions,
+        ChatSendWire(environment, http),
+        RealtimeConnection(environment, http),
+        PendingActionWire(environment, http),
+    )
 
     /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
     val push = PushRegistrationCoordinator(
@@ -76,6 +99,19 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val pendingSignIn = PendingSignInStore(context)
 
     fun chat(sessionId: String?, scope: CoroutineScope) = ChatController(sessionId, chatBackend, scope)
+
+    /** [briefId] null shows the latest brief. */
+    fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
+
+    fun settings(scope: CoroutineScope) = SettingsController(account, scope)
+
+    fun accountDeletion(scope: CoroutineScope) = AccountDeletionController(account, scope, ::endSessionAfterDeletion)
+
+    /** [onVerified] retries what the step-up gate refused. */
+    fun stepUp(scope: CoroutineScope, onVerified: () -> Unit) =
+        StepUpController(stepUp, scope, onVerified = onVerified, onSessionEnded = ::endSessionLocally)
+
+    fun accountRestore(scope: CoroutineScope) = AccountRestoreController(account, scope) { deletionSignal.reset() }
 
     /** Feature flags, limits and the model list for this user (`GET /api/v1/client-config`). */
     suspend fun clientConfig(): GetClientConfigResponse200 = accountApi.getClientConfig().requireBody()
@@ -130,8 +166,34 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         }
     }
 
+    /** Unregisters push, then ends the session on the server; the local sign-out happens even when offline. */
+    suspend fun signOut() {
+        try {
+            push.unregisterBeforeSignOut()
+            session.signOut()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (offline: Exception) {
+            endSessionLocally()
+        }
+    }
+
     suspend fun signOutLocally() {
         tokenStore.clear()
+    }
+
+    /** Signs out on this device only, for a session the server has already ended. */
+    suspend fun endSessionLocally() {
+        signOutLocally()
+        session.restore()
+    }
+
+    // The server revoked every session when it accepted the request, so there is nothing to call; the signal
+    // ignores the 403s of calls still in flight so the restore screen does not flash on the way out.
+    private suspend fun endSessionAfterDeletion() {
+        deletionSignal.beginSignOutAfterDeletion()
+        push.sessionDidEnd()
+        endSessionLocally()
     }
 
     fun close() {

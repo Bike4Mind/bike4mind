@@ -230,6 +230,47 @@ describe('GenerationJobEngine', () => {
     expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
   });
 
+  it('a submit cut off by the step deadline logs one warning and still fails as orphaned_submit', async () => {
+    const t = setup({ submitMode: 'sync' });
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    vi.mocked(t.handler.submit).mockImplementationOnce(
+      (_job, context) =>
+        new Promise((_resolve, reject) =>
+          context.signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }))
+          )
+        )
+    );
+    expect(await t.engine.step(job.id, { stepBudgetMs: 5 })).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error).toMatchObject({ code: 'orphaned_submit', cutOffByStepDeadline: true });
+    expect(t.handler.submit).toHaveBeenCalledTimes(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toEqual([
+      [
+        'generation_job_submit_deadline',
+        expect.objectContaining({ jobId: job.id, kind: 'video', elapsedMs: expect.any(Number) }),
+      ],
+    ]);
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(0);
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a submit that throws before the step deadline still logs an orphaned-submit error', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create();
+    t.results.submit.push(Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' }));
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.error?.code).toBe('orphaned_submit');
+    expect(final.error?.cutOffByStepDeadline).toBeUndefined();
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+    expect(errorLogsNamed(warnSpy, 'generation_job_submit_deadline')).toHaveLength(0);
+  });
+
   it('a definitive submit rejection clears the attempt and retries with backoff', async () => {
     const t = setup();
     const job = await t.create();

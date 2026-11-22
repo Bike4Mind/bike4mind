@@ -114,15 +114,7 @@ private struct MorphPickerView: View {
               dismiss()
             } label: {
               Color.clear.aspectRatio(1, contentMode: .fit)
-                .overlay {
-                  AsyncImage(url: image.url) { phase in
-                    if let loaded = phase.image {
-                      loaded.resizable().scaledToFill()
-                    } else {
-                      Tokens.Palette.groupedBackground
-                    }
-                  }
-                }
+                .overlay { CachedThumbnail(url: image.url) }
                 .clipped()
             }
             .buttonStyle(.plain)

@@ -27,16 +27,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:m
   const record = await adminAccessReviewRepository.findByQuarter(requested);
   if (requested !== current && !record) throw new NotFoundError(`No access review was recorded for ${requested}`);
 
-  const rows =
-    requested === current
-      ? toAccessReviewRows(
-          (await collectAccessReview({ now })).admins,
-          record,
-          now,
-          record?.dormantDays ?? ACCESS_REVIEW_DEFAULT_DORMANT_DAYS
-        )
-      : [];
-  const csv = toCsv(toAccessReviewCsvRows(requested, rows, record));
+  // Live roles would misstate an earlier quarter, so only the current one carries the role section.
+  const snapshot = requested === current ? await collectAccessReview({ now }) : null;
+  const rows = snapshot
+    ? toAccessReviewRows(snapshot.admins, record, now, record?.dormantDays ?? ACCESS_REVIEW_DEFAULT_DORMANT_DAYS)
+    : [];
+  const csv = toCsv(toAccessReviewCsvRows(requested, rows, record, snapshot?.roles ?? []));
 
   await recordAdminActionFromRequest(req, {
     action: 'access_review.exported',

@@ -70,7 +70,13 @@ export function SectionNameDialog({
             <Button type="submit" size="sm" disabled={!canSubmit} data-testid="section-name-submit-btn">
               {request.kind === 'rename' ? 'Rename' : 'Create'}
             </Button>
-            <Button size="sm" variant="plain" color="neutral" onClick={onClose} data-testid="section-name-cancel-btn">
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={onClose}
+              data-testid="section-name-cancel-btn"
+            >
               Cancel
             </Button>
           </DialogActions>

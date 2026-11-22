@@ -66,11 +66,17 @@ vi.mock('./tabs/OverviewTab', () => ({
     onViewCredits: () => void;
   }) => (
     <div data-testid="stub-overview">
-      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust', 'internalAccount', 'fileEmbeddingWindowReset'].map(
-        action => (
-          <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
-        )
-      )}
+      {[
+        'tags',
+        'mfaReset',
+        'emailVerification',
+        'apiKeyTrust',
+        'internalAccount',
+        'partnerAccount',
+        'fileEmbeddingWindowReset',
+      ].map(action => (
+        <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
+      ))}
       <button data-testid="stub-overview-activity-btn" onClick={onViewActivity} />
       <button data-testid="stub-overview-credits-btn" onClick={onViewCredits} />
     </div>
@@ -107,6 +113,7 @@ vi.mock('./actions/accountDialogs', () => {
     ApiKeyTrustDialog: stub('api-key-trust-dialog'),
     EmailVerificationDialog: stub('email-verification-dialog'),
     InternalAccountDialog: stub('internal-account-dialog'),
+    PartnerAccountDialog: stub('partner-account-dialog'),
     FileEmbeddingWindowResetDialog: stub('file-embedding-window-reset-dialog'),
     LoginAsDialog: stub('login-as-dialog'),
     ResetMfaDialog: stub('mfa-reset-dialog'),
@@ -316,6 +323,7 @@ describe('UserProfileView', () => {
       ['emailVerification', 'email-verification-dialog'],
       ['apiKeyTrust', 'api-key-trust-dialog'],
       ['internalAccount', 'internal-account-dialog'],
+      ['partnerAccount', 'partner-account-dialog'],
       ['fileEmbeddingWindowReset', 'file-embedding-window-reset-dialog'],
     ])('opens the %s dialog requested by the overview tab', (action, dialogId) => {
       setup();

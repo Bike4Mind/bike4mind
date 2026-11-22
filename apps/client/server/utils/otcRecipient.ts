@@ -29,12 +29,15 @@ async function domainAcceptsMail(domain: string): Promise<boolean> {
 
 /**
  * Why a sign-in code should not be mailed to `email`, judged on its domain alone: the signup
- * disposable/blocked-domain gate, or a domain that cannot receive mail. Fails open on any error.
+ * disposable/blocked-domain gate, or (except on self-host) a domain that cannot receive mail. Fails open
+ * on any error.
  */
 export async function otcRecipientRefusal(email: string, logger: Logger): Promise<OtcRecipientRefusal | undefined> {
   try {
     const adapters = { adminSettings: adminSettingsRepository, signupProtection };
     if (await userService.shouldBlockDisposableEmail(email, adapters)) return 'blocked-domain';
+    // A self-host relay often delivers to internal or test domains that publish no MX record.
+    if (process.env.B4M_SELF_HOST === 'true') return undefined;
     const domain = emailDomainOf(email);
     if (!domain || PERSONAL_EMAIL_PROVIDERS.has(registrableDomain(domain) ?? '')) return undefined;
     return (await domainAcceptsMail(domain)) ? undefined : 'no-mail-host';

@@ -305,6 +305,32 @@ describe('image job handler through the real engine', () => {
     );
   });
 
+  it('moderates and stores a WebP render as image/webp', async () => {
+    // A real 32x32 lossy WebP, the container gpt-image returns for outputFormat webp.
+    const webp = Buffer.from(
+      'UklGRkoAAABXRUJQVlA4ID4AAABQAwCdASogACAAPjEYikOiIaEUBAAgAwSygDsAfgAARr/YAAD+9r4H//zBK/IN2of//pcH6XB+lwf+i4AAAA==',
+      'base64'
+    );
+    const t = setup(
+      vi.fn<Generate>(async () => ({
+        status: 'succeeded',
+        output: { kind: 'inline', base64: webp.toString('base64'), contentType: 'image/webp' },
+      })),
+      { saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) }
+    );
+    t.provider.fetchOutput.mockResolvedValue(webp);
+    const created = await create(t, request({ outputFormat: 'webp' }));
+    await t.runToCompletion();
+
+    const job = t.jobOf(created);
+    expect(job.state).toBe('succeeded');
+    expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ bytes: webp, mimeType: 'image/webp' }));
+    expect(job.payload.output).toMatchObject({ contentType: 'image/webp', bytes: webp.byteLength });
+    expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
+      expect.objectContaining({ key: `generated-images/u1/${job.id}.webp`, bytes: webp, contentType: 'image/webp' })
+    );
+  });
+
   it('fails a thrown moderation scan as orphaned_submit and releases the hold', async () => {
     const t = setup(
       vi.fn<Generate>(async () => succeeded),

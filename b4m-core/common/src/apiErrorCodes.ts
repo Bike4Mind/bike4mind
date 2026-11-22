@@ -2,6 +2,7 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const ACCOUNT_TRUST_REQUIRED_ERROR_CODE = 'account_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
+export const INSTRUCTION_LIMIT_REACHED_ERROR_CODE = 'instruction_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const FREE_QUEST_LIMIT_REACHED_ERROR_CODE = 'free_quest_limit_reached';
@@ -9,9 +10,12 @@ export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mi
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
 export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded';
+export const API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'api_key_rate_limit_exceeded';
+export const API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE = 'api_key_daily_limit_exceeded';
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
+export const SPEND_FROZEN_ERROR_CODE = 'spend_frozen';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
@@ -19,6 +23,7 @@ export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
+export const BRIEF_QUESTION_CLOSED_ERROR_CODE = 'question_closed';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
@@ -47,8 +52,12 @@ export const API_ERROR_CODES = [
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   /** The credential is valid but its owner's account is suspended; the body carries `suspension` (category, terms, appeal). Not retryable. */
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  /** An admin paused new metered spend for the user, organization or API key; the body carries `frozenScope` and `frozenAt`, never the reason. Not retryable. */
+  SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  /** The user keeps as many standing assistant instructions as allowed; remediation is removing one. */
+  INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
@@ -72,6 +81,10 @@ export const API_ERROR_CODES = [
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   /** The account already has as many completions in flight as it may; a 429, retry once one finishes. */
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+  /** The key used up its requests-per-minute allowance; a 429 with Retry-After. */
+  API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  /** The key used up its requests-per-day allowance; a 429 with Retry-After. */
+  API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE,
   /** A reasoning model spent the caller's whole `max_tokens` thinking; remediation is raising it or omitting it. */
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   /** A 426: the declared X-Client-Version is below the minimum set for that X-Client-Name; remediation is upgrading the client. */
@@ -88,6 +101,8 @@ export const API_ERROR_CODES = [
   PENDING_ACTION_EXPIRED_ERROR_CODE,
   /** A 409: the pending action was already approved, denied or cleared (including by a replayed request). */
   PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
+  /** A 409: the brief question was already replied to, or the conversation moved past it; nothing was sent. */
+  BRIEF_QUESTION_CLOSED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

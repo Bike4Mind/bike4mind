@@ -2,7 +2,7 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
 import { EndUserIdSchema } from './schemas/endUserId';
 import {
   extendGeneratedAudioResponseSchema,
@@ -29,6 +29,18 @@ export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
   openai: 'OpenAI',
   elevenlabs: 'ElevenLabs',
 };
+
+/**
+ * When one spoken word (a whitespace-separated token of the input text) starts and ends, in ms from the start of
+ * the generated clip. Recorded on a speech job when its provider reports alignment (ElevenLabs does).
+ */
+export const SpeechWordTimingSchema = z.object({
+  text: z.string().min(1),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+});
+
+export type SpeechWordTiming = z.infer<typeof SpeechWordTimingSchema>;
 
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
@@ -185,7 +197,7 @@ export const TTS_ERROR_CODES = [
  * enshrine in a schema.
  */
 /** 403 body: the `ai:generate` scope refusal (`required_scopes`), or a billing refusal. */
-export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchema.extend({
+export const ttsForbiddenResponseSchema = MeteredBillingOrganizationForbiddenErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
 });
 

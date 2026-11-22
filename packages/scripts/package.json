@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.104",
+  "version": "0.1.105",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -9,6 +9,7 @@
     "./migrate/migrationManager": "./migrate/migrationManager.ts",
     "./help/types": "./help/types.ts",
     "./help/utils": "./help/utils.ts",
+    "./help/embeddingsCodec": "./help/embeddingsCodec.ts",
     "./help/loadHelpArticles": "./help/loadHelpArticles.ts",
     "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
@@ -67,6 +68,7 @@
     "migrate:protect-credentials": "tsx migrate/protect-stored-credentials.ts",
     "migrate:encrypt-tokens": "tsx migrate/encrypt-tokens-at-rest.ts",
     "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
+    "migrate:reencrypt-stored-secrets": "tsx migrate/reencrypt-stored-secrets.ts",
     "audit:credential-census": "tsx migrate/credential-census.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:oauth-starting-grant": "tsx backfillOAuthStartingGrant.ts",
