@@ -303,12 +303,12 @@ function toPublicEntry(entry: LakeConfigHistoryEntry, userNames: Record<string, 
     changed_at: iso(entry.changedAt) ?? '',
     principal_kind: entry.principalKind,
     principal_name: entry.principalName ?? null,
-    ...(entry.target ? { target: { kind: entry.target.kind, id: entry.target.id } } : {}),
   };
   if (entry.kind === 'file') {
     return {
       kind: 'file',
       ...base,
+      target: { kind: entry.target.kind, id: entry.target.id },
       action: entry.action,
       origin: entry.origin,
       ...(entry.undoesEventId ? { undoes_event_id: entry.undoesEventId } : {}),
@@ -318,6 +318,7 @@ function toPublicEntry(entry: LakeConfigHistoryEntry, userNames: Record<string, 
   return {
     kind: 'config',
     ...base,
+    ...(entry.target ? { target: { kind: entry.target.kind, id: entry.target.id } } : {}),
     manage_rung: entry.manageRung,
     action: entry.action,
     changes: entry.changes.map(change => toPublicChange(change, userNames)),

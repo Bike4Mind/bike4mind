@@ -131,6 +131,33 @@ describe('GET /api/data-lakes/[id]/config-history', () => {
     });
   });
 
+  describe('include', () => {
+    it('reads config rows only by default', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1' }), res);
+
+      expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeFiles: false })
+      );
+    });
+
+    it('returns file rows when include=files is set', async () => {
+      const withFile = { ...view, entries: [{ kind: 'file', eventId: 'f1' }] };
+      h.assembleLakeConfigHistory.mockImplementation(async (_lake, opts) => (opts.includeFiles ? withFile : view));
+      const { res, json } = makeRes();
+
+      await call(req({ id: 'lake1', include: 'files' }), res);
+
+      expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeFiles: true })
+      );
+      expect(json.mock.calls[0][0].data.entries[0].kind).toBe('file');
+    });
+  });
+
   describe('limit', () => {
     it('passes a requested limit through for the service to clamp', async () => {
       const { res } = makeRes();

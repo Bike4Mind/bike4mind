@@ -401,12 +401,12 @@ const ConfigHistoryEntryBaseShape = {
   changed_at: z.string(),
   principal_kind: z.enum(LAKE_ACCESS_PRINCIPAL_KINDS),
   principal_name: z.string().nullable(),
-  target: ConfigHistoryTargetSchema.optional().describe('The thing the row is about. Absent on older rows.'),
 };
 
 const ConfigHistoryConfigEntrySchema = z.object({
   kind: z.literal('config'),
   ...ConfigHistoryEntryBaseShape,
+  target: ConfigHistoryTargetSchema.optional().describe('The thing the row is about. Absent on older rows.'),
   manage_rung: z.enum(LAKE_MANAGE_RUNGS),
   action: z.enum(LAKE_CONFIG_CHANGE_ACTIONS),
   changes: z.array(ConfigHistoryChangeSchema),
@@ -417,6 +417,7 @@ const ConfigHistoryConfigEntrySchema = z.object({
 const ConfigHistoryFileEntrySchema = z.object({
   kind: z.literal('file'),
   ...ConfigHistoryEntryBaseShape,
+  target: ConfigHistoryTargetSchema.describe('The file the row is about.'),
   action: z.enum(LAKE_CONFIG_HISTORY_FILE_ACTIONS),
   origin: z.enum(LAKE_MEMBERSHIP_CHANGE_ORIGINS),
   undoes_event_id: z.string().optional(),
@@ -435,7 +436,13 @@ export const ConfigHistoryQuerySchema = z.object({
     .min(1)
     .max(500)
     .optional()
-    .describe('How many of the newest events to return. Defaults to 200.'),
+    .describe(
+      'How many of the newest config changes to return. Defaults to 200. With include=files, file rows within the same time span are returned alongside, up to the same limit.'
+    ),
+  include: z
+    .enum(['files'])
+    .optional()
+    .describe('Set to files to also return file add and remove rows. Without it only config changes are returned.'),
 });
 
 export const ConfigHistoryResponseSchema = z.object({

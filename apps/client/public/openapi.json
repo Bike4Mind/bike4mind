@@ -18455,7 +18455,7 @@
                             "kind",
                             "id"
                           ],
-                          "description": "The thing the row is about. Absent on older rows."
+                          "description": "The file the row is about."
                         },
                         "action": {
                           "type": "string",
@@ -18484,6 +18484,7 @@
                         "changed_at",
                         "principal_kind",
                         "principal_name",
+                        "target",
                         "action",
                         "origin"
                       ]
@@ -63262,11 +63263,24 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 500,
-              "description": "How many of the newest events to return. Defaults to 200."
+              "description": "How many of the newest config changes to return. Defaults to 200. With include=files, file rows within the same time span are returned alongside, up to the same limit."
             },
             "required": false,
-            "description": "How many of the newest events to return. Defaults to 200.",
+            "description": "How many of the newest config changes to return. Defaults to 200. With include=files, file rows within the same time span are returned alongside, up to the same limit.",
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "files"
+              ],
+              "description": "Set to files to also return file add and remove rows. Without it only config changes are returned."
+            },
+            "required": false,
+            "description": "Set to files to also return file add and remove rows. Without it only config changes are returned.",
+            "name": "include",
             "in": "query"
           }
         ],

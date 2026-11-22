@@ -163,7 +163,8 @@ export const RESEARCH_TOOL_META: ToolMeta[] = [
     title: 'Get lake config history',
     description:
       "Read the newest changes to a lake's configuration, who made each and which fields changed. Text-valued settings " +
-      'show their size, not their text. A window, not necessarily the whole history: truncated says which.',
+      'show their size, not their text. File add and remove rows are included only when include_files is true. ' +
+      "Each row's kind is config or file. A window, not necessarily the whole history: truncated says which.",
     scope: 'datalake:read',
   },
 ];
@@ -290,6 +291,7 @@ export const researchToolShapes = {
   get_lake_config_history: {
     lake_id: lakeId,
     limit: z.number().int().min(1).max(500).default(50).describe('How many of the newest events to return'),
+    include_files: z.boolean().default(false).describe('Also return file add and remove rows'),
   },
 } satisfies Record<string, z.ZodRawShape>;
 
@@ -683,7 +685,7 @@ export async function decideResearchProposal(
 }
 
 export async function getLakeConfigHistory(client: B4mApiClient, args: ArgsIn<'get_lake_config_history'>) {
-  return client.getConfigHistory(args.lake_id, args.limit ?? 50);
+  return client.getConfigHistory(args.lake_id, args.limit ?? 50, args.include_files ?? false);
 }
 
 type Runner = (scope: string, fn: () => Promise<unknown>) => Promise<CallToolResult>;

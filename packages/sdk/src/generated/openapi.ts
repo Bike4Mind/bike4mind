@@ -9261,8 +9261,8 @@ export interface components {
               /** @enum {string} */
               principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
               principal_name: string | null;
-              /** @description The thing the row is about. Absent on older rows. */
-              target?: {
+              /** @description The file the row is about. */
+              target: {
                 /** @enum {string} */
                 kind: 'researchConfig' | 'proposal' | 'file';
                 id: string;
@@ -27254,8 +27254,10 @@ export interface operations {
   getDataLakeConfigHistory: {
     parameters: {
       query?: {
-        /** @description How many of the newest events to return. Defaults to 200. */
+        /** @description How many of the newest config changes to return. Defaults to 200. With include=files, file rows within the same time span are returned alongside, up to the same limit. */
         limit?: number;
+        /** @description Set to files to also return file add and remove rows. Without it only config changes are returned. */
+        include?: 'files';
       };
       header?: never;
       path: {

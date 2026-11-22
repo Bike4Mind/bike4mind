@@ -260,10 +260,9 @@ export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, 
     refetchOnWindowFocus: false,
     staleTime: 0,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeConfigHistoryView }>(
-        `/api/data-lakes/${dataLakeId}/config-history`,
-        limit == null ? undefined : { params: { limit } }
-      );
+      const response = await api.get<{ data: LakeConfigHistoryView }>(`/api/data-lakes/${dataLakeId}/config-history`, {
+        params: { include: 'files', ...(limit == null ? {} : { limit }) },
+      });
       return response.data.data;
     },
   });

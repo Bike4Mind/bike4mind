@@ -170,6 +170,8 @@ export interface AssembleLakeConfigHistoryAdapters {
   };
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
+  /** Also return file add/remove rows. Off by default: callers that predate them expect config rows only. */
+  includeFiles?: boolean;
   /** Injectable clock so `generatedAt` is deterministic in tests. */
   now?: Date;
 }
@@ -209,25 +211,38 @@ function identityValueIds(changes: readonly LakeConfigHistoryFieldChange[]): str
 
 export async function assembleLakeConfigHistory(
   lake: Pick<IDataLakeDocument, 'id' | 'name'>,
-  { db, limit, now = new Date() }: AssembleLakeConfigHistoryAdapters
+  { db, limit, includeFiles = false, now = new Date() }: AssembleLakeConfigHistoryAdapters
 ): Promise<LakeConfigHistoryView> {
   const pageSize = clampLakeConfigHistoryLimit(limit);
   // One row MORE than the page, purely as a probe: fetching exactly `pageSize` cannot distinguish
   // "this lake has exactly that many events" from "there are more behind this page", and calling a
   // complete history truncated makes a consumer caption the lake's whole life as "changes since
   // <date>". The extra row is never returned - it is sliced off below.
-  // Each stream is read to the same depth, so the newest `pageSize + 1` of the merge are always in
-  // hand: no entry outside either read can rank above one inside it.
-  const [configEvents, fileEvents] = await Promise.all([
-    db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }),
-    db.lakeMembershipChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }),
-  ]);
-  const merged: LakeConfigHistoryEntry[] = [
-    ...configEvents.map(toLakeConfigHistoryEntry),
-    ...fileEvents.map(toLakeFileHistoryEntry),
-  ].sort(byNewest);
-  const truncated = merged.length > pageSize;
-  const entries = truncated ? merged.slice(0, pageSize) : merged;
+  const configProbe = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
+  const configTruncated = configProbe.length > pageSize;
+  const configEntries = configProbe.slice(0, pageSize).map(toLakeConfigHistoryEntry);
+
+  let fileEntries: LakeConfigHistoryFileEntry[] = [];
+  let filesTruncated = false;
+  if (includeFiles) {
+    // Config rows own the window: file rows older than the oldest kept config row are dropped, so a
+    // burst of file events (a connector sync writes one per file) can never evict a config row.
+    const oldestConfigAt = configTruncated ? configEntries[configEntries.length - 1]?.changedAt : undefined;
+    const fileProbe = (await db.lakeMembershipChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }))
+      .map(toLakeFileHistoryEntry)
+      .filter(entry => !oldestConfigAt || entry.changedAt >= oldestConfigAt);
+    filesTruncated = fileProbe.length > pageSize;
+    fileEntries = fileProbe.slice(0, pageSize);
+  }
+
+  const entries: LakeConfigHistoryEntry[] = [...configEntries, ...fileEntries].sort(byNewest);
+  const truncated = configTruncated || filesTruncated;
+  // History is complete only from the later of the two streams' cut-offs.
+  const cutoffs = [
+    configTruncated ? configEntries[configEntries.length - 1]?.changedAt : undefined,
+    filesTruncated ? fileEntries[fileEntries.length - 1]?.changedAt : undefined,
+  ].filter((d): d is Date => d !== undefined);
+  const windowStartsAt = cutoffs.length > 0 ? new Date(Math.max(...cutoffs.map(d => d.getTime()))) : undefined;
 
   // One batched name resolution across every id worth looking up. Only USER-kind principals and the
   // on-behalf human are candidates - a system/agent/apiKey principalId names no user record - and
@@ -269,9 +284,8 @@ export async function assembleLakeConfigHistory(
       onBehalfOfName: entry.onBehalfOfUserId ? userNameById.get(entry.onBehalfOfUserId) : undefined,
     })),
     truncated,
-    // The window's oldest event, so a consumer can say "changes since <date>" instead of implying
-    // the list is all-time. Events come back newest-first, so that is the last element.
-    windowStartsAt: truncated ? entries[entries.length - 1]?.changedAt : undefined,
+    // So a consumer can say "changes since <date>" instead of implying the list is all-time.
+    windowStartsAt,
     generatedAt: now,
     // Only the ids that actually resolved to a NAME. Absent covers both "no user record" and "a user
     // with neither name nor username" - userDisplayName deliberately never falls back to email - and

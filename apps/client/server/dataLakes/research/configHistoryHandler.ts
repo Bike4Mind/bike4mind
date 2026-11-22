@@ -14,7 +14,8 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 export async function readLakeConfigHistory(
   lakeId: string,
   ctx: AccessContext,
-  limit: number | undefined
+  limit: number | undefined,
+  includeFiles = false
 ): Promise<LakeConfigHistoryView> {
   const lake = await dataLakeService.assertLakeAccess(lakeId, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
@@ -35,5 +36,6 @@ export async function readLakeConfigHistory(
       userApiKeys: userApiKeyRepository,
     },
     limit,
+    includeFiles,
   });
 }

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ConfigHistoryEntrySchema,
   ConfigHistoryResponseSchema,
   ListProposalsResponseSchema,
   ResearchConfigResponseSchema,
@@ -319,6 +320,20 @@ describe('toPublicConfigHistory', () => {
       after: 'Casey, Casey',
     });
     expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  it('requires a target on a file row', () => {
+    const fileRow = {
+      kind: 'file',
+      event_id: 'ev3',
+      changed_at: '2026-03-01T00:00:00.000Z',
+      principal_kind: 'user',
+      principal_name: 'Casey',
+      action: 'file-added',
+      origin: 'person',
+    };
+    expect(ConfigHistoryEntrySchema.safeParse(fileRow).success).toBe(false);
+    expect(ConfigHistoryEntrySchema.safeParse({ ...fileRow, target: { kind: 'file', id: 'fab1' } }).success).toBe(true);
   });
 
   const withEntries = (entries: unknown[]) => ({ ...view, entries }) as unknown as LakeConfigHistoryView;

@@ -50,6 +50,7 @@ const adapters = (
     find?: ReturnType<typeof vi.fn>;
     limit?: number;
     fileEvents?: ILakeMembershipChangeEventDocument[];
+    includeFiles?: boolean;
   } = {}
 ) => {
   const listByLake = vi.fn().mockResolvedValue(events);
@@ -58,6 +59,7 @@ const adapters = (
   const find = over.find ?? vi.fn().mockResolvedValue([]);
   return {
     listByLake,
+    listFilesByLake,
     findByIds,
     find,
     adapters: {
@@ -68,6 +70,7 @@ const adapters = (
         userApiKeys: { find } as never,
       },
       limit: over.limit,
+      includeFiles: over.includeFiles,
       now: new Date('2026-08-18T12:00:00Z'),
     },
   };
@@ -595,40 +598,96 @@ describe('file entries merged into the view', () => {
     });
   });
 
-  it('interleaves config and file entries in time order, newest first', async () => {
+  it('returns config rows only, without reading membership events, by default', async () => {
+    const { adapters: a, listFilesByLake } = adapters([event({ id: 'c1' })], { fileEvents: [fileEvent()] });
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.kind)).toEqual(['config']);
+    expect(listFilesByLake).not.toHaveBeenCalled();
+  });
+
+  it('interleaves config and file entries in time order, newest first, when files are included', async () => {
     const { adapters: a } = adapters(
       [
         event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
         event({ id: 'c2', createdAt: new Date('2026-08-01T08:00:00Z') }),
       ],
       {
+        includeFiles: true,
         fileEvents: [
-          fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
           fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T11:00:00Z'), action: 'removed' }),
+          fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
         ],
       }
     );
     const view = await assembleLakeConfigHistory(lake(), a);
     expect(view.entries.map(e => e.eventId)).toEqual(['f2', 'c1', 'f1', 'c2']);
     expect(view.entries.map(e => e.kind)).toEqual(['file', 'config', 'file', 'config']);
+    expect(view.truncated).toBe(false);
+    expect(view.windowStartsAt).toBeUndefined();
   });
 
-  it('truncates the merged window and starts it at the oldest kept entry across both streams', async () => {
-    const { adapters: a } = adapters([event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') })], {
-      limit: 2,
-      fileEvents: [
-        fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
-        fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T08:00:00Z') }),
+  it('keeps every config row in the page when a burst of newer file events exceeds the page size', async () => {
+    const files = Array.from({ length: 6 }, (_, i) =>
+      fileEvent({ id: `f${i}`, createdAt: new Date(Date.UTC(2026, 7, 2, 12, 0, 10 - i)) })
+    );
+    const { adapters: a } = adapters(
+      [
+        event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
+        event({ id: 'c2', createdAt: new Date('2026-08-01T09:00:00Z') }),
       ],
-    });
+      { limit: 2, includeFiles: true, fileEvents: files }
+    );
     const view = await assembleLakeConfigHistory(lake(), a);
-    expect(view.entries.map(e => e.eventId)).toEqual(['c1', 'f1']);
+    expect(view.entries.filter(e => e.kind === 'config').map(e => e.eventId)).toEqual(['c1', 'c2']);
+    expect(view.entries.filter(e => e.kind === 'file')).toHaveLength(2);
+    expect(view.truncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(files[1]!.createdAt);
+  });
+
+  it('drops file events older than the oldest kept config row when config is truncated', async () => {
+    const { adapters: a } = adapters(
+      [
+        event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
+        event({ id: 'c2', createdAt: new Date('2026-08-01T09:00:00Z') }),
+        event({ id: 'c3', createdAt: new Date('2026-08-01T08:00:00Z') }),
+      ],
+      {
+        limit: 2,
+        includeFiles: true,
+        fileEvents: [
+          fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:30:00Z') }),
+          fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T08:30:00Z') }),
+        ],
+      }
+    );
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.eventId)).toEqual(['c1', 'f1', 'c2']);
     expect(view.truncated).toBe(true);
     expect(view.windowStartsAt).toEqual(new Date('2026-08-01T09:00:00Z'));
   });
 
-  it('does not flag a merged history that exactly fills the window', async () => {
-    const { adapters: a } = adapters([event({ id: 'c1' })], { limit: 2, fileEvents: [fileEvent({ id: 'f1' })] });
+  it('flags truncation from files alone and starts the window at the oldest kept file', async () => {
+    const { adapters: a } = adapters([event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') })], {
+      limit: 2,
+      includeFiles: true,
+      fileEvents: [
+        fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
+        fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T08:00:00Z') }),
+        fileEvent({ id: 'f3', createdAt: new Date('2026-08-01T07:00:00Z') }),
+      ],
+    });
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.eventId)).toEqual(['c1', 'f1', 'f2']);
+    expect(view.truncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(new Date('2026-08-01T08:00:00Z'));
+  });
+
+  it('does not flag a merged history whose streams each exactly fill the window', async () => {
+    const { adapters: a } = adapters([event({ id: 'c1' })], {
+      limit: 1,
+      includeFiles: true,
+      fileEvents: [fileEvent({ id: 'f1' })],
+    });
     const view = await assembleLakeConfigHistory(lake(), a);
     expect(view.entries).toHaveLength(2);
     expect(view.truncated).toBe(false);
