@@ -160,6 +160,7 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
               )}
               <Button
                 variant="outlined"
+                color="neutral"
                 disabled={busy || !stopped || !note.trim()}
                 data-testid="agent-task-revise-btn"
                 onClick={() => void decide({ kind: 'revise', contract: task.contract, instruction: note })}
@@ -196,6 +197,7 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
                   </Button>
                   <Button
                     variant="outlined"
+                    color="neutral"
                     disabled={busy || !stopped}
                     data-testid="agent-task-deny-btn"
                     onClick={() =>
@@ -214,8 +216,8 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
           )}
           {taskOpen && (
             <Button
+              variant="outlined"
               color="danger"
-              variant="plain"
               disabled={busy}
               data-testid="agent-task-cancel-btn"
               onClick={() => void decide({ kind: 'cancel', reason: note.trim() || 'Canceled by user.' })}

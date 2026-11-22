@@ -526,6 +526,204 @@ describe('execution results', () => {
   });
 });
 
+describe('function calls', () => {
+  const readySandbox = async () => {
+    vi.resetModules();
+    const imported = await import('../pyodideManager');
+    const pending = imported.pyodideManager.initialize();
+    void pending.catch(() => {});
+    await Promise.resolve();
+
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    const posted: Array<Record<string, unknown>> = [];
+    Object.defineProperty(frame, 'contentWindow', {
+      configurable: true,
+      value: { postMessage: (message: Record<string, unknown>) => posted.push(message) },
+    });
+    const fromSandbox = (data: unknown, source: MessageEventSource | null = frame.contentWindow) =>
+      window.dispatchEvent(new MessageEvent('message', { data, source }));
+
+    fromSandbox({ type: 'pyodide-sandbox-ready' });
+    await Promise.resolve();
+    await Promise.resolve();
+    fromSandbox({ type: 'ready' });
+    await pending;
+
+    return { ...imported, posted, fromSandbox };
+  };
+
+  const callResult = (result: Record<string, unknown>) => ({
+    type: 'call-result',
+    result: { success: true, output: '', executionTime: 3, ...result },
+  });
+
+  afterEach(() => {
+    document.querySelectorAll('iframe').forEach(node => node.remove());
+  });
+
+  it('posts a describe call with paramsJson null and resolves with the parsed contract', async () => {
+    const { pyodideManager, posted, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('FUNCTION = {}', ['numpy']);
+    await Promise.resolve();
+
+    expect(posted.at(-1)).toEqual({
+      type: 'call',
+      code: 'FUNCTION = {}',
+      packages: ['numpy'],
+      paramsJson: null,
+      timeoutMs: 30000,
+    });
+    fromSandbox(callResult({ contractJson: '{"name": "f"}', output: 'hi\n' }));
+    await expect(call).resolves.toEqual({
+      success: true,
+      contract: { name: 'f' },
+      output: 'hi\n',
+      error: undefined,
+      executionTime: 3,
+    });
+    expect(pyodideManager.getState().isExecuting).toBe(false);
+  });
+
+  it('posts params as JSON text and returns the value', async () => {
+    const { pyodideManager, posted, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], { span: 4, label: 'a' });
+    await Promise.resolve();
+
+    expect(posted.at(-1)).toMatchObject({ type: 'call', paramsJson: '{"span":4,"label":"a"}' });
+    fromSandbox(callResult({ contractJson: '{}', valueJson: '{"deflection": 0.002}' }));
+    await expect(call).resolves.toMatchObject({ success: true, value: { deflection: 0.002 } });
+  });
+
+  it('passes on the output problems the sandbox found', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+
+    fromSandbox(
+      callResult({
+        valueJson: '{"count": 3.0}',
+        outputProblemsJson: '[{"path": "count", "message": "must be a whole number"}]',
+      })
+    );
+    await expect(call).resolves.toMatchObject({
+      success: true,
+      value: { count: 3 },
+      outputProblems: [{ path: 'count', message: 'must be a whole number' }],
+    });
+  });
+
+  it.each(['{"path": "count"}', '[{"path": 1, "message": "x"}]', '[null]', 'not json'])(
+    'refuses output problems that are not a problem list: %s',
+    async outputProblemsJson => {
+      const { pyodideManager, fromSandbox, FUNCTION_RESULT_UNREADABLE } = await readySandbox();
+      const call = pyodideManager.callFunction('code', [], {});
+      await Promise.resolve();
+
+      fromSandbox(callResult({ valueJson: '{"count": 3}', outputProblemsJson }));
+      await expect(call).resolves.toMatchObject({ success: false, error: FUNCTION_RESULT_UNREADABLE });
+    }
+  );
+
+  it('refuses an oversized result before parsing it', async () => {
+    const { pyodideManager, fromSandbox, FUNCTION_RESULT_TOO_LARGE } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+    const parse = vi.spyOn(JSON, 'parse');
+
+    const oversized = `{"text": "${'x'.repeat(256 * 1024)}"}`;
+    fromSandbox(callResult({ contractJson: '{}', valueJson: oversized }));
+
+    const result = await call;
+    expect(result).toMatchObject({ success: false, error: FUNCTION_RESULT_TOO_LARGE });
+    expect(result.value).toBeUndefined();
+    expect(parse).not.toHaveBeenCalledWith(oversized);
+    parse.mockRestore();
+  });
+
+  it('refuses a result that is not valid JSON or not text', async () => {
+    const { pyodideManager, fromSandbox, FUNCTION_RESULT_UNREADABLE } = await readySandbox();
+    const malformed = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+    fromSandbox(callResult({ contractJson: '{}', valueJson: '{"deflection": ' }));
+    await expect(malformed).resolves.toMatchObject({ success: false, error: FUNCTION_RESULT_UNREADABLE });
+
+    const notText = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+    fromSandbox(callResult({ contractJson: { name: 'f' } }));
+    await expect(notText).resolves.toMatchObject({ success: false, error: FUNCTION_RESULT_UNREADABLE });
+  });
+
+  it('refuses an oversized contract before parsing it', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code');
+    await Promise.resolve();
+    const parse = vi.spyOn(JSON, 'parse');
+
+    const oversized = `{"description": "${'x'.repeat(32 * 1024)}"}`;
+    fromSandbox(callResult({ contractJson: oversized }));
+
+    const result = await call;
+    expect(result).toMatchObject({ success: false, error: 'The function contract is larger than 32 KB.' });
+    expect(result.contract).toBeUndefined();
+    expect(parse).not.toHaveBeenCalledWith(oversized);
+    parse.mockRestore();
+  });
+
+  it('caps printed output', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code');
+    await Promise.resolve();
+    fromSandbox(callResult({ output: 'y'.repeat(150_000) }));
+    expect((await call).output).toHaveLength(100_000);
+  });
+
+  it('caps the error text', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code');
+    await Promise.resolve();
+    fromSandbox(callResult({ success: false, error: 'e'.repeat(150_000) }));
+    expect((await call).error).toHaveLength(100_000);
+  });
+
+  it('leaves an execute running when a call-result arrives with no call pending', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const run = pyodideManager.execute('print(1)');
+    void run.catch(() => {});
+    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true));
+
+    fromSandbox(callResult({ valueJson: '{"forged": 1}' }));
+
+    expect(pyodideManager.getState().isExecuting).toBe(true);
+    pyodideManager.interrupt();
+  });
+
+  it('ignores a call-result from a window other than the sandbox frame', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    let settled: unknown = 'pending';
+    const call = pyodideManager.callFunction('code', [], {});
+    void call.then(result => (settled = result));
+    await Promise.resolve();
+
+    fromSandbox(callResult({ valueJson: '{"deflection": 1}' }), window as unknown as MessageEventSource);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe('pending');
+
+    fromSandbox(callResult({ valueJson: '{"deflection": 2}' }));
+    await expect(call).resolves.toMatchObject({ value: { deflection: 2 } });
+  });
+
+  it('shares the single-run guard with execute and is settled by interrupt', async () => {
+    const { pyodideManager } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+
+    await expect(pyodideManager.execute('print(1)')).rejects.toThrow('Another Python script is already running');
+    pyodideManager.interrupt();
+    await expect(call).resolves.toMatchObject({ success: false, error: 'Execution interrupted' });
+  });
+});
+
 describe('execution timeout', () => {
   it('should have EXECUTION_TIMEOUT_MS constant defined', async () => {
     // The timeout constant is private, but we can verify the execute method

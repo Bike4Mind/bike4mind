@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import manifestFixture from './__fixtures__/skins/nightglass/mod.json';
 import tokensFixture from './__fixtures__/skins/nightglass/tokens.json';
-import { modManifestSchema, skinAssetUrl, skinTokensSchema } from './mods';
+import packFixture from './__fixtures__/sound-packs/chimes/mod.json';
+import { SOUND_PACK_EVENTS, modManifestSchema, skinAssetUrl, skinTokensSchema } from './mods';
 
 describe('modManifestSchema', () => {
   it('accepts the sample skin', () => {
@@ -94,5 +95,52 @@ describe('skinTokensSchema', () => {
 describe('skinAssetUrl', () => {
   it('puts the skin id in the host', () => {
     expect(skinAssetUrl('nightglass', 'sprites/tank.png')).toBe('b4m-skin://nightglass/sprites/tank.png');
+  });
+});
+
+describe('a sounds manifest', () => {
+  it('accepts the sample pack and narrows on kind', () => {
+    const parsed = modManifestSchema.safeParse(packFixture);
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.kind === 'sounds') {
+      expect(Object.keys(parsed.data.sounds).sort()).toEqual([...SOUND_PACK_EVENTS].sort());
+    } else {
+      throw new Error('expected a sounds manifest');
+    }
+  });
+
+  it('may set any subset of the events, or none', () => {
+    expect(modManifestSchema.safeParse({ ...packFixture, sounds: { finale: 'sounds/f.mp3' } }).success).toBe(true);
+    expect(modManifestSchema.safeParse({ ...packFixture, sounds: {} }).success).toBe(true);
+  });
+
+  it.each([
+    ['a needs-you sound', { 'needs-you': 'sounds/alarm.ogg' }],
+    ['an unknown event', { 'agent-started': 'sounds/start.ogg' }],
+    ['a path outside sounds/', { finale: '../finale.ogg' }],
+    ['a nested path', { finale: 'sounds/deep/finale.ogg' }],
+    ['a file type that is not audio', { finale: 'sounds/finale.wav' }],
+    ['an absolute path', { finale: '/etc/passwd.ogg' }],
+  ])('rejects %s', (_label, sounds) => {
+    expect(modManifestSchema.safeParse({ ...packFixture, sounds }).success).toBe(false);
+  });
+
+  it('rejects the needs-you entry alongside valid ones, so it is never applied', () => {
+    const result = modManifestSchema.safeParse({
+      ...packFixture,
+      sounds: { ...packFixture.sounds, 'needs-you': 'sounds/alarm.ogg' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a pack with no sounds map, with an entry or with permissions', () => {
+    const { sounds: _sounds, ...withoutSounds } = packFixture;
+    expect(modManifestSchema.safeParse(withoutSounds).success).toBe(false);
+    expect(modManifestSchema.safeParse({ ...packFixture, entry: 'index.html' }).success).toBe(false);
+    expect(modManifestSchema.safeParse({ ...packFixture, permissions: ['x'] }).success).toBe(false);
+  });
+
+  it('rejects a sounds map on a skin', () => {
+    expect(modManifestSchema.safeParse({ ...manifestFixture, sounds: packFixture.sounds }).success).toBe(false);
   });
 });

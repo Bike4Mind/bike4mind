@@ -79,7 +79,7 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
         {state.status !== 'unsupported' && !blockedBy && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             loading={state.status === 'checking'}
             disabled={busy}
@@ -130,7 +130,7 @@ export function UpdateRestartConfirm({
       </Alert>
       {/* Wraps in the narrow update notice instead of overflowing it. */}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
-        <Button size="sm" variant="plain" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
+        <Button size="sm" variant="outlined" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
           Keep working
         </Button>
         {/* The user has now been told exactly what this ends, so it says so. */}

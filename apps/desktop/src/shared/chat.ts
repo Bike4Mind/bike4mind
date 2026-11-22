@@ -1724,6 +1724,14 @@ export interface SendMessageRequest {
   notes?: string[];
 }
 
+/** An edit of a sent prompt; see ChatService.editMessage. */
+export interface EditMessageRequest {
+  sessionId: string;
+  /** The persisted id of the user message being replaced. */
+  messageId: string;
+  text: string;
+}
+
 /**
  * What the user typed while a reply was still running, waiting to become the next turn.
  *

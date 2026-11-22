@@ -130,6 +130,10 @@ Located in the Experimental category, and used only while Artifacts are enabled.
 
 Python code can send what it has to a listed origin as well as read from it, so list only hosts you trust with artifact content. HTML and React artifacts stay offline whatever this list holds.
 
+### Enable Callable Functions
+
+When it is on, a Python artifact that declares a function gets a Function tab beside Output and Code.
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:

@@ -1504,6 +1504,39 @@ export class SessionStore implements SessionWritesStore {
     return session;
   }
 
+  /**
+   * Drop `messageId` and every message after it, in one write: what editing a sent prompt and
+   * regenerating a reply rewind. Everything a turn carries (tool calls, rounds, artifacts, stats,
+   * attachment refs, a /compact marker) lives on its message and goes with it; the callers prune
+   * attachment files nothing references any more.
+   *
+   * `null` when there is no such session, `false` (nothing written) when the message is not in
+   * the thread or `admit` rejects it as stored.
+   */
+  async truncateFrom(
+    id: string,
+    messageId: string,
+    admit: (message: ChatMessage, session: ChatSession) => boolean = () => true
+  ): Promise<ChatSession | null | false> {
+    return this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return null;
+      const session = await this.read(directory, id);
+      if (!session) return null;
+      const at = session.messages.findIndex(message => message.id === messageId);
+      if (at < 0 || !admit(session.messages[at], session)) return false;
+
+      session.messages = session.messages.slice(0, at);
+      session.updatedAt = new Date().toISOString();
+      // The thread no longer matches its source, so a re-import must not overwrite it.
+      if (session.importOrigin && !session.importOrigin.forkedAt) {
+        session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
+      }
+      await this.write(directory, session);
+      return session;
+    });
+  }
+
   /** Replace an already-appended message, for settling a streamed reply into its final text. */
   async updateMessage(id: string, messageId: string, changes: Partial<ChatMessage>): Promise<ChatSession | null> {
     return this.serialize(id, () => this.updateNow(id, messageId, changes));

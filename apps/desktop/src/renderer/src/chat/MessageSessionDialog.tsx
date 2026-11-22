@@ -81,7 +81,7 @@ export function MessageSessionDialog({
             Send
           </Button>
           <Button
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={sending}
             onClick={onClose}

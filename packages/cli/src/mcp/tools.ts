@@ -44,6 +44,7 @@ import {
   type RawProject,
   NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
+import { RESEARCH_TOOL_META, registerResearchTools } from './researchTools.js';
 import { logger } from '../utils/Logger.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -130,7 +131,8 @@ export const TOOL_META: ToolMeta[] = [
     name: 'list_lakes',
     title: 'List data lakes',
     description:
-      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it.",
+      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it. " +
+      'The research config and proposal tools need canManage: true on the lake.',
     scope: 'datalake:read',
   },
   { name: 'list_files', title: 'List files', description: "Search the caller's files.", scope: 'files:read' },
@@ -232,6 +234,7 @@ export const TOOL_META: ToolMeta[] = [
       "How many Bob runs the key owner can start now under the daily limit, when the next one frees up, and whether the account's credits cover a full read. A comparison uses two runs.",
     scope: 'bob:read',
   },
+  ...RESEARCH_TOOL_META,
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -485,6 +488,7 @@ function lakeSummary(l: RawDataLake) {
     builtIn: l.built_in,
     status: l.status,
     fileCount: l.file_count,
+    canManage: l.can_manage,
   };
 }
 
@@ -1661,4 +1665,6 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     },
     args => runBob('bob:read', () => bobRunsLeft(client, args))
   );
+
+  registerResearchTools(server, client, run);
 }

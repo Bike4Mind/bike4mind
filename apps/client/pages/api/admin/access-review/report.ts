@@ -1,5 +1,5 @@
 import { adminAccessReviewRepository } from '@bike4mind/database';
-import { isAccessReviewOverdue, reviewQuarter } from '@bike4mind/server-utils/security/accessReview/accessReview';
+import { accessReviewOverdueSince, reviewQuarter } from '@bike4mind/server-utils/security/accessReview/accessReview';
 import { collectAccessReview } from '@bike4mind/server-utils/security/accessReview/accessReviewData';
 import { adminApi } from '@server/middlewares/adminApi';
 import { assertAccessReviewer, parseDormantDays, toAccessReviewRows } from '@server/admin/accessReview';
@@ -15,11 +15,13 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:m
     adminAccessReviewRepository.findByQuarter(quarter),
     adminAccessReviewRepository.findLatestCompleted(),
   ]);
+  const overdueSince = accessReviewOverdueSince(latestCompleted?.completedAt ?? null, now);
   return res.json({
     quarter,
     generatedAt: snapshot.generatedAt,
     dormantDays,
-    overdue: isAccessReviewOverdue(latestCompleted?.completedAt ?? null, now),
+    overdue: overdueSince !== null,
+    overdueSince,
     admins: toAccessReviewRows(snapshot.admins, record, now, dormantDays),
     roles: snapshot.roles,
     record,

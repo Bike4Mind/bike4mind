@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: true } }),
+}));
 vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
   fetchGrantPackages: mocks.fetchGrantPackages,
   GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',

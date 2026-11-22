@@ -7,6 +7,11 @@
     <string name="action_refresh">Refresh</string>
     <string name="action_try_again">Try again</string>
 
+    <!-- First-launch welcome (the page copy is in kit Onboarding.pages, shared with iOS) -->
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_page_indicator">Page %1$d of %2$d</string>
+
     <!-- Sign-in -->
     <string name="signin_title">@string/app_name</string>
     <string name="signin_action">Sign in</string>

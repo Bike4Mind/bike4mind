@@ -155,7 +155,7 @@ function BlockedActions({ state }: { state: AuthState }) {
         >
           I have accepted, continue
         </Button>
-        <Button variant="plain" color="neutral" onClick={() => void window.b4m.auth.signOut()}>
+        <Button variant="outlined" color="neutral" onClick={() => void window.b4m.auth.signOut()}>
           Sign out
         </Button>
       </Stack>
@@ -180,7 +180,7 @@ function BlockedActions({ state }: { state: AuthState }) {
         >
           Done, continue
         </Button>
-        <Button variant="plain" color="neutral" onClick={() => void window.b4m.auth.signOut()}>
+        <Button variant="outlined" color="neutral" onClick={() => void window.b4m.auth.signOut()}>
           Sign out
         </Button>
       </Stack>
@@ -233,7 +233,7 @@ export function ApprovalPanel({ state }: { state: AuthState }) {
           Open browser again
         </Button>
         <Button
-          variant="plain"
+          variant="outlined"
           color="neutral"
           onClick={() => void window.b4m.auth.cancelSignIn()}
           data-testid="auth-cancel-signin-btn"

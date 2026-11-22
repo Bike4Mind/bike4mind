@@ -1,19 +1,8 @@
 import { brand, designTokens, emitJoyThemeFragment } from '@bike4mind/design-tokens';
 import { extendTheme } from '@mui/joy/styles';
-import { avoidPageModifier } from './chat/agentBrowser';
+import { desktopComponents } from './themeComponents';
 
-/**
- * Every tooltip's width cap. Joy leaves a tooltip to its content's width, so one long path or
- * sentence used to draw a single line off the right edge of the window.
- */
-export const TOOLTIP_MAX_WIDTH = 340;
-
-/**
- * Every tooltip and menu slides off the agent's browser page, which is a native view drawn above
- * them; see agentBrowser.ts. A call site passing its own `modifiers` replaces this, so one that
- * needs both has to include it.
- */
-const avoidPage = [avoidPageModifier];
+export { TOOLTIP_MAX_WIDTH } from './themeComponents';
 
 // Everything desktop shares with the web comes from the design tokens. Desktop keeps its own
 // mapping of those values into Joy slots, so it is not the web scheme spread wholesale. The font
@@ -114,34 +103,5 @@ export const desktopTheme = extendTheme({
       },
     },
   },
-  components: {
-    JoyMenu: {
-      defaultProps: { modifiers: avoidPage },
-    },
-    JoyTooltip: {
-      // Not interactive: a tooltip is only ever text here, and an interactive one stays up while
-      // the pointer crosses it, covering - and taking the click from - whatever it was drawn over.
-      defaultProps: { modifiers: avoidPage, disableInteractive: true },
-      styleOverrides: {
-        root: ({ theme, ownerState }) => ({
-          maxWidth: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - 32px))`,
-          // A path has no spaces to wrap at.
-          overflowWrap: 'anywhere',
-          ...(ownerState.color === 'neutral' &&
-            ownerState.variant === 'soft' && {
-              backgroundColor: theme.vars.palette.background.popup,
-            }),
-        }),
-        arrow: ({ theme, ownerState }) => ({
-          ...(ownerState.color === 'neutral' &&
-            ownerState.variant === 'soft' && {
-              '&::before': {
-                borderTopColor: theme.vars.palette.background.popup,
-                borderRightColor: theme.vars.palette.background.popup,
-              },
-            }),
-        }),
-      },
-    },
-  },
+  components: desktopComponents,
 });

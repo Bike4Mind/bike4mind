@@ -233,6 +233,7 @@ export interface RawDataLake {
   built_in?: boolean;
   status?: string;
   file_count?: number;
+  can_manage?: boolean;
   [key: string]: unknown;
 }
 
@@ -314,6 +315,13 @@ export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> 
   id: string;
   promptText?: string;
 };
+
+interface Page {
+  limit: number;
+  cursor?: string;
+}
+
+const pageQuery = ({ limit, cursor }: Page) => ({ limit, ...(cursor ? { cursor } : {}) });
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
@@ -397,6 +405,69 @@ export class B4mApiClient {
       query: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
     });
     return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listResearchConfigs(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchConfigs', {
+      params: { id: lakeId },
+      query: pageQuery(page),
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async getResearchConfig(lakeId: string, configId: string) {
+    return (await this.sdk.call('getDataLakeResearchConfig', { params: { id: lakeId, config_id: configId } })).data;
+  }
+
+  async createResearchConfig(lakeId: string, body: JsonBody<'createDataLakeResearchConfig'>) {
+    return (await this.sdk.call('createDataLakeResearchConfig', { params: { id: lakeId }, body })).data;
+  }
+
+  async updateResearchConfig(lakeId: string, configId: string, body: JsonBody<'updateDataLakeResearchConfig'>) {
+    return (await this.sdk.call('updateDataLakeResearchConfig', { params: { id: lakeId, config_id: configId }, body }))
+      .data;
+  }
+
+  async deleteResearchConfig(lakeId: string, configId: string): Promise<void> {
+    await this.sdk.call('deleteDataLakeResearchConfig', {
+      params: { id: lakeId, config_id: configId },
+      redirect: 'manual',
+    });
+  }
+
+  async startResearchRun(lakeId: string, configId: string) {
+    return (await this.sdk.call('startDataLakeResearchRun', { params: { id: lakeId }, body: { config_id: configId } }))
+      .data;
+  }
+
+  async getResearchRun(lakeId: string, runId: string) {
+    return (await this.sdk.call('getDataLakeResearchRun', { params: { id: lakeId, run_id: runId } })).data;
+  }
+
+  async listResearchRuns(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchRuns', { params: { id: lakeId }, query: pageQuery(page) });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listProposals(lakeId: string, args: Page & { status?: 'pending' | 'approved' | 'declined' }) {
+    const result = await this.sdk.call('listDataLakeProposals', {
+      params: { id: lakeId },
+      query: { ...pageQuery(args), ...(args.status ? { status: args.status } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async decideProposal(lakeId: string, proposalId: string, body: JsonBody<'decideDataLakeProposal'>) {
+    return this.sdk.call('decideDataLakeProposal', { params: { id: lakeId, proposal_id: proposalId }, body });
+  }
+
+  async getConfigHistory(lakeId: string, limit?: number) {
+    return (
+      await this.sdk.call('getDataLakeConfigHistory', {
+        params: { id: lakeId },
+        query: limit === undefined ? {} : { limit },
+      })
+    ).data;
   }
 
   async sendChat(args: {
@@ -857,6 +928,18 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
     const serverMessage = extractServerMessage(data);
+    // A route that classifies its refusal with an errorCode says why; the key-scope guess below would misdirect.
+    if (serverMessage && typeof (data as { errorCode?: unknown } | undefined)?.errorCode === 'string') {
+      return serverMessage;
+    }
+    // Data lake routes answer a scope refusal with required_scopes; any other 403 there is an authorization
+    // refusal (manage rights, lake owner state) whose own message is the useful part.
+    const scopeRefusal = Array.isArray((data as { required_scopes?: unknown } | undefined)?.required_scopes);
+    if (scope?.startsWith('datalake:') && !scopeRefusal && serverMessage) {
+      return /\bmanage\b|review proposals/i.test(serverMessage)
+        ? `${serverMessage} (the key's owner needs manage rights on this lake; a different scope does not help)`
+        : serverMessage;
+    }
     if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
     // Must stay in sync with the ForbiddenError text in
     // apps/client/server/services/publish/checkScopePermission.ts.

@@ -55,7 +55,8 @@ const WRITE_FORBIDDEN =
 
 const RATE_LIMITED = 'Per-user rate limit exceeded.';
 
-const BODY_422 = 'The body is malformed, has an unknown field, or a value is the wrong type.';
+const BODY_422 =
+  'The body is malformed, has an unknown field, a value is the wrong type, or a number is outside its documented range.';
 
 const PAGE_422 =
   '`limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor ' +

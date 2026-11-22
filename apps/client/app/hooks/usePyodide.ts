@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { pyodideManager, PyodideManagerState } from '@client/app/utils/pyodideManager';
+import { pyodideManager, PyodideManagerState, type PythonFunctionCall } from '@client/app/utils/pyodideManager';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import type { ExecutionResult } from '@client/app/workers/pyodide/types';
 
@@ -30,6 +30,14 @@ export function usePyodide() {
     const detectedPackages = packages || pyodideManager.detectPackages(code);
     return await pyodideManager.execute(code, detectedPackages);
   }, []);
+
+  const callFunction = useCallback(
+    async (code: string, params: Record<string, unknown> | null, packages?: string[]): Promise<PythonFunctionCall> => {
+      const detectedPackages = packages || pyodideManager.detectPackages(code);
+      return await pyodideManager.callFunction(code, detectedPackages, params);
+    },
+    []
+  );
 
   const interrupt = useCallback(() => {
     pyodideManager.interrupt();
@@ -60,6 +68,7 @@ export function usePyodide() {
     // Methods
     initialize,
     execute,
+    callFunction,
     interrupt,
     detectPackages,
     isReady,

@@ -518,6 +518,34 @@ describe('configs', () => {
     expect(h.createConfig).not.toHaveBeenCalled();
   });
 
+  // A percent where a fraction belongs (60 for 0.6) used to clamp to 1 and drop every result.
+  it('rejects out-of-range levers with 422 on create and update instead of clamping', async () => {
+    const create = await call(configsIndex, { method: 'POST', body: { name: 'n', query: 'q', min_relevance: 60 } });
+    expect(create.status).toBe(422);
+    expect(isZodError(create.thrown)).toBe(true);
+    const update = await call(configOne, { method: 'PATCH', query: { config_id: CFG }, body: { min_relevance: 60 } });
+    expect(update.status).toBe(422);
+    expect(isZodError(update.thrown)).toBe(true);
+    expect(h.createConfig).not.toHaveBeenCalled();
+    expect(h.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['max_results', 0],
+    ['max_results', 51],
+    ['max_proposals', 26],
+    ['max_proposals', 1.5],
+    ['recency_days', 367],
+    ['max_auto_admits', 0],
+    ['cost_ceiling_micro_usd', 5_000_001],
+    ['review_backlog_limit', 501],
+    ['min_relevance', -0.1],
+  ])('rejects %s = %s with 422', async (field, value) => {
+    const res = await call(configsIndex, { method: 'POST', body: { name: 'n', query: 'q', [field]: value } });
+    expect(res.status).toBe(422);
+    expect(h.createConfig).not.toHaveBeenCalled();
+  });
+
   it('answers 404 for a config of another lake', async () => {
     h.store.configs.push(configDoc(CFG, { dataLakeId: OTHER_LAKE_ID }));
     expect((await call(configOne, { query: { config_id: CFG } })).status).toBe(404);
