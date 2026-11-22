@@ -23,7 +23,6 @@ export const FUNCTION_CONTRACT_LIMITS = {
   maxDescriptionLength: 500,
   maxStringLength: 2000,
   maxContractBytes: 32 * 1024,
-  maxTests: 50,
   maxResultBytes: 256 * 1024,
   maxProblems: 50,
 } as const;
@@ -66,19 +65,11 @@ export interface FunctionObjectField extends FunctionFieldBase {
 export type FunctionField =
   FunctionNumberField | FunctionStringField | FunctionBooleanField | FunctionArrayField | FunctionObjectField;
 
-export interface FunctionTestCase {
-  name: string;
-  input: Record<string, unknown>;
-  expected: Record<string, unknown>;
-  tolerance?: { abs?: number; rel?: number };
-}
-
 export interface FunctionContract {
   name: string;
   description: string;
   inputs: FunctionObjectField;
   outputs: FunctionObjectField;
-  tests: FunctionTestCase[];
 }
 
 export interface FunctionContractProblem {
@@ -101,9 +92,7 @@ const ALLOWED_KEYS: Record<(typeof FIELD_TYPES)[number], readonly string[]> = {
   object: ['properties', 'required', 'additionalProperties'],
 };
 const COMMON_KEYS = ['type', 'description'];
-const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs', 'tests'];
-const TEST_CASE_KEYS = ['name', 'input', 'expected', 'tolerance'];
-const TOLERANCE_KEYS = ['abs', 'rel'];
+const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs'];
 
 /** UTF-8 size of a JSON text, the unit every size limit in this file is stated in. */
 export function functionJsonBytes(text: string): number {
@@ -387,54 +376,6 @@ function checkField(raw: unknown, path: string, depth: number, problems: Functio
   }
 }
 
-function checkTests(raw: unknown, inputs: FunctionObjectField | null, problems: FunctionContractProblem[]): void {
-  if (raw === undefined) return;
-  if (!Array.isArray(raw)) {
-    report(problems, 'tests', 'must be a list of test cases');
-    return;
-  }
-  if (raw.length > FUNCTION_CONTRACT_LIMITS.maxTests) {
-    report(problems, 'tests', `has ${raw.length} test cases; at most ${FUNCTION_CONTRACT_LIMITS.maxTests} are allowed`);
-    return;
-  }
-  for (let index = 0; index < raw.length && !isFull(problems); index++) {
-    const testCase: unknown = raw[index];
-    const path = join('tests', index);
-    if (!isPlainObject(testCase)) {
-      report(problems, path, 'must be an object with name, input, and expected');
-      continue;
-    }
-    refuseUnknownKeys(testCase, TEST_CASE_KEYS, path, problems);
-    const name = own(testCase, 'name');
-    if (typeof name !== 'string' || !name.trim() || name.length > FUNCTION_CONTRACT_LIMITS.maxDescriptionLength) {
-      report(problems, join(path, 'name'), 'must be a non-empty name');
-    }
-    const input = own(testCase, 'input');
-    if (!isPlainObject(input)) {
-      report(problems, join(path, 'input'), 'must be an object of input values');
-    } else if (inputs) {
-      checkObjectValue(inputs, input, join(path, 'input'), problems);
-    }
-    if (!isPlainObject(own(testCase, 'expected'))) {
-      report(problems, join(path, 'expected'), 'must be an object of expected values');
-    }
-    const tolerance = own(testCase, 'tolerance');
-    if (tolerance !== undefined) {
-      if (!isPlainObject(tolerance)) {
-        report(problems, join(path, 'tolerance'), 'must be an object with abs or rel');
-      } else {
-        refuseUnknownKeys(tolerance, TOLERANCE_KEYS, join(path, 'tolerance'), problems);
-        for (const key of TOLERANCE_KEYS) {
-          const value = own(tolerance, key);
-          if (value !== undefined && !(isFiniteNumber(value) && value >= 0)) {
-            report(problems, join(join(path, 'tolerance'), key), 'must be a number of 0 or more');
-          }
-        }
-      }
-    }
-  }
-}
-
 /**
  * Validate a contract read from guest code, collecting up to `maxProblems` problems; a contract is returned only
  * when there are none. A keyword outside the subset, such as `$ref` or `pattern`, is refused by name.
@@ -500,8 +441,6 @@ export function parseFunctionContract(raw: unknown): FunctionContractParse {
     if (problems.length === before && !isFull(problems)) sides[side] = field as unknown as FunctionObjectField;
   }
 
-  checkTests(own(raw, 'tests'), sides.inputs, problems);
-
   if (problems.length > 0 || !sides.inputs || !sides.outputs) {
     return { ok: false, problems: capFunctionProblems(problems) };
   }
@@ -512,7 +451,6 @@ export function parseFunctionContract(raw: unknown): FunctionContractParse {
       description: description as string,
       inputs: sides.inputs,
       outputs: sides.outputs,
-      tests: (own(raw, 'tests') as FunctionTestCase[] | undefined) ?? [],
     },
   };
 }

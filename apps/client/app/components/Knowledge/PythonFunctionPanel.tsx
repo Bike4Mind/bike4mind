@@ -508,7 +508,6 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
       case 'ready': {
         const { contract } = described;
         const controlsDisabled = disabled || calling;
-        const testCount = contract.tests.length;
         return (
           <Stack spacing={2}>
             <Box>
@@ -567,9 +566,6 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 Calls run in your browser. Nothing is saved.
               </Typography>
             </Stack>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {testCount === 1 ? '1 test case declared.' : `${testCount} test cases declared.`}
-            </Typography>
 
             {outcome?.status === 'inputs' && (
               <ProblemList heading="These inputs do not match the contract:" problems={outcome.problems} />

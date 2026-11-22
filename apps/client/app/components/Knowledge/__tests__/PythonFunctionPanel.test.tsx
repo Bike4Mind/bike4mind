@@ -34,14 +34,6 @@ const sampleContract = () => ({
     required: ['deflection'],
     properties: { deflection: { type: 'number', unit: 'm' } },
   },
-  tests: [
-    {
-      name: 'steel beam, 4 m span',
-      input: { load: 1000, span: 4, elastic_modulus: 200e9, second_moment: 8e-6 },
-      expected: { deflection: 0.00208333 },
-      tolerance: { rel: 1e-5 },
-    },
-  ],
 });
 
 const described = (contract: unknown = sampleContract()) => ({
@@ -92,7 +84,7 @@ describe('PythonFunctionPanel', () => {
     const outputs = screen.getByTestId('python-function-contract-outputs');
     expect(within(outputs).getByText('deflection')).toBeTruthy();
     expect(screen.getByText('beam_midspan_deflection')).toBeTruthy();
-    expect(screen.getByText('1 test case declared.')).toBeTruthy();
+    expect(screen.queryByText(/test case/)).toBeNull();
     // Each numeric input carries its unit beside it.
     const spanControl = screen.getByTestId('python-function-input-span').parentElement as HTMLElement;
     expect(within(spanControl).getByText('m')).toBeTruthy();
@@ -221,12 +213,9 @@ describe('PythonFunctionPanel', () => {
 
   it('renders at most 50 problems and a closing line for a flooded contract', async () => {
     const contract = sampleContract() as Record<string, unknown>;
-    contract.inputs = {
-      type: 'object',
-      additionalProperties: false,
-      properties: { xs: { type: 'array', items: { type: 'string', enum: ['steel', 'timber'] } } },
-    };
-    contract.tests = [{ name: 'flood', input: { xs: new Array(500).fill('') }, expected: {} }];
+    const properties: Record<string, unknown> = {};
+    for (let i = 0; i < 40; i++) properties[`p${i}`] = { type: 'number', x: 1 };
+    contract.inputs = { type: 'object', additionalProperties: false, properties };
     callFunction.mockResolvedValueOnce(described(contract));
     renderPanel();
 
@@ -250,7 +239,6 @@ describe('PythonFunctionPanel', () => {
             proto: { type: 'number', unit: 'm', default: 5 },
           },
         },
-        tests: [],
       }).replace('"proto"', '"__proto__"')
     );
     callFunction.mockResolvedValueOnce(described(contract)).mockResolvedValueOnce({

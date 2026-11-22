@@ -27,14 +27,6 @@ const sampleContract = () => ({
     required: ['deflection'],
     properties: { deflection: { type: 'number', unit: 'm' } },
   } as Record<string, unknown>,
-  tests: [
-    {
-      name: 'steel beam, 4 m span',
-      input: { load: 1000, span: 4, elastic_modulus: 200e9, second_moment: 8e-6 },
-      expected: { deflection: 0.00208333 },
-      tolerance: { rel: 1e-5 },
-    },
-  ] as unknown[],
 });
 
 const problemsOf = (raw: unknown): FunctionContractProblem[] => {
@@ -59,14 +51,18 @@ describe('parseFunctionContract', () => {
       'elastic_modulus',
       'second_moment',
     ]);
-    expect(result.contract.tests).toHaveLength(1);
+    expect(Object.keys(result.contract)).toEqual(['name', 'description', 'inputs', 'outputs']);
   });
 
-  it('defaults tests to an empty list', () => {
-    const contract: Record<string, unknown> = sampleContract();
-    delete contract.tests;
-    const result = parseFunctionContract(contract);
-    expect(result.ok && result.contract.tests).toEqual([]);
+  it('refuses a tests key like any other unknown key', () => {
+    const contract = {
+      ...sampleContract(),
+      tests: [{ name: 'steel beam', input: { load: 1000 }, expected: { deflection: 0.002 } }],
+    };
+    expect(problemsOf(contract)).toEqual([{ path: 'tests', message: '"tests" is not supported' }]);
+    expect(problemsOf({ ...sampleContract(), tests: [] })).toEqual([
+      { path: 'tests', message: '"tests" is not supported' },
+    ]);
   });
 
   it('refuses a value that is not a dict', () => {
@@ -168,24 +164,9 @@ describe('parseFunctionContract', () => {
     for (let i = 0; i < FUNCTION_CONTRACT_LIMITS.maxProperties + 1; i++) properties[`p${i}`] = { type: 'boolean' };
     contract.inputs.properties = properties as Record<string, Record<string, unknown>>;
     contract.inputs.required = [];
-    contract.tests = [];
     expect(problemsOf(contract)).toEqual([
       { path: 'inputs.properties', message: 'has 41 fields; at most 40 are allowed' },
     ]);
-  });
-
-  it('refuses more than 50 test cases', () => {
-    const contract = sampleContract();
-    contract.tests = Array.from({ length: FUNCTION_CONTRACT_LIMITS.maxTests + 1 }, () => contract.tests[0]);
-    expect(problemsOf(contract)).toEqual([{ path: 'tests', message: 'has 51 test cases; at most 50 are allowed' }]);
-  });
-
-  it('refuses a test case whose input does not match the inputs schema', () => {
-    const contract = sampleContract();
-    contract.tests = [
-      { name: 'bad', input: { load: 1000, span: -4, elastic_modulus: 1, second_moment: 1 }, expected: {} },
-    ];
-    expect(problemsOf(contract)).toEqual([{ path: 'tests.0.input.span', message: 'must be greater than 0' }]);
   });
 
   it('refuses a contract over 32 KB', () => {
@@ -220,7 +201,6 @@ describe('parseFunctionContract', () => {
 
   it.each(['class', 'None', 'lambda'])('refuses the Python keyword %s as an input or output name', name => {
     const contract = sampleContract();
-    contract.tests = [];
     contract.inputs = { type: 'object', additionalProperties: false, properties: { [name]: { type: 'boolean' } } };
     contract.outputs = { type: 'object', additionalProperties: false, properties: { [name]: { type: 'boolean' } } };
     expect(problemsOf(contract)).toEqual([
@@ -231,7 +211,6 @@ describe('parseFunctionContract', () => {
 
   it('accepts the soft keyword match as a field name, and a keyword as a nested dict key', () => {
     const contract = sampleContract();
-    contract.tests = [];
     contract.inputs = {
       type: 'object',
       additionalProperties: false,
@@ -277,8 +256,7 @@ describe('parseFunctionContract', () => {
     [{ minimum: 4, exclusiveMaximum: 4.5 }, 4],
   ])('accepts integer bounds that allow a whole number: %j', (bounds, span) => {
     const contract = sampleContract();
-    inputProperties(contract).span = { type: 'integer', unit: 'm', ...bounds };
-    (contract.tests[0] as { input: Record<string, unknown> }).input.span = span;
+    inputProperties(contract).span = { type: 'integer', unit: 'm', ...bounds, default: span };
     expect(problemsOf(contract)).toEqual([]);
   });
 
@@ -292,7 +270,7 @@ describe('parseFunctionContract', () => {
     let deep = '1';
     for (let i = 0; i < 5000; i++) deep = `{"a":${deep}}`;
     const contract = sampleContract();
-    (contract.tests[0] as Record<string, unknown>).expected = JSON.parse(deep);
+    inputProperties(contract).span.description = JSON.parse(deep);
     expect(problemsOf(contract)).toEqual([{ path: '', message: 'FUNCTION is nested too deeply to read' }]);
   });
 
@@ -446,19 +424,14 @@ describe('problem cap', () => {
     for (const problem of problems) expect(problem.message.length).toBeLessThan(300);
   });
 
-  it('stops a test-case input flood inside the contract at 50 problems plus a closing entry', () => {
+  it('stops a flood of field problems inside the contract at 50 problems plus a closing entry', () => {
     const contract = sampleContract();
-    contract.inputs = {
-      type: 'object',
-      additionalProperties: false,
-      properties: { xs: { type: 'array', items: { type: 'string', enum: longEnum.slice(0, 8) } } },
-    };
-    const budget = FUNCTION_CONTRACT_LIMITS.maxContractBytes - JSON.stringify(contract).length - 100;
-    contract.tests = [{ name: 'flood', input: { xs: new Array(Math.floor(budget / 3)).fill('') }, expected: {} }];
-    expect(JSON.stringify(contract).length).toBeLessThanOrEqual(FUNCTION_CONTRACT_LIMITS.maxContractBytes);
+    const properties: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < FUNCTION_CONTRACT_LIMITS.maxProperties; i++) properties[`p${i}`] = { type: 'number', x: 1 };
+    contract.inputs = { type: 'object', additionalProperties: false, properties };
 
     const problems = problemsOf(contract);
-    expect(problems.length).toBeLessThanOrEqual(51);
+    expect(problems).toHaveLength(51);
     expect(problems.at(-1)).toEqual(CLOSING);
     for (const problem of problems) expect(problem.message.length).toBeLessThan(300);
   });
