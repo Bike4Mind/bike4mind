@@ -118,7 +118,10 @@ export interface CallableFunctionRunResult {
   reason?: CallableFunctionReason;
   /** The guest exception's class name, never its message. */
   errorClass?: string;
-  value?: Record<string, unknown>;
+  /** Inline outputs. An output stored elsewhere would get a sibling field, so do not assume every output is here. */
+  outputs?: Record<string, unknown>;
+  /** Filled by the dispatcher; the runtime never sets it. */
+  stamp?: Record<string, unknown>;
   contract?: FunctionContract;
   problems?: FunctionContractProblem[];
   printed?: string;
@@ -143,7 +146,7 @@ export type CallableFunctionChildReply =
       ok: true;
       initMs: number;
       contractJson?: string;
-      valueJson?: string;
+      outputsJson?: string;
       outputProblemsJson?: string;
       printed: string;
       error?: string;
@@ -375,7 +378,7 @@ function parseReply(raw: unknown): CallableFunctionChildReply | null {
     ok: true,
     initMs: typeof raw.initMs === 'number' ? raw.initMs : 0,
     contractJson: optionalString(raw.contractJson),
-    valueJson: optionalString(raw.valueJson),
+    outputsJson: optionalString(raw.outputsJson),
     outputProblemsJson: optionalString(raw.outputProblemsJson),
     printed: raw.printed,
     error: optionalString(raw.error),
@@ -546,19 +549,19 @@ export async function runCallableFunctionInChild(
     return refused('contract_changed');
   }
 
-  const valueJson = reply.valueJson ?? '';
-  if (functionJsonBytes(valueJson) > limits.outputBytes) {
+  const outputsJson = reply.outputsJson ?? '';
+  if (functionJsonBytes(outputsJson) > limits.outputBytes) {
     return finish({ ...after, outcome: 'output_too_large', reason: 'result_too_large' });
   }
-  let value: unknown;
+  let outputs: unknown;
   try {
-    value = JSON.parse(valueJson);
+    outputs = JSON.parse(outputsJson);
   } catch {
     return finish({ ...after, outcome: 'output_invalid', reason: 'result_not_json' });
   }
-  const problems = [...pythonTypeProblems(reply.outputProblemsJson), ...validateFunctionValue(pinned.outputs, value)];
-  if (problems.length > 0 || !isObject(value)) {
+  const problems = [...pythonTypeProblems(reply.outputProblemsJson), ...validateFunctionValue(pinned.outputs, outputs)];
+  if (problems.length > 0 || !isObject(outputs)) {
     return finish({ ...after, outcome: 'output_invalid', problems: safePaths(problems) });
   }
-  return finish({ ...after, outcome: 'ok', value });
+  return finish({ ...after, outcome: 'ok', outputs });
 }

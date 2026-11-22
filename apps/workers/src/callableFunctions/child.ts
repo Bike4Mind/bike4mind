@@ -157,7 +157,7 @@ async function runRequest(
       ok: true,
       initMs,
       contractJson: text(fields.contract_json),
-      valueJson: text(fields.value_json),
+      outputsJson: text(fields.value_json),
       outputProblemsJson: text(fields.output_problems_json),
       printed: (text(fields.stdout) ?? '') + (text(fields.stderr) ?? ''),
       error: text(fields.error),

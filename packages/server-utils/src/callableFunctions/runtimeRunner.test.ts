@@ -55,6 +55,18 @@ describe('createLambdaCallableFunctionRunner', () => {
 });
 
 describe('parseCallableFunctionRunResult', () => {
+  it('keeps the outputs object and drops a stamp, which only the dispatcher fills', () => {
+    expect(
+      parseCallableFunctionRunResult({
+        outcome: 'ok',
+        durationMs: 1,
+        outputs: { deflection: 0.004 },
+        stamp: { codeHash: 'from the runtime' },
+        value: { deflection: 1 },
+      })
+    ).toEqual({ outcome: 'ok', durationMs: 1, outputs: { deflection: 0.004 } });
+  });
+
   it('drops problems that are not path and message pairs and refuses an invalid contract', () => {
     expect(
       parseCallableFunctionRunResult({

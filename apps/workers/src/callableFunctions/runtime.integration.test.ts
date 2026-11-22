@@ -336,9 +336,9 @@ function startUnisolatedChild() {
   const call = (code: string, arg: string) =>
     new Promise<Attempt>(resolve => {
       waiting.push(line => {
-        const reply = JSON.parse(line) as { valueJson?: string; error?: string };
+        const reply = JSON.parse(line) as { outputsJson?: string; error?: string };
         resolve(
-          reply.valueJson ? asAttempt(JSON.parse(reply.valueJson)) : { ran: false, reached: false, detail: 'error' }
+          reply.outputsJson ? asAttempt(JSON.parse(reply.outputsJson)) : { ran: false, reached: false, detail: 'error' }
         );
       });
       const request = {
@@ -356,7 +356,7 @@ function startUnisolatedChild() {
 const isolatedCall = async (code: string, arg: string): Promise<Attempt> => {
   const result = await runner({ op: 'call', code, contract: PROBE_CONTRACT, params: { arg } });
   return result.outcome === 'ok'
-    ? asAttempt(result.value)
+    ? asAttempt(result.outputs)
     : { ran: false, reached: false, detail: `${result.outcome} ${result.reason ?? ''}` };
 };
 
@@ -419,14 +419,14 @@ describe('callable function runtime with real Pyodide', () => {
     console.log(['| Attempt | Isolation off | Isolation on |', '|---|---|---|', ...table].join('\n'));
   });
 
-  it('runs the beam example through a fresh child and returns its value', async () => {
+  it('runs the beam example through a fresh child and returns its outputs', async () => {
     const params = { load: 1000, span: 5, elastic_modulus: 200e9, second_moment: 8e-6 };
     const read = await runner({ op: 'read_contract', code: BEAM });
     expect(read.outcome).toBe('ok');
     const contract = read.contract as FunctionContract;
     const result = await runner({ op: 'call', code: BEAM, contract, params });
     expect(result.outcome).toBe('ok');
-    expect(result.value?.deflection).toBeCloseTo((5 * 1000 * 5 ** 4) / (384 * 200e9 * 8e-6), 12);
+    expect(result.outputs?.deflection).toBeCloseTo((5 * 1000 * 5 ** 4) / (384 * 200e9 * 8e-6), 12);
     expect(spawnedPids().slice(-2).every(pidGone)).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
@@ -468,7 +468,7 @@ def attempt(arg):
     import os
     import sys
     started = '{"started": true}\\n'
-    reply = '{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "valueJson": "{}"}\\n'
+    reply = '{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "outputsJson": "{}"}\\n'
     for line in (started, reply):
         print(line, end="")
         sys.__stdout__.write(line)
@@ -480,9 +480,9 @@ def attempt(arg):
     const call = (arg: string, timeoutMs: number) =>
       runner({ op: 'call', code: probe(forged), contract: PROBE_CONTRACT, params: { arg }, limits: { timeoutMs } });
     const returned = await call('return', 30_000);
-    expect(returned).toMatchObject({ outcome: 'ok', value: { reached: false, detail: 'returned' } });
+    expect(returned).toMatchObject({ outcome: 'ok', outputs: { reached: false, detail: 'returned' } });
     expect(returned.printed).toBe(
-      '{"started": true}\n{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "valueJson": "{}"}\n'
+      '{"started": true}\n{"ok": true, "initMs": 0, "printed": "", "contractJson": "{}", "outputsJson": "{}"}\n'
     );
     const looped = await call('loop', 2000);
     expect(looped.outcome).toBe('timeout');
@@ -495,10 +495,10 @@ def attempt(arg):
     const code = `FUNCTION = ${pythonLiteral(SERIES_CONTRACT)}\n\n\ndef run(samples=(), count=0):\n    return {"values": [len(samples)] if samples else [0.5] * count}\n`;
     const call = (params: Record<string, unknown>) => runner({ op: 'call', code, contract: SERIES_CONTRACT, params });
     const samples = new Array(Math.floor((4.9 * MIB) / 4)).fill(0.5);
-    expect(await call({ samples })).toMatchObject({ outcome: 'ok', value: { values: [samples.length] } });
+    expect(await call({ samples })).toMatchObject({ outcome: 'ok', outputs: { values: [samples.length] } });
     const fits = await call({ count: Math.floor((4.9 * MIB) / 5) });
     expect(fits.outcome).toBe('ok');
-    expect(fits.value?.values).toHaveLength(Math.floor((4.9 * MIB) / 5));
+    expect(fits.outputs?.values).toHaveLength(Math.floor((4.9 * MIB) / 5));
     expect(await call({ count: Math.floor((5.1 * MIB) / 5) })).toMatchObject({
       outcome: 'output_too_large',
       reason: 'result_too_large',

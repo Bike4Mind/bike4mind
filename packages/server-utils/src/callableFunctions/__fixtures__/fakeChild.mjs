@@ -27,8 +27,8 @@ function runMode(request, spec) {
       break;
     }
     case 'series': {
-      const valueJson = `{"values": [${new Array(spec.count).fill('0.5').join(', ')}]}`;
-      write({ ok: true, initMs: 1, printed: '', contractJson: spec.contractJson, valueJson });
+      const outputsJson = `{"values": [${new Array(spec.count).fill('0.5').join(', ')}]}`;
+      write({ ok: true, initMs: 1, printed: '', contractJson: spec.contractJson, outputsJson });
       stayAlive();
       break;
     }
