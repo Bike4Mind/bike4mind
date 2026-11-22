@@ -308,6 +308,8 @@ function checkObjectField(
       // Nested names are only dict keys; the top-level ones must also work as Python identifiers.
       if (depth === 1 && PYTHON_HARD_KEYWORDS.includes(name)) {
         report(problems, fieldPath, `"${name}" is a Python keyword and cannot be a field name`);
+        // Still declared, so `required` does not also report it as missing.
+        declared.add(name);
         continue;
       }
       declared.add(name);

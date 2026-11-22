@@ -209,6 +209,19 @@ describe('parseFunctionContract', () => {
     ]);
   });
 
+  it('reports a required keyword field only as a keyword, not also as a missing field', () => {
+    const contract = sampleContract();
+    contract.inputs = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['class'],
+      properties: { class: { type: 'boolean' } },
+    };
+    expect(problemsOf(contract)).toEqual([
+      { path: 'inputs.properties.class', message: '"class" is a Python keyword and cannot be a field name' },
+    ]);
+  });
+
   it('accepts the soft keyword match as a field name, and a keyword as a nested dict key', () => {
     const contract = sampleContract();
     contract.inputs = {
