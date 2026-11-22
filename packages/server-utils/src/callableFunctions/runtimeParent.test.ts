@@ -317,14 +317,19 @@ describe('runCallableFunctionInChild', () => {
     }
   });
 
-  it('defaults the time limit to 30 s, refuses one above the 900 s ceiling, and sizes the Lambda from both budgets', async () => {
+  it('defaults the time limit to 30 s, refuses one above the 825 s ceiling, and sizes the Lambda from both budgets', async () => {
     expect(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS).toBe(30_000);
-    expect(CALLABLE_FUNCTION_LIMITS.timeoutMs).toBe(900_000);
-    expect(await run(timed(reply({}), 900_001))).toMatchObject({ outcome: 'refused', reason: 'limit_above_ceiling' });
+    expect(CALLABLE_FUNCTION_LIMITS.timeoutMs).toBe(825_000);
+    expect(await run(timed(reply({}), 825_001))).toMatchObject({ outcome: 'refused', reason: 'limit_above_ceiling' });
     expect(spawn).not.toHaveBeenCalled();
     expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS * 1000).toBeGreaterThanOrEqual(
       CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS
     );
+    expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS).toBe(900);
+  });
+
+  it("never sizes the Lambda past Lambda's 900 s maximum", () => {
+    expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS).toBeLessThanOrEqual(900);
   });
 
   it('kills a child over the memory cap', async () => {

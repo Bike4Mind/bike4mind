@@ -37,7 +37,7 @@ const MIB = 1024 * 1024;
  * `limits`, never a higher one; each surface's default (chat's 256 KB output, for one) is the dispatcher's.
  */
 export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
-  timeoutMs: 900_000,
+  timeoutMs: 825_000,
   inputBytes: 5 * MIB,
   outputBytes: 5 * MIB,
   memoryMb: 1536,
