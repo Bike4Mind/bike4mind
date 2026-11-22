@@ -6,6 +6,7 @@ import type {
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunRepository,
   ILakeMembershipDecisionRepository,
+  ILakeConfigSnapshotRepository,
   ILakeSkippedFileRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
@@ -43,6 +44,8 @@ interface CleanupDeletedDataLakeAdapters {
     lakeMembershipDecisions?: Pick<ILakeMembershipDecisionRepository, 'deleteForLake'>;
     /** Optional like the rows above: the not-ingested list is lake-scoped, see ILakeSkippedFile. */
     lakeSkippedFiles?: Pick<ILakeSkippedFileRepository, 'deleteForLake'>;
+    /** Optional like the rows above: undo snapshots hold full config values, a feed address among them. */
+    lakeConfigSnapshots?: Pick<ILakeConfigSnapshotRepository, 'deleteForLake'>;
     /**
      * Optional for the same reason again: research configs and their run history (#1682) are
      * lake-scoped, and a host that never wired the producer has no rows to sweep.
@@ -404,6 +407,10 @@ export const cleanupDeletedDataLake = async (
 
   // 4h. And the not-ingested list: names and paths of source files the lake never held. Idempotent.
   await db.lakeSkippedFiles?.deleteForLake(dataLakeId);
+
+  // 4i. And the config undo snapshots: full values, a private feed address among them, that must
+  // not outlive the lake. Idempotent.
+  await db.lakeConfigSnapshots?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

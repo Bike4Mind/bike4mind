@@ -113,6 +113,7 @@ export * from './DataLakeAccessGrantTypes';
 export * from './DataLakeOwnershipOfferTypes';
 export * from './LakeAccessEventTypes';
 export * from './LakeConfigChangeEventTypes';
+export * from './LakeConfigSnapshotTypes';
 export * from './LakeMembershipChangeEventTypes';
 export * from './LakeMembershipDiffTypes';
 export * from './LakeConfigHistoryTypes';

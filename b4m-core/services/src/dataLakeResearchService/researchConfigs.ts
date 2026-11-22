@@ -2,7 +2,6 @@ import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
   ResearchKeysetPage,
-  ResearchItemRule,
   ResearchRunLevers,
   ResearchRunTrigger,
   ResearchScheduleCadence,
@@ -12,7 +11,6 @@ import {
   deriveLegacyAllowedDomains,
   isSameDomainSet,
   normalizeDomainList,
-  researchItemRuleKey,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_FEED_URL_MAX_CHARS,
   RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
@@ -24,12 +22,7 @@ import { isPublicSuffixEntry } from '@bike4mind/utils/registrableDomain';
 import {
   researchAutoAdmitChange,
   researchConfigChange,
-  researchItemRulesChange,
-  researchReviewBacklogLimitChange,
-  researchScheduleCadenceChange,
   researchSchedulePausedChange,
-  researchSourceChange,
-  researchTrustedSitesChange,
 } from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 import {
@@ -37,6 +30,15 @@ import {
   type LakeConfigAuditAdapters,
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
+import { recordLakeConfigSnapshot, type LakeConfigSnapshotAdapters } from '../dataLakeService/recordLakeConfigSnapshot';
+import {
+  diffResearchConfig,
+  leversDiffer,
+  researchConfigStateOf,
+  snapshotLeverChanges,
+  itemRuleChanges,
+  LEVER_EQUALITY,
+} from './researchConfigChanges';
 import { normalizeResearchLevers, type ResearchLeversDraft } from './researchLevers';
 import { firstResearchRunAt, nextResearchRunAfter, normalizeReviewBacklogLimit } from './researchSchedule';
 
@@ -55,6 +57,9 @@ export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
     // REQUIRED, not optional: every caller of these writes is one of the two research-config
     // routes, so leaving it optional would let a create/edit/delete go unaudited silently.
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    // REQUIRED like the event repository: without it a delete or feed edit would record no undo
+    // snapshot and nothing would say so.
+    lakeConfigSnapshots: LakeConfigSnapshotAdapters['db']['lakeConfigSnapshots'];
   };
   now?: () => Date;
 }
@@ -267,6 +272,7 @@ export async function createResearchConfig(
       lake,
       grants,
       action: 'create-research-config',
+      target: { kind: 'researchConfig', id: created.id },
       changes: [
         researchConfigChange(name, 'created'),
         ...(levers.autoAdmitTrusted ? [researchAutoAdmitChange(name, true)] : []),
@@ -278,68 +284,6 @@ export async function createResearchConfig(
 
   return created;
 }
-
-const sameValue = <T extends string | number | boolean>(a: T, b: T) => a === b;
-// `recencyDays`/`model` are coerced to `null` on both sides, matching how each is stored on update.
-const sameNullable = <T>(a: T | undefined, b: T | undefined) => (a ?? null) === (b ?? null);
-// Set semantics: a reordered resubmit of the same domains/tags is not an edit.
-const sameStringSet = (a: readonly string[], b: readonly string[]) => {
-  const setA = new Set(a);
-  const setB = new Set(b);
-  return setA.size === setB.size && [...setA].every(value => setB.has(value));
-};
-
-// Derived from ResearchRunLevers so a new lever without a comparer is a compile error, not a
-// silently-ignored edit that records no History event.
-const LEVER_EQUALITY: {
-  [K in keyof ResearchRunLevers]-?: (a: ResearchRunLevers[K], b: ResearchRunLevers[K]) => boolean;
-} = {
-  // A config document read without the lever (not through the upgrader) is a search config.
-  source: (a, b) => (a ?? 'search') === (b ?? 'search'),
-  feedUrl: sameNullable,
-  query: sameValue,
-  model: sameNullable,
-  maxResults: sameValue,
-  maxProposals: sameValue,
-  recencyDays: sameNullable,
-  trustedDomains: sameStringSet,
-  reviewDomains: sameStringSet,
-  unlistedSources: sameValue,
-  autoAdmitTrusted: sameValue,
-  maxAutoAdmits: sameValue,
-  // Derived from the three fields above, so it can never be the reason a config moved.
-  allowedDomains: () => true,
-  blockedDomains: sameStringSet,
-  minRelevance: sameValue,
-  costCeilingMicroUsd: sameValue,
-  proposedTags: sameStringSet,
-  itemRules: (a, b) =>
-    sameStringSet(canonicalItemRules(a).map(researchItemRuleKey), canonicalItemRules(b).map(researchItemRuleKey)),
-};
-
-const itemRuleChanges = (
-  name: string,
-  before: readonly ResearchItemRule[] | undefined,
-  after: readonly ResearchItemRule[] | undefined
-) => {
-  const beforeKeys = new Set(canonicalItemRules(before).map(researchItemRuleKey));
-  const afterKeys = new Set(canonicalItemRules(after).map(researchItemRuleKey));
-  const added = [...afterKeys].filter(key => !beforeKeys.has(key)).length;
-  const removed = [...beforeKeys].filter(key => !afterKeys.has(key)).length;
-  return added > 0 || removed > 0 ? [researchItemRulesChange(name, added, removed)] : [];
-};
-
-const trustedSiteChanges = (name: string, before: readonly string[], after: readonly string[]) => {
-  const added = after.filter(entry => !before.includes(entry));
-  const removed = before.filter(entry => !after.includes(entry));
-  return added.length > 0 || removed.length > 0 ? [researchTrustedSitesChange(name, added, removed)] : [];
-};
-
-const leversMoved = (next: ResearchRunLevers, current: ResearchRunLevers) =>
-  (Object.keys(LEVER_EQUALITY) as (keyof ResearchRunLevers)[]).some(
-    // The union of per-key comparers cannot be called with a union key; each pair is type-matched by the map above.
-    key => !(LEVER_EQUALITY[key] as (a: unknown, b: unknown) => boolean)(next[key], current[key])
-  );
 
 export function listResearchConfigs(
   dataLakeId: string,
@@ -406,7 +350,7 @@ export async function updateResearchConfig(
   // `normalizeResearchLevers` omits `model`/`recencyDays` when unset, so key order differs between
   // `merged` and a hand-built object and a byte-identical default-config resubmit would read as changed.
   const nextName = input.name !== undefined ? normalizeName(input.name) : existing.name;
-  const nothingMoved = nextName === existing.name && !leversMoved(merged, existing);
+  const nothingMoved = nextName === existing.name && !leversDiffer(merged, existing);
 
   const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
     ...merged,
@@ -430,52 +374,59 @@ export async function updateResearchConfig(
   // nothing, so it earns no `researchConfig: updated: <name>` row - a resubmit-without-edits is not
   // an event a History reader needs to see.
   // Outside the nothingMoved gate: a pause-only change moves no lever and must still be recorded.
-  // Switching the cadence off clears the flag, but that is the schedule going off, not a resume.
-  const pauseChanges =
-    nextPaused !== wasPaused && cadence !== 'off' ? [researchSchedulePausedChange(updated.name, nextPaused)] : [];
-  // Cadence and the backlog limit are schedule settings, not levers, so `leversMoved` never sees them.
-  const previousBacklogLimit = normalizeReviewBacklogLimit(existing.reviewBacklogLimit);
   const nextBacklogLimit =
     input.reviewBacklogLimit !== undefined
       ? normalizeReviewBacklogLimit(input.reviewBacklogLimit)
-      : previousBacklogLimit;
-  const scheduleChanges = [
-    ...pauseChanges,
-    ...(cadence !== currentCadence ? [researchScheduleCadenceChange(updated.name, currentCadence, cadence)] : []),
-    ...(nextBacklogLimit !== previousBacklogLimit
-      ? [researchReviewBacklogLimitChange(updated.name, previousBacklogLimit, nextBacklogLimit)]
-      : []),
-  ];
-  if (nothingMoved && scheduleChanges.length > 0) {
-    await recordLakeConfigChange(
-      { actor, lake, grants, action: 'update-research-config', changes: scheduleChanges },
-      { db, logger }
-    );
-  } else if (!nothingMoved) {
+      : normalizeReviewBacklogLimit(existing.reviewBacklogLimit);
+  // The UPDATED document's own name, not the input: an edit that never touched `name` still reads
+  // by its current name rather than by whatever this caller happened to submit.
+  const { scheduleLines, leverLines, leverChanges } = diffResearchConfig(researchConfigStateOf(existing), {
+    name: updated.name,
+    levers: merged,
+    cadence,
+    reviewBacklogLimit: nextBacklogLimit,
+    schedulePaused: nextPaused,
+  });
+  const feedUrlMoved = !LEVER_EQUALITY.feedUrl(merged.feedUrl, existing.feedUrl);
+  if (nothingMoved && leverChanges.length > 0) {
     await recordLakeConfigChange(
       {
         actor,
         lake,
         grants,
         action: 'update-research-config',
-        // The UPDATED document's own name, not the input: an edit that never touched `name` still
-        // reads by its current name here rather than by whatever this caller happened to submit.
-        changes: [
-          researchConfigChange(updated.name, 'updated'),
-          ...scheduleChanges,
-          ...(merged.autoAdmitTrusted !== (existing.autoAdmitTrusted === true)
-            ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
-            : []),
-          ...trustedSiteChanges(updated.name, existing.trustedDomains ?? [], merged.trustedDomains),
-          ...itemRuleChanges(updated.name, existing.itemRules, merged.itemRules),
-          ...(LEVER_EQUALITY.source(merged.source, existing.source) &&
-          LEVER_EQUALITY.feedUrl(merged.feedUrl, existing.feedUrl)
-            ? []
-            : [researchSourceChange(updated.name, merged.source, merged.feedUrl)]),
-        ],
+        target: { kind: 'researchConfig', id: configId },
+        changes: scheduleLines,
+        leverChanges,
       },
       { db, logger }
     );
+  } else if (!nothingMoved) {
+    const eventId = await recordLakeConfigChange(
+      {
+        actor,
+        lake,
+        grants,
+        action: 'update-research-config',
+        target: { kind: 'researchConfig', id: configId },
+        changes: [researchConfigChange(updated.name, 'updated'), ...scheduleLines, ...leverLines],
+        leverChanges,
+      },
+      { db, logger }
+    );
+    if (feedUrlMoved) {
+      await recordLakeConfigSnapshot(
+        eventId,
+        {
+          dataLakeId: lake.id,
+          kind: 'feed-url-edited',
+          feedUrlBefore: existing.feedUrl ?? null,
+          feedUrlAfter: merged.feedUrl ?? null,
+        },
+        { db, logger },
+        now()
+      );
+    }
   }
 
   return updated;
@@ -526,7 +477,9 @@ export async function setResearchSchedulePaused(
       lake,
       grants,
       action: 'update-research-config',
+      target: { kind: 'researchConfig', id: configId },
       changes: [researchSchedulePausedChange(updated.name, paused)],
+      leverChanges: [{ lever: 'schedulePaused', before: existing.schedulePaused === true, after: paused }],
     },
     { db, logger }
   );
@@ -538,7 +491,7 @@ export async function deleteResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
   grants: readonly LakeGrant[],
-  { db, logger }: ResearchConfigAdapters
+  { db, logger, now = () => new Date() }: ResearchConfigAdapters
 ): Promise<void> {
   const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
@@ -548,14 +501,23 @@ export async function deleteResearchConfig(
   // Run history is deliberately NOT swept with the config: a row is what a proposal's `runId`
   // points at, and those proposals outlive the config that produced them.
 
-  await recordLakeConfigChange(
+  const eventId = await recordLakeConfigChange(
     {
       actor,
       lake,
       grants,
       action: 'delete-research-config',
+      target: { kind: 'researchConfig', id: configId },
       changes: [researchConfigChange(existing.name, 'deleted')],
+      leverChanges: snapshotLeverChanges(researchConfigStateOf(existing)),
     },
     { db, logger }
+  );
+  // The full config, feed address included, for the undo window only; the row above is redacted.
+  await recordLakeConfigSnapshot(
+    eventId,
+    { dataLakeId: lake.id, kind: 'config-deleted', config: { ...existing } },
+    { db, logger },
+    now()
   );
 }

@@ -70,10 +70,16 @@ const makeAdapters = (overrides: Partial<ResearchConfigAdapters['db']['dataLakeR
     deleteConfig: vi.fn(async () => true),
     ...overrides,
   };
-  const record = vi.fn(async () => undefined);
+  const record = vi.fn(async (_input: unknown) => ({ id: 'evt-1' }));
+  const snapshotRecord = vi.fn(async (_input: unknown) => undefined);
   return {
+    snapshotRecord,
     adapters: {
-      db: { dataLakeResearchConfigs: repo, lakeConfigChangeEvents: { record } },
+      db: {
+        dataLakeResearchConfigs: repo,
+        lakeConfigChangeEvents: { record },
+        lakeConfigSnapshots: { record: snapshotRecord },
+      },
       now: () => NOW,
     } as unknown as ResearchConfigAdapters,
     repo,
@@ -370,7 +376,12 @@ describe('updateResearchConfig', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'update-research-config',
-        changes: [{ field: 'researchConfig', kind: 'literal', after: 'updated: Renamed sweep' }],
+        target: { kind: 'researchConfig', id: 'config-1' },
+        changes: [
+          { field: 'researchConfig', kind: 'literal', after: 'updated: Renamed sweep' },
+          { field: 'researchConfig', kind: 'literal', after: 'name Weekly sweep -> Renamed sweep: Renamed sweep' },
+        ],
+        leverChanges: [{ lever: 'name', before: 'Weekly sweep', after: 'Renamed sweep' }],
       })
     );
   });
@@ -853,7 +864,9 @@ describe('research config feed source', () => {
   it('adds no source entry when only another lever changes on a feed config', async () => {
     const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { minRelevance: 0.9 });
     await run();
-    expect(record.mock.calls[0][0].changes).toHaveLength(1);
+    const lines = record.mock.calls[0][0].changes.map((c: { after: string }) => c.after);
+    expect(lines).toHaveLength(2);
+    expect(lines.some((l: string) => l.startsWith('source:'))).toBe(false);
   });
 });
 
@@ -1251,5 +1264,80 @@ describe('research schedule pause', () => {
         createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', schedulePaused: true }, adapters)
       ).rejects.toThrow(/needs a cadence/);
     });
+  });
+});
+
+describe('structured History and config snapshots', () => {
+  const FEED_QS = 'https://example.com/feed.xml?token=secret-abc';
+
+  it('records target and a redacted lever snapshot on delete, plus the full config as a snapshot', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS, cadence: 'daily' });
+    const { adapters, record, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await deleteResearchConfig('config-1', lake(), actor(), NO_GRANTS, adapters);
+
+    const input = record.mock.calls[0][0] as { target: unknown; leverChanges: { after: unknown }[] };
+    expect(input.target).toEqual({ kind: 'researchConfig', id: 'config-1' });
+    expect(input.leverChanges.every(c => c.after === null)).toBe(true);
+    expect(JSON.stringify(input)).not.toContain('secret-abc');
+    expect(snapshotRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: LAKE_ID,
+        eventId: 'evt-1',
+        kind: 'config-deleted',
+        config: expect.objectContaining({ feedUrl: FEED_QS }),
+      })
+    );
+  });
+
+  it('writes the full before and after feed address to a snapshot on a feed edit, never to History', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS });
+    const next = 'https://example.com/other.xml?key=second';
+    const { adapters, record, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { feedUrl: next }, adapters);
+
+    expect(snapshotRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 'evt-1', kind: 'feed-url-edited', feedUrlBefore: FEED_QS, feedUrlAfter: next })
+    );
+    const out = JSON.stringify(record.mock.calls[0][0]);
+    expect(out).not.toContain('secret-abc');
+    expect(out).not.toContain('second');
+  });
+
+  it('writes no snapshot when the feed address did not move', async () => {
+    const { adapters, snapshotRecord } = makeAdapters();
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { minRelevance: 0.9 }, adapters);
+    expect(snapshotRecord).not.toHaveBeenCalled();
+  });
+
+  it('survives a failing snapshot write', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS });
+    const { adapters, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    snapshotRecord.mockRejectedValueOnce(new Error('boom'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(
+      updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { feedUrl: 'https://example.com/b.xml' }, adapters)
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('records the schedulePaused flip when an edit sets cadence off', async () => {
+    const stored = storedConfig({ cadence: 'daily', schedulePaused: true });
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, adapters);
+
+    const input = record.mock.calls[0][0] as { leverChanges: { lever: string; before: unknown; after: unknown }[] };
+    expect(input.leverChanges).toEqual(
+      expect.arrayContaining([{ lever: 'schedulePaused', before: true, after: false }])
+    );
+  });
+
+  it('records target on create', async () => {
+    const { adapters, record } = makeAdapters();
+    await createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'Weekly', query: 'erosion' }, adapters);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'researchConfig', id: 'new' } }));
   });
 });

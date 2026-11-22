@@ -1351,7 +1351,7 @@ export interface paths {
     };
     /**
      * Get the config-change history
-     * @description Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. `limit` caps the window, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.
+     * @description Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. Entries with `kind` "config" carry `lever_changes`, one structured move per lever. Entries with `kind` "file" are files added to or removed from the lake, merged in by time. `limit` caps the window across both, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.
      */
     get: operations['getDataLakeConfigHistory'];
     put?: never;
@@ -9174,66 +9174,107 @@ export interface components {
         lake_id: string;
         lake_name: string;
         /** @description Newest first. */
-        entries: {
-          event_id: string;
-          changed_at: string;
-          /** @enum {string} */
-          principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
-          principal_name: string | null;
-          /** @enum {string} */
-          manage_rung:
-            'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
-          /** @enum {string} */
-          action:
-            | 'update'
-            | 'visibility'
-            | 'transfer-ownership'
-            | 'archive'
-            | 'unarchive'
-            | 'delete'
-            | 'restore'
-            | 'promote'
-            | 'demote'
-            | 'purge'
-            | 'auto-activate'
-            | 'grant-access'
-            | 'revoke-access'
-            | 'membership-succession'
-            | 'approve-proposal'
-            | 'auto-approve-proposal'
-            | 'decline-proposal'
-            | 'restore-proposal'
-            | 'create-research-config'
-            | 'update-research-config'
-            | 'delete-research-config'
-            | 'start-research-run'
-            | 'complete-research-run'
-            | 'create'
-            | 'upload-files';
-          changes: {
-            field: string;
-            /** @enum {string} */
-            kind: 'literal' | 'fingerprint';
-            /** @description A literal change only. Absent means unset on that side. */
-            before?: string | number | boolean | null;
-            /** @description A literal change only. Absent means unset on that side. */
-            after?: string | number | boolean | null;
-            /** @description A literal string value was clipped. */
-            truncated?: boolean;
-            /** @description A fingerprint change only. Size, never the text. */
-            before_fingerprint?: {
-              present: boolean;
-              length: number;
-            };
-            /** @description A fingerprint change only. Size, never the text. */
-            after_fingerprint?: {
-              present: boolean;
-              length: number;
-            };
-            /** @description A fingerprint change only. The two sides are the same text. */
-            text_unchanged?: boolean;
-          }[];
-        }[];
+        entries: (
+          | {
+              /** @enum {string} */
+              kind: 'config';
+              event_id: string;
+              changed_at: string;
+              /** @enum {string} */
+              principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+              principal_name: string | null;
+              /** @description The thing the row is about. Absent on older rows. */
+              target?: {
+                /** @enum {string} */
+                kind: 'researchConfig' | 'proposal' | 'file';
+                id: string;
+              };
+              /** @enum {string} */
+              manage_rung:
+                'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
+              /** @enum {string} */
+              action:
+                | 'update'
+                | 'visibility'
+                | 'transfer-ownership'
+                | 'archive'
+                | 'unarchive'
+                | 'delete'
+                | 'restore'
+                | 'promote'
+                | 'demote'
+                | 'purge'
+                | 'auto-activate'
+                | 'grant-access'
+                | 'revoke-access'
+                | 'membership-succession'
+                | 'approve-proposal'
+                | 'auto-approve-proposal'
+                | 'decline-proposal'
+                | 'restore-proposal'
+                | 'create-research-config'
+                | 'update-research-config'
+                | 'delete-research-config'
+                | 'start-research-run'
+                | 'complete-research-run'
+                | 'create'
+                | 'upload-files';
+              changes: {
+                field: string;
+                /** @enum {string} */
+                kind: 'literal' | 'fingerprint';
+                /** @description A literal change only. Absent means unset on that side. */
+                before?: string | number | boolean | null;
+                /** @description A literal change only. Absent means unset on that side. */
+                after?: string | number | boolean | null;
+                /** @description A literal string value was clipped. */
+                truncated?: boolean;
+                /** @description A fingerprint change only. Size, never the text. */
+                before_fingerprint?: {
+                  present: boolean;
+                  length: number;
+                };
+                /** @description A fingerprint change only. Size, never the text. */
+                after_fingerprint?: {
+                  present: boolean;
+                  length: number;
+                };
+                /** @description A fingerprint change only. The two sides are the same text. */
+                text_unchanged?: boolean;
+              }[];
+              /** @description Absent on older rows. */
+              lever_changes?: {
+                lever: string;
+                /** @description Absent or null means unset. A feed address is origin and path only. */
+                before?: unknown;
+                /** @description Null on a delete, which records the setting as it stood. */
+                after?: unknown;
+              }[];
+              /** @description The file an approval admitted. */
+              admitted_fab_file_id?: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'file';
+              event_id: string;
+              changed_at: string;
+              /** @enum {string} */
+              principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+              principal_name: string | null;
+              /** @description The file the row is about. */
+              target: {
+                /** @enum {string} */
+                kind: 'researchConfig' | 'proposal' | 'file';
+                id: string;
+              };
+              /** @enum {string} */
+              action: 'file-added' | 'file-removed';
+              /** @enum {string} */
+              origin: 'connector' | 'person';
+              undoes_event_id?: string;
+              caused_by_event_id?: string;
+            }
+        )[];
         /** @description True when `entries` is a window rather than the whole history. */
         truncated: boolean;
         /** @description The oldest event in the window. Set only when truncated. */
@@ -27213,8 +27254,10 @@ export interface operations {
   getDataLakeConfigHistory: {
     parameters: {
       query?: {
-        /** @description How many of the newest events to return. Defaults to 200. */
+        /** @description How many of the newest config changes to return. Defaults to 200. With include=files, up to the same number of the newest file rows are returned on top; when config rows are truncated, only file rows no older than the oldest config row returned. */
         limit?: number;
+        /** @description Set to files to also return file add and remove rows. Without it only config changes are returned. */
+        include?: 'files';
       };
       header?: never;
       path: {

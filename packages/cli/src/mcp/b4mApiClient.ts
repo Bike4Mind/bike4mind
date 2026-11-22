@@ -463,11 +463,11 @@ export class B4mApiClient {
     return this.sdk.call('decideDataLakeProposal', { params: { id: lakeId, proposal_id: proposalId }, body });
   }
 
-  async getConfigHistory(lakeId: string, limit?: number) {
+  async getConfigHistory(lakeId: string, limit?: number, includeFiles?: boolean) {
     return (
       await this.sdk.call('getDataLakeConfigHistory', {
         params: { id: lakeId },
-        query: limit === undefined ? {} : { limit },
+        query: { ...(limit === undefined ? {} : { limit }), ...(includeFiles ? { include: 'files' as const } : {}) },
       })
     ).data;
   }

@@ -73,6 +73,7 @@ import {
   useCleanupDataLake,
   useDataLakeFiles,
   useDataLakeSkippedFiles,
+  useLakeConfigHistory,
   useDataLakeResearchRuns,
   useDataLakeSpend,
   useDuplicatePrefixLake,
@@ -355,6 +356,34 @@ describe('useDataLakeFiles', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake-a/articles', { params: { limit: 100 } });
+  });
+});
+
+describe('useLakeConfigHistory', () => {
+  const mountHistory = (limit?: number) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useLakeConfigHistory('lake_1', true, limit), { wrapper });
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { data: { entries: [] } } });
+  });
+
+  it('asks for file rows alongside config rows', async () => {
+    const { result } = mountHistory();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake_1/config-history', { params: { include: 'files' } });
+  });
+
+  it('keeps the limit alongside include=files', async () => {
+    const { result } = mountHistory(25);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake_1/config-history', {
+      params: { include: 'files', limit: 25 },
+    });
   });
 });
 

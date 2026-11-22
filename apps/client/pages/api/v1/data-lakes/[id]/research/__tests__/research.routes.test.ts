@@ -147,6 +147,8 @@ vi.mock('@bike4mind/database', () => ({
       h.store.runs.find(r => r.id === id && r.dataLakeId === lakeId) ?? null,
   },
   lakeConfigChangeEventRepository: {},
+  lakeConfigSnapshotRepository: {},
+  lakeMembershipChangeEventRepository: {},
   organizationRepository: {},
   spendFreezeRepository: {},
   userApiKeyRepository: {},
@@ -737,6 +739,46 @@ describe('config history', () => {
     expect(res.status).toBe(200);
     expect(h.history.mock.calls[0][1]).toMatchObject({ limit: 50 });
     expect(JSON.stringify(res.body)).not.toContain('65a0000000000000000000aa');
+  });
+
+  it('reads config rows only unless include=files is set', async () => {
+    h.history.mockResolvedValue({
+      lakeId: LAKE_ID,
+      lakeName: 'Handbook',
+      entries: [],
+      userNames: {},
+      truncated: false,
+      generatedAt: T0,
+    });
+    await call(configHistory, { query: { limit: '5' } });
+    expect(h.history.mock.calls[0][1]).toMatchObject({ includeFiles: false });
+  });
+
+  it('returns file rows when include=files is set', async () => {
+    h.history.mockResolvedValue({
+      lakeId: LAKE_ID,
+      lakeName: 'Handbook',
+      entries: [
+        {
+          kind: 'file',
+          eventId: 'ev2',
+          changedAt: T0,
+          principalKind: 'user',
+          principalId: '65a0000000000000000000aa',
+          principalName: 'Casey',
+          action: 'file-added',
+          target: { kind: 'file', id: 'fab1' },
+          origin: 'person',
+        },
+      ],
+      userNames: {},
+      truncated: false,
+      generatedAt: T0,
+    });
+    const res = await call(configHistory, { query: { include: 'files' } });
+    expect(res.status).toBe(200);
+    expect(h.history.mock.calls[0][1]).toMatchObject({ includeFiles: true });
+    expect((res.body as { data: { entries: { kind: string }[] } }).data.entries[0]?.kind).toBe('file');
   });
 
   it('keeps ForbiddenError for a manage-less reader', async () => {

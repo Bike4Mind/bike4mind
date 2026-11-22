@@ -18179,176 +18179,316 @@
               "entries": {
                 "type": "array",
                 "items": {
-                  "type": "object",
-                  "properties": {
-                    "event_id": {
-                      "type": "string"
-                    },
-                    "changed_at": {
-                      "type": "string"
-                    },
-                    "principal_kind": {
-                      "type": "string",
-                      "enum": [
-                        "user",
-                        "agent",
-                        "apiKey",
-                        "system"
-                      ]
-                    },
-                    "principal_name": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "manage_rung": {
-                      "type": "string",
-                      "enum": [
-                        "platform-admin",
-                        "grant-owner",
-                        "creator",
-                        "grant-curator",
-                        "org-admin",
-                        "org-grant",
-                        "system"
-                      ]
-                    },
-                    "action": {
-                      "type": "string",
-                      "enum": [
-                        "update",
-                        "visibility",
-                        "transfer-ownership",
-                        "archive",
-                        "unarchive",
-                        "delete",
-                        "restore",
-                        "promote",
-                        "demote",
-                        "purge",
-                        "auto-activate",
-                        "grant-access",
-                        "revoke-access",
-                        "membership-succession",
-                        "approve-proposal",
-                        "auto-approve-proposal",
-                        "decline-proposal",
-                        "restore-proposal",
-                        "create-research-config",
-                        "update-research-config",
-                        "delete-research-config",
-                        "start-research-run",
-                        "complete-research-run",
-                        "create",
-                        "upload-files"
-                      ]
-                    },
-                    "changes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "field": {
-                            "type": "string"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "config"
+                          ]
+                        },
+                        "event_id": {
+                          "type": "string"
+                        },
+                        "changed_at": {
+                          "type": "string"
+                        },
+                        "principal_kind": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "agent",
+                            "apiKey",
+                            "system"
+                          ]
+                        },
+                        "principal_name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "target": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "researchConfig",
+                                "proposal",
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
                           },
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "literal",
-                              "fingerprint"
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "description": "The thing the row is about. Absent on older rows."
+                        },
+                        "manage_rung": {
+                          "type": "string",
+                          "enum": [
+                            "platform-admin",
+                            "grant-owner",
+                            "creator",
+                            "grant-curator",
+                            "org-admin",
+                            "org-grant",
+                            "system"
+                          ]
+                        },
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "update",
+                            "visibility",
+                            "transfer-ownership",
+                            "archive",
+                            "unarchive",
+                            "delete",
+                            "restore",
+                            "promote",
+                            "demote",
+                            "purge",
+                            "auto-activate",
+                            "grant-access",
+                            "revoke-access",
+                            "membership-succession",
+                            "approve-proposal",
+                            "auto-approve-proposal",
+                            "decline-proposal",
+                            "restore-proposal",
+                            "create-research-config",
+                            "update-research-config",
+                            "delete-research-config",
+                            "start-research-run",
+                            "complete-research-run",
+                            "create",
+                            "upload-files"
+                          ]
+                        },
+                        "changes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "literal",
+                                  "fingerprint"
+                                ]
+                              },
+                              "before": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "A literal change only. Absent means unset on that side."
+                              },
+                              "after": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "A literal change only. Absent means unset on that side."
+                              },
+                              "truncated": {
+                                "type": "boolean",
+                                "description": "A literal string value was clipped."
+                              },
+                              "before_fingerprint": {
+                                "type": "object",
+                                "properties": {
+                                  "present": {
+                                    "type": "boolean"
+                                  },
+                                  "length": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "present",
+                                  "length"
+                                ],
+                                "description": "A fingerprint change only. Size, never the text."
+                              },
+                              "after_fingerprint": {
+                                "type": "object",
+                                "properties": {
+                                  "present": {
+                                    "type": "boolean"
+                                  },
+                                  "length": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "present",
+                                  "length"
+                                ],
+                                "description": "A fingerprint change only. Size, never the text."
+                              },
+                              "text_unchanged": {
+                                "type": "boolean",
+                                "description": "A fingerprint change only. The two sides are the same text."
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "kind"
                             ]
-                          },
-                          "before": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "boolean"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ],
-                            "description": "A literal change only. Absent means unset on that side."
-                          },
-                          "after": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "boolean"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ],
-                            "description": "A literal change only. Absent means unset on that side."
-                          },
-                          "truncated": {
-                            "type": "boolean",
-                            "description": "A literal string value was clipped."
-                          },
-                          "before_fingerprint": {
-                            "type": "object",
-                            "properties": {
-                              "present": {
-                                "type": "boolean"
-                              },
-                              "length": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "present",
-                              "length"
-                            ],
-                            "description": "A fingerprint change only. Size, never the text."
-                          },
-                          "after_fingerprint": {
-                            "type": "object",
-                            "properties": {
-                              "present": {
-                                "type": "boolean"
-                              },
-                              "length": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "present",
-                              "length"
-                            ],
-                            "description": "A fingerprint change only. Size, never the text."
-                          },
-                          "text_unchanged": {
-                            "type": "boolean",
-                            "description": "A fingerprint change only. The two sides are the same text."
                           }
                         },
-                        "required": [
-                          "field",
-                          "kind"
-                        ]
-                      }
+                        "lever_changes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "lever": {
+                                "type": "string"
+                              },
+                              "before": {
+                                "description": "Absent or null means unset. A feed address is origin and path only."
+                              },
+                              "after": {
+                                "description": "Null on a delete, which records the setting as it stood."
+                              }
+                            },
+                            "required": [
+                              "lever"
+                            ]
+                          },
+                          "description": "Absent on older rows."
+                        },
+                        "admitted_fab_file_id": {
+                          "type": "string",
+                          "description": "The file an approval admitted."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "event_id",
+                        "changed_at",
+                        "principal_kind",
+                        "principal_name",
+                        "manage_rung",
+                        "action",
+                        "changes"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "file"
+                          ]
+                        },
+                        "event_id": {
+                          "type": "string"
+                        },
+                        "changed_at": {
+                          "type": "string"
+                        },
+                        "principal_kind": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "agent",
+                            "apiKey",
+                            "system"
+                          ]
+                        },
+                        "principal_name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "target": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "researchConfig",
+                                "proposal",
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "description": "The file the row is about."
+                        },
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "file-added",
+                            "file-removed"
+                          ]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "connector",
+                            "person"
+                          ]
+                        },
+                        "undoes_event_id": {
+                          "type": "string"
+                        },
+                        "caused_by_event_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "event_id",
+                        "changed_at",
+                        "principal_kind",
+                        "principal_name",
+                        "target",
+                        "action",
+                        "origin"
+                      ]
                     }
-                  },
-                  "required": [
-                    "event_id",
-                    "changed_at",
-                    "principal_kind",
-                    "principal_name",
-                    "manage_rung",
-                    "action",
-                    "changes"
                   ]
                 },
                 "description": "Newest first."
@@ -63096,7 +63236,7 @@
       "get": {
         "operationId": "getDataLakeConfigHistory",
         "summary": "Get the config-change history",
-        "description": "Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. `limit` caps the window, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.",
+        "description": "Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. Entries with `kind` \"config\" carry `lever_changes`, one structured move per lever. Entries with `kind` \"file\" are files added to or removed from the lake, merged in by time. `limit` caps the window across both, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.",
         "tags": [
           "Data Lake Research"
         ],
@@ -63123,11 +63263,24 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 500,
-              "description": "How many of the newest events to return. Defaults to 200."
+              "description": "How many of the newest config changes to return. Defaults to 200. With include=files, up to the same number of the newest file rows are returned on top; when config rows are truncated, only file rows no older than the oldest config row returned."
             },
             "required": false,
-            "description": "How many of the newest events to return. Defaults to 200.",
+            "description": "How many of the newest config changes to return. Defaults to 200. With include=files, up to the same number of the newest file rows are returned on top; when config rows are truncated, only file rows no older than the oldest config row returned.",
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "files"
+              ],
+              "description": "Set to files to also return file add and remove rows. Without it only config changes are returned."
+            },
+            "required": false,
+            "description": "Set to files to also return file add and remove rows. Without it only config changes are returned.",
+            "name": "include",
             "in": "query"
           }
         ],

@@ -396,7 +396,9 @@ export const getDataLakeConfigHistoryContract = defineEndpoint({
   description:
     'Returns who changed how the lake answers, what each change moved, and which management rung ' +
     'authorized it, newest first. Long free-text settings appear as a size and a same-or-different ' +
-    'flag, never as text. `limit` caps the window, and `truncated` is true when older events exist. ' +
+    'flag, never as text. Entries with `kind` "config" carry `lever_changes`, one structured move per ' +
+    'lever. Entries with `kind` "file" are files added to or removed from the lake, merged in by ' +
+    'time. `limit` caps the window across both, and `truncated` is true when older events exist. ' +
     'The response is a window, not a cursor-paginated list.',
   tags: ['Data Lake Research'],
   auth: 'apiKeyOrJwt',
