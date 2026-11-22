@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadSkin, loadSkins, type SkinLoadResult } from './skinFolder';
-import { PNG_BYTES, installSampleSkin } from './testSkins';
+import { loadSkin, loadSkins, loadSoundPack, loadSoundPacks, type SkinLoadResult } from './skinFolder';
+import { OGG_BYTES, PNG_BYTES, installSamplePack, installSampleSkin } from './testSkins';
 
 let modsRoot: string;
 let outside: string;
@@ -116,6 +116,16 @@ describe('loadSkin', () => {
     expectRejected(await loadSkin(modsRoot, 'nightglass'), /skin folder is a symbolic link/);
   });
 
+  it('lists a symlinked mod folder once, as a broken skin, and not as a broken sound pack', async () => {
+    await installSampleSkin(outside, 'nightglass');
+    await symlink(join(outside, 'nightglass'), join(modsRoot, 'nightglass'));
+    expect(await loadSoundPack(modsRoot, 'nightglass')).toBe('not-a-sound-pack');
+    expect(await loadSoundPacks(modsRoot)).toEqual([]);
+    expect((await loadSkins(modsRoot)).map(result => (result.ok ? result.skin.manifest.id : result.id))).toEqual([
+      'nightglass',
+    ]);
+  });
+
   it('rejects a mod.json that is a symlink', async () => {
     const folder = await installSampleSkin(modsRoot);
     await writeJson(join(outside, 'mod.json'), { manifest: 1 });
@@ -221,5 +231,111 @@ describe('loadSkins', () => {
 
   it('is empty when the mods folder does not exist yet', async () => {
     expect(await loadSkins(join(modsRoot, 'missing'))).toEqual([]);
+  });
+});
+
+describe('sound packs', () => {
+  const manifestOf = (folder: string) => join(folder, 'mod.json');
+
+  it('loads the sample pack with only its referenced files as assets', async () => {
+    const folder = await installSamplePack(modsRoot);
+    await writeFile(join(folder, 'sounds/unused.ogg'), OGG_BYTES);
+
+    const result = await loadSoundPack(modsRoot, 'chimes');
+
+    if (result === 'not-a-sound-pack' || !result.ok) throw new Error(JSON.stringify(result));
+    expect(result.pack.manifest.name).toBe('Chimes');
+    expect([...result.pack.assets.keys()].sort()).toEqual([
+      'sounds/approval.ogg',
+      'sounds/done.ogg',
+      'sounds/error.ogg',
+      'sounds/finale.ogg',
+    ]);
+    expect(result.pack.assets.get('sounds/done.ogg')).toMatchObject({ type: 'ogg', size: OGG_BYTES.length });
+  });
+
+  it('is skipped by the skin loader, and skins and broken folders are skipped by the pack loader', async () => {
+    await installSamplePack(modsRoot);
+    await installSampleSkin(modsRoot);
+    await mkdir(join(modsRoot, 'no-manifest'));
+    const brokenJson = join(modsRoot, 'bad-json');
+    await mkdir(brokenJson);
+    await writeFile(manifestOf(brokenJson), '{ nope');
+
+    expect((await loadSkins(modsRoot)).map(result => (result.ok ? result.skin.manifest.id : result.id))).toEqual([
+      'bad-json',
+      'nightglass',
+      'no-manifest',
+    ]);
+    expect((await loadSoundPacks(modsRoot)).map(result => (result.ok ? result.pack.manifest.id : result.id))).toEqual([
+      'chimes',
+    ]);
+    expect(await loadSkin(modsRoot, 'chimes')).toBe('not-a-skin');
+    expect(await loadSoundPack(modsRoot, 'nightglass')).toBe('not-a-sound-pack');
+  });
+
+  it('rejects a pack that sets a needs-you sound', async () => {
+    const folder = await installSamplePack(modsRoot);
+    await writeJson(manifestOf(folder), {
+      manifest: 1,
+      id: 'chimes',
+      name: 'Chimes',
+      version: '1.0.0',
+      kind: 'sounds',
+      contract: 1,
+      sounds: { 'needs-you': 'sounds/done.ogg' },
+    });
+    const result = await loadSoundPack(modsRoot, 'chimes');
+    expect(result).toMatchObject({ ok: false, id: 'chimes', error: expect.stringContaining('needs-you') });
+  });
+
+  it.each([
+    [
+      'a missing sound file',
+      async (folder: string) => rm(join(folder, 'sounds/done.ogg')),
+      /sounds\/done.ogg is missing/,
+    ],
+    [
+      'a file that is not audio',
+      async (folder: string) => writeFile(join(folder, 'sounds/done.ogg'), PNG_BYTES),
+      /not a valid \.ogg file/,
+    ],
+    [
+      'a sound over the size cap',
+      async (folder: string) => writeFile(join(folder, 'sounds/done.ogg'), Buffer.alloc(1024 * 1024 + 1)),
+      /over the 1 MB limit/,
+    ],
+    [
+      'a document in the folder',
+      async (folder: string) => writeFile(join(folder, 'index.html'), '<script></script>'),
+      /file type is not allowed/,
+    ],
+    [
+      'a symbolic link',
+      async (folder: string) => symlink(outside, join(folder, 'sounds/link.ogg')),
+      /is a symbolic link/,
+    ],
+  ])('rejects %s', async (_label, break_, reason) => {
+    const folder = await installSamplePack(modsRoot);
+    await break_(folder);
+    const result = await loadSoundPack(modsRoot, 'chimes');
+    if (result === 'not-a-sound-pack' || result.ok)
+      throw new Error(`expected a rejection, got ${JSON.stringify(result)}`);
+    expect(result.error).toMatch(reason);
+  });
+
+  it('rejects another contract and a manifest id that does not match the folder', async () => {
+    const folder = await installSamplePack(modsRoot);
+    const manifest = { manifest: 1, id: 'chimes', name: 'Chimes', version: '1.0.0', kind: 'sounds', sounds: {} };
+    await writeJson(manifestOf(folder), { ...manifest, contract: 2 });
+    expect(await loadSoundPack(modsRoot, 'chimes')).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('contract 2'),
+    });
+    await writeJson(manifestOf(folder), { ...manifest, contract: 1, id: 'other-pack' });
+    expect(await loadSoundPack(modsRoot, 'chimes')).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('does not match'),
+    });
   });
 });

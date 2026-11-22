@@ -213,6 +213,15 @@ describe('DataLakeResearchPanel', () => {
     expect(button.textContent).toMatch(/in progress/i);
   });
 
+  it('says which card owns the active run and marks the others as another run', () => {
+    renderPanel({
+      configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })],
+      runs: [run({ configId: 'config-b', status: 'running', startedAt: new Date() })],
+    });
+    expect(screen.getByTestId('datalake-research-run-btn-config-b').textContent).toBe('Run in progress');
+    expect(screen.getByTestId('datalake-research-run-btn-config-a').textContent).toBe('Another run in progress');
+  });
+
   it('re-enables Run once every run has settled', () => {
     renderPanel({ configs: [config()], runs: [run({ status: 'completed' })] });
     expect((screen.getByTestId('datalake-research-run-btn-config-1') as HTMLButtonElement).disabled).toBe(false);
@@ -1870,6 +1879,68 @@ describe('DataLakeResearchPanel run fix hints', () => {
     fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
     expect(screen.getByTestId('datalake-research-advanced')).toBeVisible();
     expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('B');
+  });
+
+  it.each([
+    ['belowRelevance', {}, 'datalake-research-min-relevance-input'],
+    ['filteredBySource', { blockedDomains: ['spam.net'] }, 'datalake-research-blocked-input'],
+    ['unlistedDropped', {}, 'datalake-research-unlisted-select'],
+    ['blockedByRule', {}, 'datalake-research-rule-add'],
+  ] as const)('focuses the field the %s hint names from Adjust settings', (bucket, levers, testId) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [
+        run({
+          id: 'run-9',
+          configId: 'config-b',
+          levers: { ...run().levers, ...levers },
+          totals: totalsWith({ filteredBySource: 1, unlistedDropped: 1, [bucket]: 6 }),
+        }),
+      ],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId(testId));
+  });
+
+  it.each([
+    ['cost_ceiling', 'datalake-research-cost-ceiling-input'],
+    ['proposal_limit', 'datalake-research-max-proposals-input'],
+  ] as const)('focuses the %s lever from Adjust settings when there is no hint', (stopReason, testId) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b', stopReason })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId(testId));
+  });
+
+  it('focuses the first rule from Adjust settings when Add rule is disabled at the cap', () => {
+    renderPanel({
+      configs: [
+        quickConfig({
+          id: 'config-b',
+          name: 'B',
+          itemRules: Array.from({ length: RESEARCH_ITEM_RULES_MAX }, (_, i) => ({
+            condition: `rule ${i}`,
+            action: 'review' as const,
+          })),
+        }),
+      ],
+      runs: [run({ id: 'run-9', configId: 'config-b', totals: totalsWith({ blockedByRule: 6 }) })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId('datalake-research-rule-condition-0'));
+  });
+
+  it('focuses Name from Adjust settings when the run has no lever to point at', () => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b' })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
   });
 
   it('hides Adjust settings when the config was deleted', () => {

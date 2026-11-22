@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '../types/entities/DataLakeProposalTypes';
 import {
+  RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+  RESEARCH_MAX_PROPOSALS_LIMIT,
+  RESEARCH_MAX_RESULTS_LIMIT,
+  RESEARCH_RECENCY_DAYS_LIMIT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_RUN_STATUSES,
   RESEARCH_RUN_STOP_REASONS,
   RESEARCH_RUN_TRIGGERS,
@@ -37,17 +43,45 @@ export const ResearchLeversResourceSchema = z.object({
   feed_url: z.string().nullable(),
   query: z.string(),
   model: z.string().nullable().describe('The relevance judge model. Null means the platform default.'),
-  max_results: z.number().int(),
-  max_proposals: z.number().int(),
-  recency_days: z.number().int().nullable().describe('Null means no recency constraint.'),
+  max_results: z
+    .number()
+    .int()
+    .describe(
+      `How many search results or feed items one run looks at. An integer from 1 to ${RESEARCH_MAX_RESULTS_LIMIT}.`
+    ),
+  max_proposals: z
+    .number()
+    .int()
+    .describe(`The most proposals one run may add to the queue. An integer from 1 to ${RESEARCH_MAX_PROPOSALS_LIMIT}.`),
+  recency_days: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      `Only results from the last this many days. An integer from 0 to ${RESEARCH_RECENCY_DAYS_LIMIT}. Null or 0 means no recency constraint.`
+    ),
   trusted_domains: z.array(z.string()),
   review_domains: z.array(z.string()),
   unlisted_sources: z.enum(RESEARCH_UNLISTED_SOURCES),
   auto_admit_trusted: z.boolean(),
-  max_auto_admits: z.number().int(),
+  max_auto_admits: z
+    .number()
+    .int()
+    .describe(
+      `The most sources one run may admit without a reviewer. An integer from 1 to ${RESEARCH_MAX_AUTO_ADMITS_LIMIT}.`
+    ),
   blocked_domains: z.array(z.string()),
-  min_relevance: z.number(),
-  cost_ceiling_micro_usd: z.number().int(),
+  min_relevance: z
+    .number()
+    .describe(
+      `The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%.`
+    ),
+  cost_ceiling_micro_usd: z
+    .number()
+    .int()
+    .describe(
+      `The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to ${RESEARCH_COST_CEILING_MICRO_USD_LIMIT} (5000000 is $5.00).`
+    ),
   proposed_tags: z.array(z.string()),
   item_rules: z.array(ItemRuleSchema),
 });
@@ -76,7 +110,12 @@ export const ResearchConfigResourceSchema = ResearchLeversResourceSchema.extend(
   name: z.string(),
   trigger: z.enum(RESEARCH_RUN_TRIGGERS),
   cadence: z.enum(RESEARCH_SCHEDULE_CADENCES),
-  review_backlog_limit: z.number().int(),
+  review_backlog_limit: z
+    .number()
+    .int()
+    .describe(
+      `Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`
+    ),
   schedule_paused: z.boolean().describe('Scheduled runs are stopped. The cadence is kept and run-now still works.'),
   held: z
     .boolean()
@@ -100,25 +139,79 @@ const LeverRequestFields = {
   feed_url: z.string().nullable().optional(),
   query: z.string().optional(),
   model: z.string().nullable().optional(),
-  max_results: z.number().optional(),
-  max_proposals: z.number().optional(),
-  recency_days: z.number().nullable().optional(),
+  max_results: z
+    .number()
+    .int()
+    .min(1)
+    .max(RESEARCH_MAX_RESULTS_LIMIT)
+    .describe(
+      `How many search results or feed items one run looks at. An integer from 1 to ${RESEARCH_MAX_RESULTS_LIMIT}.`
+    )
+    .optional(),
+  max_proposals: z
+    .number()
+    .int()
+    .min(1)
+    .max(RESEARCH_MAX_PROPOSALS_LIMIT)
+    .describe(`The most proposals one run may add to the queue. An integer from 1 to ${RESEARCH_MAX_PROPOSALS_LIMIT}.`)
+    .optional(),
+  recency_days: z
+    .number()
+    .int()
+    .min(0)
+    .max(RESEARCH_RECENCY_DAYS_LIMIT)
+    .nullable()
+    .describe(
+      `Only results from the last this many days. An integer from 0 to ${RESEARCH_RECENCY_DAYS_LIMIT}. Null or 0 means no recency constraint.`
+    )
+    .optional(),
   trusted_domains: z.array(z.string()).optional(),
   review_domains: z.array(z.string()).optional(),
   unlisted_sources: z.enum(RESEARCH_UNLISTED_SOURCES).optional(),
   auto_admit_trusted: z.boolean().optional(),
-  max_auto_admits: z.number().optional(),
+  max_auto_admits: z
+    .number()
+    .int()
+    .min(1)
+    .max(RESEARCH_MAX_AUTO_ADMITS_LIMIT)
+    .describe(
+      `The most sources one run may admit without a reviewer. An integer from 1 to ${RESEARCH_MAX_AUTO_ADMITS_LIMIT}.`
+    )
+    .optional(),
   blocked_domains: z.array(z.string()).optional(),
-  min_relevance: z.number().optional(),
-  cost_ceiling_micro_usd: z.number().optional(),
+  min_relevance: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe(
+      `The relevance a result must reach to be fetched or proposed. A fraction from 0 to 1, not a percent: 0.6 means 60%.`
+    )
+    .optional(),
+  cost_ceiling_micro_usd: z
+    .number()
+    .int()
+    .min(1)
+    .max(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)
+    .describe(
+      `The most one run may spend on judging, in millionths of a US dollar. An integer from 1 to ${RESEARCH_COST_CEILING_MICRO_USD_LIMIT} (5000000 is $5.00).`
+    )
+    .optional(),
   proposed_tags: z.array(z.string()).optional(),
   item_rules: z.array(ItemRuleSchema).optional(),
   cadence: z.enum(RESEARCH_SCHEDULE_CADENCES).optional(),
-  review_backlog_limit: z.number().optional(),
+  review_backlog_limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(RESEARCH_REVIEW_BACKLOG_LIMIT_MAX)
+    .describe(
+      `Scheduled runs are held while this many proposals or more are waiting. An integer from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`
+    )
+    .optional(),
   schedule_paused: z.boolean().optional(),
 };
 
-/** Out-of-range numbers are clamped to the documented bounds, not rejected. */
+/** Out-of-range or non-integer numbers are rejected with 422. The SPA routes still clamp. */
 export const CreateResearchConfigRequestSchema = z
   .object({
     ...LeverRequestFields,

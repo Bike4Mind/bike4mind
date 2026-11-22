@@ -73,7 +73,7 @@ export function CuratedListSettings({
             {error}
           </Typography>
           {onRetry && (
-            <Button size="sm" variant="plain" onClick={onRetry}>
+            <Button size="sm" variant="outlined" color="neutral" onClick={onRetry}>
               Try again
             </Button>
           )}

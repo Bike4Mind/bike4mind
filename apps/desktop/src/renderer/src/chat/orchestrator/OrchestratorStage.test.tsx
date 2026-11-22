@@ -16,7 +16,7 @@ const FIXTURE = [
   agentFixture('d', 'done'),
 ];
 
-const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
+const chime = vi.hoisted(() => ({ playChime: vi.fn(), playSoundEvent: vi.fn() }));
 vi.mock('./chime', () => chime);
 
 const onViewChange = vi.fn();
@@ -278,7 +278,9 @@ describe('OrchestratorStage', () => {
           ? 'rgb(242, 236, 225)'
           : view === 'aquarium'
             ? 'rgb(231, 239, 240)'
-            : 'var(--joy-palette-background-surface)'
+            : view === 'office'
+              ? 'rgb(238, 240, 230)'
+              : 'var(--joy-palette-background-surface)'
       );
     }
   );
@@ -666,10 +668,11 @@ describe('OrchestratorStage', () => {
     it('chimes once as the banner comes up', async () => {
       await renderRun([agentFixture('a', 'working')]);
       await renderRun(finished);
-      expect(chime.playChime).not.toHaveBeenCalled();
+      const finaleCalls = () => chime.playSoundEvent.mock.calls.filter(([event]) => event === 'finale');
+      expect(finaleCalls()).toHaveLength(0);
       await settle();
       await renderRun(finished);
-      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(finaleCalls()).toEqual([['finale', undefined]]);
     });
 
     it('reads the report and dismisses the banner', async () => {
@@ -757,6 +760,8 @@ describe('OrchestratorStage', () => {
       await settle();
       expect(el('office-scene').contains(el('orchestrator-finale'))).toBe(true);
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
+      expect(el('orchestrator-finale').getAttribute('data-look')).toBe('office');
+      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Shift ended');
 
       await renderOffice(true);
       expect(query('office-scene')).toBeNull();

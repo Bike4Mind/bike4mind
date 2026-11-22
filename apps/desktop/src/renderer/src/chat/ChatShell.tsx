@@ -12,6 +12,7 @@ import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { promptHistory } from '@shared/threadRewind';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillsScope } from '@shared/skills';
 import {
@@ -50,7 +51,7 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon, StatsIcon } from './icons';
+import { ConversationIcon, PanelRightIcon, StatsIcon } from './icons';
 import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
@@ -768,6 +769,7 @@ export function ChatShell({
   const turnOpen =
     conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+  const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
   const workspaceChanges = useWorkspaceChanges(
     screen === 'conversation' ? persistedId : null,
@@ -1483,6 +1485,8 @@ export function ChatShell({
                   onRespond={conversation.respondToApproval}
                   onMove={background.moveToBackground}
                   onContinue={() => void conversation.continueReply()}
+                  onEditMessage={conversation.editMessage}
+                  onRegenerate={() => void conversation.regenerate()}
                   onReplyToSelection={onReplyToSelection}
                   onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
@@ -1905,7 +1909,7 @@ export function ChatShell({
                           }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
-                          <PanelRightIcon />
+                          <ConversationIcon />
                         </IconButton>
                       </Tooltip>
                     }
@@ -2161,6 +2165,7 @@ export function ChatShell({
 
               <Composer
                 sessionId={activeId}
+                promptHistory={sentPrompts}
                 disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
                 disabledPlaceholder={disabledPlaceholder}
                 streaming={turnOpen}

@@ -1163,6 +1163,35 @@ describe('research schedule pause', () => {
       expect(record).not.toHaveBeenCalled();
     });
 
+    it('records one History row naming the old and new cadence', async () => {
+      const toOff = adaptersFor(weekly());
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, toOff.adapters);
+      expect(historyEntries(toOff.record)).toEqual(['research schedule weekly -> off: Weekly sweep']);
+
+      const toDaily = adaptersFor(weekly({ cadence: 'off', trigger: 'manual' }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'daily' }, toDaily.adapters);
+      expect(historyEntries(toDaily.record)).toEqual(['research schedule off -> daily: Weekly sweep']);
+    });
+
+    it('records one History row naming the old and new review backlog limit', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 25 }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { reviewBacklogLimit: 40 }, adapters);
+      expect(historyEntries(record)).toEqual(['review backlog limit 25 -> 40: Weekly sweep']);
+    });
+
+    it('records nothing when cadence and backlog limit are resubmitted unchanged', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 40 }));
+      await updateResearchConfig(
+        'config-1',
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { cadence: 'weekly', reviewBacklogLimit: 40 },
+        adapters
+      );
+      expect(record).not.toHaveBeenCalled();
+    });
+
     it('resumes with the same next-run rule as the narrow write', async () => {
       const retryAt = new Date('2026-03-01T12:40:00.000Z');
       const { adapters, repo } = adaptersFor(weekly({ schedulePaused: true, nextRunAt: retryAt }));

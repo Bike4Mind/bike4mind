@@ -343,7 +343,7 @@ export function GenerationSettingsPicker({
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', pt: 0.5 }}>
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
                 color="neutral"
                 disabled={disabled}
                 onClick={resetShown}
