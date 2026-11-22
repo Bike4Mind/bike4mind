@@ -290,7 +290,15 @@ export const researchToolShapes = {
   },
   get_lake_config_history: {
     lake_id: lakeId,
-    limit: z.number().int().min(1).max(500).default(50).describe('How many of the newest events to return'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(50)
+      .describe(
+        'How many of the newest config changes to return; with include_files, up to as many file rows come on top'
+      ),
     include_files: z.boolean().default(false).describe('Also return file add and remove rows'),
   },
 } satisfies Record<string, z.ZodRawShape>;

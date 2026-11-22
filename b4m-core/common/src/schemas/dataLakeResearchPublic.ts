@@ -437,7 +437,7 @@ export const ConfigHistoryQuerySchema = z.object({
     .max(500)
     .optional()
     .describe(
-      'How many of the newest config changes to return. Defaults to 200. With include=files, file rows within the same time span are returned alongside, up to the same limit.'
+      'How many of the newest config changes to return. Defaults to 200. With include=files, up to the same number of the newest file rows are returned on top; when config rows are truncated, only file rows no older than the oldest config row returned.'
     ),
   include: z
     .enum(['files'])

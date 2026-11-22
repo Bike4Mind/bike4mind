@@ -415,8 +415,8 @@ export function LakeConfigHistorySection({ view, isLoading, error }: LakeConfigH
           </Typography>
           {view.truncated && (
             <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-config-history-truncated">
-              Showing the {view.entries.length} most recent changes
-              {view.windowStartsAt ? `, back to ${fmtDate(view.windowStartsAt)}` : ''}. Older changes are not shown.
+              {view.windowStartsAt ? `Complete back to ${fmtDate(view.windowStartsAt)}. ` : ''}Some earlier changes are
+              not shown.
             </Typography>
           )}
         </Stack>
