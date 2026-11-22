@@ -218,6 +218,35 @@ describe('parseFunctionContract', () => {
     expect(problemsOf(contract)).toEqual([{ path: 'inputs.required', message: 'must list each field name only once' }]);
   });
 
+  it.each(['class', 'None', 'lambda'])('refuses the Python keyword %s as an input or output name', name => {
+    const contract = sampleContract();
+    contract.tests = [];
+    contract.inputs = { type: 'object', additionalProperties: false, properties: { [name]: { type: 'boolean' } } };
+    contract.outputs = { type: 'object', additionalProperties: false, properties: { [name]: { type: 'boolean' } } };
+    expect(problemsOf(contract)).toEqual([
+      { path: `inputs.properties.${name}`, message: `"${name}" is a Python keyword and cannot be a field name` },
+      { path: `outputs.properties.${name}`, message: `"${name}" is a Python keyword and cannot be a field name` },
+    ]);
+  });
+
+  it('accepts the soft keyword match as a field name, and a keyword as a nested dict key', () => {
+    const contract = sampleContract();
+    contract.tests = [];
+    contract.inputs = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        match: { type: 'boolean' },
+        options: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { class: { type: 'string' } },
+        },
+      },
+    };
+    expect(problemsOf(contract)).toEqual([]);
+  });
+
   it.each([
     [{ exclusiveMinimum: 5, exclusiveMaximum: 5 }],
     [{ minimum: 5, exclusiveMaximum: 5 }],

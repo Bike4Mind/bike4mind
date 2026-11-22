@@ -10,6 +10,11 @@ export const FUNCTION_UNIT_PATTERN = /^[A-Za-z0-9%][A-Za-z0-9%^*/.() -]{0,31}$/;
 export const FUNCTION_NAME_PATTERN = /^[a-z][a-z0-9_]{1,39}$/;
 // Property names become Python keyword arguments of `run`.
 export const FUNCTION_PROPERTY_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+// `keyword.kwlist` of Python 3.11, the version Pyodide 0.25.1 runs. Soft keywords such as `match` stay allowed.
+export const PYTHON_HARD_KEYWORDS: readonly string[] = (
+  'False None True and as assert async await break class continue def del elif else except finally for from ' +
+  'global if import in is lambda nonlocal not or pass raise return try while with yield'
+).split(' ');
 
 export const FUNCTION_CONTRACT_LIMITS = {
   maxProperties: 40,
@@ -309,6 +314,11 @@ function checkObjectField(
           fieldPath,
           'a field name must start with a letter or underscore and use only letters, digits, and underscores'
         );
+        continue;
+      }
+      // Nested names are only dict keys; the top-level ones must also work as Python identifiers.
+      if (depth === 1 && PYTHON_HARD_KEYWORDS.includes(name)) {
+        report(problems, fieldPath, `"${name}" is a Python keyword and cannot be a field name`);
         continue;
       }
       declared.add(name);
