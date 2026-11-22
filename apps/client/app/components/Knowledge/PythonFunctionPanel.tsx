@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -17,7 +18,10 @@ import {
 } from '@mui/joy';
 import {
   DIMENSIONLESS_UNIT,
+  FUNCTION_CONTRACT_GLOBAL,
   FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_ENTRY_POINT,
+  capFunctionProblems,
   parseFunctionContract,
   validateFunctionValue,
   type FunctionContract,
@@ -26,6 +30,7 @@ import {
   type FunctionObjectField,
 } from '@bike4mind/common';
 import { usePyodide } from '@client/app/hooks/usePyodide';
+import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 
 interface PythonFunctionPanelProps {
   code: string;
@@ -35,7 +40,8 @@ interface PythonFunctionPanelProps {
 }
 
 const DESCRIBE_DEBOUNCE_MS = 500;
-const NO_CONTRACT_ERROR = 'FUNCTION is not defined';
+// The sandbox wrapper raises this exact text; sandboxWorkerBody.test.ts pins it to the same constant.
+const NO_CONTRACT_ERROR = `${FUNCTION_CONTRACT_GLOBAL} is not defined`;
 
 type Described =
   | { status: 'reading' }
@@ -121,15 +127,20 @@ function formatValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// A field may be named after an inherited key such as `constructor`, so only own entries count.
+const ownValue = (values: FormValues, name: string): string | boolean | undefined =>
+  Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
+
 function initialValues(inputs: FunctionObjectField, previous: FormValues): FormValues {
-  const values: FormValues = {};
-  for (const [name, field] of Object.entries(inputs.properties)) {
-    if (name in previous) values[name] = previous[name];
-    else if (field.type === 'boolean') values[name] = field.default ?? false;
-    else if ('default' in field && field.default !== undefined) values[name] = String(field.default);
-    else values[name] = '';
-  }
-  return values;
+  return Object.fromEntries(
+    Object.entries(inputs.properties).map(([name, field]): [string, string | boolean] => {
+      const kept = ownValue(previous, name);
+      if (kept !== undefined) return [name, kept];
+      if (field.type === 'boolean') return [name, field.default ?? false];
+      if ('default' in field && field.default !== undefined) return [name, String(field.default)];
+      return [name, ''];
+    })
+  );
 }
 
 /** Turn the form into `run` keyword arguments. Empty fields are left out, so a required one reads as missing. */
@@ -137,7 +148,7 @@ function buildParams(inputs: FunctionObjectField, values: FormValues) {
   const entries: [string, unknown][] = [];
   const problems: FunctionContractProblem[] = [];
   for (const [name, field] of Object.entries(inputs.properties)) {
-    const raw = values[name];
+    const raw = ownValue(values, name);
     if (field.type === 'boolean') {
       entries.push([name, raw === true]);
       continue;
@@ -166,25 +177,32 @@ function buildParams(inputs: FunctionObjectField, values: FormValues) {
   return { params, problems };
 }
 
+// Matches the Output tab's error Alert in PythonArtifactViewer.
+const dangerAlertSx = {
+  bgcolor: 'danger.700',
+  color: 'white',
+  '& .MuiTypography-root': { color: 'white' },
+} as const;
+
 const ProblemList = ({ heading, problems }: { heading: string; problems: FunctionContractProblem[] }) => (
-  <Box data-testid="python-function-problems" role="alert">
-    <Typography level="title-sm" color="danger">
-      {heading}
-    </Typography>
-    <Box component="ul" sx={{ my: 0.5, pl: 3 }}>
-      {problems.map(problem => (
-        <Typography component="li" level="body-sm" key={`${problem.path}:${problem.message}`}>
-          {problem.path ? (
-            <>
-              <code>{problem.path}</code>: {problem.message}
-            </>
-          ) : (
-            problem.message
-          )}
-        </Typography>
-      ))}
+  <Alert color="danger" variant="solid" data-testid="python-function-problems" sx={dangerAlertSx}>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography level="title-sm">{heading}</Typography>
+      <Box component="ul" sx={{ my: 0.5, pl: 3 }}>
+        {capFunctionProblems(problems).map(problem => (
+          <Typography component="li" level="body-sm" key={`${problem.path}:${problem.message}`}>
+            {problem.path ? (
+              <>
+                <code>{problem.path}</code>: {problem.message}
+              </>
+            ) : (
+              problem.message
+            )}
+          </Typography>
+        ))}
+      </Box>
     </Box>
-  </Box>
+  </Alert>
 );
 
 const codeBlockSx = {
@@ -213,13 +231,27 @@ const PrintedOutput = ({ output }: { output: string }) =>
   ) : null;
 
 const FailureBlock = ({ error, output }: { error: string; output: string }) => (
-  <Stack spacing={1} data-testid="python-function-error" role="alert">
-    <Typography level="title-sm" color="danger">
-      The function raised an error:
-    </Typography>
-    <Box component="pre" sx={codeBlockSx}>
-      {error}
-    </Box>
+  <Stack spacing={1}>
+    <Alert color="danger" variant="solid" data-testid="python-function-error" sx={dangerAlertSx}>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography level="title-sm">The function raised an error:</Typography>
+        <Typography
+          component="pre"
+          level="body-sm"
+          sx={{
+            m: 0,
+            mt: 0.5,
+            fontFamily: 'monospace',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: '300px',
+            overflow: 'auto',
+          }}
+        >
+          {error}
+        </Typography>
+      </Box>
+    </Alert>
     <PrintedOutput output={output} />
   </Stack>
 );
@@ -393,7 +425,10 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
         if (request !== describeRequest.current) return;
         // The sandbox was busy or failed to start; read again once it is free.
         describedCode.current = null;
-        setDescribed({ status: 'failed', error: errorMessage(error), output: '' });
+        const message = errorMessage(error);
+        setDescribed(
+          message === PYTHON_SCRIPT_BUSY ? { status: 'reading' } : { status: 'failed', error: message, output: '' }
+        );
       }
     },
     [callFunction]
@@ -453,7 +488,8 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
       case 'failed':
         return described.error === NO_CONTRACT_ERROR ? (
           <Typography level="body-sm" data-testid="python-function-status">
-            This artifact needs a FUNCTION contract and a run function to be called.
+            This artifact needs a {FUNCTION_CONTRACT_GLOBAL} contract and a {FUNCTION_ENTRY_POINT} function to be
+            called.
           </Typography>
         ) : (
           <FailureBlock error={described.error} output={described.output} />
@@ -493,7 +529,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                   <FieldControl
                     name={name}
                     field={field}
-                    value={values[name]}
+                    value={ownValue(values, name)}
                     disabled={controlsDisabled}
                     onChange={next => setValues(previous => ({ ...previous, [name]: next }))}
                   />
@@ -535,7 +571,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 ) : (
                   <ResultTable outputs={contract.outputs} value={outcome.value} />
                 )}
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
                   Ran in {Math.round(outcome.executionTime)} ms.
                 </Typography>
                 <PrintedOutput output={outcome.output} />

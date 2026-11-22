@@ -323,13 +323,19 @@ _result
       pyodide.globals.set('_fn_params_json', paramsJson);
       globalsSet = true;
 
-      // Plain compile() refuses top-level await, so `async def run` is refused by name instead.
+      // Plain compile() refuses top-level await, so `async def run` is refused by name instead. The caps match
+      // MAX_FUNCTION_OUTPUT_CHARS and FUNCTION_CONTRACT_LIMITS, which the parent applies again; json.dumps output
+      // is ASCII, so its length is its size in bytes.
       const wrapper = `
 import sys
 import json
 import inspect
 import traceback
 from io import StringIO
+
+_MAX_OUTPUT_CHARS = 100000
+_MAX_CONTRACT_BYTES = 32768
+_MAX_RESULT_BYTES = 262144
 
 class _FunctionCallError(Exception):
     pass
@@ -351,9 +357,12 @@ def _b4m_call_function(code, params_json):
         if contract is None:
             raise _FunctionCallError('FUNCTION is not defined')
         try:
-            contract_json = json.dumps(contract, allow_nan=False)
+            contract_text = json.dumps(contract, allow_nan=False)
         except (TypeError, ValueError) as e:
             raise _FunctionCallError('FUNCTION is not valid JSON: ' + str(e))
+        if len(contract_text) > _MAX_CONTRACT_BYTES:
+            raise _FunctionCallError('The function contract is larger than 32 KB.')
+        contract_json = contract_text
         if params_json is not None:
             run = namespace.get('run')
             if not callable(run):
@@ -364,9 +373,12 @@ def _b4m_call_function(code, params_json):
             if not isinstance(value, dict):
                 raise _FunctionCallError('run must return a dict')
             try:
-                value_json = json.dumps(value, allow_nan=False)
+                value_text = json.dumps(value, allow_nan=False)
             except (TypeError, ValueError) as e:
                 raise _FunctionCallError('run returned a value that is not valid JSON: ' + str(e))
+            if len(value_text) > _MAX_RESULT_BYTES:
+                raise _FunctionCallError('The function returned a result larger than 256 KB.')
+            value_json = value_text
     except _FunctionCallError as e:
         error = str(e)
     except Exception:
@@ -377,9 +389,9 @@ def _b4m_call_function(code, params_json):
     return {
         'contract_json': contract_json,
         'value_json': value_json,
-        'stdout': stdout.getvalue(),
-        'stderr': stderr.getvalue(),
-        'error': error,
+        'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS],
+        'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS],
+        'error': None if error is None else error[:_MAX_OUTPUT_CHARS],
     }
 
 _b4m_call_function(_fn_code, _fn_params_json)

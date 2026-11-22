@@ -79,8 +79,11 @@ export interface PythonFunctionCall {
   executionTime: number;
 }
 
+export const PYTHON_SCRIPT_BUSY = 'Another Python script is already running';
+
+// The sandbox wrapper in sandboxWorkerBody.ts applies the same caps before posting; these checks stay the authority.
 const MAX_FUNCTION_OUTPUT_CHARS = 100_000;
-export const FUNCTION_CONTRACT_TOO_LARGE = `The function contract is larger than ${FUNCTION_CONTRACT_LIMITS.maxContractBytes / 1024} KB.`;
+const FUNCTION_CONTRACT_TOO_LARGE = `The function contract is larger than ${FUNCTION_CONTRACT_LIMITS.maxContractBytes / 1024} KB.`;
 export const FUNCTION_RESULT_TOO_LARGE = `The function returned a result larger than ${FUNCTION_CONTRACT_LIMITS.maxResultBytes / 1024} KB.`;
 export const FUNCTION_RESULT_UNREADABLE = 'The function returned a result that could not be read.';
 
@@ -341,8 +344,9 @@ class PyodideManager {
         break;
 
       case 'call-result':
-        this.updateState({ isExecuting: false, executionStatus: null });
+        // Guest code can post this during an execute; only a pending call may end the running state.
         if (this.callResolver) {
+          this.updateState({ isExecuting: false, executionStatus: null });
           this.callResolver(readFunctionCallResult(msg.result));
           this.callResolver = null;
           this.callRejecter = null;
@@ -445,7 +449,7 @@ class PyodideManager {
     // One sandbox, one run: a second caller would replace the first one's resolver and leave
     // its promise unsettled forever.
     if (this.executeResolver || this.callResolver) {
-      throw new Error('Another Python script is already running');
+      throw new Error(PYTHON_SCRIPT_BUSY);
     }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
@@ -476,7 +480,7 @@ class PyodideManager {
       throw new Error('Python sandbox not available');
     }
     if (this.executeResolver || this.callResolver) {
-      throw new Error('Another Python script is already running');
+      throw new Error(PYTHON_SCRIPT_BUSY);
     }
 
     const paramsJson = params === null ? null : JSON.stringify(params);

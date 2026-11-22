@@ -1,5 +1,7 @@
-const FUNCTION_CONTRACT_LINE = /^FUNCTION\s*=/m;
-const RUN_DEFINITION_LINE = /^(async\s+)?def\s+run\s*\(/m;
+import { FUNCTION_CONTRACT_GLOBAL, FUNCTION_ENTRY_POINT } from '@bike4mind/common';
+
+const FUNCTION_CONTRACT_LINE = new RegExp(`^${FUNCTION_CONTRACT_GLOBAL}\\s*=`, 'm');
+const RUN_DEFINITION_LINE = new RegExp(`^(async\\s+)?def\\s+${FUNCTION_ENTRY_POINT}\\s*\\(`, 'm');
 
 /**
  * Whether Python code looks like a callable function: a column-0 `FUNCTION =` assignment and a
