@@ -18,7 +18,8 @@ const pyodideDir = argv.find(arg => !arg.startsWith('--')) ?? '';
 const isolated = !argv.includes('--unsafe-no-isolation');
 const reuse = argv.includes('--reuse');
 
-const MAX_REQUEST_CHARS = 4 * 1024 * 1024;
+// Above the parent's largest request: twice the input and source ceilings in runtimeParent.ts (JSON escaping).
+const MAX_REQUEST_CHARS = 16 * 1024 * 1024;
 const MAX_ERROR_CHARS = 100_000;
 const NETWORK_GLOBALS = ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest'];
 const HOST_GLOBALS = ['process', 'global', 'require', '_createPyodideModule'];

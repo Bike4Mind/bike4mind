@@ -1,16 +1,34 @@
+import { FUNCTION_CONTRACT_LIMITS } from './functionContract';
+
 /** The Pyodide release both runtimes load: the browser sandbox from its CDN, the server runtime from local disk. */
 export const PYODIDE_VERSION = '0.25.1';
 
-/** The glue's fixed refusal for a result over `FUNCTION_CONTRACT_LIMITS.maxResultBytes`. */
-export const FUNCTION_RESULT_TOO_LARGE_MESSAGE = 'The function returned a result larger than 256 KB.';
+/** Every form of the glue's refusal for a result over its cap starts with this. */
+export const FUNCTION_RESULT_TOO_LARGE_PREFIX = 'The function returned a result larger than';
+
+const KIB = 1024;
+const MIB = 1024 * 1024;
+
+const sizeLabel = (bytes: number): string =>
+  bytes % MIB === 0 ? `${bytes / MIB} MB` : bytes % KIB === 0 ? `${bytes / KIB} KB` : `${bytes} bytes`;
+
+export const functionResultTooLargeMessage = (maxResultBytes: number): string =>
+  `${FUNCTION_RESULT_TOO_LARGE_PREFIX} ${sizeLabel(maxResultBytes)}.`;
+
+/** The browser's refusal, at `FUNCTION_CONTRACT_LIMITS.maxResultBytes`. */
+export const FUNCTION_RESULT_TOO_LARGE_MESSAGE = functionResultTooLargeMessage(FUNCTION_CONTRACT_LIMITS.maxResultBytes);
 
 /**
  * The Python that loads function code as module `b4m_function`, reads FUNCTION and, given params, calls
- * `run(**params)`, with the number type refusals. It expects the globals `_fn_code` and `_fn_params_json`
- * and evaluates to a dict of strings. The browser worker cannot import this (it is serialized with
- * `Function.prototype.toString()`), so `sandboxWorkerBody.test.ts` checks that its copy is this text.
+ * `run(**params)`, with the number type refusals and a result cap. It expects the globals `_fn_code` and
+ * `_fn_params_json` and evaluates to a dict of strings.
  */
-export const FUNCTION_CALL_GLUE_PY = `
+export function functionCallGluePy(maxResultBytes: number): string {
+  // The cap is written into Python source.
+  if (!Number.isSafeInteger(maxResultBytes) || maxResultBytes <= 0) {
+    throw new RangeError('maxResultBytes must be a positive whole number');
+  }
+  return `
 import sys
 import json
 import inspect
@@ -19,7 +37,7 @@ from io import StringIO
 
 _MAX_OUTPUT_CHARS = 100000
 _MAX_CONTRACT_BYTES = 32768
-_MAX_RESULT_BYTES = 262144
+_MAX_RESULT_BYTES = ${maxResultBytes}
 _MAX_PROBLEMS = 50
 
 class _FunctionCallError(Exception):
@@ -81,7 +99,7 @@ def _b4m_call_function(code, params_json):
             except (TypeError, ValueError) as e:
                 raise _FunctionCallError('run returned a value that is not valid JSON: ' + str(e))
             if len(value_text) > _MAX_RESULT_BYTES:
-                raise _FunctionCallError('${FUNCTION_RESULT_TOO_LARGE_MESSAGE}')
+                raise _FunctionCallError('${functionResultTooLargeMessage(maxResultBytes)}')
             value_json = value_text
             _output_type_problems(contract.get('outputs'), value, '', output_problems)
     except _FunctionCallError as e:
@@ -102,3 +120,10 @@ def _b4m_call_function(code, params_json):
 
 _b4m_call_function(_fn_code, _fn_params_json)
 `;
+}
+
+/**
+ * The glue at the browser's cap. The browser worker cannot import this (it is serialized with
+ * `Function.prototype.toString()`), so `sandboxWorkerBody.test.ts` checks that its copy is this text.
+ */
+export const FUNCTION_CALL_GLUE_PY = functionCallGluePy(FUNCTION_CONTRACT_LIMITS.maxResultBytes);

@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { FUNCTION_RESULT_TOO_LARGE_MESSAGE, PYODIDE_VERSION } from '@bike4mind/common';
 import {
   CALLABLE_FUNCTION_LIMITS,
+  CALLABLE_FUNCTION_MAX_REPLY_BYTES,
   classifyGuestError,
   liveCallableFunctionChildren,
   runCallableFunctionInChild,
@@ -52,6 +53,32 @@ const reply = (fields: Record<string, unknown>) => ({
 
 const run = (payload: unknown, limits: Partial<CallableFunctionLimits> = {}) =>
   runCallableFunctionInChild(payload, { childPath: CHILD, pyodideDir: FIXTURES, limits });
+
+const MIB = 1024 * 1024;
+const SERIES_CONTRACT = {
+  name: 'series',
+  description: 'Returns a series of numbers.',
+  inputs: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { samples: { type: 'array', items: { type: 'number', unit: '1' } } },
+  },
+  outputs: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['values'],
+    properties: { values: { type: 'array', items: { type: 'number', unit: '1' } } },
+  },
+} as const;
+
+/** A call whose fake child returns about `bytes` of output JSON (`0.5, ` is five bytes per item). */
+const series = (bytes: number, params: Record<string, unknown> = {}, limits?: object) => ({
+  op: 'call',
+  code: JSON.stringify({ mode: 'series', count: Math.floor(bytes / 5), contractJson: JSON.stringify(SERIES_CONTRACT) }),
+  contract: SERIES_CONTRACT,
+  params,
+  limits,
+});
 
 const lastChild = (): ChildProcess => {
   const results = vi.mocked(spawn).mock.results;
@@ -191,7 +218,7 @@ describe('runCallableFunctionInChild', () => {
       outcome: 'output_too_large',
       reason: 'result_too_large',
     });
-    expect(await run(call({ mode: 'flood' }))).toMatchObject({
+    expect(await run(call({ mode: 'flood', bytes: CALLABLE_FUNCTION_MAX_REPLY_BYTES + 1 }))).toMatchObject({
       outcome: 'output_too_large',
       reason: 'reply_too_large',
     });
@@ -229,12 +256,56 @@ describe('runCallableFunctionInChild', () => {
     expect(missing).toMatchObject({ outcome: 'refused', reason: 'runtime_unavailable' });
   });
 
-  it('applies the default limits', () => {
-    expect(CALLABLE_FUNCTION_LIMITS).toMatchObject({
-      timeoutMs: 30_000,
-      inputBytes: 256 * 1024,
-      outputBytes: 256 * 1024,
+  it('carries 5 MB input and output ceilings', () => {
+    expect(CALLABLE_FUNCTION_LIMITS).toMatchObject({ inputBytes: 5 * MIB, outputBytes: 5 * MIB });
+  });
+
+  it('returns a 4.9 MB output from a 4.9 MB input under the ceilings', async () => {
+    const samples = new Array(Math.floor((4.9 * MIB) / 4)).fill(0.5);
+    expect(JSON.stringify({ samples }).length).toBeGreaterThan(4.8 * MIB);
+    const result = await run(series(4.9 * MIB, { samples }));
+    expect(result.outcome).toBe('ok');
+    expect((result.value?.values as number[]).length).toBe(Math.floor((4.9 * MIB) / 5));
+  });
+
+  it('returns output_too_large for a 5.1 MB output', async () => {
+    expect(await run(series(5.1 * MIB))).toMatchObject({ outcome: 'output_too_large', reason: 'result_too_large' });
+  });
+
+  it('enforces a per-call output cap below the ceiling, in the parent and in the glue', async () => {
+    expect(await run(series(2 * MIB, {}, { outputBytes: MIB }))).toMatchObject({
+      outcome: 'output_too_large',
+      reason: 'result_too_large',
     });
+    const reported = await run({
+      op: 'read_contract',
+      code: JSON.stringify({ mode: 'report' }),
+      limits: { outputBytes: MIB },
+    });
+    expect(JSON.parse(reported.printed ?? '{}').glueResultCap).toBe(MIB);
+    const defaults = await run({ op: 'read_contract', code: JSON.stringify({ mode: 'report' }) });
+    expect(JSON.parse(defaults.printed ?? '{}').glueResultCap).toBe(5 * MIB);
+  });
+
+  it('enforces a per-call input cap below the ceiling', async () => {
+    const samples = new Array(1000).fill(0.5);
+    expect(await run(series(100, { samples }, { inputBytes: 1000 }))).toMatchObject({
+      outcome: 'input_invalid',
+      reason: 'input_too_large',
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a per-call cap above the ceiling, and one that is not a positive whole number', async () => {
+    expect(await run(series(100, {}, { outputBytes: 5 * MIB + 1 }))).toMatchObject({
+      outcome: 'refused',
+      reason: 'limit_above_ceiling',
+    });
+    expect(await run(series(100, {}, { inputBytes: 6 * MIB }))).toMatchObject({ reason: 'limit_above_ceiling' });
+    for (const limits of [{ outputBytes: 0 }, { outputBytes: 1.5 }, { outputBytes: '1' }, { memoryMb: 1 }, []]) {
+      expect(await run(series(100, {}, limits))).toMatchObject({ outcome: 'refused', reason: 'payload_invalid' });
+    }
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 

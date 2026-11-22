@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import {
-  FUNCTION_CALL_GLUE_PY,
   FUNCTION_CONTRACT_LIMITS,
-  FUNCTION_RESULT_TOO_LARGE_MESSAGE,
+  FUNCTION_RESULT_TOO_LARGE_PREFIX,
   PYODIDE_VERSION,
+  functionCallGluePy,
   functionJsonBytes,
   parseFunctionContract,
   validateFunctionValue,
@@ -29,14 +29,26 @@ export interface CallableFunctionLimits {
   printedChars: number;
 }
 
+const MIB = 1024 * 1024;
+
+/**
+ * The runtime's ceilings. A call may ask for lower `inputBytes` and `outputBytes` in its `limits`, never
+ * higher; each surface's default (chat's 256 KB output, for one) is the dispatcher's to apply.
+ */
 export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
   timeoutMs: 30_000,
-  inputBytes: 256 * 1024,
-  outputBytes: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+  inputBytes: 5 * MIB,
+  outputBytes: 5 * MIB,
   memoryMb: 1536,
   sourceBytes: 512 * 1024,
   printedChars: 100_000,
 };
+
+const CALL_LIMIT_KEYS = ['inputBytes', 'outputBytes'] as const;
+type CallLimitKey = (typeof CALL_LIMIT_KEYS)[number];
+
+/** Limits one call asks for; each must be a positive whole number no higher than the runtime's ceiling. */
+export type CallableFunctionCallLimits = Partial<Pick<CallableFunctionLimits, CallLimitKey>>;
 
 export const CALLABLE_FUNCTION_OUTCOMES = [
   'ok',
@@ -69,12 +81,19 @@ export const CALLABLE_FUNCTION_REASONS = [
   'result_not_dict',
   'result_not_json',
   'result_too_large',
+  'limit_above_ceiling',
 ] as const;
 export type CallableFunctionReason = (typeof CALLABLE_FUNCTION_REASONS)[number];
 
 export type CallableFunctionRunPayload =
-  | { op: 'read_contract'; code: string }
-  | { op: 'call'; code: string; contract: FunctionContract; params: Record<string, unknown> };
+  | { op: 'read_contract'; code: string; limits?: CallableFunctionCallLimits }
+  | {
+      op: 'call';
+      code: string;
+      contract: FunctionContract;
+      params: Record<string, unknown>;
+      limits?: CallableFunctionCallLimits;
+    };
 
 export interface CallableFunctionRunResult {
   outcome: CallableFunctionOutcome;
@@ -114,11 +133,18 @@ export type CallableFunctionChildReply =
 export interface CallableFunctionChildOptions {
   childPath: string;
   pyodideDir: string;
+  /** Lowers this host's ceilings (tests); a call's own `limits` are checked against the result. */
   limits?: Partial<CallableFunctionLimits>;
   nodePath?: string;
 }
 
-const MAX_REPLY_BYTES = 2 * 1024 * 1024;
+// The outputs and the contract travel as JSON strings inside the reply, so escaping can double them; a
+// printed or error character can take six bytes as a \u escape (stdout, stderr, and the error, each capped).
+const REPLY_ENVELOPE_BYTES = 64 * 1024;
+export const CALLABLE_FUNCTION_MAX_REPLY_BYTES =
+  2 * (CALLABLE_FUNCTION_LIMITS.outputBytes + FUNCTION_CONTRACT_LIMITS.maxContractBytes) +
+  6 * 3 * CALLABLE_FUNCTION_LIMITS.printedChars +
+  REPLY_ENVELOPE_BYTES;
 const MEMORY_POLL_MS = 100;
 const EXIT_WAIT_MS = 5_000;
 
@@ -232,7 +258,7 @@ async function runChild(
   let replyBytes = 0;
   child.stdout.on('data', (chunk: Buffer) => {
     replyBytes += chunk.length;
-    if (replyBytes > MAX_REPLY_BYTES) return settle({ kind: 'reply_too_large' });
+    if (replyBytes > CALLABLE_FUNCTION_MAX_REPLY_BYTES) return settle({ kind: 'reply_too_large' });
     chunks.push(chunk);
     if (chunk.includes(0x0a)) {
       const text = Buffer.concat(chunks).toString('utf8');
@@ -312,7 +338,7 @@ const GLUE_REFUSALS: ReadonlyArray<[string, CallableFunctionReason]> = [
   ['run must be defined with def', 'run_async'],
   ['run must return a dict', 'result_not_dict'],
   ['run returned a value that is not valid JSON', 'result_not_json'],
-  [FUNCTION_RESULT_TOO_LARGE_MESSAGE, 'result_too_large'],
+  [FUNCTION_RESULT_TOO_LARGE_PREFIX, 'result_too_large'],
 ];
 
 const ERROR_CLASS = /^([A-Za-z_][A-Za-z0-9_.]{0,99})(?::|$)/;
@@ -363,13 +389,32 @@ function validPayload(payload: unknown): payload is CallableFunctionRunPayload {
   return payload.op === 'call' && isObject(payload.params) && payload.contract !== undefined;
 }
 
+const isCallLimitKey = (key: string): key is CallLimitKey => (CALL_LIMIT_KEYS as readonly string[]).includes(key);
+
+/** A call's limits over the ceilings, or why they are refused. */
+function callLimits(
+  requested: unknown,
+  ceilings: CallableFunctionLimits
+): CallableFunctionLimits | CallableFunctionReason {
+  const limits = { ...ceilings };
+  if (requested === undefined) return limits;
+  if (!isObject(requested)) return 'payload_invalid';
+  for (const [key, value] of Object.entries(requested)) {
+    if (!isCallLimitKey(key) || typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+      return 'payload_invalid';
+    }
+    if (value > ceilings[key]) return 'limit_above_ceiling';
+    limits[key] = value;
+  }
+  return limits;
+}
+
 /** Runs one operation in a fresh child and checks everything it returns. */
 export async function runCallableFunctionInChild(
   payload: unknown,
   options: CallableFunctionChildOptions
 ): Promise<CallableFunctionRunResult> {
   const started = Date.now();
-  const limits = { ...CALLABLE_FUNCTION_LIMITS, ...options.limits };
   const finish = (result: Omit<CallableFunctionRunResult, 'durationMs'>): CallableFunctionRunResult => ({
     ...result,
     durationMs: Date.now() - started,
@@ -377,6 +422,8 @@ export async function runCallableFunctionInChild(
   const refused = (reason: CallableFunctionReason) => finish({ outcome: 'refused', reason });
 
   if (!validPayload(payload)) return refused('payload_invalid');
+  const limits = callLimits(payload.limits, { ...CALLABLE_FUNCTION_LIMITS, ...options.limits });
+  if (typeof limits === 'string') return refused(limits);
   if (functionJsonBytes(payload.code) > limits.sourceBytes) return refused('source_too_large');
 
   let pinned: FunctionContract | undefined;
@@ -394,7 +441,13 @@ export async function runCallableFunctionInChild(
   }
 
   const run = await runChild(
-    { op: payload.op, glue: FUNCTION_CALL_GLUE_PY, code: payload.code, paramsJson, pyodideVersion: PYODIDE_VERSION },
+    {
+      op: payload.op,
+      glue: functionCallGluePy(limits.outputBytes),
+      code: payload.code,
+      paramsJson,
+      pyodideVersion: PYODIDE_VERSION,
+    },
     options,
     limits
   );

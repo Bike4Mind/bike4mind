@@ -18,9 +18,18 @@ createInterface({ input: process.stdin }).once('line', line => {
         args: process.argv.slice(2),
         pid: process.pid,
         glueBytes: request.glue.length,
+        glueResultCap: Number(/^_MAX_RESULT_BYTES = (\d+)$/m.exec(request.glue)?.[1]),
         pyodideVersion: request.pyodideVersion,
       };
       process.stdout.write(`${JSON.stringify({ ok: true, initMs: 1, printed: JSON.stringify(report) })}\n`);
+      stayAlive();
+      break;
+    }
+    case 'series': {
+      const valueJson = `{"values": [${new Array(spec.count).fill('0.5').join(', ')}]}`;
+      process.stdout.write(
+        `${JSON.stringify({ ok: true, initMs: 1, printed: '', contractJson: spec.contractJson, valueJson })}\n`
+      );
       stayAlive();
       break;
     }
@@ -30,7 +39,7 @@ createInterface({ input: process.stdin }).once('line', line => {
       break;
     }
     case 'flood':
-      process.stdout.write('x'.repeat(3 * 1024 * 1024));
+      process.stdout.write('x'.repeat(spec.bytes));
       stayAlive();
       break;
     case 'exit':

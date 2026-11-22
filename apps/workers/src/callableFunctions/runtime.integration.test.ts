@@ -63,6 +63,25 @@ const PROBE_CONTRACT: FunctionContract = {
   },
 };
 
+const SERIES_CONTRACT: FunctionContract = {
+  name: 'series',
+  description: 'Counts or returns a series of numbers.',
+  inputs: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      samples: { type: 'array', items: { type: 'number', unit: '1' } },
+      count: { type: 'integer', unit: '1', minimum: 0 },
+    },
+  },
+  outputs: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['values'],
+    properties: { values: { type: 'array', items: { type: 'number', unit: '1' } } },
+  },
+};
+
 const pythonLiteral = (contract: object): string => JSON.stringify(contract).replace(/\bfalse\b/g, 'False');
 
 const probe = (attempt: string) => `
@@ -416,10 +435,20 @@ describe('callable function runtime with real Pyodide', () => {
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
 
-  it('returns output_too_large for an oversized result', async () => {
-    const code = `FUNCTION = ${pythonLiteral(PROBE_CONTRACT)}\n\n\ndef run(arg=""):\n    return {"reached": True, "detail": "x" * 300000}\n`;
-    const result = await runner({ op: 'call', code, contract: PROBE_CONTRACT, params: {} });
-    expect(result.outcome).toBe('output_too_large');
+  it('takes a 4.9 MB input, returns a 4.9 MB output, and refuses a 5.1 MB output', async () => {
+    const MIB = 1024 * 1024;
+    // json.dumps writes `0.5, ` for each item: five bytes.
+    const code = `FUNCTION = ${pythonLiteral(SERIES_CONTRACT)}\n\n\ndef run(samples=(), count=0):\n    return {"values": [len(samples)] if samples else [0.5] * count}\n`;
+    const call = (params: Record<string, unknown>) => runner({ op: 'call', code, contract: SERIES_CONTRACT, params });
+    const samples = new Array(Math.floor((4.9 * MIB) / 4)).fill(0.5);
+    expect(await call({ samples })).toMatchObject({ outcome: 'ok', value: { values: [samples.length] } });
+    const fits = await call({ count: Math.floor((4.9 * MIB) / 5) });
+    expect(fits.outcome).toBe('ok');
+    expect(fits.value?.values).toHaveLength(Math.floor((4.9 * MIB) / 5));
+    expect(await call({ count: Math.floor((5.1 * MIB) / 5) })).toMatchObject({
+      outcome: 'output_too_large',
+      reason: 'result_too_large',
+    });
   }, 120_000);
 
   for (const hostile of CASES) {
