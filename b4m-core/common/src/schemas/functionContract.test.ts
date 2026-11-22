@@ -212,6 +212,39 @@ describe('parseFunctionContract', () => {
     ]);
   });
 
+  it('refuses a required list that names a field twice', () => {
+    const contract = sampleContract();
+    contract.inputs.required = ['load', 'span', 'load'];
+    expect(problemsOf(contract)).toEqual([{ path: 'inputs.required', message: 'must list each field name only once' }]);
+  });
+
+  it.each([
+    [{ exclusiveMinimum: 5, exclusiveMaximum: 5 }],
+    [{ minimum: 5, exclusiveMaximum: 5 }],
+    [{ exclusiveMinimum: 5, maximum: 5 }],
+    [{ minimum: 6, maximum: 5 }],
+  ])('refuses bounds that leave no value: %j', bounds => {
+    const contract = sampleContract();
+    inputProperties(contract).span = { type: 'number', unit: 'm', ...bounds };
+    expect(problemsOf(contract)).toEqual([
+      { path: 'inputs.properties.span.minimum', message: 'the bounds leave no allowed value' },
+    ]);
+  });
+
+  it('accepts inclusive bounds that allow a single value', () => {
+    const contract = sampleContract();
+    inputProperties(contract).span = { type: 'number', unit: 'm', minimum: 4, maximum: 4 };
+    expect(problemsOf(contract)).toEqual([]);
+  });
+
+  it('reports nesting too deep to serialize as too deep, not as invalid JSON', () => {
+    let deep = '1';
+    for (let i = 0; i < 5000; i++) deep = `{"a":${deep}}`;
+    const contract = sampleContract();
+    (contract.tests[0] as Record<string, unknown>).expected = JSON.parse(deep);
+    expect(problemsOf(contract)).toEqual([{ path: '', message: 'FUNCTION is nested too deeply to read' }]);
+  });
+
   it('returns every problem together', () => {
     const contract = sampleContract();
     contract.name = 'Bad Name';
@@ -327,6 +360,61 @@ describe('validateFunctionValue', () => {
     expect(check({ span: 1, point: { x: 'a', y: 1 } })).toEqual([
       { path: 'point.x', message: 'must be a number' },
       { path: 'point.y', message: 'is not part of the contract' },
+    ]);
+  });
+});
+
+describe('problem cap', () => {
+  const CLOSING = { path: '', message: 'more problems were found; the first 50 are listed' };
+  // Fifteen values of 1,990 characters: about 30 KB, inside the 32 KB contract limit.
+  const longEnum = Array.from({ length: 15 }, (_, i) => String.fromCharCode(97 + i).repeat(1990));
+  const listOf = (items: Record<string, unknown>) =>
+    ({
+      type: 'object',
+      additionalProperties: false,
+      properties: { xs: { type: 'array', items } },
+    }) as unknown as FunctionObjectField;
+
+  it('lists exactly 50 problems without a closing entry', () => {
+    const problems = validateFunctionValue(listOf({ type: 'number', unit: 'm', minimum: 0 }), {
+      xs: new Array(50).fill(-1),
+    });
+    expect(problems).toHaveLength(50);
+    expect(problems).not.toContainEqual(CLOSING);
+  });
+
+  it('stops a result flood at 50 problems plus a closing entry, each message short', () => {
+    // The largest list a 256 KB result can hold: '"", ' is four bytes per item.
+    const items = Math.floor((FUNCTION_CONTRACT_LIMITS.maxResultBytes - 10) / 4);
+    const problems = validateFunctionValue(listOf({ type: 'string', enum: longEnum }), {
+      xs: new Array(items).fill(''),
+    });
+    expect(problems.length).toBeLessThanOrEqual(51);
+    expect(problems.at(-1)).toEqual(CLOSING);
+    expect(problems[0]).toEqual({ path: 'xs.0', message: 'must be one of the 15 allowed values' });
+    for (const problem of problems) expect(problem.message.length).toBeLessThan(300);
+  });
+
+  it('stops a test-case input flood inside the contract at 50 problems plus a closing entry', () => {
+    const contract = sampleContract();
+    contract.inputs = {
+      type: 'object',
+      additionalProperties: false,
+      properties: { xs: { type: 'array', items: { type: 'string', enum: longEnum.slice(0, 8) } } },
+    };
+    const budget = FUNCTION_CONTRACT_LIMITS.maxContractBytes - JSON.stringify(contract).length - 100;
+    contract.tests = [{ name: 'flood', input: { xs: new Array(Math.floor(budget / 3)).fill('') }, expected: {} }];
+    expect(JSON.stringify(contract).length).toBeLessThanOrEqual(FUNCTION_CONTRACT_LIMITS.maxContractBytes);
+
+    const problems = problemsOf(contract);
+    expect(problems.length).toBeLessThanOrEqual(51);
+    expect(problems.at(-1)).toEqual(CLOSING);
+    for (const problem of problems) expect(problem.message.length).toBeLessThan(300);
+  });
+
+  it('still lists a short enum in full', () => {
+    expect(validateFunctionValue(listOf({ type: 'string', enum: ['steel', 'timber'] }), { xs: ['glass'] })).toEqual([
+      { path: 'xs.0', message: 'must be one of: steel, timber' },
     ]);
   });
 });
