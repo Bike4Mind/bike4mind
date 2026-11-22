@@ -130,6 +130,17 @@ Located in the Experimental category, and used only while Artifacts are enabled.
 
 Python code can send what it has to a listed origin as well as read from it, so list only hosts you trust with artifact content. HTML and React artifacts stay offline whatever this list holds.
 
+### Enable Callable Functions
+
+Located in the Experimental category, under Enable Artifacts, and used only while Artifacts are enabled. It is off by default. When it is on, a Python artifact whose code defines a `FUNCTION` contract and a `run` function shows a Function tab beside Output and Code. The tab lists the function's inputs and outputs with their units, and you enter the inputs, call the function, and see the outputs checked against the contract.
+
+- Every number in a contract carries a unit, such as `m` or `N/m`, or `1` for a number without one
+- Inputs that do not match the contract are refused with the field named, and `run` is not called
+- Calls run in your browser, in the same isolated frame as a script run, and nothing is saved
+- With the setting off, Python artifacts show only Output and Code, as before
+
+A platform admin can turn it on for a single organization from the setting's scoped overrides while the platform value stays off. A user sees the Function tab when any organization they belong to resolves the setting to on; a user in no organization follows the platform value.
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:
