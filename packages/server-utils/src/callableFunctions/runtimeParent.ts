@@ -48,8 +48,11 @@ export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
 /** A call's time limit when it names none. */
 export const CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS = 30_000;
 
-/** Spawn to run start: Pyodide's load and the package wheels, outside the call's time limit. */
-export const CALLABLE_FUNCTION_START_BUDGET_MS = 30_000;
+/**
+ * Spawn to run start: Pyodide's load and the package wheels, outside the call's time limit. Loading all five
+ * baked packages took up to 26 s on a heavily loaded host; this is a little over twice that.
+ */
+export const CALLABLE_FUNCTION_START_BUDGET_MS = 60_000;
 
 const EXIT_WAIT_MS = 5_000;
 
