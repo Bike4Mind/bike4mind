@@ -147,6 +147,8 @@ vi.mock('@bike4mind/database', () => ({
       h.store.runs.find(r => r.id === id && r.dataLakeId === lakeId) ?? null,
   },
   lakeConfigChangeEventRepository: {},
+  lakeConfigSnapshotRepository: {},
+  lakeMembershipChangeEventRepository: {},
   organizationRepository: {},
   spendFreezeRepository: {},
   userApiKeyRepository: {},

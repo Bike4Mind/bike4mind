@@ -345,6 +345,25 @@ describe('research tool operations', () => {
   });
 });
 
+describe('get_lake_config_history entries', () => {
+  it('returns both entry arms as the API sent them, with the redacted feed address and no query string', async () => {
+    const entries = [
+      { kind: 'file', event_id: 'f1', action: 'file-added', origin: 'person', target: { kind: 'file', id: 'fab1' } },
+      {
+        kind: 'config',
+        event_id: 'c1',
+        action: 'update-research-config',
+        changes: [],
+        lever_changes: [{ lever: 'feedUrl', before: 'https://example.com/a.xml', after: 'https://example.com/b.xml' }],
+      },
+    ];
+    const getConfigHistory = vi.fn().mockResolvedValue({ entries });
+    const result = await collect(mockClient({ getConfigHistory })).call('get_lake_config_history', { lake_id: 'l1' });
+    expect(out(result).entries).toEqual(entries);
+    expect(JSON.stringify(out(result))).not.toContain('?');
+  });
+});
+
 describe('research tool projections', () => {
   it('shows a null unlisted_dropped as combined into filtered_by_source', async () => {
     const getResearchRun = vi

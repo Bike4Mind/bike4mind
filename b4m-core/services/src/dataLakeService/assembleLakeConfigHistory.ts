@@ -3,9 +3,13 @@ import type {
   ILakeConfigChangeEventDocument,
   ILakeConfigChangeEventRepository,
   ILakeConfigFieldChange,
+  ILakeMembershipChangeEventDocument,
+  ILakeMembershipChangeEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  LakeConfigHistoryConfigEntry,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFileEntry,
   LakeConfigHistoryFieldChange,
   LakeConfigHistoryView,
 } from '@bike4mind/common';
@@ -68,10 +72,21 @@ const userDisplayName = (u: { name?: string; username?: string } | undefined): s
 export function toLakeConfigHistoryEntry(
   event: Pick<
     ILakeConfigChangeEventDocument,
-    'id' | 'createdAt' | 'principalKind' | 'principalId' | 'onBehalfOfUserId' | 'manageRung' | 'action' | 'changes'
+    | 'id'
+    | 'createdAt'
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'manageRung'
+    | 'action'
+    | 'changes'
+    | 'target'
+    | 'leverChanges'
+    | 'admittedFabFileId'
   >
-): LakeConfigHistoryEntry {
+): LakeConfigHistoryConfigEntry {
   return {
+    kind: 'config',
     eventId: event.id,
     changedAt: event.createdAt,
     principalKind: event.principalKind,
@@ -80,8 +95,46 @@ export function toLakeConfigHistoryEntry(
     manageRung: event.manageRung,
     action: event.action,
     changes: event.changes.map(toHistoryFieldChange),
+    target: event.target,
+    leverChanges: event.leverChanges,
+    admittedFabFileId: event.admittedFabFileId,
   };
 }
+
+/** A membership event as a History row: the file is the target, and the log carries no rung or prose. */
+export function toLakeFileHistoryEntry(
+  event: Pick<
+    ILakeMembershipChangeEventDocument,
+    | 'id'
+    | 'createdAt'
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'fabFileId'
+    | 'action'
+    | 'origin'
+    | 'undoesEventId'
+    | 'causedByEventId'
+  >
+): LakeConfigHistoryFileEntry {
+  return {
+    kind: 'file',
+    eventId: event.id,
+    changedAt: event.createdAt,
+    principalKind: event.principalKind,
+    principalId: event.principalId,
+    onBehalfOfUserId: event.onBehalfOfUserId,
+    action: event.action === 'added' ? 'file-added' : 'file-removed',
+    target: { kind: 'file', id: event.fabFileId },
+    origin: event.origin,
+    undoesEventId: event.undoesEventId,
+    causedByEventId: event.causedByEventId,
+  };
+}
+
+/** Newest first. The sort is stable, so same-millisecond rows keep each repository's own order. */
+const byNewest = (a: LakeConfigHistoryEntry, b: LakeConfigHistoryEntry): number =>
+  b.changedAt.getTime() - a.changedAt.getTime();
 
 /**
  * Narrow a stored change to its wire form, dropping the fingerprint hash.
@@ -111,6 +164,7 @@ function toHistoryFieldChange(change: ILakeConfigFieldChange): LakeConfigHistory
 export interface AssembleLakeConfigHistoryAdapters {
   db: {
     lakeConfigChangeEvents: Pick<ILakeConfigChangeEventRepository, 'listByLake'>;
+    lakeMembershipChangeEvents: Pick<ILakeMembershipChangeEventRepository, 'listByLake'>;
     users: Pick<IUserRepository, 'findByIds'>;
     userApiKeys: Pick<IUserApiKeyRepository, 'find'>;
   };
@@ -162,10 +216,18 @@ export async function assembleLakeConfigHistory(
   // "this lake has exactly that many events" from "there are more behind this page", and calling a
   // complete history truncated makes a consumer caption the lake's whole life as "changes since
   // <date>". The extra row is never returned - it is sliced off below.
-  const events = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
-  const truncated = events.length > pageSize;
-  const windowEvents = truncated ? events.slice(0, pageSize) : events;
-  const entries = windowEvents.map(toLakeConfigHistoryEntry);
+  // Each stream is read to the same depth, so the newest `pageSize + 1` of the merge are always in
+  // hand: no entry outside either read can rank above one inside it.
+  const [configEvents, fileEvents] = await Promise.all([
+    db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }),
+    db.lakeMembershipChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }),
+  ]);
+  const merged: LakeConfigHistoryEntry[] = [
+    ...configEvents.map(toLakeConfigHistoryEntry),
+    ...fileEvents.map(toLakeFileHistoryEntry),
+  ].sort(byNewest);
+  const truncated = merged.length > pageSize;
+  const entries = truncated ? merged.slice(0, pageSize) : merged;
 
   // One batched name resolution across every id worth looking up. Only USER-kind principals and the
   // on-behalf human are candidates - a system/agent/apiKey principalId names no user record - and
@@ -182,7 +244,7 @@ export async function assembleLakeConfigHistory(
     // comes here for - unresolved it reads as two opaque hex strings in the column that exists to
     // say what changed. Folded into the SAME batch as the principals, so this costs no extra round
     // trip however many rows reference an identity.
-    for (const id of identityValueIds(entry.changes)) userIds.add(id);
+    if (entry.kind === 'config') for (const id of identityValueIds(entry.changes)) userIds.add(id);
   }
   const [users, keys] = await Promise.all([
     userIds.size > 0 ? db.users.findByIds(Array.from(userIds)) : [],

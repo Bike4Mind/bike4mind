@@ -175,6 +175,10 @@ export const aiHolders = {
       { path: 'onBehalfOfUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  LakeConfigSnapshot: {
+    kind: 'noUserData',
+    note: 'Config values kept 30 days for undo, keyed by lake and event; swept with the lake. The copied config carries creator ids only inside a deleted config, until the TTL expires.',
+  },
   LakeMembershipChangeEvent: {
     kind: 'holder',
     references: [

@@ -272,6 +272,7 @@ describe('toPublicConfigHistory', () => {
     lakeName: 'Handbook',
     entries: [
       {
+        kind: 'config',
         eventId: 'ev1',
         changedAt: new Date('2026-03-01T00:00:00.000Z'),
         principalKind: 'user',
@@ -318,5 +319,92 @@ describe('toPublicConfigHistory', () => {
       after: 'Casey, Casey',
     });
     expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  const withEntries = (entries: unknown[]) => ({ ...view, entries }) as unknown as LakeConfigHistoryView;
+
+  it('maps a config entry with target, lever_changes and the admitted file in snake_case', () => {
+    const mapped = toPublicConfigHistory(
+      withEntries([
+        {
+          kind: 'config',
+          eventId: 'ev2',
+          changedAt: new Date('2026-03-01T00:00:00.000Z'),
+          principalKind: 'user',
+          principalId: USER_ID,
+          manageRung: 'creator',
+          action: 'approve-proposal',
+          changes: [],
+          target: { kind: 'proposal', id: 'p1' },
+          leverChanges: [{ lever: 'minRelevance', before: 0.6, after: 0.5 }],
+          admittedFabFileId: 'fab1',
+        },
+      ])
+    );
+    expect(mapped.data.entries[0]).toMatchObject({
+      kind: 'config',
+      target: { kind: 'proposal', id: 'p1' },
+      lever_changes: [{ lever: 'minRelevance', before: 0.6, after: 0.5 }],
+      admitted_fab_file_id: 'fab1',
+    });
+    expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  it('omits the new keys on an old config row', () => {
+    const entry = toPublicConfigHistory(view).data.entries[0] as Record<string, unknown>;
+    expect(entry.kind).toBe('config');
+    for (const key of ['target', 'lever_changes', 'admitted_fab_file_id']) expect(key in entry).toBe(false);
+  });
+
+  it('maps a file entry without a rung or changes, and never exposes the principal id', () => {
+    const mapped = toPublicConfigHistory(
+      withEntries([
+        {
+          kind: 'file',
+          eventId: 'ev3',
+          changedAt: new Date('2026-03-02T00:00:00.000Z'),
+          principalKind: 'user',
+          principalId: USER_ID,
+          principalName: 'Casey',
+          action: 'file-removed',
+          target: { kind: 'file', id: 'fab7' },
+          origin: 'person',
+          undoesEventId: 'ev0',
+        },
+      ])
+    );
+    const entry = mapped.data.entries[0];
+    expect(entry).toEqual({
+      kind: 'file',
+      event_id: 'ev3',
+      changed_at: '2026-03-02T00:00:00.000Z',
+      principal_kind: 'user',
+      principal_name: 'Casey',
+      target: { kind: 'file', id: 'fab7' },
+      action: 'file-removed',
+      origin: 'person',
+      undoes_event_id: 'ev0',
+    });
+    expect(JSON.stringify(mapped)).not.toContain(USER_ID);
+    expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  it('puts no feed query string on the wire when the stored lever change is redacted', () => {
+    const mapped = toPublicConfigHistory(
+      withEntries([
+        {
+          kind: 'config',
+          eventId: 'ev4',
+          changedAt: new Date('2026-03-01T00:00:00.000Z'),
+          principalKind: 'user',
+          principalId: USER_ID,
+          manageRung: 'creator',
+          action: 'update-research-config',
+          changes: [],
+          leverChanges: [{ lever: 'feedUrl', before: 'https://example.com/a.xml', after: 'https://example.com/b.xml' }],
+        },
+      ])
+    );
+    expect(JSON.stringify(mapped)).not.toContain('?');
   });
 });

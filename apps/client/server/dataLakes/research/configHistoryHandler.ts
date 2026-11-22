@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   lakeConfigChangeEventRepository,
+  lakeMembershipChangeEventRepository,
   userRepository,
   userApiKeyRepository,
 } from '@bike4mind/database';
@@ -29,6 +30,7 @@ export async function readLakeConfigHistory(
   return dataLakeService.assembleLakeConfigHistory(lake, {
     db: {
       lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+      lakeMembershipChangeEvents: lakeMembershipChangeEventRepository,
       users: userRepository,
       userApiKeys: userApiKeyRepository,
     },

@@ -243,6 +243,11 @@ export function researchConfigChange(
   return literalChange('researchConfig', undefined, `${decision}: ${configName}`);
 }
 
+/** One changed research-config lever as a line, for the levers with no dedicated phrasing above. */
+export function researchLeverChange(configName: string, description: string): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `${description}: ${configName}`);
+}
+
 /** Auto-admit being switched on or off on a research config, as an event entry on the same field. */
 export function researchAutoAdmitChange(configName: string, enabled: boolean): ILakeConfigLiteralChange {
   return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
