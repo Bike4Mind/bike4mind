@@ -19,7 +19,8 @@ const hasLiveSession = (): boolean => !!useAccessToken.getState().accessToken &&
  * sign-out, expiry and mid-MFA) is the only hint; without it a signed-out visitor makes no refresh
  * call here. A sign-in error in the URL wins: the visitor came back to see it, not to be forwarded.
  *
- * A session already live in memory is left to MultiStepLogin's own redirect effect. Signing in
+ * A session already live in memory is left to MultiStepLogin's own redirect effect (the cache
+ * teardown is skipped too, it would wipe the session just established). Signing in
  * remounts this page (TanStackRouterProvider swaps its wrapper once there is a user) while the
  * router still matches /login, and that effect reads redirectTo in the same commit; an awaited
  * resume here would read the address only after the sign-in's navigation, find no redirectTo,
@@ -57,6 +58,7 @@ const LoginPage = () => {
     // MFAEnforcementWrapper stuck on its loader.
     let cancelled = false;
     const resumeOrClear = async () => {
+      if (hasLiveSession()) return;
       // The resume must run before the teardown below: removeQueries and the cache wipe would drop
       // the very session the shared bootstrap is about to establish (see sessionBootstrap.ts).
       if (shouldResumeSession()) {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { clearClientCaches } from '@client/app/utils/clearClientCaches';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -123,12 +124,17 @@ describe('LoginPage in the router - a fresh sign-in', () => {
       </QueryClientProvider>
     );
 
-    fireEvent.click(await screen.findByTestId('login-otc-verify-btn'));
+    const verifyBtn = await screen.findByTestId('login-otc-verify-btn');
+    vi.mocked(clearClientCaches).mockClear();
+    fireEvent.click(verifyBtn);
 
-    await waitFor(() => expect(screen.queryByTestId('page-/projects') ?? screen.queryByTestId('page-/new')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.queryByTestId('page-/projects') ?? screen.queryByTestId('page-/new')).toBeTruthy()
+    );
     await act(() => new Promise(resolve => setTimeout(resolve, 50)));
     expect(window.location.pathname).toBe('/projects');
     expect(seen).not.toContain('/new');
+    expect(clearClientCaches).not.toHaveBeenCalled();
     expect(screen.getByTestId('page-/projects')).toBeTruthy();
   });
 });

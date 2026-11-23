@@ -159,6 +159,20 @@ describe('LoginPage - resuming an existing session', () => {
     expect(history.replace).not.toHaveBeenCalled();
   });
 
+  it('leaves a session that is already live in memory alone: no resume, no cache teardown', async () => {
+    useAccessToken.setState({ accessToken: 'live-access', hasSession: true });
+    useUser.setState({ currentUser: signedInUser as never });
+    const calls = serveRefresh(true);
+
+    renderLogin('/login?redirectTo=%2Fprojects');
+
+    expect(screen.getByTestId('login-form')).toBeTruthy();
+    await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+    expect(clearClientCaches).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(history.replace).not.toHaveBeenCalled();
+  });
+
   it('forwards when another tab signs in while the form is open', async () => {
     const calls = serveRefresh(true);
     renderLogin('/login?redirectTo=%2Fprojects');
@@ -172,7 +186,7 @@ describe('LoginPage - resuming an existing session', () => {
     expect(calls).toEqual(['/api/auth/refreshToken']);
   });
 
-  it('forwards on a later sign-in in another tab after this tab\'s own resume found no session', async () => {
+  it("forwards on a later sign-in in another tab after this tab's own resume found no session", async () => {
     useAccessToken.setState({ hasSession: true });
     const calls = serveRefresh(false);
     renderLogin('/login?redirectTo=%2Fprojects');
