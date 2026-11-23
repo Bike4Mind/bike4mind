@@ -29,7 +29,8 @@
     "incremental": "tsdown",
     "typecheck": "tsc --noEmit",
     "dev": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",

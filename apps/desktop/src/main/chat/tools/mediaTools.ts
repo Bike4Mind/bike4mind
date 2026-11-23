@@ -140,7 +140,7 @@ export const generateImageTool: ToolDefinition = {
     parameters: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What to draw. Be specific; the server may refine it.' },
+        prompt: { type: 'string', description: 'What to draw. Be specific; it is sent to the model as written.' },
         model: {
           type: 'string',
           description: 'Image model id. Omit to use this deployment default; a model it does not offer is refused.',
@@ -177,22 +177,16 @@ export const generateImageTool: ToolDefinition = {
           prompt,
           model,
           ...(optionalString(input, 'size') ? { size: optionalString(input, 'size') } : {}),
-          ...(media.getRemoteSessionId() ? { remoteSessionId: media.getRemoteSessionId() } : {}),
-          notebookName: media.notebookName,
         },
         {
           client: media.client,
           store: media.store,
           sessionId: context.sessionId ?? '',
-          cdnUrl: media.cdnUrl,
           signal: context.signal,
           progress: text => context.report?.progress(text),
         }
       );
 
-      if (outcome.remoteSessionId && outcome.remoteSessionId !== media.getRemoteSessionId()) {
-        await media.setRemoteSessionId(outcome.remoteSessionId);
-      }
       for (const item of outcome.media) context.report?.media(item);
 
       const sizes = outcome.media.map(item => formatBytes(item.byteLength)).join(', ');

@@ -20,6 +20,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
 import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
+import { useGetReferralLink } from '@client/app/hooks/data/referralLink';
+import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
@@ -69,6 +71,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   // Disabled by the server while the reward amounts are 0, so the section stays out of sight until launch.
   const { data: referralSummary } = useGetReferralSummary({ enabled: isOpen && !!userId });
+  const { data: referralLink } = useGetReferralLink({
+    enabled: isOpen && !!userId && inviteType === ReferralInviteType.referral,
+  });
+  const { copied: linkCopied, handleCopyToClipboard } = useCopyToClipboard();
 
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
@@ -286,6 +292,31 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 </Box>
               ))}
             </Box>
+          )}
+
+          {referralLink && (
+            <FormControl data-testid="referral-link" sx={{ mb: 3 }}>
+              <FormLabel sx={{ mb: 0.5 }}>{t('referral.share_link_label')}</FormLabel>
+              <Stack direction="row" spacing={1}>
+                <Input
+                  readOnly
+                  value={referralLink.url}
+                  onFocus={e => e.target.select()}
+                  slotProps={{ input: { 'data-testid': 'referral-link-input' } }}
+                  sx={{ flex: 1, borderRadius: '4px' }}
+                />
+                <Button
+                  variant="outlined"
+                  data-testid="referral-link-copy-btn"
+                  onClick={() => handleCopyToClipboard(referralLink.url)}
+                >
+                  {linkCopied ? t('referral.share_link_copied') : t('referral.share_link_copy')}
+                </Button>
+              </Stack>
+              <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                {t('referral.share_link_hint')}
+              </Typography>
+            </FormControl>
           )}
 
           <Stack spacing={2.5} sx={{ mb: 3 }}>

@@ -120,7 +120,7 @@ const read = (rel: string) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')
 // Comments stripped (keeping `://` in strings) so a commented-out call cannot satisfy a check.
 const stripComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, '$1');
 
-// Same skip set as fabFileModerationGate.test.ts (a copy: the walker is ten lines, and a shared
+// Same skip set as fabFileModerationGate.repo.test.ts (a copy: the walker is ten lines, and a shared
 // helper would need a non-test module in this directory just for two guards).
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
 

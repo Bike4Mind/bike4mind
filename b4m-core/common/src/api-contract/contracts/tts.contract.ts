@@ -129,6 +129,10 @@ export const synthesizeSpeechContract = defineEndpoint({
         'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
       schema: ttsErrorResponseSchema,
     },
+    503: {
+      description: 'Every candidate provider is out of quota, so speech is temporarily unavailable.',
+      schema: ttsErrorResponseSchema,
+    },
     504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.

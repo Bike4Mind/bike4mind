@@ -8,6 +8,46 @@ function track(): { activity: SessionActivity; events: ChatSessionStatusEvent[] 
 }
 
 describe('SessionActivity', () => {
+  it('badges an unread finished reply until viewed without keeping its turn open', () => {
+    const { activity } = track();
+    activity.replyStarted('a');
+    activity.replyEnded('a', true);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    expect(activity.runtimeStatusOf('a')).toBe('done');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action', unreadReply: true }]);
+    activity.viewed('a');
+    expect(activity.statusOf('a')).toBe('done');
+    expect(activity.snapshot()).toEqual([]);
+  });
+
+  it('does not clear approvals, held messages or decisions when a reply is viewed', () => {
+    const { activity, events } = track();
+    activity.replyStarted('a');
+    activity.replyEnded('a', true);
+    activity.approvalRequested('a');
+    expect(events.at(-1)).toEqual({ sessionId: 'a', status: 'needs-action' });
+    activity.heldChanged('a', true);
+    activity.decisionChanged('a', true);
+    activity.viewed('a');
+    activity.approvalSettled('a');
+    activity.heldChanged('a', false);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    activity.decisionChanged('a', false);
+    expect(activity.statusOf('a')).toBe('done');
+  });
+
+  it('replaces unread attention with working and forgets unread deleted sessions', () => {
+    const { activity } = track();
+    activity.replyEnded('a', true);
+    activity.replyStarted('a');
+    expect(activity.statusOf('a')).toBe('processing');
+    activity.replyEnded('a');
+    expect(activity.statusOf('a')).toBe('done');
+    activity.replyEnded('a', true);
+    activity.forget('a');
+    expect(activity.snapshot()).toEqual([]);
+  });
+
   it('reports an untouched session as done', () => {
     const { activity, events } = track();
     expect(activity.statusOf('a')).toBe('done');

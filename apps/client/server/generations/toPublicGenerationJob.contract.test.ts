@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import type { JobMapperDeps, SignedOutput } from '@bike4mind/server-utils/generations/signedOutput';
 import {
+  IMAGE_GENERATION_PROJECTION,
   MUSIC_GENERATION_PROJECTION,
   toPublicGenerationJob,
   VIDEO_GENERATION_PROJECTION,
@@ -18,6 +19,8 @@ const toPublicVideoGeneration = (
   job: IGenerationJobDocumentOf<'video'>,
   deps: JobMapperDeps
 ): Promise<VideoGeneration> => toPublicGenerationJob(job, deps, VIDEO_GENERATION_PROJECTION);
+const toPublicImageGeneration = (job: IGenerationJobDocumentOf<'image'>, deps: JobMapperDeps) =>
+  toPublicGenerationJob(job, deps, IMAGE_GENERATION_PROJECTION);
 const toPublicMusicGeneration = (
   job: IGenerationJobDocumentOf<'music'>,
   deps: JobMapperDeps
@@ -85,6 +88,20 @@ const musicJob = (overrides: Partial<IGenerationJobDocument> = {}) =>
     },
     ...overrides,
   }) as IGenerationJobDocumentOf<'music'>;
+
+const imageJob = (overrides: Partial<IGenerationJobDocument> = {}) =>
+  ({
+    ...base,
+    kind: 'image',
+    state: 'pending',
+    payload: {
+      request: { model: 'gpt-image-2', mode: 'generate', prompt: 'a red bicycle', quality: 'medium' },
+      providerId: 'openai',
+      groupId: 'g1',
+      groupSize: 2,
+    },
+    ...overrides,
+  }) as IGenerationJobDocumentOf<'image'>;
 
 const deps = (signed: SignedOutput): JobMapperDeps => ({
   sign: async () => signed,
@@ -165,5 +182,34 @@ describe('public v1 music resource bytes', () => {
   it.each(GENERATION_JOB_ERROR_CODES)('renders a job failed with %s', async code => {
     const failed = musicJob({ state: 'failed', error: { code, message: 'provider wording' } });
     expect(JSON.stringify(await toPublicMusicGeneration(failed, ready))).toMatchSnapshot();
+  });
+});
+
+describe('public v1 image resource bytes', () => {
+  it('renders a pending job', async () => {
+    expect(JSON.stringify(await toPublicImageGeneration(imageJob(), ready))).toMatchSnapshot();
+  });
+
+  it('renders a succeeded job with its group_id', async () => {
+    const succeeded = imageJob({
+      state: 'succeeded',
+      settledCredits: 100,
+      payload: {
+        ...imageJob().payload,
+        output: {
+          location: 'files',
+          s3Key: 'generated-image/j.png',
+          fileId: 'f1',
+          contentType: 'image/png',
+          bytes: 10,
+        },
+      },
+    });
+    expect(JSON.stringify(await toPublicImageGeneration(succeeded, ready))).toMatchSnapshot();
+  });
+
+  it('folds an internal-only error code into the public set', async () => {
+    const failed = imageJob({ state: 'failed', error: { code: 'orphaned_submit', message: 'provider wording' } });
+    expect(JSON.stringify(await toPublicImageGeneration(failed, ready))).toMatchSnapshot();
   });
 });

@@ -29,6 +29,7 @@ const EXPECTED_CORE_DISALLOWED = [
   '/verify-',
   '/auth',
   '/oauth',
+  '/r/',
   '/admin',
   '/agent',
   '/artifacts-demo',
