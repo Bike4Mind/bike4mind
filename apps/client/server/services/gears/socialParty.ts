@@ -41,7 +41,10 @@ export async function hasQualifyingSocialParty(beneficiaryId: string, partyIds: 
 
 /** hasQualifyingSocialParty over the collaborators of the projects `ownerId` owns. */
 export async function hasQualifyingProjectCollaborator(ownerId: string): Promise<boolean> {
-  const projects = await Project.find({ userId: ownerId, 'users.0': { $exists: true } }, { 'users.userId': 1 })
+  const projects = await Project.find(
+    { userId: ownerId, deletedAt: null, 'users.0': { $exists: true } },
+    { 'users.userId': 1 }
+  )
     .limit(100)
     .lean<Array<{ users?: Array<{ userId?: unknown }> }>>();
   return hasQualifyingSocialParty(

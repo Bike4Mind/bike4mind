@@ -71,7 +71,7 @@ describe('hasQualifyingProjectCollaborator', () => {
     mocks.userFind.mockResolvedValue([owner, { _id: THIRD, emailVerified: false }, verifiedOther]);
     await expect(hasQualifyingProjectCollaborator(OWNER)).resolves.toBe(true);
     expect(mocks.projectFind).toHaveBeenCalledWith(
-      { userId: OWNER, 'users.0': { $exists: true } },
+      { userId: OWNER, deletedAt: null, 'users.0': { $exists: true } },
       { 'users.userId': 1 }
     );
   });

@@ -1685,7 +1685,8 @@ function bumpViewCount(
   const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
   void (async () => {
     const countsAsExternal =
-      signedInOther && (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]));
+      signedInOther &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]).catch(() => false));
     const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
     await (countsAsShareView
       ? PublishedArtifact.updateOne(

@@ -2273,6 +2273,16 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     );
   });
 
+  it('a failed qualifying check still records the plain view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockQualifies.mockRejectedValue(new Error('db down'));
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } })
+    );
+  });
+
   it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
