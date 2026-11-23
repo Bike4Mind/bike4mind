@@ -139,7 +139,7 @@ export const assistantBriefRepository = {
   /** The latest ready brief's id and decision approval refs only: what the pending-decisions count reads. */
   async findLatestReadyDecisionRefs(
     userId: string
-  ): Promise<{ _id: mongoose.Types.ObjectId; decisions: Array<Pick<BriefDecision, 'approval'>> } | null> {
+  ): Promise<{ _id: mongoose.Types.ObjectId; decisions: Array<Pick<StoredBriefDecision, 'approval'>> } | null> {
     return AssistantBriefModel.findOne({ userId, status: 'ready' })
       .sort({ createdAt: -1 })
       .select('_id decisions.approval')
