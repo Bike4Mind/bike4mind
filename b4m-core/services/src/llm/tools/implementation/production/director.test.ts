@@ -243,8 +243,10 @@ describe('production director tools', () => {
     expect(directorClips(final.timeline, 'music')).toHaveLength(1);
     expect(directorClips(final.timeline, 'voice')).toHaveLength(3);
     expect(directorClips(final.timeline, 'sfx')).toHaveLength(1);
+    // The blank template's own empty video lane stays; the director never removes a lane it did not make.
     expect(final.timeline.tracks.map(track => track.id)).toEqual([
       DIRECTOR_TRACK_IDS.video,
+      'track-video-1',
       DIRECTOR_TRACK_IDS.music,
       DIRECTOR_TRACK_IDS.voice,
       DIRECTOR_TRACK_IDS.sfx,
@@ -741,6 +743,59 @@ describe('production director tools', () => {
       shots: [{ keep: 'shot-1' }, { keep: 'shot-2' }, { keep: 'shot-3' }],
     };
     expect(await run(productionStoryboardTool, harness, retime)).not.toMatch(/^Error/);
+  });
+
+  it('reports lines that moved with their pictures, and pins them back on a second call in the same order', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const lines = () => harness.composition().shots.map(shot => shot.voiceLine);
+    const original = lines();
+
+    const swapped = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1' }, { keep: 'shot-3' }, { keep: 'shot-2' }],
+      })
+    );
+    expect(swapped.linesMoved).toEqual([
+      { shot: 'shot-2', says: original[2], before: original[1] },
+      { shot: 'shot-3', says: original[1], before: original[2] },
+    ]);
+    expect(swapped.shots.map((shot: { voiceLine?: string }) => shot.voiceLine)).toEqual(lines());
+    expect(swapped.next).toContain('linesMoved');
+
+    const pinned = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [
+          { keep: 'shot-1' },
+          { keep: 'shot-2', voiceLine: original[1] },
+          { keep: 'shot-3', voiceLine: original[2] },
+        ],
+      })
+    );
+    expect(pinned.linesMoved).toBeUndefined();
+    expect(lines()).toEqual(original);
+  });
+
+  it('does not report moved lines when no shot changes place', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const result = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1' }, { keep: 'shot-2' }, { keep: 'shot-3' }],
+      })
+    );
+    expect(result.linesMoved).toBeUndefined();
+  });
+
+  it('tells the director to retry with rewriteLines when it rewords a kept shot without it', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const refused = await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [{ keep: 'shot-1' }, { keep: 'shot-2', voiceLine: 'A brand new line.' }, { keep: 'shot-3' }],
+    });
+    expect(refused).toMatch(/^Error: this storyboard no longer says/);
+    expect(refused).toContain('You gave shot-2 a new voice line');
   });
 
   it('keeps stills on the timeline when animate is false', async () => {

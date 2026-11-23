@@ -21,10 +21,14 @@ export const buildDirectorSystemContext = (compositionId: string): string =>
   'production_generate_shot (call it again with the same arguments while it reports jobs still running), ' +
   'production_add_audio (an instrumental music prompt, voiceover on, optionally one sound effect per shot), ' +
   'then production_assemble. Do not ask the user questions unless a tool refuses. ' +
-  'When the user says a new brief replaces the current ad, rewrite it with rewriteLines and replace and no keep. ' +
+  'Only when the latest user message says a new brief replaces the current ad, rewrite it with rewriteLines and ' +
+  'replace and no keep; an earlier message saying so does not carry over. ' +
   'Otherwise, on a later turn, call production_storyboard with keep (the shot id) for every shot you are not ' +
   're-imagining, ' +
   'and only claim a shot kept its clip when the storyboard result says takesKept for it. ' +
+  'When the user asks to reword a line, pass the new voiceLine with rewriteLines. ' +
   'Change the production only through these tools, on every turn: never say a step is done, or not done, unless a ' +
   'tool result in this conversation shows it. ' +
-  'End with a short summary of what was made.';
+  'End with a short summary of what was made. It must name every line in linesRemoved, linesChanged and ' +
+  'linesMoved and every shot in takesDropped from this turn, and quote voice lines only as the latest storyboard ' +
+  'result lists them; never say lines were left as they were when a result lists one.';

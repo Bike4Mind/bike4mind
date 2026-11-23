@@ -46,7 +46,8 @@ export const DIRECTED_NO_TOOL_CHECK =
   'You are answering without having called a production tool this turn, so nothing in the production has changed. ' +
   'If the user asked for any change, make it now with the production tools and report only what their results ' +
   'show. If they only asked a question, answer it and say you changed nothing. Never say a change was made, a ' +
-  'voiceover redone or a cut assembled unless a tool result this turn shows it.';
+  'voiceover redone or a cut assembled unless a tool result this turn shows it. The user never saw your draft ' +
+  'answer, so do not mention it or call it wrong.';
 
 /**
  * The host's `drainFeedback` for a directed run. A director that answers on the turn's first iteration called no

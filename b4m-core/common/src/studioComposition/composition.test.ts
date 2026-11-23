@@ -155,11 +155,10 @@ describe('shot picks', () => {
     expect(validateStudioComposition(content)).toEqual([]);
   });
 
-  it('refuses a pick or a clip outside the shot files', () => {
+  it('refuses a pick outside the shot takes; a clip is its own file, not a take', () => {
     const content = withShot({ fileIds: [FILE_A], chosenFileId: FILE_B, clipFileId: FILE_C });
     expect(validateStudioComposition(content).map(issue => [issue.code, issue.path.join('.')])).toEqual([
-      ['unknown_file', 'shots.0.chosenFileId'],
-      ['unknown_file', 'shots.0.clipFileId'],
+      ['unknown_take', 'shots.0.chosenFileId'],
     ]);
   });
 });

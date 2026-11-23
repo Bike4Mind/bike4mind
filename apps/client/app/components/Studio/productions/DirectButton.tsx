@@ -32,16 +32,27 @@ const productLines = (picked: IFabFileDocument | null, brandProducts: readonly s
 
 const sameBrief = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 
+type DirectedShot = NonNullable<StudioCompositionResponse['shots']>[number];
+
+// A template's starter shots have only a title and intent; a shot is part of an earlier ad once it has a prompt, a
+// voice line or takes.
+const isAuthoredShot = (shot: DirectedShot): boolean =>
+  Boolean(shot.prompt?.trim() || shot.voiceLine?.trim() || (shot.fileIds?.length ?? 0) > 0);
+
 // A Direct launch on a production that already has shots is the user asking for a new ad; without saying so the
-// storyboard tool refuses the new lines and the director reads the brief as a follow-up that keeps every shot.
-const redirectLines = (shotCount: number, brief: string, savedBrief: string | undefined): string[] =>
-  shotCount > 0 && !sameBrief(brief, savedBrief ?? '')
+// storyboard tool refuses the new lines and the director reads the brief as a follow-up that keeps every shot. The
+// replace is scoped to this message: the director carries it into later turns otherwise (a swap rebuilt the ad).
+const redirectLines = (shots: readonly DirectedShot[], brief: string, savedBrief: string | undefined): string[] => {
+  const shotCount = shots.filter(isAuthoredShot).length;
+  return shotCount > 0 && !sameBrief(brief, savedBrief ?? '')
     ? [
         `It already has ${shotCount} shot${shotCount === 1 ? '' : 's'} from an earlier brief. This brief replaces ` +
           'that ad: write a new storyboard for it with production_storyboard, passing rewriteLines: true and ' +
-          'replace: true and no keep.',
+          'replace: true and no keep. That applies to this message only; on every later message keep each shot ' +
+          'the user does not ask to change.',
       ]
     : [];
+};
 
 type DirectDialogProps = {
   composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit' | 'shots'>;
@@ -73,7 +84,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
         ...productLines(product, composition.brandKit?.productFileIds ?? []),
-        ...redirectLines(composition.shots?.length ?? 0, trimmedBrief, composition.brief?.summary),
+        ...redirectLines(composition.shots ?? [], trimmedBrief, composition.brief?.summary),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',

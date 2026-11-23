@@ -604,7 +604,11 @@ describe('processExecution tool deps', () => {
     async function resumeWith(payload: Record<string, unknown>) {
       const { agentExecutionRepository } = await import('@bike4mind/database');
       vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockClear();
-      vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockResolvedValueOnce(6 as never);
+      // Queued only for a resume that spends the budget: a user resume never calls it, and mockClear keeps a queued
+      // value, which would leak into the next describe's first handoff.
+      if (payload.resumedBy !== 'user') {
+        vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockResolvedValueOnce(6 as never);
+      }
       vi.mocked(agentExecutionRepository.markFailed).mockClear();
       const { handler } = await import('./agentExecutor');
       await handler({ executionId: 'exec-1', connectionId: 'conn-1', ...payload } as never, lambdaContext).catch(

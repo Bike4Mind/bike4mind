@@ -110,15 +110,17 @@ describe('DirectButton', () => {
     );
   });
 
-  const redirect = (summary: string, typed?: string) => {
-    render(
-      wrap(
-        <DirectButton
-          composition={{ id: 'comp123', brief: { summary }, shots: [{ id: 'shot-1' }, { id: 'shot-2' }] } as never}
-          blocked={false}
-        />
-      )
-    );
+  const authoredShots = [
+    { id: 'shot-1', title: 'Hook', prompt: 'A runner at dawn', voiceLine: 'Start strong.', fileIds: ['take1'] },
+    { id: 'shot-2', title: 'Product', prompt: 'The shoe on wet asphalt', fileIds: [] },
+  ];
+  const starterShots = [
+    { id: 'shot-1', title: 'Hook', intent: 'Grab attention', fileIds: [] },
+    { id: 'shot-2', title: 'Product', intent: 'Show the product', fileIds: [] },
+  ];
+
+  const redirect = (summary: string, typed?: string, shots: readonly object[] = authoredShots) => {
+    render(wrap(<DirectButton composition={{ id: 'comp123', brief: { summary }, shots } as never} blocked={false} />));
     fireEvent.click(screen.getByTestId('production-direct-btn'));
     if (typed !== undefined) {
       fireEvent.change(screen.getByTestId('production-direct-brief-input'), { target: { value: typed } });
@@ -133,6 +135,14 @@ describe('DirectButton', () => {
     expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain(
       'It already has 2 shots from an earlier brief. This brief replaces that ad'
     );
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain('applies to this message only');
+  });
+
+  it("does not treat a template's starter shots as an earlier ad", async () => {
+    redirect('', 'A bright gym ad for a water bottle', starterShots);
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).not.toContain('replaces that ad');
   });
 
   it('does not ask for a new ad when the brief is the saved one', async () => {

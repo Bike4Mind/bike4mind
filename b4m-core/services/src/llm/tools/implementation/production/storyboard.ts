@@ -29,7 +29,8 @@ const ShotArg = z.object({
     .describe(
       'A current shot id (e.g. "shot-3", not its title) to carry over with its prompt, takes and clip; omit ' +
         'prompt. Use it for every shot you are not re-imagining, in any order: listing kept shots in a new order ' +
-        'moves them. Other fields default to the current ones; voiceLine "" removes it.'
+        "moves them, and each kept shot's voice line moves with it: to move only the picture, set voiceLine to the " +
+        'line that place should say. Other fields default to the current ones; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
@@ -294,12 +295,19 @@ export const productionStoryboardTool: ToolDefinition = {
                 resolved.map(({ shot }) => shot)
               );
           if (dropped.length > 0) {
+            const reworded = resolved.flatMap(({ shot, source }) =>
+              source?.voiceLine && spokenWords(source.voiceLine) !== spokenWords(shot.voiceLine) ? [source.id] : []
+            );
             throw new ProductionToolError(
               `this storyboard no longer says these current voice lines word for word: ${dropped
                 .map(line => `"${line}"`)
                 .join(', ')}. Keep every line the user did not ask to change, word for word (you may split one ` +
                 'over shots). If the user asked to reword or remove them, or to drop a shot or rewrite the ad for a new brief, ' +
-                'pass rewriteLines: true.'
+                'pass rewriteLines: true.' +
+                (reworded.length > 0
+                  ? ` You gave ${reworded.join(', ')} a new voice line: if the user asked for that wording, call ` +
+                    'production_storyboard again now with the same shots and rewriteLines: true, without asking them.'
+                  : '')
             );
           }
           const totalMs = resolved.reduce((sum, { shot }) => sum + shot.durationMs, 0);
@@ -384,6 +392,21 @@ export const productionStoryboardTool: ToolDefinition = {
               ? [{ shot: source.id, was: source.voiceLine, now: shot.voiceLine ?? '' }]
               : []
           );
+          // keep carries a shot's line with its picture, so a reorder moves lines too; the user often meant only the
+          // pictures, and the director has told them the lines stayed (QA saw this on swaps).
+          const linesMoved = reorders
+            ? resolved.flatMap(({ shot, source }, index) =>
+                source?.voiceLine && shot.voiceLine === source.voiceLine && current.shots[index]?.id !== source.id
+                  ? [
+                      {
+                        shot: shots[index]?.id ?? source.id,
+                        says: shot.voiceLine,
+                        before: current.shots[index]?.voiceLine ?? '',
+                      },
+                    ]
+                  : []
+              )
+            : [];
           return JSON.stringify({
             // Every storyboard renumbers its shots, so a kept shot reports the id it had, which is now stale.
             shots: shots.map((shot, index) => {
@@ -393,6 +416,7 @@ export const productionStoryboardTool: ToolDefinition = {
                 ...(was && was !== shot.id && { was }),
                 title: shot.title,
                 durationMs: shot.durationMs,
+                ...(shot.voiceLine && { voiceLine: shot.voiceLine }),
                 ...(shot.fileIds.length > 0 && { takesKept: true }),
               };
             }),
@@ -400,6 +424,7 @@ export const productionStoryboardTool: ToolDefinition = {
             ...(lost.length > 0 && { takesDropped: lost }),
             ...(linesChanged.length > 0 && { linesChanged }),
             ...(linesRemoved.length > 0 && { linesRemoved }),
+            ...(linesMoved.length > 0 && { linesMoved }),
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
               'unless it needs a clip.' +
@@ -407,6 +432,12 @@ export const productionStoryboardTool: ToolDefinition = {
                 ? ' Tell the user each line in linesChanged as it now reads; never say a changed line was kept.'
                 : '') +
               (linesRemoved.length > 0 ? ' Tell the user each line in linesRemoved is no longer said.' : '') +
+              (linesMoved.length > 0
+                ? ' Each line in linesMoved moved with its picture and is now said on that shot. If the user asked ' +
+                  'for the lines to stay where they were, call production_storyboard again now with the shots in ' +
+                  'this order (keep their new ids) and each one in linesMoved given voiceLine: its before; ' +
+                  'otherwise tell the user which line each of those shots now says.'
+                : '') +
               (staleCut
                 ? " The old cut's voiceover and sound effects were cleared: call production_add_audio again with " +
                   'them, and with the music, which is remade only if the cut grew past it.'
