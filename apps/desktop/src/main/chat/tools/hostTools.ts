@@ -6,7 +6,7 @@ import {
   taskReportSchema,
   workerRequirementsSchema,
 } from '@shared/orchestration';
-import { SPAWN_CHOICE_TEXT } from '@shared/chat';
+import { SESSION_TITLE_MAX_LENGTH, SPAWN_CHOICE_TEXT } from '@shared/chat';
 import { suggestBranchName } from '../project/branchName';
 import {
   requireString,
@@ -572,6 +572,69 @@ export const sessionArchive: ToolDefinition = {
     const updated = await host.setArchived(sessionId, archived);
     if (!updated) return 'No conversation with that id in this project.';
     return `${archived ? 'Archived' : 'Restored'} "${updated.title}".`;
+  },
+};
+
+function hasControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** The title as it will be stored, or a refusal the model can act on. */
+export function validateSessionTitle(raw: unknown): string {
+  if (typeof raw !== 'string') throw new Error('The "title" argument is required and must be a string.');
+  const title = raw.trim();
+  if (!title) throw new Error('The title cannot be empty.');
+  if (hasControlCharacter(title)) throw new Error('The title must be one line with no control characters.');
+  if (title.length > SESSION_TITLE_MAX_LENGTH) {
+    throw new Error(`The title is ${title.length} characters; keep it to ${SESSION_TITLE_MAX_LENGTH} or fewer.`);
+  }
+  return title;
+}
+
+/**
+ * Ungated in every mode: it only changes a sidebar label, the user can rename it back, and a
+ * title the user chose is refused rather than overwritten.
+ */
+export const sessionRename: ToolDefinition = {
+  schema: {
+    name: 'session_rename',
+    description:
+      'Rename this conversation, or one you started, so the sidebar says what it is about. Use it ' +
+      'once the work is known - the issue or PR it is for - rather than on the first message. A ' +
+      'title the user chose by hand is never replaced, and other conversations cannot be renamed. ' +
+      `At most ${SESSION_TITLE_MAX_LENGTH} characters.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        session_id: {
+          type: 'string',
+          description: 'The conversation to rename. Omit it, or pass "self", for this one.',
+        },
+        title: { type: 'string', description: 'The new title, one line.' },
+      },
+      required: ['title'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const host = requireHost(context);
+    const title = validateSessionTitle(input.title);
+    const requested = optionalText(input, 'session_id');
+    const sessionId = !requested || requested === 'self' ? context.sessionId : requested;
+    if (!sessionId) throw new Error('This conversation has no id to rename; pass session_id.');
+    context.beginWrite?.();
+    const outcome = await host.renameSession(sessionId, title);
+    if (!outcome.ok) {
+      if (outcome.reason === 'user-title') {
+        throw new Error('The user named that conversation themselves, so its title is left as they chose it.');
+      }
+      throw new Error('Only this conversation and the ones it started can be renamed.');
+    }
+    return `Renamed it to "${outcome.session.title}".`;
   },
 };
 
