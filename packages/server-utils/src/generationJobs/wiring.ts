@@ -741,6 +741,7 @@ export const getImageJobDeps = (): ImageJobDeps => {
       spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
+    runBudget,
     enqueue: enqueueGenerationJob,
     recordUsage: recordImageUsage,
     countNotebookImage,

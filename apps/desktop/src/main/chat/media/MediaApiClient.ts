@@ -203,13 +203,16 @@ export class MediaApiClient {
    */
   async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/image-jobs', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/image-jobs',
+          { ...body, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
+      );
       return CreateImageJobResponseSchema.parse(response).data;
     } catch (error) {
-      throw toMediaError(error, 'Image generation');
+      throw toPaidCallError(error, 'Image generation');
     }
   }
 

@@ -55,6 +55,23 @@ const videoJob = {
   updated_at: 'x',
 };
 
+const imageJob = {
+  id: 'job-i',
+  object: 'image_generation',
+  state: 'pending',
+  model: 'gpt-image-1-mini',
+  mode: 'generate',
+  prompt: 'p',
+  group_id: 'grp1',
+  source: 'agent',
+  error: null,
+  output: null,
+  credits: { reserved: null, settled: null },
+  created_at: 'x',
+  updated_at: 'x',
+};
+const imageBody = { model: 'gpt-image-1-mini', mode: 'generate' as const, prompt: 'p', count: 1 };
+
 const speech = { audio: 'AAAA', contentType: 'audio/mpeg', format: 'mp3' };
 
 function clientWith(api: { post?: unknown; axiosPost?: unknown }, run?: MediaRun) {
@@ -79,6 +96,7 @@ describe('paid media calls inside an orchestration run', () => {
       if (path === '/api/ai/tts') return Promise.resolve(speech);
       if (path === '/api/v1/music-generations') return Promise.resolve(musicJob);
       if (path === '/api/v1/video-generations') return Promise.resolve(videoJob);
+      if (path === '/api/v1/image-jobs') return Promise.resolve({ group_id: 'grp1', data: [imageJob] });
       return Promise.reject(new Error(`unexpected ${path}`));
     });
     const axiosPost = vi.fn().mockResolvedValue({ data: new ArrayBuffer(2), headers: {} });
@@ -89,9 +107,10 @@ describe('paid media calls inside an orchestration run', () => {
     await client.generateSoundEffect({ text: 'rain' } as never);
     await client.createMusicGeneration({ model: 'm', prompt: 'p' }, 'key-1');
     await client.createVideoGeneration({ model: 'v', prompt: 'p' } as never, 'key-2');
+    await client.createImageJob(imageBody, 'key-3');
 
     const bodies = [...post.mock.calls, ...axiosPost.mock.calls].map(call => call[1] as { run?: unknown });
-    expect(bodies).toHaveLength(5);
+    expect(bodies).toHaveLength(6);
     for (const body of bodies) expect(body.run).toEqual(TOOL_RUN);
   });
 
@@ -125,6 +144,26 @@ describe('paid media calls inside an orchestration run', () => {
     await expect(client.createMusicGeneration({ model: 'm', prompt: 'p' }, 'key-m')).rejects.toBeInstanceOf(
       RunBudgetExhaustedError
     );
+    await expect(client.createImageJob(imageBody, 'key-i')).rejects.toBeInstanceOf(RunBudgetExhaustedError);
+  });
+
+  it('keeps the Idempotency-Key on an image job submit, including the unattributed resend', async () => {
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(notFound())
+      .mockResolvedValueOnce({ group_id: 'grp1', data: [imageJob] });
+    const run = runOf(false);
+
+    await clientWith({ post }, run).createImageJob(imageBody, 'key-i');
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[0][1]).toMatchObject({ run: TOOL_RUN });
+    expect(post.mock.calls[1][1]).not.toHaveProperty('run');
+    expect(post.mock.calls.map(call => (call[2] as { headers: unknown }).headers)).toEqual([
+      { 'Idempotency-Key': 'key-i' },
+      { 'Idempotency-Key': 'key-i' },
+    ]);
+    expect(run.onRejected).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the Idempotency-Key on video and music submits, including the unattributed resend', async () => {

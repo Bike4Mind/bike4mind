@@ -7,17 +7,19 @@ import {
   usdToCredits,
   validateImageRequest,
   type ApiKeyBillingOwnerType,
+  type CompletionRunAttribution,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
 } from '@bike4mind/common';
-import { releaseCreditHold, type CreditHold } from '../creditService/creditHold';
+import { releaseCreditHold } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
   checkBatchSpendCap,
   findIdempotentReplay,
   holdJobCredits,
   persistAndEnqueueJob,
+  type HeldJobCredits,
   resolveJobOwner,
   type IdempotencyKeyReused,
   type JobOwner,
@@ -171,6 +173,7 @@ export async function createImageJobs(
       requiredCredits,
       apiKeyId: input.apiKeyId,
       apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -203,13 +206,20 @@ type HoldParams = {
   requiredCredits: number;
   apiKeyId?: string;
   apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  run?: CompletionRunAttribution;
 };
 
+type Held = Omit<HeldJobCredits, 'ok'>;
+
+/**
+ * One hold per job, each claimed against the run (if any) in its own transaction. A refusal or a throw part way
+ * through returns the holds and claims already taken, so the batch is all or nothing.
+ */
 async function holdBatch(
   count: number,
   params: HoldParams,
   deps: CreateImageJobsDeps
-): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
+): Promise<{ ok: true; holds: Held[] } | Refusal> {
   if (count > 1) {
     const capped = await checkBatchSpendCap(
       { enforceCredits: params.enforceCredits, user: params.user, totalCredits: count * params.requiredCredits },
@@ -217,7 +227,7 @@ async function holdBatch(
     );
     if (capped) return capped;
   }
-  const holds: (CreditHold | null)[] = [];
+  const holds: Held[] = [];
   for (let index = 0; index < count; index++) {
     let held: Awaited<ReturnType<typeof holdJobCredits>>;
     try {
@@ -230,24 +240,32 @@ async function holdBatch(
       await releaseHolds(holds, deps);
       return held;
     }
-    holds.push(held.hold);
+    holds.push({ hold: held.hold, ...(held.runClaim && { runClaim: held.runClaim }) });
   }
   return { ok: true, holds };
 }
 
-async function releaseHolds(holds: readonly (CreditHold | null)[], deps: CreateImageJobsDeps): Promise<void> {
-  for (const hold of holds) {
-    if (!hold) continue;
+async function releaseHolds(holds: readonly Held[], deps: CreateImageJobsDeps): Promise<void> {
+  for (const { hold, runClaim } of holds) {
+    if (hold) {
+      try {
+        await releaseCreditHold(hold, deps.credits);
+      } catch (error) {
+        // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
+        deps.logger.error('image_job_create_hold_release_failed', {
+          ownerId: hold.ownerId,
+          ownerType: hold.ownerType,
+          reservedCredits: hold.reservedCredits,
+          error,
+        });
+      }
+    }
+    if (!runClaim) continue;
     try {
-      await releaseCreditHold(hold, deps.credits);
+      if (!deps.runBudget) throw new Error('No run budget adapters to release the run claim');
+      await deps.runBudget.release(runClaim, 0);
     } catch (error) {
-      // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
-      deps.logger.error('image_job_create_hold_release_failed', {
-        ownerId: hold.ownerId,
-        ownerType: hold.ownerType,
-        reservedCredits: hold.reservedCredits,
-        error,
-      });
+      deps.logger.error('image_job_create_run_claim_release_failed', { runClaim, error });
     }
   }
 }
@@ -258,7 +276,7 @@ type PersistParams = {
   request: StoredImageRequest;
   providerId: ImageJob['payload']['providerId'];
   groupId: string;
-  holds: readonly (CreditHold | null)[];
+  holds: readonly Held[];
   keys: readonly (string | undefined)[];
   missingIndexes: readonly number[];
 };
@@ -296,7 +314,9 @@ async function persistBatch(
           nextPollAt: now,
           deadlineAt: new Date(now.getTime() + IMAGE_JOB_MAX_WALL_CLOCK_MS),
           ...(keys[index] !== undefined && { idempotencyKey: keys[index] }),
-          creditHold: holds[position],
+          creditHold: holds[position].hold,
+          ...(input.run && { run: input.run }),
+          ...(holds[position].runClaim && { runClaim: holds[position].runClaim }),
         },
         deps
       );

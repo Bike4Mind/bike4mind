@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/utils/imageProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
+import { createFakeRunBudget } from '../generationJobs/__test__/fakeRunBudget';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { createImageJobs } from './createImageJobs';
@@ -33,7 +34,7 @@ vi.mock('../creditService/creditHold', () => ({
   releaseCreditHold: vi.fn(async () => undefined),
   settleCreditHold: vi.fn(async (_hold: unknown, charged: number) => charged),
 }));
-import { holdCredits, releaseCreditHold } from '../creditService/creditHold';
+import { holdCredits, releaseCreditHold, settleCreditHold } from '../creditService/creditHold';
 
 vi.mock('../creditService/newAccountSpendCap', () => ({ checkNewAccountSpendCap: vi.fn(async () => null) }));
 import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
@@ -636,5 +637,76 @@ describe('createImageJobs', () => {
       expect(job).toMatchObject({ kind: 'image', state: 'failed', error: { code: 'enqueue_failed' } });
       expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('createImageJobs with a completion run', () => {
+  const completionRun = { runId: 'run-1', role: 'worker' as const, purpose: 'tool' as const };
+  const create = (deps: CreateImageJobsDeps, count = 1) =>
+    createImageJobs({ user, request: validRequest, count, source: 'api', run: completionRun }, deps);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('claims each job hold against the run and persists the claim and the run on every job', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await create(deps, 2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const reserved = result.jobs[0].creditHold?.reservedCredits ?? 0;
+    expect(reserved).toBeGreaterThan(0);
+    for (const job of result.jobs) {
+      expect(job).toMatchObject({ run: completionRun, runClaim: { runId: 'run-1', credits: reserved } });
+    }
+    expect(budget.adapters.claim).toHaveBeenCalledTimes(2);
+    expect(budget.state.committedCredits).toBe(2 * reserved);
+  });
+
+  it('refuses with run_budget_exhausted and leaves no hold, claim or job when the batch does not fit', async () => {
+    const probe = createFakeRunBudget();
+    const sized = await create(makeDeps({ runBudget: probe.adapters }).deps);
+    const reserved = sized.ok ? (sized.jobs[0].creditHold?.reservedCredits ?? 0) : 0;
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+
+    // Room for one job of the two: the second claim is refused, so the first is returned.
+    const budget = createFakeRunBudget({ budgetCredits: reserved + 1 });
+    const { deps, repository } = makeDeps({ runBudget: budget.adapters });
+    await expect(create(deps, 2)).rejects.toMatchObject({ additionalInfo: { errorCode: 'run_budget_exhausted' } });
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(budget.state.committedCredits).toBe(0);
+    expect(repository.jobs.size).toBe(0);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns the claim when a job fails, and keeps only the charge when one succeeds', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await create(deps, 2);
+    if (!result.ok) throw new Error('expected the batch to be created');
+    const [failing, succeeding] = result.jobs;
+    const handler = createImageJobHandler(deps);
+    vi.mocked(settleCreditHold).mockResolvedValueOnce(7);
+
+    await handler.onTerminal({ ...failing, state: 'failed' });
+    await handler.onTerminal({ ...succeeding, state: 'succeeded' });
+
+    expect(budget.adapters.release).toHaveBeenCalledWith(failing.runClaim, 0);
+    expect(budget.adapters.release).toHaveBeenCalledWith(succeeding.runClaim, 7);
+    expect(budget.state.committedCredits).toBe(7);
+    expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ run: completionRun });
+  });
+
+  it('touches no run budget without a run', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await run(deps, validRequest);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.jobs[0]).not.toHaveProperty('run');
+    expect(result.ok && result.jobs[0]).not.toHaveProperty('runClaim');
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 });
