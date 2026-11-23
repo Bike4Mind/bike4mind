@@ -286,6 +286,7 @@ describe('streamCompletion', () => {
     });
 
     it('is not retried once content arrived, and says what happened instead of a bare "aborted"', async () => {
+      devLog.clear();
       const stream = new PassThrough();
       const { instance, post } = sequentialAxios([stream]);
       const events: CompletionStreamEvent[] = [];
@@ -297,6 +298,12 @@ describe('streamCompletion', () => {
 
       await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
       expect(post).toHaveBeenCalledTimes(1);
+      const logged = devLog.snapshot().records.filter(record => record.tags.includes('errors'));
+      expect(logged).toHaveLength(1);
+      expect(logged[0].tags).toEqual(['chat-stream', 'errors']);
+      expect(logged[0].fields?.source).toBe('transport');
+      expect(logged[0].message).toContain('aborted');
+      expect(logged[0].fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
     });
 
     it('is not retried after the caller aborted', async () => {

@@ -73,11 +73,19 @@ describe('createRendererErrorHandler', () => {
       const handle = createRendererErrorHandler(sink);
       for (let index = 0; index < RATE_LIMIT + 5; index++) handle.report({ kind: 'error', message: `e${index}` });
       expect(sink.snapshot().records).toHaveLength(RATE_LIMIT);
-      vi.advanceTimersByTime(RATE_WINDOW_MS);
+      vi.advanceTimersByTime(RATE_WINDOW_MS - 1);
+      expect(sink.snapshot().records).toHaveLength(RATE_LIMIT);
+      vi.advanceTimersByTime(1);
       const records = sink.snapshot().records;
       expect(records).toHaveLength(RATE_LIMIT + 1);
       expect(records.at(-1)?.message).toBe('5 renderer error reports dropped (rate limit)');
       expect(records.at(-1)?.fields).toEqual({ source: 'renderer', dropped: 5 });
+
+      handle.report({ kind: 'error', message: 'later' });
+      vi.advanceTimersByTime(RATE_WINDOW_MS * 2);
+      const after = sink.snapshot().records;
+      expect(after.at(-1)?.message).toBe('later');
+      expect(after.filter(record => /dropped/.test(record.message))).toHaveLength(1);
     });
   });
 
@@ -95,6 +103,12 @@ describe('createRendererErrorHandler', () => {
       expect(records[0].tags).toEqual(['renderer', 'errors']);
       expect(records[0].message).toBe('boom');
       expect(records[0].fields).toEqual({ source: 'renderer', kind: 'render', route: '#/settings' });
+    });
+
+    it('gives an empty message a fallback', () => {
+      const sink = new DevLogSink();
+      createRendererErrorHandler(sink).render({ message: '' });
+      expect(sink.snapshot().records[0].message).toBe('(no message)');
     });
 
     it('shares the rate limit with report', () => {

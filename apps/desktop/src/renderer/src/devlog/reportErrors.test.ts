@@ -46,7 +46,7 @@ describe('installErrorReporting', () => {
     expect(() => installErrorReporting(new EventTarget() as unknown as Window, undefined)).not.toThrow();
   });
 
-  it('reports a rejection whose reason cannot be stringified', () => {
+  it('does not throw when the reason cannot be stringified', () => {
     const listeners = new Map<string, (event: Event) => void>();
     const target = {
       addEventListener: (type: string, listener: (event: Event) => void) => listeners.set(type, listener),
@@ -57,5 +57,6 @@ describe('installErrorReporting', () => {
     expect(() =>
       listeners.get('unhandledrejection')?.(Object.assign(new Event('unhandledrejection'), { reason }))
     ).not.toThrow();
+    expect(report).not.toHaveBeenCalled();
   });
 });
