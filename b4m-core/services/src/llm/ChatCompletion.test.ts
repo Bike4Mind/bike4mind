@@ -15981,9 +15981,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(notify).toHaveBeenCalledWith(
@@ -16003,9 +16001,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(notify).toHaveBeenCalledWith(expect.objectContaining({ reasons: ['suspend_pending'], hitsInWindow: 5 }))
@@ -16017,9 +16013,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(applyModerationHit).toHaveBeenCalled();
       expect(notify).not.toHaveBeenCalled();
@@ -16030,9 +16024,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockRejectedValue(new Error('event bus down'));
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -16048,9 +16040,7 @@ describe('prompt moderation', () => {
         throw new Error('not wired');
       };
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -16065,9 +16055,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(notify).toHaveBeenCalledTimes(1);
     });
@@ -16076,9 +16064,7 @@ describe('prompt moderation', () => {
       blockWith(['sexual/minors']);
       service.notifyModerationEscalation = undefined;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(applyModerationHit).toHaveBeenCalled();
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());

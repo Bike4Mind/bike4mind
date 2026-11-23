@@ -719,7 +719,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     description:
       'Review users throttled or pending suspension for flagged prompts, or with a severe-category hit; confirm the suspension, keep them throttled or return them to active',
     navigationType: 'tab',
-    target: '82', // AdminTab.TextModerationReview
+    target: '84', // AdminTab.TextModerationReview
     keywords: [
       'text moderation',
       'flagged prompts',
