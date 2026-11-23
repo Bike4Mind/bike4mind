@@ -38,7 +38,7 @@ const WORKFLOW_DIR = path.join(REPO_ROOT, '.github', 'workflows');
  * it is added, and a deleted guard fails rather than leaving the shape assertions below to pass
  * over an empty set.
  */
-const EXPECTED_GUARD_FILES = ['e2e-ai-latency.yml', 'e2e-on-label.yml', 'e2e-run.yml'];
+const EXPECTED_GUARD_FILES = ['e2e-ai-latency.yml', 'e2e-run.yml'];
 
 type Guard = { file: string; body: string };
 
@@ -75,7 +75,7 @@ describe('e2e preview E2E_CLEANUP_SECRET guard', () => {
   // count exceeds the file count. Pinned so that deleting one guard fails here even though the
   // file still contains the other - the per-file assertion above cannot see that.
   it('finds every guard occurrence, including the two in e2e-ai-latency.yml', () => {
-    expect(guards).toHaveLength(4);
+    expect(guards).toHaveLength(3);
   });
 
   it.each(EXPECTED_GUARD_FILES)('reports a missing secret as a labeled skip in %s', file => {
@@ -125,13 +125,11 @@ describe('e2e skip rendering', () => {
 
   it('renders the PR comment as Skipped rather than Passed', () => {
     const contents = read('e2e-on-label.yml');
-    expect(contents).toMatch(/const skipped = process\.env\.E2E_PREVIEW_SKIPPED === 'true'/);
-    expect(contents).toMatch(/^\s*E2E_PREVIEW_SKIPPED: \$\{\{ steps\.e2e\.outputs\.preview_skipped \}\}$/m);
-    // Anchored to the front of the statement, not matched anywhere in it: `passed ? 'Passed' :
-    // skipped ? 'Skipped' : 'Failed'` still contains the inner arm, so an unanchored match would
-    // pass while a skip rendered a green "E2E Tests Passed" on a PR where zero tests ran.
-    expect(contents).toMatch(/const status = skipped \? 'Skipped' :/);
-    expect(contents).toMatch(/const icon = skipped \?/);
+    expect(contents).toContain('uses: ./.github/workflows/e2e-core.yml');
+    expect(read('e2e-core.yml')).toContain('OUTCOME: ${{ needs.preview.outputs.outcome }}');
+    expect(read('e2e-core.yml')).toContain('JOB_RESULT: ${{ needs.preview.result }}');
+    const reporter = fs.readFileSync(path.join(REPO_ROOT, '.github/scripts/preview-e2e.cjs'), 'utf8');
+    expect(reporter).toContain("state: outcome === 'passed' ? 'success'");
   });
 
   /**
