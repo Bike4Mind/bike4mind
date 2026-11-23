@@ -8,12 +8,24 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-const { mockResolve, perUserBuckets, limiter, session } = vi.hoisted(() => ({
+const { mockResolve, perUserBuckets, limiter, session, validateApiKey } = vi.hoisted(() => ({
   mockResolve: vi.fn(),
   perUserBuckets: [] as string[],
   limiter: { limited: false },
   session: { attachUser: true },
+  validateApiKey: vi.fn(),
 }));
+
+vi.mock('@bike4mind/services', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    userApiKeyService: {
+      ...(actual.userApiKeyService as object),
+      validateUserApiKey: (...args: unknown[]) => validateApiKey(...args),
+    },
+  };
+});
 
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
   resolveCallableFunctionsEnabled: (...args: unknown[]) => mockResolve(...args),
@@ -56,12 +68,12 @@ import handler from '../status';
 
 type HandlerArgs = Parameters<typeof handler>;
 
-function fire(bearer?: string) {
+function fire(bearer?: string, extraHeaders: Record<string, string> = {}) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>(
     {
       method: 'GET',
       url: '/api/callable-functions/status',
-      headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+      headers: { ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...extraHeaders },
     },
     { eventEmitter: EventEmitter }
   );
@@ -75,6 +87,17 @@ describe('GET /api/callable-functions/status', () => {
     mockResolve.mockResolvedValue(false);
     limiter.limited = false;
     session.attachUser = true;
+    validateApiKey.mockReset();
+    validateApiKey.mockResolvedValue({ isValid: false, reason: 'not_found' });
+  });
+
+  it('answers 401 to an API key without validating it, since the route takes a session only', async () => {
+    const { res, call } = fire(undefined, { 'x-api-key': 'b4m_live_0123456789abcdef0123456789abcdef' });
+    await call();
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(validateApiKey).not.toHaveBeenCalled();
+    expect(mockResolve).not.toHaveBeenCalled();
   });
 
   it('answers 401 without a session and never reads the setting', async () => {
