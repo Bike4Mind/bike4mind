@@ -39,36 +39,38 @@ const parseCyclesBack = (raw: unknown): number => {
  * elevenLabsPlan* admin settings. GET ?cyclesBack=0 (the current cycle; 1 is the previous one, and so on).
  * Credits are estimates from our usage records; see b4m-core/common/src/elevenLabsPlanUsage.ts for the rates.
  *
- * Gated like usage-margin.ts: support:read, and the ADMIN scope on the API-key path.
+ * Gated by support:read; session-only (jwtOnly), like revenue.ts.
  */
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req, res) => {
-    const cyclesBack = parseCyclesBack(req.query.cyclesBack);
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
+  const cyclesBack = parseCyclesBack(req.query.cyclesBack);
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: [...PLAN_SETTINGS] });
-    const startDay = planSetting('elevenLabsPlanCycleStartDay', settings);
-    const cycle = elevenLabsBillingCycle(new Date(), startDay, cyclesBack);
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: [...PLAN_SETTINGS] });
+  const startDay = planSetting('elevenLabsPlanCycleStartDay', settings);
+  const cycle = elevenLabsBillingCycle(new Date(), startDay, cyclesBack);
 
-    const rows = await usageEventRepository.providerUnitsBreakdown({
-      provider: 'elevenlabs',
-      ...cycle,
-      defaultUnits: ELEVENLABS_DEFAULT_DURATION_SECONDS,
-    });
-    const summary = summarizeElevenLabsPlanUsage(rows, {
-      cycle,
-      startDay,
-      monthlyCredits: planSetting('elevenLabsPlanMonthlyCredits', settings),
-      agentMinutes: planSetting('elevenLabsPlanAgentMinutes', settings),
-    });
+  const rows = await usageEventRepository.providerUnitsBreakdown({
+    provider: 'elevenlabs',
+    ...cycle,
+    defaultUnits: ELEVENLABS_DEFAULT_DURATION_SECONDS,
+  });
+  const summary = summarizeElevenLabsPlanUsage(rows, {
+    cycle,
+    startDay,
+    monthlyCredits: planSetting('elevenLabsPlanMonthlyCredits', settings),
+    agentMinutes: planSetting('elevenLabsPlanAgentMinutes', settings),
+  });
 
-    const users = await userRepository.findByIds(summary.byUser.map(u => u.userId));
-    const labelById = new Map(users.map(u => [String(u.id), u.name || u.username || u.email]));
-    const body: ElevenLabsPlanUsage = {
-      ...summary,
-      byUser: summary.byUser.map(u => ({ ...u, userLabel: labelById.get(u.userId) ?? u.userId })),
-    };
-    return res.json(body);
-  }
-);
+  const users = await userRepository.findByIds(summary.byUser.map(u => u.userId));
+  const labelById = new Map(users.map(u => [String(u.id), u.name || u.username || u.email]));
+  const body: ElevenLabsPlanUsage = {
+    ...summary,
+    byUser: summary.byUser.map(u => ({ ...u, userLabel: labelById.get(u.userId) ?? u.userId })),
+  };
+  return res.json(body);
+});
 
 export default handler;
