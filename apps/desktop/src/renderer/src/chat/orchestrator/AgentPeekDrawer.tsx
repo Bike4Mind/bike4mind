@@ -106,8 +106,16 @@ export function useSessionMessages(
     };
   }, [agentId, refreshKey, enabled]);
   useEffect(() => {
-    if (viewed) markSessionViewed(agentId);
-  }, [agentId, viewed]);
+    if (!viewed) return;
+    const acknowledge = () => markSessionViewed(agentId);
+    acknowledge();
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [agentId, viewed, messages, refreshKey]);
   return { messages, loadError };
 }
 

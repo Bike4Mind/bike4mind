@@ -10,7 +10,7 @@ import {
 } from '../../schemas/billingOrganization';
 
 import { ImageQuestSchema } from '../../schemas/imageApi';
-import { imageQuestPollResult } from './imageGeneration.contract';
+import { IMAGE_QUEST_ROUTES_DEPRECATION, imageQuestPollResult } from './imageGeneration.contract';
 import {
   GENERATION_CALLBACK_DESCRIPTION,
   GENERATION_CALLBACK_REJECTED_DESCRIPTION,
@@ -55,6 +55,7 @@ export const editImageContract = defineEndpoint({
     '(`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
+  deprecated: IMAGE_QUEST_ROUTES_DEPRECATION,
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: EditImageRequestBodySchema,

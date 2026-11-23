@@ -25,6 +25,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
   },
+  cancelImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs/{id}/cancel',
+  },
   cancelMusicGeneration: {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
@@ -92,6 +96,10 @@ export const operations = {
   createFileUpload: {
     method: 'POST',
     path: '/api/v1/files',
+  },
+  createImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs',
   },
   createMusicGeneration: {
     method: 'POST',
@@ -245,6 +253,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/briefs/{id}',
   },
+  getBriefSchedule: {
+    method: 'GET',
+    path: '/api/v1/briefs/schedule',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -304,6 +316,10 @@ export const operations = {
   getFilesByIds: {
     method: 'GET',
     path: '/api/v1/files/by-ids',
+  },
+  getImageJob: {
+    method: 'GET',
+    path: '/api/v1/image-jobs/{id}',
   },
   getMe: {
     method: 'GET',
@@ -421,6 +437,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/handoff-devices',
   },
+  listImageJobs: {
+    method: 'GET',
+    path: '/api/v1/image-jobs',
+  },
   listImageModels: {
     method: 'GET',
     path: '/api/v1/image-models',
@@ -520,6 +540,10 @@ export const operations = {
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
+  },
+  putBriefSchedule: {
+    method: 'PUT',
+    path: '/api/v1/briefs/schedule',
   },
   raiseCompletionRunBudget: {
     method: 'POST',

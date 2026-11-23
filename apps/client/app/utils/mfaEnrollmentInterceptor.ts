@@ -1,8 +1,8 @@
 import { isAxiosError, type AxiosInstance } from 'axios';
 
 /**
- * True for the 403 the server auth middleware returns when enforceMFA is on and this session has
- * no factor enrolled (mfaEnrollmentGate in server/auth/auth.ts).
+ * True for the 403 the server auth middleware returns when MFA is required of this session (enforceMFA
+ * or a team policy) and it has no factor enrolled (mfaEnrollmentGate in server/auth/auth.ts).
  */
 export const isMfaEnrollmentRequired = (error: unknown): boolean =>
   isAxiosError(error) &&

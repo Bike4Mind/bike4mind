@@ -24,7 +24,12 @@ vi.mock('../../../../fabFileService/create', () => ({
   createFabFile: (...args: unknown[]) => createFabFileMock(...args),
 }));
 
-import { resolveFileNameAndType, saveContentToDataLakeTool } from './saveContentToDataLake';
+import {
+  MAX_LAKE_SAVES_PER_TURN,
+  MAX_SAVE_CONTENT_BYTES,
+  resolveFileNameAndType,
+  saveContentToDataLakeTool,
+} from './saveContentToDataLake';
 import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE } from './adapters';
 import type { ToolContext } from '../../base/types';
 
@@ -240,6 +245,100 @@ describe('save_content_to_data_lake', () => {
 
     await expect(run(context)).resolves.toBe(DATA_LAKES_DISABLED_MESSAGE);
     expect(assertLakeAccessWithGrantsMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses content over the byte cap before any lake gate or file create', async () => {
+    const { context } = makeContext();
+
+    const result = await run(context, { ...baseArgs, content: 'a'.repeat(MAX_SAVE_CONTENT_BYTES + 1) });
+
+    expect(result).toContain('Nothing was saved');
+    expect(result).toContain(`${MAX_SAVE_CONTENT_BYTES + 1} bytes`);
+    expect(context.db.adminSettings!.getSettingsValue).not.toHaveBeenCalled();
+    expect(assertLakeAccessWithGrantsMock).not.toHaveBeenCalled();
+    expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  it('saves content of exactly the byte cap', async () => {
+    const result = await run(makeContext().context, { ...baseArgs, content: 'a'.repeat(MAX_SAVE_CONTENT_BYTES) });
+
+    expect(result).toContain('Saved "notes.md"');
+    expect(createFabFileMock.mock.calls[0][1].fileSize).toBe(MAX_SAVE_CONTENT_BYTES);
+  });
+
+  it('counts bytes rather than characters for multibyte content', async () => {
+    // U+20AC is 3 bytes in UTF-8, so this string is under the cap in characters but over it in bytes.
+    const content = '\u20ac'.repeat(Math.floor(MAX_SAVE_CONTENT_BYTES / 3) + 1);
+    expect(content.length).toBeLessThan(MAX_SAVE_CONTENT_BYTES);
+
+    const result = await run(makeContext().context, { ...baseArgs, content });
+
+    expect(result).toContain('Nothing was saved');
+    expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  describe('per-turn save budget', () => {
+    const withQuest = (claimLakeSaveSlot: ReturnType<typeof vi.fn>) => {
+      const { context } = makeContext();
+      return {
+        ...context,
+        questId: 'q1',
+        db: { ...context.db, quests: { findSessionIdsByImage: vi.fn(), claimLakeSaveSlot } },
+      } as ToolContext;
+    };
+
+    it('refuses the save after the cap within one tool build, creating no file', async () => {
+      const toolFn = saveContentToDataLakeTool.implementation(makeContext().context, undefined).toolFn;
+      for (let i = 0; i < MAX_LAKE_SAVES_PER_TURN; i++) {
+        expect(await toolFn(baseArgs)).toContain('Saved');
+      }
+
+      const result = (await toolFn(baseArgs)) as string;
+
+      expect(result).toContain(`limit of ${MAX_LAKE_SAVES_PER_TURN} saves per message`);
+      expect(createFabFileMock).toHaveBeenCalledTimes(MAX_LAKE_SAVES_PER_TURN);
+    });
+
+    it('holds the cap for parallel calls without a quest', async () => {
+      const toolFn = saveContentToDataLakeTool.implementation(makeContext().context, undefined).toolFn;
+
+      await Promise.all(Array.from({ length: MAX_LAKE_SAVES_PER_TURN + 3 }, () => toolFn(baseArgs)));
+
+      expect(createFabFileMock).toHaveBeenCalledTimes(MAX_LAKE_SAVES_PER_TURN);
+    });
+
+    it('claims from the quest when there is one, so separate builds share the count', async () => {
+      const claim = vi.fn().mockResolvedValue(false);
+
+      const result = await run(withQuest(claim));
+
+      expect(claim).toHaveBeenCalledWith('q1', MAX_LAKE_SAVES_PER_TURN);
+      expect(result).toContain('saves per message');
+      expect(createFabFileMock).not.toHaveBeenCalled();
+    });
+
+    it('saves when the quest grants a slot', async () => {
+      const result = await run(withQuest(vi.fn().mockResolvedValue(true)));
+
+      expect(result).toContain('Saved "notes.md"');
+    });
+
+    it('claims nothing when the target lake is refused', async () => {
+      const claim = vi.fn().mockResolvedValue(true);
+      assertLakeAccessWithGrantsMock.mockRejectedValue(new ForbiddenError('no access'));
+
+      const result = await run(withQuest(claim));
+
+      expect(result).toContain('Nothing was saved');
+      expect(claim).not.toHaveBeenCalled();
+    });
+
+    it('saves nothing when the claim itself fails', async () => {
+      const result = await run(withQuest(vi.fn().mockRejectedValue(new Error('db down'))));
+
+      expect(result).toContain('Nothing was saved');
+      expect(createFabFileMock).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a mime type outside the text allowlist', async () => {

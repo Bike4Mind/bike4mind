@@ -1514,17 +1514,6 @@ export interface ChatSession extends ChatSessionMeta {
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
   /**
-   * The b4m notebook this conversation files its generations under, created lazily by the
-   * server on the first one.
-   *
-   * Desktop conversations are otherwise purely local (see the header). Image generation is the
-   * exception: `POST /api/ai/generate-image` is notebook-scoped and creates one when given no
-   * id, so without this every image would leave a separate stray notebook in the web app - and
-   * the server's prompt resolver, which reads that notebook's history, could never bind a
-   * follow-up like "make it darker" to the image before it.
-   */
-  remoteSessionId?: string;
-  /**
    * Tasks the model suggested handing to a new session; see ChatSpawnSuggestion. Kept off
    * ChatSessionSummary so the sidebar listing never carries them.
    */
@@ -1708,6 +1697,8 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** Attention for a finished reply, not a turn waiting on an answer. */
+  unreadReply?: boolean;
   /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
   preparing?: SessionSetupStep;
 }

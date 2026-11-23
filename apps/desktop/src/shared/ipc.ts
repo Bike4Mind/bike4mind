@@ -7,6 +7,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
+import type { AppMenuAction, RendererErrorReport } from './appShell';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -609,6 +610,12 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** main -> renderer push: an app-menu item the renderer carries out (main/appMenu.ts). */
+  appMenuAction: 'appmenu:action',
+  /** A menu action chosen while no window was open, waiting for the window it reopened. */
+  appMenuTakePending: 'appmenu:take-pending',
+  /** Renderer -> main: a render error the top-level error boundary caught, for main's log. */
+  rendererReportError: 'renderer:report-error',
   /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
   attentionGetNotifyScope: 'attention:get-notify-scope',
   attentionSetNotifyScope: 'attention:set-notify-scope',
@@ -793,6 +800,12 @@ export interface MiniTavernApi {
 export interface DesktopApi {
   studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
+  appMenu: {
+    onAction(listener: (action: AppMenuAction) => void): () => void;
+    takePending(): Promise<AppMenuAction | null>;
+  };
+  reportRendererError(report: RendererErrorReport): Promise<void>;
   /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
   skins: {
     list(): Promise<SkinSummary[]>;

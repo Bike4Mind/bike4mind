@@ -51,6 +51,7 @@ import { useAcquisitionConversion } from './useAcquisitionConversion';
 import { useActivationFunnel } from './useActivationFunnel';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { todayUtc } from '@client/app/utils/dateUtils';
 
 const RANGE_OPTIONS = [
   { value: '7d', label: '7d' },
@@ -80,7 +81,6 @@ const FOOTERS: Record<AnalyticsAccounts, string> = {
   all: 'Active users include admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups, usage and top accounts always exclude them. The separate API series always counts external accounts. Days are UTC.',
 };
 
-const todayUtc = () => new Date().toISOString().slice(0, 10);
 const shiftUtc = (day: string, days: number) =>
   new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 

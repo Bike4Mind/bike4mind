@@ -58,22 +58,36 @@ for await (const event of b4m.completions({
 
 The endpoint opens the stream before it validates, authenticates or rate-limits, so an invalid body, a rejected key or a rate limit arrives as a yielded `{ type: 'error' }` event, not a thrown error. Only a response that never becomes a stream (a malformed JSON body, a wrong method, a proxy error) throws `B4mApiError`. Pass `{ signal }` to cancel, or `{ url }` to stream from a different endpoint; a relative `url` is joined under `baseUrl`. An absolute `url` receives the same `Authorization` header, so pass only an origin you trust. A stream that ends without `[DONE]` and without an error event throws.
 
-## Chat and image jobs
+## Chat turns
 
-Chat turns and image generations and edits are queued. Each helper returns a handle whose `poll()` waits for the job to finish:
+Chat turns are queued. `chat` returns a handle whose `poll()` waits for the turn to finish:
 
 ```ts
 const turn = await b4m.chat({ message: 'Summarize my last notebook' });
 const quest = await turn.poll({ timeoutMs: 120_000 });
 console.log(quest.reply);
-
-const image = await b4m.generateImage({ prompt: 'a red bicycle', model: 'gpt-image-1' });
-const { images } = await image.poll();
 ```
 
 `poll` backs off from `intervalMs` (default 1000 ms) up to `maxIntervalMs` (default 5000 ms). It throws `B4mQuestError` when the job ends with `type: "error"` (`reason: 'error'`), ends `stopped` (`'stopped'`), or outlives `timeoutMs` (`'timeout'`). `error.quest` holds the last state. To resume polling a known quest id, use `pollQuest(id)`.
 
-Other async jobs (agent executions, video generations, file uploads) are plain `call`s: start the job, then poll its `get*` operation.
+## Image, video and music jobs
+
+Image, video and music generations, agent executions and file uploads are plain `call`s: start the job, then poll its `get*` operation until `state` is terminal.
+
+```ts
+const { data: [job] } = await b4m.call('createImageJob', {
+  body: { model: 'gpt-image-1', mode: 'generate', prompt: 'a red bicycle' },
+  headers: { 'Idempotency-Key': crypto.randomUUID() },
+});
+let current = job;
+while (current.state === 'pending' || current.state === 'running' || current.state === 'storing') {
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  current = await b4m.call('getImageJob', { params: { id: job.id } });
+}
+console.log(current.output?.url);
+```
+
+`generateImage` and `editImage` (the quest-based `POST /api/v1/image-generations` and `/api/v1/image-edits`) are deprecated and stop working on 2027-02-17.
 
 ## Audio
 
