@@ -41,11 +41,24 @@ const states: [string, WorkerTask['state'], boolean][] = [
 describe.each(states)('%s attention', (_label, state, updateOnly) => {
   it.each([true, false, undefined])('preserves required decisions when attentionViewed=%s', attentionViewed => {
     const workerTask = { state, attentionViewed } as WorkerTask;
-    const done =
-      updateOnly && (attentionViewed === true || (state.status === 'completed' && attentionViewed === undefined));
     expect(isUpdateOnlyTask(state)).toBe(updateOnly);
-    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, undefined)).toBe(done ? 'done' : 'needs-you');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, undefined)).toBe('done');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done')).toBe('done');
     expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'needs-action')).toBe('needs-you');
     expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'processing')).toBe('working');
   });
+});
+
+it('preserves task completion, cancellation and runtime outcome states without inventing attention', () => {
+  expect(deriveTaskAgentState({ workerTask: { state: completed(false) } as WorkerTask }, undefined)).toBe('done');
+  const workerTask = { state: { status: 'canceled', reason: 'Stopped' } } as WorkerTask;
+  expect(deriveTaskAgentState({ workerTask }, undefined)).toBe('stopped');
+  expect(deriveTaskAgentState({ workerTask }, 'processing')).toBe('working');
+  expect(deriveTaskAgentState({ workerTask }, 'needs-action')).toBe('needs-you');
+  for (const state of ['queued', 'running', 'blocked', 'paused', 'escalated'] as const) {
+    const workerTask = { state: { status: state } } as WorkerTask;
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'failed' }, undefined)).toBe('failed');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'aborted' }, undefined)).toBe('stopped');
+    expect(deriveTaskAgentState({ workerTask }, undefined)).toBe('idle');
+  }
 });

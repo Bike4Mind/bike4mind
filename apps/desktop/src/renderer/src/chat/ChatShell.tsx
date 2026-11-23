@@ -366,7 +366,7 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const { statuses, preparing, loaded: statusesLoaded } = useSessionStatusFeed();
+  const { statuses, preparing, unreadReplies, loaded: statusesLoaded } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -769,8 +769,11 @@ export function ChatShell({
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const awaitingDecision = pendingDecisionOf(activeSummary?.workerTask) !== undefined;
+  const unreadReply = !!activeId && unreadReplies.has(activeId);
   const turnOpen =
-    conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
+    conversation.streaming ||
+    sessionStatus === 'processing' ||
+    (sessionStatus === 'needs-action' && !awaitingDecision && !unreadReply);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
   const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
@@ -958,6 +961,17 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  useEffect(() => {
+    if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
+    const acknowledge = () => markSessionViewed(persistedId);
+    acknowledge();
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [persistedId, screen, unreadReply, orchestrating, dockVisible]);
   const toggleParentChat = () => {
     const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
     wakeAmbient();
@@ -1015,7 +1029,14 @@ export function ChatShell({
     else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
   // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
+  useNeedsYouAlerts(
+    sessions,
+    statuses,
+    statusesLoaded,
+    openNotice,
+    screen === 'conversation' ? activeId : null,
+    unreadReplies
+  );
   const clearAgentFocus = useCallback(() => setAgentFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
