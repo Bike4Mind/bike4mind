@@ -94,6 +94,17 @@ export const useAdminRevokeApiKey = (userId: string) => {
   });
 };
 
+/** Grants (all categories) or clears (`categories: []`) the key's prompt moderation exception. */
+export const useAdminSetApiKeyModerationException = (userId: string) => {
+  const invalidate = useInvalidateUserKeys(userId);
+  return useMutation({
+    mutationFn: async ({ keyId, reason, categories }: KeyWrite & { categories: readonly string[] }) => {
+      await api.put(`${keyPath(keyId)}/moderation-exception`, { reason, categories });
+    },
+    onSettled: invalidate,
+  });
+};
+
 export const useAdminRestoreApiKey = (userId: string) => {
   const invalidate = useInvalidateUserKeys(userId);
   return useMutation({

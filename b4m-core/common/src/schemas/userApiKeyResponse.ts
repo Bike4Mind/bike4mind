@@ -69,6 +69,15 @@ export const apiKeyRateLimitUsageSchema = z.object({
 
 export type ApiKeyRateLimitUsage = z.infer<typeof apiKeyRateLimitUsageSchema>;
 
+/** The admin-visible part of a key's moderation exception; the acting admin id stays server-side. */
+export const adminApiKeyModerationExceptionSchema = z.object({
+  categories: z.array(z.string()),
+  reason: z.string(),
+  setAt: z.coerce.date(),
+});
+
+export type AdminApiKeyModerationException = z.infer<typeof adminApiKeyModerationExceptionSchema>;
+
 /** GET /api/admin/users/[userId]/user-api-keys */
 export const adminUserApiKeysResponseSchema = z.object({
   apiKeys: z.array(userApiKeyResponseSchema),
@@ -76,4 +85,6 @@ export const adminUserApiKeysResponseSchema = z.object({
   /** Requests per key from the usage log (90-day TTL), keyed by key id; absent keys made none. */
   requests: z.record(z.string(), adminApiKeyRequestCountsSchema),
   access: adminApiKeyAccessSchema,
+  /** Keys with a moderation exception, keyed by key id; absent keys have none. */
+  moderationExceptions: z.record(z.string(), adminApiKeyModerationExceptionSchema),
 });
