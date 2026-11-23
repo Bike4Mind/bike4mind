@@ -42631,17 +42631,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/v1/briefs/schedule\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\nundefined\nB4M_REQUEST_BODY"
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/v1/briefs/schedule\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"enabled\": true,\n  \"timeOfDay\": \"08:00\",\n  \"days\": [\n    1,\n    2,\n    3,\n    4,\n    5\n  ],\n  \"timeZone\": \"America/New_York\"\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/schedule\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify(undefined),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/schedule\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"enabled\": true,\n  \"timeOfDay\": \"08:00\",\n  \"days\": [\n    1,\n    2,\n    3,\n    4,\n    5\n  ],\n  \"timeZone\": \"America/New_York\"\n}),\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/briefs/schedule\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json=None,\n)"
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/briefs/schedule\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"enabled\": True,\n        \"timeOfDay\": \"08:00\",\n        \"days\": [\n            1,\n            2,\n            3,\n            4,\n            5\n        ],\n        \"timeZone\": \"America/New_York\"\n    },\n)"
           }
         ]
       }
