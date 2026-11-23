@@ -41,7 +41,7 @@ const collectedFiles = (serverUtilsTestLane: string | undefined): string[] => {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  const entries: unknown = JSON.parse(stdout.slice(stdout.search(/^\[/m)));
+  const entries: unknown = JSON.parse(stdout.slice(stdout.search(/^\[\s*(?:[{\]]|$)/m)));
   if (!Array.isArray(entries)) throw new Error('vitest list --json did not print an array');
   return entries.map(entry => path.relative(PACKAGE_ROOT, (entry as { file: string }).file)).sort();
 };
