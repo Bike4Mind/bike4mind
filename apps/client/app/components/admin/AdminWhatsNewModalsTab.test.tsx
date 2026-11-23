@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   modals: vi.fn(),
   toggle: vi.fn(),
   remove: vi.fn(),
-  env: vi.fn(),
+  deployment: vi.fn(),
   toggleState: {} as Record<string, unknown>,
   highlights: vi.fn(),
 }));
@@ -29,7 +29,7 @@ vi.mock('@client/app/hooks/data/whatsNewModals', () => ({
   useUpdateHighlightsConfig: () => idleMutation(),
   useGenerateHighlights: () => idleMutation(),
 }));
-vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: mocks.env }));
+vi.mock('@client/app/hooks/data/admin', () => ({ useDeploymentInfo: mocks.deployment }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
@@ -68,7 +68,7 @@ describe('AdminWhatsNewModalsTab', () => {
     mocks.remove.mockReset();
     mocks.toggleState = {};
     // A fork stage hides the weekly highlights section; only the last test shows it.
-    mocks.env.mockReturnValue({ data: { stage: 'production', isForkProduction: true } });
+    mocks.deployment.mockReturnValue({ data: { stage: 'production', isForkProduction: true } });
     mocks.highlights.mockReturnValue({ data: undefined, isLoading: false, refetch: vi.fn() });
   });
 
@@ -149,7 +149,7 @@ describe('AdminWhatsNewModalsTab', () => {
   });
 
   it('shows the weekly highlights section below the modals on a main environment', () => {
-    mocks.env.mockReturnValue({ data: { stage: 'dev', isForkProduction: false } });
+    mocks.deployment.mockReturnValue({ data: { stage: 'dev', isForkProduction: false } });
     mocks.highlights.mockReturnValue({
       data: { enabled: true, slackChannelId: 'C1', slackTeamId: 'T1' },
       isLoading: false,

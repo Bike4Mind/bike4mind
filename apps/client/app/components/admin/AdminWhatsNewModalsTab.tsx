@@ -43,7 +43,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveIcon from '@mui/icons-material/Save';
 import { IModalDocument } from '@bike4mind/common';
-import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
+import { useDeploymentInfo } from '@client/app/hooks/data/admin';
 import {
   useGetWhatsNewModals,
   useDeleteWhatsNewModal,
@@ -286,9 +286,9 @@ function WhatsNewErrorFallback() {
 export default function AdminWhatsNewModalsTab() {
   // isForkProduction distinguishes a fork's production stage from the source deployment. The
   // highlights card stays on the main environments only (source prod, dev, PR previews).
-  const { data: env } = useLiveOpsTriageEnv();
-  const stage = env?.stage || 'unknown';
-  const isForkProduction = env?.isForkProduction ?? false;
+  const { data: deployment } = useDeploymentInfo();
+  const stage = deployment?.stage || 'unknown';
+  const isForkProduction = deployment?.isForkProduction ?? false;
 
   const [createOpen, setCreateOpen] = useState(false);
   const { refetch, isFetching } = useGetWhatsNewModals();
@@ -334,7 +334,7 @@ export default function AdminWhatsNewModalsTab() {
         <ModalsSection createOpen={createOpen} onCreateOpenChange={setCreateOpen} />
 
         {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-        {shouldShowWeeklyHighlights(env) && <WeeklyHighlightsSection />}
+        {shouldShowWeeklyHighlights(deployment) && <WeeklyHighlightsSection />}
       </Stack>
     </ErrorBoundary>
   );

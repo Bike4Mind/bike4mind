@@ -229,21 +229,21 @@ describe('AdminWhatsNewModalsTab.utils', () => {
 });
 
 describe('shouldShowWeeklyHighlights', () => {
-  const env = (stage: string, isForkProduction = false) => ({ stage, isForkProduction });
+  const deployment = (stage: string, isForkProduction = false) => ({ stage, isForkProduction });
 
   it.each(['production', 'dev', 'pr6756'])('shows the card on the main stage %s', stage => {
-    expect(shouldShowWeeklyHighlights(env(stage))).toBe(true);
+    expect(shouldShowWeeklyHighlights(deployment(stage))).toBe(true);
   });
 
   it.each(['staging', 'shared-dev', 'john'])('hides the card on the non-main stage %s', stage => {
-    expect(shouldShowWeeklyHighlights(env(stage))).toBe(false);
+    expect(shouldShowWeeklyHighlights(deployment(stage))).toBe(false);
   });
 
   it('hides the card on a fork production deployment', () => {
-    expect(shouldShowWeeklyHighlights(env('production', true))).toBe(false);
+    expect(shouldShowWeeklyHighlights(deployment('production', true))).toBe(false);
   });
 
-  it('hides the card until the environment descriptor resolves', () => {
+  it('hides the card until the deployment descriptor resolves', () => {
     expect(shouldShowWeeklyHighlights(undefined)).toBe(false);
   });
 });
