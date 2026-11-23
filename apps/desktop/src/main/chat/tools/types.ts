@@ -532,6 +532,14 @@ export interface HostSessionView {
   project?: string;
 }
 
+/**
+ * What session_rename got back. 'out-of-scope' covers a session outside this project as well as
+ * one in it that is neither the caller nor a child of it, so the model cannot probe either.
+ */
+export type HostRenameOutcome =
+  | { ok: true; session: HostSessionView }
+  | { ok: false; reason: 'out-of-scope' | 'user-title' };
+
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
   ok: false;
@@ -638,6 +646,11 @@ export interface HostContext {
   readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /**
+   * Retitle this conversation or one it started, and lock the title against the generator.
+   * Refused for any other session, and for a title the user chose by hand; see agentMayRetitle.
+   */
+  renameSession(sessionId: string, title: string): Promise<HostRenameOutcome>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
   /**

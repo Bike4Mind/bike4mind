@@ -6231,6 +6231,18 @@ export class ChatService {
         return updated ? { ...this.toHostView(updated), title: visibleTitle(updated) } : null;
       },
 
+      // Narrower than archive: only the caller itself and the sessions it started.
+      renameSession: async (sessionId, title) => {
+        const target = await addressable(sessionId);
+        if (!target || (target.id !== session.id && target.origin?.parentSessionId !== session.id)) {
+          return { ok: false, reason: 'out-of-scope' };
+        }
+        const outcome = await this.deps.store.renameByAgent(sessionId, title);
+        if (!outcome.ok) return { ok: false, reason: outcome.reason === 'missing' ? 'out-of-scope' : outcome.reason };
+        this.deps.summaryChanged?.(outcome.summary);
+        return { ok: true, session: { ...this.toHostView(outcome.summary), title: visibleTitle(outcome.summary) } };
+      },
+
       deleteSession: async sessionId => {
         if (!(await addressable(sessionId))) return false;
         await this.deleteSession(sessionId);
@@ -9630,6 +9642,8 @@ const HOST_GUIDANCE: readonly string[] = [
   'session_archive tidies one away and session_delete removes one permanently. Spawning,',
   'archiving and deleting reach this project only, and a spawned session can read and change',
   'exactly the folders you can - it cannot be given others.',
+  'session_rename names this conversation or one you started once its work is known (the issue',
+  'or PR); a title the user chose by hand is left alone.',
   "session_send also reaches the user's conversations in other projects: session_list with scope",
   '"all" finds them. A message to another project, or to a conversation allowed to do more without',
   'asking than this one, waits until ITS user lets it in. Never try to get another conversation',

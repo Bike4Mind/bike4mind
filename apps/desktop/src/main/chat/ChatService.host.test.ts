@@ -162,6 +162,7 @@ describe('ChatService app-control tools', () => {
       'session_read',
       'session_send',
       'session_archive',
+      'session_rename',
       'session_delete',
       'session_spawn',
       'session_suggestion_update',
@@ -340,5 +341,107 @@ describe('ChatService app-control tools', () => {
     callTool(await awaitStreamOf('tidy up'), 'c2', 'session_archive', { session_id: other.id, archived: false });
     await vi.waitUntil(() => settled('session_archive').length === 2, { timeout: 5000, interval: 5 });
     expect((await store.get(other.id))?.archived).toBeUndefined();
+  });
+
+  describe('session_rename', () => {
+    /** A session the caller started, in the caller's own project. */
+    async function childOf(parent: ChatSessionSummary): Promise<ChatSessionSummary> {
+      const stored = await store.get(parent.id);
+      return store.create(undefined, {
+        mode: 'code',
+        ...(stored?.project ? { project: stored.project } : {}),
+        origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'child task' },
+      });
+    }
+
+    const outcomeOf = (index: number): string => JSON.stringify(settled('session_rename')[index] ?? null);
+
+    it('renames the calling conversation when session_id is omitted or "self"', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'name yourself');
+      callTool(await awaitStreamOf('name yourself'), 'c1', 'session_rename', { title: '  #12 | PR#34 | rename tool  ' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      expect(await store.get(mine.id)).toMatchObject({
+        title: '#12 | PR#34 | rename tool',
+        titleLocked: true,
+        titleSource: 'agent',
+      });
+
+      callTool(await awaitStreamOf('name yourself'), 'c2', 'session_rename', { session_id: 'self', title: 'Second' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+      expect((await store.get(mine.id))?.title).toBe('Second');
+    });
+
+    it('renames a conversation it started', async () => {
+      const mine = await codeSession(projectA);
+      const child = await childOf(mine);
+
+      await service.send(mine.id, 'name the child');
+      callTool(await awaitStreamOf('name the child'), 'c1', 'session_rename', {
+        session_id: child.id,
+        title: 'Child work',
+      });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      expect(await store.get(child.id)).toMatchObject({ title: 'Child work', titleSource: 'agent' });
+    });
+
+    it('refuses a conversation it did not start, in this project or another', async () => {
+      const mine = await codeSession(projectA);
+      const sibling = await codeSession(projectA);
+      const theirs = await codeSession(projectB);
+      const before = { sibling: (await store.get(sibling.id))?.title, theirs: (await store.get(theirs.id))?.title };
+
+      await service.send(mine.id, 'rename others');
+      callTool(await awaitStreamOf('rename others'), 'c1', 'session_rename', { session_id: sibling.id, title: 'Nope' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      callTool(await awaitStreamOf('rename others'), 'c2', 'session_rename', { session_id: theirs.id, title: 'Nope' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/Only this conversation and the ones it started can be renamed/);
+      expect(outcomeOf(1)).toMatch(/Only this conversation and the ones it started can be renamed/);
+      expect((await store.get(sibling.id))?.title).toBe(before.sibling);
+      expect((await store.get(theirs.id))?.title).toBe(before.theirs);
+    });
+
+    it('never overwrites a title the user chose by hand', async () => {
+      const mine = await codeSession(projectA);
+      const child = await childOf(mine);
+      await service.renameSession(child.id, 'Picked by the user');
+
+      await service.send(mine.id, 'rename child');
+      callTool(await awaitStreamOf('rename child'), 'c1', 'session_rename', { session_id: child.id, title: 'Agent' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/named that conversation themselves/);
+      expect((await store.get(child.id))?.title).toBe('Picked by the user');
+    });
+
+    it('stops renaming its own conversation once the user renames it after the agent did', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'self rename');
+      callTool(await awaitStreamOf('self rename'), 'c1', 'session_rename', { title: 'Agent first' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      await service.renameSession(mine.id, 'User later');
+
+      callTool(await awaitStreamOf('self rename'), 'c2', 'session_rename', { title: 'Agent again' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+      expect(outcomeOf(1)).toMatch(/named that conversation themselves/);
+      expect((await store.get(mine.id))?.title).toBe('User later');
+    });
+
+    it.each(['ask', 'auto', 'full'] as const)('asks for no approval in %s mode', async mode => {
+      const mine = await codeSession(projectA);
+      await store.setApprovalMode(mine.id, mode);
+
+      await service.send(mine.id, `rename in ${mode}`);
+      callTool(await awaitStreamOf(`rename in ${mode}`), 'c1', 'session_rename', { title: `Named in ${mode}` });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(asked.filter(entry => entry.toolName === 'session_rename')).toEqual([]);
+      expect(settled('session_rename')[0]?.approvalId).toBeUndefined();
+      expect((await store.get(mine.id))?.title).toBe(`Named in ${mode}`);
+    });
   });
 });

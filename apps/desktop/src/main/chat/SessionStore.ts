@@ -56,6 +56,22 @@ export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
 }
 
+export type AgentRenameOutcome =
+  | { ok: true; summary: ChatSessionSummary }
+  | { ok: false; reason: 'user-title' | 'missing' };
+
+/**
+ * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
+ * A hand rename ('user') never is. A locked title with no recorded source is read by where it
+ * came from: on a spawned session it was the spawning agent's choice at creation; on any other
+ * it predates `titleSource` and only a hand rename could have locked it, so it is the user's.
+ */
+export function agentMayRetitle(session: Pick<ChatSession, 'titleLocked' | 'titleSource' | 'origin'>): boolean {
+  if (!session.titleLocked || session.titleSource === 'agent') return true;
+  if (session.titleSource === 'user') return false;
+  return session.origin !== undefined;
+}
+
 /**
  * Derive a session title from its first user message, the way the sidebar wants to read:
  * one line, trimmed, ellipsized. Falls back to the placeholder for an empty or blank prompt.
@@ -1019,9 +1035,32 @@ export class SessionStore implements SessionWritesStore {
     return this.mutate(id, session => {
       session.title = deriveTitle(title);
       session.titleLocked = true;
+      session.titleSource = 'user';
       session.updatedAt = new Date().toISOString();
       return true;
     });
+  }
+
+  /**
+   * Name a conversation on an agent's behalf (session_rename). Locks the title exactly as `rename`
+   * does, so the generator stops too, but refuses one the user chose - see agentMayRetitle.
+   * Checked inside the serialized write, so a hand rename that lands first always wins.
+   */
+  async renameByAgent(id: string, title: string): Promise<AgentRenameOutcome> {
+    let refused = false;
+    const summary = await this.mutate(id, session => {
+      if (!agentMayRetitle(session)) {
+        refused = true;
+        return null;
+      }
+      session.title = deriveTitle(title);
+      session.titleLocked = true;
+      session.titleSource = 'agent';
+      session.updatedAt = new Date().toISOString();
+      return true;
+    });
+    if (refused) return { ok: false, reason: 'user-title' };
+    return summary ? { ok: true, summary } : { ok: false, reason: 'missing' };
   }
 
   /**
@@ -1393,7 +1432,13 @@ export class SessionStore implements SessionWritesStore {
         // does not set (granted folders, a remote link) rides along, and these it does set lose.
         const kept: Partial<ChatSession> = existing
           ? {
-              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              ...(existing.titleLocked
+                ? {
+                    title: existing.title,
+                    titleLocked: true,
+                    ...(existing.titleSource ? { titleSource: existing.titleSource } : {}),
+                  }
+                : {}),
               // Same repository only: a project the importer now derives differently is not the user's.
               ...(existing.project && existing.project.directory === session.project?.directory
                 ? { project: existing.project }
@@ -1697,6 +1742,9 @@ export class SessionStore implements SessionWritesStore {
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
+      ...(parsed.titleLocked && (parsed.titleSource === 'user' || parsed.titleSource === 'agent')
+        ? { titleSource: parsed.titleSource }
+        : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
         ? { orchestrate: true }
