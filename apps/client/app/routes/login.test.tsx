@@ -172,6 +172,23 @@ describe('LoginPage - resuming an existing session', () => {
     expect(calls).toEqual(['/api/auth/refreshToken']);
   });
 
+  it('forwards on a later sign-in in another tab after this tab\'s own resume found no session', async () => {
+    useAccessToken.setState({ hasSession: true });
+    const calls = serveRefresh(false);
+    renderLogin('/login?redirectTo=%2Fprojects');
+    await screen.findByTestId('login-form');
+    await waitFor(() => expect(clearClientCaches).toHaveBeenCalledTimes(1));
+    expect(calls).toEqual(['/api/auth/refreshToken']);
+
+    const laterCalls = serveRefresh(true);
+    act(() => {
+      window.dispatchEvent(signedInElsewhere(true));
+    });
+
+    await waitFor(() => expect(history.replace).toHaveBeenCalledWith('/projects'));
+    expect(laterCalls).toEqual(['/api/auth/refreshToken']);
+  });
+
   it('ignores another tab signing out, and a sign-in while this tab is mid-MFA', async () => {
     const calls = serveRefresh(true);
     renderLogin('/login?redirectTo=%2Fprojects');
