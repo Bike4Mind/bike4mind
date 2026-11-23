@@ -110,8 +110,8 @@ describe('ImageGallery', () => {
 
     const [cutout, regular] = screen.getAllByTestId('image-job-image');
     expect(cutout).toHaveAttribute('src', 'https://files.example/cut.png');
-    // AspectRatio sizes and fits only an img directly inside the element holding its data-first-child prop.
-    expect(cutout.parentElement).toHaveAttribute('data-first-child');
+    // The cutout sits on its own checkerboard frame; a regular take is a direct child of the tile frame.
+    expect(regular.parentElement).toHaveAttribute('data-testid', 'image-job-card-render-media');
     expect(getComputedStyle(cutout).objectFit).toBe('contain');
     expect(getComputedStyle(regular).objectFit).toBe('cover');
   });

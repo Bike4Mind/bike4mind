@@ -89,6 +89,8 @@ type StudioTakeTileProps = {
   /** CSS aspect ratio of the frame, e.g. `4 / 5`. */
   aspectRatio?: string;
   selected?: boolean;
+  /** The take's lifecycle state (queued, failed, ...), exposed as `data-state` for styling hooks and tests. */
+  state?: string;
   /** StudioTakeAction buttons for the floating bar. */
   actions?: ReactNode;
   testId?: string;
@@ -101,10 +103,11 @@ export const StudioTakeTile = ({
   meta,
   aspectRatio = '1 / 1',
   selected = false,
+  state,
   actions,
   testId = 'studio-take-tile',
 }: StudioTakeTileProps) => (
-  <TileRoot data-selected={selected} data-testid={testId}>
+  <TileRoot data-selected={selected} data-state={state} data-testid={testId}>
     <Media style={{ aspectRatio }} data-testid={`${testId}-media`}>
       {media}
       {actions != null && (

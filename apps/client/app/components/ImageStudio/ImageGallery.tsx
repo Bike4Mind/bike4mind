@@ -9,6 +9,7 @@ const ImageGallery = ({ onRestore }: { onRestore?: StudioTrailRestore }) => (
     testId="image-gallery"
     noun="images"
     query={useStudioImageJobs()}
+    variant="takes"
     renderCard={job => <ImageJobCard job={job} onRestore={onRestore} />}
   />
 );
