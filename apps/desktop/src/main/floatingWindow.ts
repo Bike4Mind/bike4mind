@@ -1,50 +1,11 @@
 import { join } from 'node:path';
-import { BrowserWindow, screen, shell, type Rectangle, type WebContents } from 'electron';
+import { BrowserWindow, screen, shell, type WebContents } from 'electron';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { markCompanionWindow } from './windows';
-
-export type WindowSize = { width: number; height: number };
-export type WindowBounds = WindowSize & { x: number; y: number };
+import { fitBoundsToDisplays, type WindowBounds, type WindowSize } from './windowBounds';
 
 /** Moves and resizes arrive per frame while dragging; the file only needs the last one. */
 export const BOUNDS_SAVE_DELAY_MS = 400;
-
-/**
- * Saved bounds, moved fully onto the screen they overlap most. A window saved on an unplugged
- * display, or under a menu bar or dock that has since grown, would otherwise reopen where its top
- * strip (the drag handle) cannot be reached; null, when it overlaps no screen, means "use the default".
- */
-export function restoreBounds(
-  saved: WindowBounds | null,
-  workAreas: readonly Rectangle[],
-  minSize: WindowSize
-): WindowBounds | null {
-  if (!saved) return null;
-  let best: Rectangle | null = null;
-  let bestOverlap = 0;
-  for (const area of workAreas) {
-    const overlapX = Math.min(saved.x + saved.width, area.x + area.width) - Math.max(saved.x, area.x);
-    const overlapY = Math.min(saved.y + saved.height, area.y + area.height) - Math.max(saved.y, area.y);
-    const overlap = overlapX > 0 && overlapY > 0 ? overlapX * overlapY : 0;
-    if (overlap > bestOverlap) {
-      best = area;
-      bestOverlap = overlap;
-    }
-  }
-  if (!best) return null;
-  const width = clamp(saved.width, minSize.width, best.width);
-  const height = clamp(saved.height, minSize.height, best.height);
-  return {
-    x: clamp(saved.x, best.x, best.x + best.width - width),
-    y: clamp(saved.y, best.y, best.y + best.height - height),
-    width,
-    height,
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
-}
 
 export interface FloatingWindowController {
   show(): void;
@@ -110,7 +71,7 @@ export function createFloatingWindowController(options: FloatingWindowOptions): 
 
   const create = (): BrowserWindow => {
     const workAreas = screen.getAllDisplays().map(display => display.workArea);
-    const bounds = restoreBounds(memory.bounds(), workAreas, options.minSize);
+    const bounds = fitBoundsToDisplays(memory.bounds(), workAreas, options.minSize);
     const created = new BrowserWindow({
       ...(bounds ?? options.defaultSize),
       minWidth: options.minSize.width,
