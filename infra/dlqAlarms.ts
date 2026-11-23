@@ -98,7 +98,7 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriageEvidencePermissions, dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
@@ -168,7 +168,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
       )
     );
-  dlqAlarmTopic!.subscribe(
+  const triageSubscription = dlqAlarmTopic!.subscribe(
     {
       vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
@@ -205,6 +205,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
       },
     }
   );
+
+  dlqTriageRoleNames.push(triageSubscription.apply(subscription => subscription.nodes.function.nodes.role.name));
 
   // Out-of-band alarm for DlqAlarmHandlerDlq itself.
   // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.

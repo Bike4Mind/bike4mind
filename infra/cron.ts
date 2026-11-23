@@ -46,7 +46,7 @@ import './adminMorningBrief';
 import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriageEvidencePermissions, dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
@@ -72,6 +72,7 @@ if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
     transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
   });
   deadLetter.allowRules([$util.output(sweep)]);
+  dlqTriageRoleNames.push(sweep.nodes.function.nodes.role.name);
 }
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {

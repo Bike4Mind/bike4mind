@@ -1,3 +1,5 @@
+export const dlqTriageRoleNames: $util.Input<string>[] = [];
+
 export function dlqTriagePermissions() {
   const queueArn = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${$app.name}-${$app.stage}-`;
   return {
@@ -14,10 +16,6 @@ export function dlqTriageEvidencePermissions() {
   return [
     { actions: ['lambda:ListEventSourceMappings'], resources: ['*'] },
     { actions: ['sqs:GetQueueAttributes'], resources: [$interpolate`${scope}:sqs:${region}:${account}:${prefix}*`] },
-    {
-      actions: ['lambda:GetFunctionConfiguration'],
-      resources: [$interpolate`${scope}:lambda:${region}:${account}:function:${prefix}*`],
-    },
     {
       actions: ['logs:FilterLogEvents'],
       resources: [$interpolate`${scope}:logs:${region}:${account}:log-group:/aws/lambda/${prefix}*:*`],
