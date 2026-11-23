@@ -20,7 +20,7 @@ export const aiHolders = {
   },
   CallableFunction: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } }],
   },
   CodeAgentEvent: {
     kind: 'holder',
