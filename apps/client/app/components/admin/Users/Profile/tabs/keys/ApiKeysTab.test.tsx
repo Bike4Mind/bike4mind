@@ -408,6 +408,49 @@ describe('ApiKeysTab', () => {
     });
   });
 
+  describe('with an existing exception and every category unchecked', () => {
+    beforeEach(() => {
+      mocks.setModeration.mockResolvedValue(undefined);
+      respond({
+        data: {
+          apiKeys: KEYS,
+          liveUsage: {},
+          requests: {},
+          access: PAID,
+          moderationExceptions: {
+            'key-1': {
+              categories: ['violence/graphic'],
+              reason: 'Security research',
+              setAt: '2026-11-01T00:00:00.000Z',
+            },
+          },
+        },
+      });
+    });
+
+    it('blocks saving but still allows removing the exception', async () => {
+      renderTab();
+
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      fireEvent.click(category('violence/graphic'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-2'));
+
+      expect(screen.getByTestId('user-keys-moderation-dialog-confirm-btn')).toBeDisabled();
+      expect(screen.getByTestId('user-keys-moderation-dialog-hint')).toHaveTextContent('Choose at least one category.');
+      const remove = screen.getByTestId('user-keys-moderation-dialog-secondary-btn');
+      expect(remove).toBeEnabled();
+
+      fireEvent.click(remove);
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Exception no longer needed',
+          categories: [],
+        })
+      );
+    });
+  });
+
   it('keeps the moderation dialog open and reports a server refusal', async () => {
     mocks.setModeration.mockRejectedValue({ response: { data: { error: 'API key not found' } } });
     renderTab();

@@ -523,7 +523,11 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
         onConfirm={reason => changeModeration(reason, moderationCategories)}
         secondaryAction={
           moderatingException
-            ? { label: 'Remove exception', onConfirm: reason => changeModeration(reason, []) }
+            ? {
+                label: 'Remove exception',
+                onConfirm: reason => changeModeration(reason, []),
+                ignoreBlockedReason: true,
+              }
             : undefined
         }
         blockedReason={
