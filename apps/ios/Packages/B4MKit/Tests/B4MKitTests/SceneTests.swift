@@ -209,8 +209,76 @@ final class SceneWireTests: XCTestCase {
     XCTAssertTrue(requests.isEmpty)
   }
 
+  func testComposeAccepts200AsWellAs202() async throws {
+    let transport = FakeTransport { _ in (200, Data(openAPIExampleJob.utf8)) }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    let handle = try await client.composeScene(SceneRequest(videoFileID: "v1", audioFileID: "a1", label: "Beach"))
+    XCTAssertEqual(handle.id, "664f1c2b9a1e4d0012ab34cd")
+    XCTAssertEqual(handle.kind, .scene)
+  }
+
+  func testAnAcceptedComposeWithANonJSONBodyIsMalformed() async {
+    let transport = FakeTransport { _ in (202, Data("accepted".utf8)) }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.composeScene(SceneRequest(videoFileID: "v1", audioFileID: "a1"))
+      XCTFail("expected a malformed response")
+    } catch {
+      XCTAssertEqual(error as? APIError, .malformedResponse)
+    }
+  }
+
+  func testCancellingASceneTheServerCannotCancelKeepsItsCode() async {
+    let transport = FakeTransport { _ in
+      (409, Data(#"{"error":"Already finished.","errorCode":"not_cancellable"}"#.utf8))
+    }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    let handle = GenerationHandle(kind: .scene, id: "664f1c2b9a1e4d0012ab34cd", prompt: "Beach", startedAt: Date())
+    do {
+      try await client.cancel(handle)
+      XCTFail("expected a refusal")
+    } catch let error as StudioRequestError {
+      XCTAssertEqual(error.status, 409)
+      XCTAssertEqual(error.code, "not_cancellable")
+    } catch {
+      XCTFail("unexpected \(error)")
+    }
+  }
+
+  func testMusicAndVideoStatusAndCancelUseTheirJobRoutes() async throws {
+    let transport = FakeTransport { request in
+      request.url?.path().hasSuffix("/cancel") == true
+        ? (200, Data(openAPIExampleJob.utf8)) : (200, Data(succeededJob.utf8))
+    }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    let music = GenerationHandle(kind: .music, id: "m1", prompt: "lofi", startedAt: Date())
+    let video = GenerationHandle(kind: .video, id: "v1", prompt: "waves", startedAt: Date())
+
+    _ = try await client.status(of: music)
+    try await client.cancel(music)
+    _ = try await client.status(of: video)
+    try await client.cancel(video)
+
+    let paths = await transport.requests.map { $0.url?.path() }
+    XCTAssertEqual(
+      paths,
+      [
+        "/api/v1/music-generations/m1",
+        "/api/v1/music-generations/m1/cancel",
+        "/api/v1/video-generations/v1",
+        "/api/v1/video-generations/v1/cancel",
+      ])
+  }
+
   func testTheCreateBarDoesNotOfferScenes() {
     XCTAssertFalse(GenerationKind.promptable.contains(.scene))
+    XCTAssertEqual(GenerationKind.scene.mediaKind, .video)
+  }
+
+  func testEveryKindMapsToItsGalleryMediaKind() {
+    XCTAssertEqual(GenerationKind.image.mediaKind, .image)
+    XCTAssertEqual(GenerationKind.video.mediaKind, .video)
+    XCTAssertEqual(GenerationKind.music.mediaKind, .audio)
     XCTAssertEqual(GenerationKind.scene.mediaKind, .video)
   }
 }
@@ -251,6 +319,18 @@ final class SceneTrackingTests: XCTestCase {
     tracker.track(GenerationHandle(kind: .scene, id: "s2", prompt: "Beach", startedAt: Date()))
     await eventually { await MainActor.run { tracker.generations.first?.resultFileID == "f2" } }
   }
+
+  func testALaterStatusWithoutAFileKeepsTheRecordedOne() {
+    let tracker = GenerationTracker(
+      api: FakeStudioAPI(), realtime: nil, store: MemoryGenerationStore(),
+      sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+    tracker.track(GenerationHandle(kind: .scene, id: "s3", prompt: "Beach", startedAt: Date()))
+
+    tracker.apply(GenerationStatus(phase: .running(progress: 0.5), resultFileID: "f3"), to: "s3")
+    tracker.apply(GenerationStatus(phase: .running(progress: 0.9)), to: "s3")
+
+    XCTAssertEqual(tracker.generations.first?.resultFileID, "f3")
+  }
 }
 
 /// Lists by kind, so the composer's partner and cover lists can be told apart.
@@ -271,6 +351,34 @@ private actor KindedMediaAPI: MediaAPI {
   }
 
   func media(id: String) async throws -> MediaItem { throw APIError.notFound }
+}
+
+/// A compose call that stays in flight until `release()`, to prove a second submit is turned away.
+private actor GatedSceneAPI: StudioAPI {
+  private(set) var calls = 0
+  private var waiter: CheckedContinuation<Void, Never>?
+
+  func release() {
+    waiter?.resume()
+    waiter = nil
+  }
+
+  func models(for kind: GenerationKind) async throws -> [GenerationModel] { [] }
+  func generate(_ request: GenerationRequest) async throws -> GenerationHandle { throw APIError.notFound }
+  func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle { throw APIError.notFound }
+
+  func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+    calls += 1
+    await withCheckedContinuation { waiter = $0 }
+    return GenerationHandle(kind: .scene, id: "gated-\(calls)", prompt: request.label, startedAt: Date())
+  }
+
+  func status(of handle: GenerationHandle) async throws -> GenerationStatus {
+    GenerationStatus(phase: .running(progress: nil))
+  }
+
+  func cancel(_ handle: GenerationHandle) async throws {}
+  func createSession(name: String) async throws -> String { "s" }
 }
 
 @MainActor
@@ -338,5 +446,56 @@ final class SceneComposerViewModelTests: XCTestCase {
     XCTAssertFalse(started)
     XCTAssertEqual(model.error, .rejected(code: "limit_exceeded", message: "That video is too long."))
     XCTAssertTrue(tracker.generations.isEmpty)
+  }
+
+  func testASecondSubmitWhileTheFirstIsInFlightSendsNothing() async throws {
+    let api = GatedSceneAPI()
+    let tracker = makeTracker(FakeStudioAPI())
+    let model = SceneComposerViewModel(
+      draft: SceneDraft(video: clip, audio: song), api: api, media: KindedMediaAPI([]), tracker: tracker)
+
+    let first = Task { await model.submit() }
+    await eventually { await api.calls == 1 }
+    XCTAssertTrue(model.isSubmitting)
+    XCTAssertFalse(model.canSubmit)
+
+    let second = await model.submit()
+    await api.release()
+    let firstStarted = await first.value
+
+    XCTAssertFalse(second)
+    XCTAssertTrue(firstStarted)
+    let calls = await api.calls
+    XCTAssertEqual(calls, 1)
+    XCTAssertEqual(tracker.generations.count, 1)
+    XCTAssertFalse(model.isSubmitting)
+  }
+
+  func testPickingAFileClearsAPreviousError() {
+    let model = SceneComposerViewModel(
+      draft: SceneDraft(video: clip), api: FakeStudioAPI(), media: KindedMediaAPI([]),
+      tracker: makeTracker(FakeStudioAPI()))
+    model.error = .api(.offline)
+
+    model.pick(song)
+
+    XCTAssertNil(model.error)
+    XCTAssertEqual(model.draft.audio, song)
+  }
+
+  func testACompleteDraftHasNoOpenSlotAndOnlyListsCovers() async {
+    let media = KindedMediaAPI([clip, song, art])
+    let model = SceneComposerViewModel(
+      draft: SceneDraft(video: clip, audio: song), api: FakeStudioAPI(), media: media,
+      tracker: makeTracker(FakeStudioAPI()))
+
+    await model.load()
+
+    XCTAssertNil(model.openSlot)
+    XCTAssertEqual(model.partners, .loaded([]))
+    XCTAssertEqual(model.covers, .loaded([art]))
+    let listed = await media.listed
+    XCTAssertEqual(listed, [.image])
+    XCTAssertTrue(model.canSubmit)
   }
 }
