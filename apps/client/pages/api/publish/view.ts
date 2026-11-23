@@ -8,6 +8,7 @@ import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/p
 import { requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { recordVerifiedView } from '@server/services/publish/recordVerifiedView';
 import type { PublishVisibility } from '@bike4mind/common';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 
 /** Record an admitted signed-in view reported by the bundle wrapper widget.
  * Navigation already records viewCount; this route records external analytics
@@ -75,11 +76,15 @@ const handler = baseApi({ auth: false })
       : await checkVisibility(gateArtifact, user, { passphraseVerified });
     if (!access.ok) return res.status(404).json({ error: 'Not found' });
 
-    // Analytics and reward evidence are recorded separately.
-    if (String(artifact.ownerId) !== String(principal.id)) {
+    // One qualifying-party check gates both the external count and the reward evidence.
+    const viewerId = String(principal.id);
+    if (
+      String(artifact.ownerId) !== viewerId &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [viewerId]))
+    ) {
       await PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: { externalViewCount: 1 } });
+      await recordVerifiedView(artifact, viewerId, true);
     }
-    await recordVerifiedView(artifact, String(principal.id));
     return res.status(204).end();
   });
 

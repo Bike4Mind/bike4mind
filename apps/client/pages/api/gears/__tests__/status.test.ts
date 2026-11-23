@@ -23,6 +23,7 @@ const { mocks } = vi.hoisted(() => ({
     hearthHasAnyChannel: vi.fn(),
     userFindById: vi.fn(),
     gearMinAgeSetting: vi.fn(),
+    projectCollaboratorQualifies: vi.fn(),
   },
 }));
 
@@ -98,6 +99,10 @@ vi.mock('@bike4mind/common', () => ({
   CreditHolderType: { User: 'User' },
 }));
 
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingProjectCollaborator: (...a: unknown[]) => mocks.projectCollaboratorQualifies(...a),
+}));
+
 import handler from '../status';
 import { GEAR_DEFAULTS, GEAR_KEYS } from '@server/services/gears/catalog';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
@@ -130,6 +135,7 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.heldFind.mockResolvedValue([]);
+  mocks.projectCollaboratorQualifies.mockResolvedValue(false);
   // Default: trusted account so existing status tests continue to pass.
   mocks.userFindById.mockReturnValue({
     lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
@@ -510,18 +516,39 @@ describe('GET /api/gears/status - reward schedule', () => {
   });
 });
 
-describe('GET /api/gears/status - verified project collaboration', () => {
-  it('reports a verified collaborator as unlocked and claimable', async () => {
-    const friendId = '507f1f77bcf86cd799439011';
-    mocks.projectAggregate.mockResolvedValue([{ _id: 'u1' }, { _id: friendId }]);
-    mocks.miscExists.mockImplementation((q: { emailVerified?: boolean }) =>
-      Promise.resolve(q.emailVerified ? { _id: friendId } : null)
-    );
+describe('GET /api/gears/status - Team Up reward waits for a qualifying collaborator', () => {
+  type Body = {
+    gears: Array<{
+      key: string;
+      unlocked: boolean;
+      rewardPending?: boolean;
+      pendingReason?: string;
+      claimable?: boolean;
+    }>;
+  };
+
+  it('sharing unlocks the gear but the payout stays pending without a qualifying collaborator', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
     const { res, promise } = run({ id: 'u1' });
     await promise;
-    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; claimable?: boolean }> };
-    expect(body.gears.find(g => g.key === 'shareproject')).toMatchObject({ unlocked: true, claimable: true });
-    expect(mocks.miscExists).toHaveBeenCalledWith({ _id: { $in: [friendId] }, emailVerified: true, deletedAt: null });
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(mocks.projectCollaboratorQualifies).toHaveBeenCalledWith('u1');
+    expect(team.unlocked).toBe(true);
+    expect(team.rewardPending).toBe(true);
+    expect(team.pendingReason).toBe('reward_check');
+    expect(team.claimable).toBeUndefined();
+  });
+
+  it('becomes claimable once a qualifying collaborator is on a project', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    mocks.projectCollaboratorQualifies.mockResolvedValue(true);
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(team.claimable).toBe(true);
+    expect(team.rewardPending).toBeUndefined();
   });
 });
 
