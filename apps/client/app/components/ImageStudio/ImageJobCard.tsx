@@ -44,6 +44,14 @@ const FrameMessage = styled('div')({
   '&[data-tone="danger"]': { backgroundColor: studioColor('danger-soft'), color: studioColor('danger') },
 });
 
+// A failed job carries the provider's raw error text, which can run past the square frame; the tooltip keeps the rest.
+const FrameMessageText = styled('span')({
+  display: '-webkit-box',
+  WebkitLineClamp: 5,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+});
+
 const PreviewMessage = ({
   testId,
   tone = 'neutral',
@@ -57,7 +65,7 @@ const PreviewMessage = ({
 }) => (
   <FrameMessage data-tone={tone} data-testid={testId}>
     {icon}
-    {children}
+    <FrameMessageText title={children}>{children}</FrameMessageText>
   </FrameMessage>
 );
 
