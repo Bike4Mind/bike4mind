@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 
 export const orgInvoicesQueryKey = (orgId: string) => ['organizations', orgId, 'invoices'] as const;
 
-/** The org's most recent invoices (GET /api/organizations/:id/invoices, org owner only). */
+/** The org's most recent invoices (GET /api/organizations/:id/invoices, manageBilling holders). */
 export function useOrgInvoices(orgId: string | null | undefined) {
   return useQuery({
     queryKey: orgInvoicesQueryKey(orgId ?? ''),

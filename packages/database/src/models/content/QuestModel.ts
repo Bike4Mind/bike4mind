@@ -652,6 +652,8 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     agentImagesClaimed: { type: Number, required: false },
     agentSpeechClipsClaimed: { type: Number, required: false },
     agentSoundEffectsClaimed: { type: Number, required: false },
+    // Data lake saves claimed by this turn (see claimLakeSaveSlot). Declared so strict mode keeps the $inc.
+    lakeSaveCount: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1383,8 +1385,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
-   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
-   * needs no index of its own.
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Served by the partial `sessionId_pendingActionTs` index.
    */
   async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
     if (sessionIds.length === 0) return [];
@@ -1525,6 +1526,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * How many approvals in the given sessions can still be answered: raised at or after `raisedSinceTs` (ms
+   * epoch), the bound the pending-actions endpoints accept. Served by the partial `sessionId_pendingActionTs` index.
+   */
+  async countPendingActionsBySessionIds(sessionIds: string[], raisedSinceTs: number): Promise<number> {
+    if (sessionIds.length === 0) return 0;
+    // countDocuments skips the soft-delete plugin's find hooks, so the tombstone filter is explicit.
+    return this.model.countDocuments({
+      sessionId: { $in: sessionIds },
+      'pendingAction.ts': { $gte: raisedSinceTs },
+      deletedAt: null,
+    });
+  }
+
+  /**
    * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
    * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
    * Quest matches.
@@ -1571,6 +1586,23 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model.updateOne(
       { _id: convertId(questId), status: { $ne: 'stopped' } },
       { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claim one of a turn's `limit` save_content_to_data_lake saves. Every tool build in the turn (the chat loop, research mode,
+   * subagents, agent continuations) shares this Quest, so the check and the increment are one atomic update.
+   */
+  async claimLakeSaveSlot(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ lakeSaveCount: { $exists: false } }, { lakeSaveCount: { $lt: limit } }],
+      },
+      { $inc: { lakeSaveCount: 1 } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
@@ -2073,6 +2105,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { oauthClientId: 1, timestamp: -1 },
       { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
+    );
+
+    // Serves countPendingActionsBySessionIds and findPendingActionsBySessionIds. Partial, so it holds only
+    // quests parked on an approval. Pre-built by 20261120072518_ensure-quest-session-pending-action-index.
+    ChatHistoryItemSchema.index(
+      { sessionId: 1, 'pendingAction.ts': -1 },
+      { name: 'sessionId_pendingActionTs', partialFilterExpression: { 'pendingAction.ts': { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

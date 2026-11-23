@@ -219,6 +219,18 @@ describe('useDeleteUser', () => {
     await waitFor(() => expect(toast[kind]).toHaveBeenCalledOnce());
     expect(toast[kind === 'success' ? 'warning' : 'success']).not.toHaveBeenCalled();
   });
+
+  it('stays silent when the admin cancels the step-up prompt, and toasts any other failure', async () => {
+    vi.mocked(api.delete).mockRejectedValue(new Error(CANCELLED));
+    const { result } = renderHook(() => useDeleteUser(), { wrapper });
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(toast.error).not.toHaveBeenCalled();
+
+    vi.mocked(api.delete).mockRejectedValue(new Error('boom'));
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete user'));
+  });
 });
 
 describe('client session teardown', () => {

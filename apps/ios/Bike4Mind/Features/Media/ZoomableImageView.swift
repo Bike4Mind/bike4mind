@@ -14,11 +14,13 @@ struct ZoomableImageView: View {
 
   private let range: ClosedRange<CGFloat> = 1...6
 
+  @State private var loaded: (url: URL, image: CGImage)?
+  @State private var failedURL: URL?
+
   var body: some View {
-    AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
-      switch phase {
-      case .success(let image):
-        image
+    Group {
+      if let image {
+        Image(image, scale: 1, label: Text("Generated image"))
           .resizable()
           .scaledToFit()
           .scaleEffect(scale)
@@ -26,7 +28,6 @@ struct ZoomableImageView: View {
           .gesture(zoom.simultaneously(with: pan))
           .onTapGesture(count: 2) { toggleZoom() }
           .onAppear { onLoaded() }
-          .accessibilityLabel("Generated image")
           .accessibilityAddTraits(.isImage)
           .accessibilityIdentifier("media-zoomable-image")
           .accessibilityZoomAction { action in
@@ -37,9 +38,9 @@ struct ZoomableImageView: View {
               if scale <= 1 { resetPan() }
             }
           }
-      case .failure:
+      } else if failedURL == url {
         Color.clear.task { await onFailure() }
-      default:
+      } else {
         // The grid's thumbnail stands in until the full-size image arrives; the spinner stays so VoiceOver
         // and UI tests still see a loading state.
         ZStack {
@@ -49,6 +50,30 @@ struct ZoomableImageView: View {
           ProgressView().tint(.white)
         }
       }
+    }
+    .task(id: url) { await load() }
+  }
+
+  /// Read synchronously so a reopened image draws on its first frame, even under a re-signed URL.
+  private var image: CGImage? {
+    if let cached = ThumbnailCache.fullSize.cachedImage(for: url) { return cached }
+    // Still drawn if NSCache evicted it while this view was on screen.
+    return loaded?.url == url ? loaded?.image : nil
+  }
+
+  /// Lands every success in `loaded`: `body` reads NSCache, which SwiftUI does not observe.
+  private func load() async {
+    if let cached = ThumbnailCache.fullSize.cachedImage(for: url) {
+      loaded = (url, cached)
+      return
+    }
+    do {
+      let image = try await ThumbnailCache.fullSize.image(for: url)
+      guard !Task.isCancelled else { return }
+      withAnimation(.easeOut(duration: 0.2)) { loaded = (url, image) }
+    } catch {
+      guard !Task.isCancelled else { return }
+      failedURL = url
     }
   }
 

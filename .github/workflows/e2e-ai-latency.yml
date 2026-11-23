@@ -120,7 +120,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -140,7 +140,7 @@ jobs:
         run: pnpm core:build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -382,7 +382,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -402,7 +402,7 @@ jobs:
         run: pnpm core:build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -862,7 +862,7 @@ jobs:
 
       - name: Send Slack notification
         if: always()
-        uses: slackapi/slack-github-action@v2.1.0
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
           webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -880,7 +880,7 @@ jobs:
         # matrix job, which already went red if the cell genuinely broke. Failing on no-data here
         # would red the run twice for one fault and red it for an artifact-upload hiccup too.
         if: ${{ steps.aggregate.outputs.latency_breach == 'true' || (steps.aggregate.outputs.has_no_data == 'true' && needs.e2e-ai-latency.outputs.preview_skipped != 'true') }}
-        uses: slackapi/slack-github-action@v2.1.0
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
           webhook-type: incoming-webhook
