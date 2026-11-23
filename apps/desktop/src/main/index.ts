@@ -169,6 +169,7 @@ void app.whenReady().then(async () => {
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -349,6 +350,7 @@ void app.whenReady().then(async () => {
   });
 
   app.once('will-quit', () => {
+    composerDrafts.flushSync();
     auth.dispose();
     fleet.dispose();
     models.dispose();
