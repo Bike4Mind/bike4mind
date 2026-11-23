@@ -9,6 +9,7 @@ import {
   type AdminRotateApiKeyResponse,
   type AdminUsageReceipt,
   type AdminUsageReceiptQuery,
+  type ModerationExceptionCategory,
 } from '@bike4mind/common';
 
 const userPath = (userId: string) => `/api/admin/users/${encodeURIComponent(userId)}`;
@@ -94,11 +95,15 @@ export const useAdminRevokeApiKey = (userId: string) => {
   });
 };
 
-/** Grants (all categories) or clears (`categories: []`) the key's prompt moderation exception. */
+/** Sets the categories of the key's prompt moderation exception, or clears it with `categories: []`. */
 export const useAdminSetApiKeyModerationException = (userId: string) => {
   const invalidate = useInvalidateUserKeys(userId);
   return useMutation({
-    mutationFn: async ({ keyId, reason, categories }: KeyWrite & { categories: readonly string[] }) => {
+    mutationFn: async ({
+      keyId,
+      reason,
+      categories,
+    }: KeyWrite & { categories: readonly ModerationExceptionCategory[] }) => {
       await api.put(`${keyPath(keyId)}/moderation-exception`, { reason, categories });
     },
     onSettled: invalidate,
