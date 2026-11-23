@@ -87,7 +87,7 @@ jobs:
           EXPORT_BYTES_RUN: 'false'
         run: |
           git fetch --no-tags origin "$E2E_BASE_SHA" "$E2E_HEAD_SHA" || echo "::warning::Diff refs unavailable; selection will widen"
-          if ! pnpm exec tsx apps/client/e2e/select-projects.ts; then
+          if ! pnpm --filter @bike4mind/client exec tsx e2e/select-projects.ts; then
             echo "::warning::Selector failed; running full PR-eligible configuration"
             echo 'playwright_args=' >> "$GITHUB_OUTPUT"
           fi

@@ -103,7 +103,7 @@ test('report fallback never turns missing reusable outputs into a pass, and supp
 });
 
 test('actual project configuration guard and path tables run in the existing scripts test lane', () => {
-  execFileSync(process.execPath, ['--test', 'apps/client/e2e/project-selection.test.mjs'], { cwd: root });
+  execFileSync(process.execPath, ['--test', 'apps/client/e2e/project-selection.test.mjs'], { cwd: root, stdio: 'inherit' });
 }, 30_000);
 
 test('preview statuses use the shared outcome state mapping', async () => {
@@ -128,6 +128,7 @@ test('preview dispatch executes trusted main only, fetches diff data and preserv
   assert.match(core, /checkout_ref: \$\{\{ github.sha \}\}/);
   assert.equal([...core.matchAll(/ref: \$\{\{ github.sha \}\}/g)].length, 4);
   assert.match(core, /git fetch --no-tags origin "\$E2E_BASE_SHA" "\$E2E_HEAD_SHA"/);
+  assert.match(core, /pnpm --filter @bike4mind\/client exec tsx e2e\/select-projects.ts/);
   assert.doesNotMatch(core, /refs\/pull\/|ref: .*head_sha|ref: .*base_sha|\n\s+status:|\n\s+pull_request:|workflow_call:/);
   assert.match(core, /github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/main' && inputs.pr_number != ''/);
   assert.match(core, /core:\n\s+if: github.event_name == 'workflow_dispatch' && inputs.pr_number == ''/);

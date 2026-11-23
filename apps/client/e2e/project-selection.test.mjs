@@ -9,8 +9,8 @@ import { CORE, EXCLUDED, STANDALONE, classificationErrors, dependencyClosure,
 const root = path.resolve(import.meta.dirname, '../../..');
 const e2e = path.join(root, 'apps/client/e2e');
 function loadProjects(env) {
-  const output = execFileSync('pnpm', ['exec', 'tsx', '-e',
-    `import config from './apps/client/playwright.config.ts'; console.log('PROJECTS=' + JSON.stringify(config.projects, (_, v) => v instanceof RegExp ? { regex: v.source, flags: v.flags } : v))`],
+  const output = execFileSync('pnpm', ['--filter', '@bike4mind/client', 'exec', 'tsx', '-e',
+    `import config from './playwright.config.ts'; console.log('PROJECTS=' + JSON.stringify(config.projects, (_, v) => v instanceof RegExp ? { regex: v.source, flags: v.flags } : v))`],
   { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } });
   return JSON.parse(output.split('\n').find(line => line.startsWith('PROJECTS=')).slice(9),
     (_, value) => value?.regex ? new RegExp(value.regex, value.flags) : value);
