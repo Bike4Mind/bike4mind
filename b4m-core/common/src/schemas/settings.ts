@@ -724,6 +724,9 @@ export const SettingKeySchema = z.enum([
   'elevenLabsServerApiKey',
   'elevenLabsMusicConcurrencyLimit',
   'elevenLabsSoundConcurrencyLimit',
+  'elevenLabsPlanCycleStartDay',
+  'elevenLabsPlanMonthlyCredits',
+  'elevenLabsPlanAgentMinutes',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -2651,6 +2654,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'elevenLabsServerApiKey', order: 7 },
       { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
       { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
+      { key: 'elevenLabsPlanCycleStartDay', order: 10 },
+      { key: 'elevenLabsPlanMonthlyCredits', order: 11 },
+      { key: 'elevenLabsPlanAgentMinutes', order: 12 },
     ],
   },
   XAI: {
@@ -8178,6 +8184,45 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 13,
+  }),
+  // Plan allowance and billing cycle for the ElevenLabs usage admin view (api/admin/elevenlabs-usage).
+  // 0 means "not configured": the view shows usage without a percentage of plan.
+  elevenLabsPlanCycleStartDay: makeNumberSetting({
+    key: 'elevenLabsPlanCycleStartDay',
+    name: 'ElevenLabs Billing Cycle Start Day',
+    defaultValue: 1,
+    min: 1,
+    max: 31,
+    int: true,
+    description:
+      'Day of the month (UTC) the ElevenLabs subscription renews and its credit quota resets. In shorter months a later day falls on the last day of the month. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 14,
+  }),
+  elevenLabsPlanMonthlyCredits: makeNumberSetting({
+    key: 'elevenLabsPlanMonthlyCredits',
+    name: 'ElevenLabs Plan Monthly Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Credits the ElevenLabs plan includes per billing cycle (text to speech, sound effects and music draw from this pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 15,
+  }),
+  elevenLabsPlanAgentMinutes: makeNumberSetting({
+    key: 'elevenLabsPlanAgentMinutes',
+    name: 'ElevenLabs Plan Agent Minutes',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Conversational agent call minutes the ElevenLabs plan includes per billing cycle (agents are billed by minute, not from the credit pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 16,
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',

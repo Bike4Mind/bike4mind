@@ -62,6 +62,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.credit_analytics'],
   },
   {
+    id: 'where-elevenlabs-plan-usage',
+    category: 'where-is',
+    question: 'How much of our ElevenLabs plan have we used this billing cycle?',
+    expectViewIds: ['admin.credit_analytics'],
+  },
+  {
     id: 'where-legacy-api-keys',
     category: 'where-is',
     question: 'Where can I see who still uses legacy API keys before legacy access ends?',
