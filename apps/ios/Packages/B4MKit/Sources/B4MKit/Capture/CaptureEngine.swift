@@ -33,6 +33,7 @@ public actor CaptureEngine {
   private let now: @Sendable () -> Date
   private let sleep: @Sendable (Duration) async -> Void
   private let configuration: Configuration
+  private let didSendToSession: (@Sendable (String) async -> Void)?
   private let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
   private var uploaders: [String: any BackgroundUploading] = [:]
@@ -50,7 +51,8 @@ public actor CaptureEngine {
     makeUploader: @escaping @Sendable (String) -> any BackgroundUploading,
     now: @escaping @Sendable () -> Date = Date.init,
     sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-    configuration: Configuration = Configuration()
+    configuration: Configuration = Configuration(),
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) {
     self.store = store
     self.api = api
@@ -59,6 +61,7 @@ public actor CaptureEngine {
     self.now = now
     self.sleep = sleep
     self.configuration = configuration
+    self.didSendToSession = didSendToSession
   }
 
   // MARK: - Observing
@@ -316,6 +319,7 @@ public actor CaptureEngine {
     job.sendAttemptedAt = now()
     guard persist(job) else { throw StoreUnavailable() }
     try await api.sendSessionMessage(sessionID: sessionID, message: message, fileIDs: fileIDs)
+    await didSendToSession?(sessionID)
   }
 
   private func waitUntilClean(fileID: String) async throws -> Bool {

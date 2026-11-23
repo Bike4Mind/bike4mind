@@ -17,14 +17,16 @@ final class CaptureEngineTests: XCTestCase {
 
   private func rig(
     api: FakeCaptureAPI = FakeCaptureAPI(), store: FileUploadJobStore? = nil,
-    identifier: String = BackgroundSessionIdentifier.app, uploader: FakeUploader? = nil
+    identifier: String = BackgroundSessionIdentifier.app, uploader: FakeUploader? = nil,
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) -> Rig {
     let store = store ?? FileUploadJobStore(directory: temp.url)
     let uploader = uploader ?? FakeUploader(identifier: identifier)
     let clock = clock
     let engine = CaptureEngine(
       store: store, api: api, ownIdentifier: identifier, makeUploader: { _ in uploader }, now: { clock.now },
-      sleep: { _ in }, configuration: Self.fastConfiguration)
+      sleep: { _ in }, configuration: Self.fastConfiguration,
+      didSendToSession: didSendToSession)
     return Rig(engine: engine, api: api, uploader: uploader, store: store)
   }
 
@@ -101,6 +103,16 @@ final class CaptureEngineTests: XCTestCase {
     try await eventually { stage(rig, job.id) == .done }
     let calls = await rig.api.calls
     XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "what is good here?", files: ["file-1"]))
+  }
+
+  func testASessionCaptureReportsTheSessionItSentInto() async throws {
+    let sent = SentSessions()
+    let rig = rig(didSendToSession: { await sent.add($0) })
+    let job = try only(await rig.engine.submit([photo("menu.jpg")], to: session, note: "what is good here?"))
+    rig.uploader.finish(job.id)
+    try await eventually { stage(rig, job.id) == .done }
+    let ids = await sent.ids
+    XCTAssertEqual(ids, ["sess-1"])
   }
 
   func testASessionCaptureWithoutANoteNamesTheFile() async throws {
@@ -643,4 +655,9 @@ private final class UnwritableJobStore: UploadJobStore, @unchecked Sendable {
     try base.writePayload(data, jobID: jobID, fileName: fileName)
   }
   func discardPayload(jobID: UUID) { base.discardPayload(jobID: jobID) }
+}
+
+private actor SentSessions {
+  private(set) var ids: [String] = []
+  func add(_ id: String) { ids.append(id) }
 }

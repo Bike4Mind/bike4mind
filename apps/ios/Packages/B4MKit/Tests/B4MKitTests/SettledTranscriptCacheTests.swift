@@ -27,6 +27,19 @@ final class SettledTranscriptCacheTests: XCTestCase {
     reopened.stop()
   }
 
+  func testRemovedSessionFetchesTheNewTurnOnReopen() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    await TranscriptViewModel(sessionID: "s", api: api, cache: cache).load()
+    XCTAssertNotNil(cache.load(sessionID: "s", pageSize: 50))
+    cache.remove(sessionID: "s")
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old"), Samples.quest("sent")], nextCursor: nil)])
+    let reopened = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["old", "sent"])
+  }
+
   func testUnsettledFirstTurnDoesNotSeedAnEmptyLoadedChat() async {
     let api = FakeAPI()
     let cache = SettledTranscriptCache()
