@@ -9,6 +9,10 @@ vi.mock('../services/publish/purgeUserPublishedArtifacts', () => ({
 vi.mock('../auth/signupNetworkLimits', () => ({
   retainDeletedSignupTraces: vi.fn(async () => undefined),
 }));
+vi.mock('../premium-generated/premiumDataSubjectRegistry.generated', () => ({
+  premiumDataSubjectRegistries: [],
+  premiumDeclaredModelNames: [],
+}));
 vi.mock('./subjectErasureExecutor', () => ({
   SubjectErasureExecutor: class {
     run = h.run;
