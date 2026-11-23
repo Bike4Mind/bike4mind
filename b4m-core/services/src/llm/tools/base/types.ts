@@ -137,7 +137,8 @@ export interface ToolContext {
      * Owner lookup for generated-image keys (see resolveOwnedGeneratedImageUrl). Absent (or
      * `sessions.findAllByIds` absent) means every generated key is refused - fail closed.
      */
-    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
+    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'> &
+      Partial<Pick<IChatHistoryItemRepository, 'claimLakeSaveSlot'>>;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'

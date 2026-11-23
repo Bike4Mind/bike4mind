@@ -421,6 +421,29 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     }
   );
 
+  it('keeps the data lake save count when a turn is retried, so earlier saves still count', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.findById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'session-1',
+      status: 'error',
+      lakeSaveCount: 5,
+    });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    await makeInvoke({ id: OWNER_ID }).invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    const [updated, options] = mockDb.quests.update.mock.calls[0];
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).not.toContain('lakeSaveCount');
+  });
+
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.
   it('carries disableUserIntegrations onto questStartParams', async () => {

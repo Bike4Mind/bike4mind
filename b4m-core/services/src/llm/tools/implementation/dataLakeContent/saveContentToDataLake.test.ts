@@ -24,7 +24,12 @@ vi.mock('../../../../fabFileService/create', () => ({
   createFabFile: (...args: unknown[]) => createFabFileMock(...args),
 }));
 
-import { MAX_SAVE_CONTENT_BYTES, resolveFileNameAndType, saveContentToDataLakeTool } from './saveContentToDataLake';
+import {
+  MAX_LAKE_SAVES_PER_TURN,
+  MAX_SAVE_CONTENT_BYTES,
+  resolveFileNameAndType,
+  saveContentToDataLakeTool,
+} from './saveContentToDataLake';
 import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE } from './adapters';
 import type { ToolContext } from '../../base/types';
 
@@ -270,6 +275,70 @@ describe('save_content_to_data_lake', () => {
 
     expect(result).toContain('Nothing was saved');
     expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  describe('per-turn save budget', () => {
+    const withQuest = (claimLakeSaveSlot: ReturnType<typeof vi.fn>) => {
+      const { context } = makeContext();
+      return {
+        ...context,
+        questId: 'q1',
+        db: { ...context.db, quests: { findSessionIdsByImage: vi.fn(), claimLakeSaveSlot } },
+      } as ToolContext;
+    };
+
+    it('refuses the save after the cap within one tool build, creating no file', async () => {
+      const toolFn = saveContentToDataLakeTool.implementation(makeContext().context, undefined).toolFn;
+      for (let i = 0; i < MAX_LAKE_SAVES_PER_TURN; i++) {
+        expect(await toolFn(baseArgs)).toContain('Saved');
+      }
+
+      const result = (await toolFn(baseArgs)) as string;
+
+      expect(result).toContain(`limit of ${MAX_LAKE_SAVES_PER_TURN} saves per message`);
+      expect(createFabFileMock).toHaveBeenCalledTimes(MAX_LAKE_SAVES_PER_TURN);
+    });
+
+    it('holds the cap for parallel calls without a quest', async () => {
+      const toolFn = saveContentToDataLakeTool.implementation(makeContext().context, undefined).toolFn;
+
+      await Promise.all(Array.from({ length: MAX_LAKE_SAVES_PER_TURN + 3 }, () => toolFn(baseArgs)));
+
+      expect(createFabFileMock).toHaveBeenCalledTimes(MAX_LAKE_SAVES_PER_TURN);
+    });
+
+    it('claims from the quest when there is one, so separate builds share the count', async () => {
+      const claim = vi.fn().mockResolvedValue(false);
+
+      const result = await run(withQuest(claim));
+
+      expect(claim).toHaveBeenCalledWith('q1', MAX_LAKE_SAVES_PER_TURN);
+      expect(result).toContain('saves per message');
+      expect(createFabFileMock).not.toHaveBeenCalled();
+    });
+
+    it('saves when the quest grants a slot', async () => {
+      const result = await run(withQuest(vi.fn().mockResolvedValue(true)));
+
+      expect(result).toContain('Saved "notes.md"');
+    });
+
+    it('claims nothing when the target lake is refused', async () => {
+      const claim = vi.fn().mockResolvedValue(true);
+      assertLakeAccessWithGrantsMock.mockRejectedValue(new ForbiddenError('no access'));
+
+      const result = await run(withQuest(claim));
+
+      expect(result).toContain('Nothing was saved');
+      expect(claim).not.toHaveBeenCalled();
+    });
+
+    it('saves nothing when the claim itself fails', async () => {
+      const result = await run(withQuest(vi.fn().mockRejectedValue(new Error('db down'))));
+
+      expect(result).toContain('Nothing was saved');
+      expect(createFabFileMock).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a mime type outside the text allowlist', async () => {
