@@ -807,6 +807,23 @@ describe('ChatCompletionProcess', () => {
       for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
       expect(persisted).toEqual(final);
     });
+
+    it('never write lakeSaveCount back, so a retried turn cannot reset the count its tools claimed', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.lakeSaveCount = 2;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(0);
+      for (const w of writes) expect(w).not.toHaveProperty('lakeSaveCount');
+    });
   });
 
   describe('an unrecognised timezone', () => {
