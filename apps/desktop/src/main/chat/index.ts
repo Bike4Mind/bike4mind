@@ -673,11 +673,12 @@ export function registerChat(
   // Declared before the two things that feed it, because both take it as a constructor
   // argument: the gate reports who is waiting on the user, the service reports who is
   // replying, and this turns the pair into the one status a sidebar row draws.
-  const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
+  const activity = new SessionActivity((event: ChatSessionStatusEvent, statusChanged: boolean) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
     hooks.observeSessionStatus?.(event);
-    // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+    // Only reached once a turn has run, long after pullRequests below exists. A background job
+    // starting or ending re-sends 'done' without a new turn, so only a real change settles one.
+    if (statusChanged && (event.status === 'done' || event.unreadReply)) pullRequests.turnSettled(event.sessionId);
     // Same: a session changes status only once `service` below exists.
     service.sessionStatusChanged(event);
   });
@@ -697,7 +698,11 @@ export function registerChat(
   const background = new BackgroundProcessRegistry({
     output: (sessionId, processId, stream, text) =>
       broadcast({ type: 'background-output', sessionId, processId, stream, text }),
-    status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
+    status: (sessionId, process) => {
+      broadcast({ type: 'background-status', sessionId, process });
+      // Only ever fires from start/finish, after `background` below has been assigned.
+      activity.backgroundChanged(sessionId, background.wakingJobs(sessionId));
+    },
     // Only ever fires once a process has run, long after `service` below exists.
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });

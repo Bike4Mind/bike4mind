@@ -1,7 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
+import {
+  backgroundJobLabel,
+  type BackgroundProcessInfo,
+  type BackgroundProcessStatus,
+  type SessionBackgroundJobs,
+} from '@shared/chat';
 import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
 import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
@@ -326,6 +331,23 @@ export class BackgroundProcessRegistry {
       if (tracked.info.status === 'running') sessions.add(tracked.info.sessionId);
     }
     return sessions;
+  }
+
+  /**
+   * The session's running commands whose exit wakes it, labelled by the newest; undefined when none.
+   * Only these keep an agent waiting: a dependency install or anything else the app started is not
+   * work the agent will come back for. See SessionActivity.backgroundChanged.
+   */
+  wakingJobs(sessionId: string): SessionBackgroundJobs | undefined {
+    let running = 0;
+    let newest: BackgroundProcessInfo | undefined;
+    for (const tracked of this.processes.values()) {
+      const { info } = tracked;
+      if (info.sessionId !== sessionId || info.status !== 'running' || !tracked.wakeOnExit) continue;
+      running += 1;
+      if (!newest || info.startedAt >= newest.startedAt) newest = info;
+    }
+    return newest ? { running, label: backgroundJobLabel(newest.command) } : undefined;
   }
 
   list(sessionId: string): BackgroundProcessInfo[] {
