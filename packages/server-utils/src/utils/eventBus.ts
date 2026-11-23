@@ -554,6 +554,22 @@ export const TelemetryEvents = {
   ),
 };
 
+export const ModerationEvents = {
+  // A user entering suspend_pending, or any severe-category hit. Published fire-and-forget from the
+  // chat path; apps/workers/src/events/moderationEscalationAlert.ts posts it to the abuse alarm channel.
+  // Mirrors ModerationEscalationAlert in b4m-core/services/src/userService/moderationPolicy.ts.
+  Escalation: event(
+    'moderation.escalation',
+    z.object({
+      userId: z.string(),
+      reasons: z.array(z.enum(['suspend_pending', 'severe_category'])).min(1),
+      categories: z.array(z.string()),
+      source: z.enum(['openai', 'bedrock', 'provider']),
+      hitsInWindow: z.number().int().min(0),
+    })
+  ),
+};
+
 export const SreEvents = {
   // Diagnostician -> Surgeon handoff. Routed to sreFixQueue by an EventBridge rule
   // (infra/eventBus.ts) so additional consumers (audit, metrics) can attach without

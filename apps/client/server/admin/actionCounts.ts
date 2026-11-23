@@ -103,6 +103,10 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
     count: ({ cap }) => imageModerationIncidentRepository.countPendingReview({ limit: cap }),
     oldestAt: () => imageModerationIncidentRepository.oldestPendingReviewAt(),
   },
+  textModerationReview: {
+    access: 'users:moderate',
+    count: ({ cap }) => userRepository.countModerationReviewQueue({ limit: cap }),
+  },
   heldSignupGrants: {
     access: 'credits:adjust',
     count: ({ cap }) => signupGrantReleaseRepository.countHeld(undefined, { limit: cap }),
