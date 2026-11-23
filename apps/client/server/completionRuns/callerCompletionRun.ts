@@ -1,4 +1,11 @@
-import { CreditHolderType, NotFoundError, RUN_NOT_FOUND_ERROR_CODE } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  NotFoundError,
+  RUN_NOT_FOUND_ERROR_CODE,
+  type CompletionRun,
+  type CompletionRunBudgetState,
+  type CompletionRunSpend,
+} from '@bike4mind/common';
 import { completionRunRepository, type CompletionRunOwnerType, type ICompletionRun } from '@bike4mind/database';
 
 /** Who is calling a completion-run route: the user, and the organization an org-billed API key draws on. */
@@ -36,4 +43,32 @@ export async function findCallerCompletionRun(runId: string, caller: CompletionR
     });
   }
   return stored;
+}
+
+/** The public shape of a run, as the mint and budget routes return it. */
+export function toCompletionRunBody(run: ICompletionRun): CompletionRun {
+  return {
+    runId: run.runId,
+    ...(run.rootSessionId !== undefined && { rootSessionId: run.rootSessionId }),
+    ...(run.budgetCredits !== undefined && { budgetCredits: run.budgetCredits }),
+    createdAt: run.createdAt.toISOString(),
+  };
+}
+
+/**
+ * A budgeted run's ceiling against its committed total. The unsettled part is the committed total less
+ * the ledger's settled charges; both only ever move together inside a hold's terminal transaction.
+ */
+export function toCompletionRunBudgetState(
+  run: ICompletionRun,
+  settled: CompletionRunSpend
+): CompletionRunBudgetState | undefined {
+  if (run.budgetCredits === undefined) return undefined;
+  const committedCredits = Math.max(0, run.committedCredits ?? 0);
+  return {
+    budgetCredits: run.budgetCredits,
+    committedCredits,
+    reservedCredits: Math.max(0, committedCredits - settled.creditsCharged),
+    remainingCredits: Math.max(0, run.budgetCredits - committedCredits),
+  };
 }

@@ -2783,7 +2783,8 @@
               "insufficient_credits",
               "spend_cap_exceeded",
               "spend_frozen",
-              "free_quest_limit_reached"
+              "free_quest_limit_reached",
+              "run_budget_exhausted"
             ]
           }
         },
@@ -3673,6 +3674,11 @@
           "rootSessionId": {
             "type": "string"
           },
+          "budgetCredits": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "The run budget; absent for a run without one."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -3685,6 +3691,7 @@
         "example": {
           "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
           "rootSessionId": "session-42",
+          "budgetCredits": 5000,
           "createdAt": "2026-11-10T12:00:00.000Z"
         }
       },
@@ -3696,10 +3703,17 @@
             "minLength": 1,
             "maxLength": 128,
             "description": "Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id."
+          },
+          "budgetCredits": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one."
           }
         },
         "example": {
-          "rootSessionId": "session-42"
+          "rootSessionId": "session-42",
+          "budgetCredits": 5000
         }
       },
       "getCompletionRunUsageResponse200": {
@@ -3969,6 +3983,37 @@
           "byAttemptTruncated": {
             "type": "boolean",
             "description": "True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them."
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "budgetCredits": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "committedCredits": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle."
+              },
+              "reservedCredits": {
+                "type": "number",
+                "minimum": 0,
+                "description": "The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep."
+              },
+              "remainingCredits": {
+                "type": "number",
+                "minimum": 0,
+                "description": "`budgetCredits` minus `committedCredits`, never below zero."
+              }
+            },
+            "required": [
+              "budgetCredits",
+              "committedCredits",
+              "reservedCredits",
+              "remainingCredits"
+            ],
+            "description": "Present only for a run minted with a budget."
           }
         },
         "required": [
@@ -4037,7 +4082,13 @@
               "cacheWriteTokens": 6400
             }
           ],
-          "byAttemptTruncated": false
+          "byAttemptTruncated": false,
+          "budget": {
+            "budgetCredits": 5000,
+            "committedCredits": 1012,
+            "reservedCredits": 600,
+            "remainingCredits": 3988
+          }
         }
       },
       "getCompletionRunUsageResponse404": {
@@ -4065,6 +4116,107 @@
           "error",
           "errorCode"
         ]
+      },
+      "raiseCompletionRunBudgetResponse200": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A run id issued by `POST /api/v1/completion-runs`."
+          },
+          "rootSessionId": {
+            "type": "string"
+          },
+          "budgetCredits": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "The run budget; absent for a run without one."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "runId",
+          "createdAt"
+        ],
+        "example": {
+          "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+          "rootSessionId": "session-42",
+          "budgetCredits": 8000,
+          "createdAt": "2026-11-10T12:00:00.000Z"
+        }
+      },
+      "raiseCompletionRunBudgetResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "run_not_found"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
+      },
+      "raiseCompletionRunBudgetResponse409": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "run_budget_not_raised"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
+      },
+      "raiseCompletionRunBudgetRequest": {
+        "type": "object",
+        "properties": {
+          "budgetCredits": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+          }
+        },
+        "required": [
+          "budgetCredits"
+        ],
+        "example": {
+          "budgetCredits": 8000
+        }
       },
       "synthesizeSpeechResponse200": {
         "anyOf": [
@@ -36335,7 +36487,7 @@
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nEND USERS. A key that serves many end users of your own product, and that an administrator has granted `ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one (other providers receive no end-user identifier).\n\nRUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.\n\nTOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `\"anthropic\"` or `\"bedrock\"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ \"serverTool\": { \"type\": \"tool_search_tool_regex_20251119\", \"name\": \"tool_search_tool_regex\" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: \"anthropic\", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: \"pause_turn\"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ \"type\": \"tool_reference\", \"tool_name\": \"...\" }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: \"unknown_model\"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: \"model_requires_subscription\"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: \"org_model_not_allowed\"`, paused spending `403` with `errorCode: \"spend_frozen\"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: \"run_not_found\"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: \"provider_not_configured\"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: \"invalid_request\"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
+        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nEND USERS. A key that serves many end users of your own product, and that an administrator has granted `ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one (other providers receive no end-user identifier).\n\nRUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.\n\nTOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `\"anthropic\"` or `\"bedrock\"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ \"serverTool\": { \"type\": \"tool_search_tool_regex_20251119\", \"name\": \"tool_search_tool_regex\" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: \"anthropic\", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: \"pause_turn\"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ \"type\": \"tool_reference\", \"tool_name\": \"...\" }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: \"unknown_model\"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: \"model_requires_subscription\"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: \"org_model_not_allowed\"`, paused spending `403` with `errorCode: \"spend_frozen\"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a `run` minted with a budget that has too little left for even a short answer `422` with `errorCode: \"run_budget_exhausted\"` (retry once in-flight requests on the run settle, or raise the run budget; buying credits does not), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: \"run_not_found\"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: \"provider_not_configured\"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: \"invalid_request\"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
         "tags": [
           "AI"
         ],
@@ -36491,7 +36643,7 @@
             }
           },
           "422": {
-            "description": "The body failed schema validation, or the caller cannot afford the request (`errorCode: \"insufficient_credits\"`: personal or org balance, or an org per-member credit cap).",
+            "description": "The body failed schema validation, or the caller cannot afford the request (`errorCode: \"insufficient_credits\"`: personal or org balance, or an org per-member credit cap), or the `run` budget has too little left (`errorCode: \"run_budget_exhausted\"`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -36614,7 +36766,7 @@
       "post": {
         "operationId": "createCompletionRun",
         "summary": "Create a completion run",
-        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.",
+        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.\n\nWith `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: \"max_tokens\"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: \"run_budget_exhausted\"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.",
         "tags": [
           "AI"
         ],
@@ -36922,17 +37074,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/completion-runs\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"rootSessionId\": \"session-42\"\n}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/completion-runs\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"rootSessionId\": \"session-42\",\n  \"budgetCredits\": 5000\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/completion-runs\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"rootSessionId\": \"session-42\"\n}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/completion-runs\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"rootSessionId\": \"session-42\",\n  \"budgetCredits\": 5000\n}),\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/completion-runs\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"rootSessionId\": \"session-42\"\n    },\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/completion-runs\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"rootSessionId\": \"session-42\",\n        \"budgetCredits\": 5000\n    },\n)"
           }
         ]
       }
@@ -36941,7 +37093,7 @@
       "get": {
         "operationId": "getCompletionRunUsage",
         "summary": "Get a completion run's spend",
-        "description": "Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: \"run_not_found\"`).",
+        "description": "Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: \"run_not_found\"`).\n\nA run minted with a budget also returns `budget`: the ceiling, what is committed against it (settled charges plus the claims of completions still running), the unsettled part of that, and what is left.",
         "tags": [
           "AI"
         ],
@@ -37317,6 +37469,454 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/completion-runs/<runId>/usage\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/completion-runs/{runId}/budget": {
+      "post": {
+        "operationId": "raiseCompletionRunBudget",
+        "summary": "Raise a completion run's budget",
+        "description": "Sets a higher `budgetCredits` on a run minted with one, so completions refused with `errorCode: \"run_budget_exhausted\"` can be admitted again. A budget is only ever raised: a value at or below the current budget, or a run minted without a budget, is refused with `409` (`errorCode: \"run_budget_not_raised\"`). Raising it charges nothing, and buying credits never raises it. Only a credential of the same user and billing owner that minted the run can raise it; any other run id, including one that does not exist, gets `404` (`errorCode: \"run_not_found\"`).",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "A run id issued by `POST /api/v1/completion-runs`."
+            },
+            "required": true,
+            "description": "A run id issued by `POST /api/v1/completion-runs`.",
+            "name": "runId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/raiseCompletionRunBudgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The run with its raised budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/raiseCompletionRunBudgetResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The run does not exist, or another user or billing owner minted it (`errorCode: \"run_not_found\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/raiseCompletionRunBudgetResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new budget is not above the current one, or the run was minted without a budget (`errorCode: \"run_budget_not_raised\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/raiseCompletionRunBudgetResponse409"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/completion-runs/<runId>/budget\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"budgetCredits\": 8000\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/completion-runs/<runId>/budget\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"budgetCredits\": 8000\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/completion-runs/<runId>/budget\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"budgetCredits\": 8000\n    },\n)"
           }
         ]
       }
