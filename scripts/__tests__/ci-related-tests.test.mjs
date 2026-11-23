@@ -212,7 +212,7 @@ describe('related CI workflow guard', () => {
       expect(block.indexOf('node scripts/ci-related-tests.mjs run')).toBeLessThan(block.indexOf('node scripts/turbo-test-cache.mjs context'));
       expect(block).toMatch(/node scripts\/ci-related-tests\.mjs run\n\s+exit \$\?/);
     }
-    expect(ci).toContain('run: pnpm --recursive --if-present run test:repo');
+    expect(ci).toContain('run: pnpm --recursive --if-present --workspace-concurrency=1 run test:repo');
     expect(ci).toContain('SHARD_ARGS: ${{ matrix.shard.args }}');
   });
 });
